@@ -1,0 +1,31 @@
+# Private chat data and generated artifacts
+data/
+output/
+*.json
+*.jsonl
+!tests/fixtures/sample_chat.json
+!tests/fixtures/sample_chat.jsonl
+.env
+
+# Python environments and caches
+.venv/
+venv/
+**/__pycache__/
+__pycache__/
+*.pyc
+*.py[cod]
+.pytest_cache/
+.pytest-tmp-stopwords/
+.coverage
+htmlcov/
+
+# Build and packaging artifacts
+build/
+dist/
+*.egg-info/
+
+# IDE and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

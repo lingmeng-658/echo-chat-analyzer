@@ -1,0 +1,4 @@
+{"id":"fictional-jsonl-message-001","seq":1,"timestamp":1767402000,"time":"2026-01-03 09:00:00","sender":{"uin":"200000001","nickname":"虚构JSONL用户甲"},"type":"text","content":{"text":"量子课程今天开课"},"recalled":false,"system":false}
+{"id":"fictional-jsonl-message-002","seq":2,"timestamp":1767402060,"time":"2026-01-03 09:01:00","sender":{"uin":"200000002","nickname":"虚构JSONL用户乙"},"type":"reply","content":{"text":"下午继续研究算法","replyTo":{"id":"fictional-reference-only","content":{"text":"这段虚构引用原文不得重复统计"}}},"recalled":false,"system":false}
+{"id":"fictional-jsonl-message-003","seq":3,"timestamp":1767402120,"time":"2026-01-03 09:02:00","sender":{"uin":"200000003","nickname":"虚构JSONL用户丙"},"type":"image","content":{"text":"[图片]"},"recalled":false,"system":false}
+{"id":"fictional-jsonl-message-004","seq":4,"timestamp":1767402180,"time":"2026-01-03 09:03:00","sender":{"uin":"0","nickname":"虚构系统"},"type":"system","content":{"text":"虚构系统通知"},"recalled":false,"system":true}

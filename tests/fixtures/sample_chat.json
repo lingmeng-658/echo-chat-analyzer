@@ -1,0 +1,120 @@
+{
+  "exportVersion": "fictional-test-fixture-v1",
+  "exportedAt": "2026-01-02T12:00:00+08:00",
+  "group": {
+    "uin": "900000000",
+    "name": "虚构测试交流群"
+  },
+  "messages": [
+    {
+      "messageId": "fictional-message-001",
+      "time": "2026-01-02 09:00:00",
+      "timestamp": 1767315600,
+      "sender": {
+        "uin": "100000001",
+        "nickname": "虚构用户甲"
+      },
+      "type": "text",
+      "content": {
+        "text": "今天一起学习 Python 数据分析"
+      }
+    },
+    {
+      "messageId": "fictional-message-002",
+      "time": "2026-01-02 09:01:00",
+      "timestamp": 1767315660,
+      "sender": {
+        "uin": "100000002",
+        "nickname": "虚构用户乙"
+      },
+      "type": "reply",
+      "content": {
+        "text": "好呀，下午两点开始吧",
+        "replyTo": {
+          "messageId": "fictional-message-001",
+          "sender": {
+            "uin": "100000001",
+            "nickname": "虚构用户甲"
+          },
+          "content": {
+            "text": "今天一起学习 Python 数据分析"
+          }
+        }
+      }
+    },
+    {
+      "messageId": "fictional-message-003",
+      "time": "2026-01-02 09:02:00",
+      "timestamp": 1767315720,
+      "sender": {
+        "uin": "100000003",
+        "nickname": "虚构用户丙"
+      },
+      "type": "image",
+      "content": {
+        "text": "[图片]",
+        "images": [
+          {
+            "name": "fictional-image.png",
+            "path": "images/fictional-image.png"
+          }
+        ]
+      }
+    },
+    {
+      "messageId": "fictional-message-004",
+      "time": "2026-01-02 09:03:00",
+      "timestamp": 1767315780,
+      "sender": {
+        "uin": "100000001",
+        "nickname": "虚构用户甲"
+      },
+      "type": "video",
+      "content": {
+        "text": "[视频]",
+        "name": "fictional-video.mp4"
+      }
+    },
+    {
+      "messageId": "fictional-message-005",
+      "time": "2026-01-02 09:04:00",
+      "timestamp": 1767315840,
+      "sender": {
+        "uin": "100000002",
+        "nickname": "虚构用户乙"
+      },
+      "type": "file",
+      "content": {
+        "text": "[文件] fictional-notes.pdf",
+        "name": "fictional-notes.pdf",
+        "size": 12345
+      }
+    },
+    {
+      "messageId": "fictional-message-006",
+      "time": "2026-01-02 09:05:00",
+      "timestamp": 1767315900,
+      "sender": {
+        "uin": "0",
+        "nickname": "系统"
+      },
+      "type": "system",
+      "content": {
+        "text": "虚构用户丁加入了群聊"
+      }
+    },
+    {
+      "messageId": "fictional-message-007",
+      "time": "2026-01-02 09:06:00",
+      "timestamp": 1767315960,
+      "sender": {
+        "uin": "100000003",
+        "nickname": "虚构用户丙"
+      },
+      "type": "text",
+      "content": {
+        "text": "@虚构用户乙   [图片]\u200b  明天    下午\t一起  复习吧"
+      }
+    }
+  ]
+}
