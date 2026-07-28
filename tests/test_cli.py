@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 import shutil
@@ -10,6 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -64,6 +66,92 @@ def test_module_cli_file_input_generates_outputs_without_printing_chat(
     assert "有效文本数量: 3" in result.stdout
     assert "今天一起学习 Python 数据分析" not in result.stdout
     assert "好呀，下午两点开始吧" not in result.stdout
+
+
+def test_cli_generates_word_speaker_csvs_for_fictional_senders(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    input_path = tmp_path / "fictional-multi-sender.json"
+    input_path.write_text(
+        json.dumps(
+            {
+                "messages": [
+                    {
+                        "timestamp": 1767317100,
+                        "sender": {"nickname": "小青"},
+                        "type": "text",
+                        "content": {"text": "Python Python 数据分析"},
+                    },
+                    {
+                        "timestamp": 1767317101,
+                        "sender": {"nickname": "小白"},
+                        "type": "text",
+                        "content": {"text": "Python 数据分析"},
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "output"
+
+    exit_code = main(
+        [
+            "--input",
+            str(input_path),
+            "--output-dir",
+            str(output_dir),
+            "--stopwords",
+            str(STOPWORDS_PATH),
+            "--font-path",
+            str(_available_chinese_font()),
+            "--top",
+            "5",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    summary_path = output_dir / "word_speaker_summary.csv"
+    frequency_path = output_dir / "word_speaker_frequency.csv"
+    chart_path = output_dir / "word_top_speakers.png"
+
+    assert exit_code == 0
+    assert (output_dir / "word_frequency.csv").is_file()
+    assert (output_dir / "wordcloud.png").is_file()
+    assert summary_path.is_file()
+    assert frequency_path.is_file()
+    assert chart_path.is_file()
+    with Image.open(chart_path) as image:
+        assert image.width > 0
+        assert image.height > 0
+
+    with summary_path.open("r", encoding="utf-8-sig", newline="") as file:
+        summary_rows = list(csv.DictReader(file))
+    assert {
+        "word": "Python",
+        "total_count": "3",
+        "top_speaker": "小青",
+        "top_speaker_count": "2",
+        "top_speaker_share_percent": "66.67",
+    } in summary_rows
+
+    with frequency_path.open("r", encoding="utf-8-sig", newline="") as file:
+        frequency_rows = list(csv.DictReader(file))
+    assert [
+        row
+        for row in frequency_rows
+        if row["word"] == "Python"
+    ] == [
+        {"word": "Python", "speaker": "小青", "count": "2"},
+        {"word": "Python", "speaker": "小白", "count": "1"},
+    ]
+
+    assert "Python Python 数据分析" not in captured.out
+    assert "Python 数据分析" not in captured.out
+    assert "小青" not in captured.out
+    assert "小白" not in captured.out
 
 
 def test_directory_input_ignores_one_invalid_json_file(
@@ -199,6 +287,9 @@ def test_no_valid_text_does_not_create_output_files(
     assert "没有有效文本" in captured.out
     assert not (output_dir / "word_frequency.csv").exists()
     assert not (output_dir / "wordcloud.png").exists()
+    assert not (output_dir / "word_speaker_summary.csv").exists()
+    assert not (output_dir / "word_speaker_frequency.csv").exists()
+    assert not (output_dir / "word_top_speakers.png").exists()
 
 
 def test_missing_input_path_returns_clear_error(
