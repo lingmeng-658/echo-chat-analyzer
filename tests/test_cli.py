@@ -21,7 +21,112 @@ JSONL_FIXTURE_PATH = PROJECT_ROOT / "tests" / "fixtures" / "sample_chat.jsonl"
 STOPWORDS_PATH = PROJECT_ROOT / "stopwords.txt"
 sys.path.insert(0, str(SRC_ROOT))
 
+from qq_chat_analyzer import cli as cli_module
 from qq_chat_analyzer.cli import main
+
+
+def test_simplified_arguments_use_default_profile_top_and_output() -> None:
+    input_path = Path("data") / "fictional group"
+
+    configuration = cli_module._parse_cli_configuration([str(input_path)])
+
+    assert configuration.input_path == input_path
+    assert configuration.stopwords_path == PROJECT_ROOT / "stopwords.txt"
+    assert configuration.output_directory == Path("output") / "fictional group"
+    assert configuration.top == 100
+
+
+@pytest.mark.parametrize(
+    ("profile", "expected_filename"),
+    [
+        ("topic", "stopwords_topic.txt"),
+        ("culture", "stopwords_culture.txt"),
+    ],
+)
+def test_simplified_profile_maps_to_existing_stopwords_file(
+    profile: str,
+    expected_filename: str,
+) -> None:
+    configuration = cli_module._parse_cli_configuration(
+        ["fictional-chat.jsonl", profile, "200"]
+    )
+
+    assert configuration.stopwords_path == PROJECT_ROOT / expected_filename
+    assert configuration.top == 200
+
+
+def test_legacy_arguments_keep_previous_defaults() -> None:
+    configuration = cli_module._parse_cli_configuration(
+        ["--input", "fictional-chat.json"]
+    )
+
+    assert configuration.input_path == Path("fictional-chat.json")
+    assert configuration.output_directory == Path("output")
+    assert configuration.stopwords_path == Path("stopwords.txt")
+    assert configuration.top == 50
+
+
+def test_simplified_file_input_uses_filename_without_json_suffix() -> None:
+    configuration = cli_module._parse_cli_configuration(
+        ["fictional chat.jsonl"]
+    )
+
+    assert configuration.output_directory == Path("output") / "fictional chat"
+
+
+def test_simplified_cli_path_with_spaces_uses_automatic_output_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    input_dir = tmp_path / "fictional group"
+    input_dir.mkdir()
+    shutil.copyfile(FIXTURE_PATH, input_dir / "sample.json")
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(
+        [
+            str(input_dir),
+            "--font-path",
+            str(_available_chinese_font()),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    output_dir = tmp_path / "output" / "fictional group"
+    assert exit_code == 0
+    assert (output_dir / "word_frequency.csv").is_file()
+    assert (output_dir / "wordcloud.png").is_file()
+    assert (output_dir / "word_speaker_summary.csv").is_file()
+    assert (output_dir / "word_speaker_frequency.csv").is_file()
+    assert (output_dir / "word_top_speakers.png").is_file()
+    assert "Top 100" in captured.out
+
+
+def test_invalid_simplified_profile_returns_friendly_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = main(["fictional-chat.json", "smart"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "profile" in captured.err
+    assert "smart" in captured.err
+    assert "Traceback" not in captured.err
+
+
+@pytest.mark.parametrize("invalid_top", ["many", "0", "-2"])
+def test_invalid_simplified_top_returns_friendly_error(
+    invalid_top: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = main(["fictional-chat.json", "culture", invalid_top])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "top" in captured.err.lower()
+    assert invalid_top in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_module_cli_file_input_generates_outputs_without_printing_chat(

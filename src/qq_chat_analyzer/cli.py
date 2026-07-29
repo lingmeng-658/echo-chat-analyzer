@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from .analyzer import (
@@ -25,24 +26,52 @@ from .tokenizer import tokenize
 
 
 SUPPORTED_INPUT_SUFFIXES = frozenset({".json", ".jsonl"})
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROFILE_STOPWORD_FILES = {
+    "default": "stopwords.txt",
+    "topic": "stopwords_topic.txt",
+    "culture": "stopwords_culture.txt",
+}
+
+
+@dataclass(frozen=True)
+class CliConfiguration:
+    """Validated CLI settings shared by simplified and legacy invocation styles."""
+
+    input_path: Path
+    output_directory: Path
+    stopwords_path: Path
+    font_path: str | None
+    top: int
+
+
+class CliUsageError(ValueError):
+    """A user-facing command-line validation error."""
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the complete local analysis pipeline."""
-    arguments = _build_argument_parser().parse_args(argv)
-    input_path = Path(arguments.input)
-
-    if not input_path.exists():
-        print(f"错误：输入路径不存在：{input_path}", file=sys.stderr)
+    try:
+        configuration = _parse_cli_configuration(argv)
+    except CliUsageError as error:
+        print(f"错误：{error}", file=sys.stderr)
         return 2
-    if arguments.top <= 0:
-        print("错误：--top 必须是大于 0 的整数。", file=sys.stderr)
+    except SystemExit as error:
+        return int(error.code)
+
+    if not configuration.input_path.exists():
+        print(
+            f"错误：输入路径不存在（找不到输入路径）："
+            f"{configuration.input_path}",
+            file=sys.stderr,
+        )
         return 2
 
-    json_files = _find_json_files(input_path)
+    json_files = _find_json_files(configuration.input_path)
     if not json_files:
         print(
-            f"错误：未找到可处理的 JSON 或 JSONL 文件：{input_path}",
+            "错误：未找到可处理的 JSON 或 JSONL 文件："
+            f"{configuration.input_path}",
             file=sys.stderr,
         )
         return 2
@@ -62,7 +91,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 continue
 
             valid_text_count += 1
-            message_tokens = tokenize(cleaned_text, arguments.stopwords)
+            message_tokens = tokenize(
+                cleaned_text,
+                str(configuration.stopwords_path),
+            )
             tokens.extend(message_tokens)
             if message_tokens:
                 sender_tokens.append((message.sender, message_tokens))
@@ -77,14 +109,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("有效文本未产生可统计词语，不生成输出文件。")
         return 0
 
-    ranked_words = top_words(tokens, arguments.top)
+    ranked_words = top_words(tokens, configuration.top)
     word_sender_counts = count_word_speakers(sender_tokens)
     speaker_summaries = top_word_speaker_summary(word_sender_counts)
     if not ranked_words:
         print("没有可输出的词频，不生成输出文件。")
         return 0
 
-    output_directory = Path(arguments.output_dir)
+    output_directory = configuration.output_directory
     csv_path = output_directory / "word_frequency.csv"
     wordcloud_path = output_directory / "wordcloud.png"
     speaker_summary_path = output_directory / "word_speaker_summary.csv"
@@ -112,18 +144,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         generate_word_top_speakers_chart(
             speaker_summaries,
             str(speaker_chart_path),
-            arguments.font_path,
+            configuration.font_path,
         )
         generate_wordcloud(
             ranked_words,
             str(wordcloud_path),
-            arguments.font_path,
+            configuration.font_path,
         )
     except (OSError, ValueError) as error:
         print(f"错误：生成输出失败：{error}", file=sys.stderr)
         return 1
 
-    print(f"Top {arguments.top} 词频:")
+    print(f"Top {configuration.top} 词频:")
     for word, count in ranked_words:
         print(f"{word}\t{count}")
 
@@ -132,22 +164,38 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
+        prog="qqchat",
         description="Analyze QQChatExporter JSON and JSONL files entirely offline."
     )
     parser.add_argument(
+        "input_path",
+        nargs="?",
+        help="JSON/JSONL file or directory (simplified form).",
+    )
+    parser.add_argument(
+        "profile",
+        nargs="?",
+        help="Stopwords profile: default, topic, or culture.",
+    )
+    parser.add_argument(
+        "positional_top",
+        nargs="?",
+        help="Number of top words in simplified form (default: 100).",
+    )
+    parser.add_argument(
         "--input",
-        required=True,
+        dest="input_option",
         help="JSON/JSONL file or directory containing JSON/JSONL files.",
     )
     parser.add_argument(
         "--output-dir",
-        default="output",
-        help="Output directory (default: output).",
+        default=None,
+        help="Output directory (legacy default: output).",
     )
     parser.add_argument(
         "--stopwords",
-        default="stopwords.txt",
-        help="Stopwords file (default: stopwords.txt).",
+        default=None,
+        help="Explicit stopwords file; overrides the selected profile.",
     )
     parser.add_argument(
         "--font-path",
@@ -156,11 +204,85 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--top",
-        type=int,
-        default=50,
-        help="Number of top words to output (default: 50).",
+        default=None,
+        help="Number of top words to output (legacy default: 50).",
     )
     return parser
+
+
+def _parse_cli_configuration(
+    argv: Sequence[str] | None = None,
+) -> CliConfiguration:
+    arguments = _build_argument_parser().parse_args(argv)
+    simplified = arguments.input_path is not None
+
+    if simplified and arguments.input_option is not None:
+        raise CliUsageError("不能同时使用位置输入路径和 --input。")
+    if not simplified and arguments.input_option is None:
+        raise CliUsageError("请提供输入路径，例如：qqchat PATH。")
+
+    profile = arguments.profile or "default"
+    if profile not in PROFILE_STOPWORD_FILES:
+        available = ", ".join(PROFILE_STOPWORD_FILES)
+        raise CliUsageError(
+            f"无效 profile：{profile}。可用值：{available}。"
+        )
+
+    if arguments.positional_top is not None and arguments.top is not None:
+        raise CliUsageError("不能同时使用位置 top 和 --top。")
+
+    top_value = arguments.positional_top or arguments.top
+    default_top = 100 if simplified else 50
+    top = _parse_positive_top(top_value, default_top)
+
+    input_path = Path(arguments.input_path or arguments.input_option)
+    if arguments.output_dir is not None:
+        output_directory = Path(arguments.output_dir)
+    elif simplified:
+        output_directory = _automatic_output_directory(input_path)
+    else:
+        output_directory = Path("output")
+
+    if arguments.stopwords is not None:
+        stopwords_path = Path(arguments.stopwords)
+    elif not simplified:
+        stopwords_path = Path("stopwords.txt")
+    else:
+        stopwords_path = PROJECT_ROOT / PROFILE_STOPWORD_FILES[profile]
+
+    return CliConfiguration(
+        input_path=input_path,
+        output_directory=output_directory,
+        stopwords_path=stopwords_path,
+        font_path=arguments.font_path,
+        top=top,
+    )
+
+
+def _parse_positive_top(value: str | None, default: int) -> int:
+    if value is None:
+        return default
+
+    try:
+        top = int(value)
+    except ValueError as error:
+        raise CliUsageError(
+            f"top 必须是大于 0 的整数，收到：{value}。"
+        ) from error
+
+    if top <= 0:
+        raise CliUsageError(f"top 必须是大于 0 的整数，收到：{value}。")
+    return top
+
+
+def _automatic_output_directory(input_path: Path) -> Path:
+    if input_path.suffix.lower() in SUPPORTED_INPUT_SUFFIXES:
+        input_name = input_path.stem.strip()
+    else:
+        input_name = input_path.name.strip()
+    if input_name in {"", ".", ".."}:
+        input_name = "analysis"
+    return Path("output") / input_name
 
 
 def _find_json_files(input_path: Path) -> list[Path]:
