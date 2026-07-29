@@ -71,14 +71,20 @@ def test_module_cli_help_guides_first_time_users() -> None:
     assert "使用 culture 模式" in result.stdout
     assert "生成前 200 个高频词" in result.stdout
     assert "输出完整分析结果" in result.stdout
-    assert "用法：" in result.stdout
+    assert "用法：" not in result.stdout
     assert "位置参数：" in result.stdout
     assert "高级参数：" in result.stdout
     assert "--stopwords" in result.stdout
     assert "--output-dir" in result.stdout
     assert "--font-path" in result.stdout
     assert "--top" in result.stdout
-    assert "显示此帮助信息并退出" in result.stdout
+    assert "显示帮助并退出" in result.stdout
+    assert "指定输出目录" in result.stdout
+    assert "指定停用词文件" in result.stdout
+    assert "指定中文字体文件" in result.stdout
+    assert "指定高频词数量" in result.stdout
+    assert "旧参数形式默认" not in result.stdout
+    assert "优先于位置参数中的停用词策略" not in result.stdout
     assert "positional arguments:" not in result.stdout
 
 

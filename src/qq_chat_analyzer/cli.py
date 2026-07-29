@@ -54,9 +54,10 @@ class ChineseArgumentParser(argparse.ArgumentParser):
 
     def format_help(self) -> str:
         help_text = super().format_help()
+        if help_text.startswith("usage: "):
+            _, _, help_text = help_text.partition("\n\n")
         return (
-            help_text.replace("usage: ", "用法：", 1)
-            .replace("位置参数:", "位置参数：")
+            help_text.replace("位置参数:", "位置参数：")
             .replace("选项:", "选项：")
             .replace("高级参数:", "高级参数：")
         )
@@ -229,7 +230,7 @@ QQ Chat Analyzer
         "-h",
         "--help",
         action="help",
-        help="显示此帮助信息并退出。",
+        help="显示帮助并退出。",
     )
     parser.add_argument(
         "input_path",
@@ -253,31 +254,31 @@ QQ Chat Analyzer
         "--input",
         dest="input_option",
         metavar="聊天记录位置",
-        help="JSON/JSONL 文件或包含这些文件的目录。",
+        help="指定聊天记录位置。",
     )
     parser.add_argument(
         "--output-dir",
         default=None,
         metavar="输出目录",
-        help="输出目录（旧参数形式默认：output）。",
+        help="指定输出目录。",
     )
     parser.add_argument(
         "--stopwords",
         default=None,
         metavar="停用词文件",
-        help="指定停用词文件；优先于位置参数中的停用词策略。",
+        help="指定停用词文件。",
     )
     parser.add_argument(
         "--font-path",
         default=None,
         metavar="字体文件",
-        help="可选的本地中文字体文件。",
+        help="指定中文字体文件。",
     )
     parser.add_argument(
         "--top",
         default=None,
         metavar="生成词数量",
-        help="输出高频词数量（旧参数形式默认：50）。",
+        help="指定高频词数量。",
     )
     return parser
 
