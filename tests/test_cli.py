@@ -25,6 +25,94 @@ from qq_chat_analyzer import cli as cli_module
 from qq_chat_analyzer.cli import main
 
 
+def test_module_cli_help_guides_first_time_users() -> None:
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(SRC_ROOT)
+    environment["PYTHONUTF8"] = "1"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "qq_chat_analyzer.cli",
+            "--help",
+        ],
+        cwd=PROJECT_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "QQ Chat Analyzer" in result.stdout
+    assert "本地 QQ 聊天记录分析工具" in result.stdout
+    assert "最简单使用" in result.stdout
+    assert 'qqchat "聊天记录路径"' in result.stdout
+    assert (
+        r'qqchat "C:\Users\你的用户名\Documents'
+        r'\QQChatExporter\exports\group_xxx"'
+    ) in result.stdout
+    assert "默认行为" in result.stdout
+    assert "使用 default 默认过滤模式" in result.stdout
+    assert "生成前 100 个高频词" in result.stdout
+    assert "输出到 output/<聊天记录名称>/" in result.stdout
+    assert "自动生成词云、高频词统计、发送者分析等结果" in result.stdout
+    assert "更多用法" in result.stdout
+    assert 'qqchat "聊天记录路径" 过滤模式 数量' in result.stdout
+    assert r'qqchat "C:\xxx\group_xxx" default 200' in result.stdout
+    assert "过滤模式" in result.stdout
+    assert "default：默认模式" in result.stdout
+    assert "topic：主题讨论模式" in result.stdout
+    assert "culture：群聊文化模式" in result.stdout
+    assert "多功能组合" in result.stdout
+    assert r'qqchat "C:\xxx\group_xxx" culture 200' in result.stdout
+    assert "使用 culture 模式" in result.stdout
+    assert "生成前 200 个高频词" in result.stdout
+    assert "输出完整分析结果" in result.stdout
+    assert "用法：" in result.stdout
+    assert "位置参数：" in result.stdout
+    assert "高级参数：" in result.stdout
+    assert "--stopwords" in result.stdout
+    assert "--output-dir" in result.stdout
+    assert "--font-path" in result.stdout
+    assert "--top" in result.stdout
+    assert "显示此帮助信息并退出" in result.stdout
+    assert "positional arguments:" not in result.stdout
+
+
+def test_console_script_and_module_help_are_consistent() -> None:
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(SRC_ROOT)
+    environment["PYTHONUTF8"] = "1"
+    console_script_name = "qqchat.exe" if os.name == "nt" else "qqchat"
+    console_script = Path(sys.executable).with_name(console_script_name)
+
+    console_result = subprocess.run(
+        [str(console_script), "--help"],
+        cwd=PROJECT_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    module_result = subprocess.run(
+        [sys.executable, "-m", "qq_chat_analyzer.cli", "--help"],
+        cwd=PROJECT_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+
+    assert console_result.returncode == 0
+    assert module_result.returncode == 0
+    assert console_result.stdout == module_result.stdout
+
+
 def test_simplified_arguments_use_default_profile_top_and_output() -> None:
     input_path = Path("data") / "fictional group"
 

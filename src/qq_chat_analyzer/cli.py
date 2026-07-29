@@ -49,6 +49,19 @@ class CliUsageError(ValueError):
     """A user-facing command-line validation error."""
 
 
+class ChineseArgumentParser(argparse.ArgumentParser):
+    """Render argparse's fixed help headings in Chinese."""
+
+    def format_help(self) -> str:
+        help_text = super().format_help()
+        return (
+            help_text.replace("usage: ", "用法：", 1)
+            .replace("位置参数:", "位置参数：")
+            .replace("选项:", "选项：")
+            .replace("高级参数:", "高级参数：")
+        )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the complete local analysis pipeline."""
     try:
@@ -163,49 +176,108 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _build_argument_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ChineseArgumentParser(
         prog="qqchat",
-        description="Analyze QQChatExporter JSON and JSONL files entirely offline."
+        description="""\
+QQ Chat Analyzer
+本地 QQ 聊天记录分析工具。
+
+用于分析 QQChatExporter 导出的 JSON/JSONL 聊天记录。
+所有聊天记录只在本地处理，不会上传。
+
+最简单使用
+  qqchat "聊天记录路径"
+
+例如：
+  qqchat "C:\\Users\\你的用户名\\Documents\\QQChatExporter\\exports\\group_xxx"
+
+默认行为
+  直接运行上述命令时，默认：
+  - 使用 default 默认过滤模式；
+  - 生成前 100 个高频词；
+  - 输出到 output/<聊天记录名称>/；
+  - 自动生成词云、高频词统计、发送者分析等结果。
+
+更多用法
+  修改生成词数量：
+
+  格式：
+    qqchat "聊天记录路径" 过滤模式 数量
+
+  示例：
+    qqchat "C:\\xxx\\group_xxx" default 200
+
+过滤模式
+  default：默认模式
+  topic：主题讨论模式
+  culture：群聊文化模式
+
+多功能组合
+  qqchat "C:\\xxx\\group_xxx" culture 200
+
+  同时：
+  - 使用 culture 模式；
+  - 生成前 200 个高频词；
+  - 输出完整分析结果。
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        add_help=False,
+    )
+    parser._positionals.title = "位置参数"
+    parser._optionals.title = "高级参数"
+    parser.add_argument(
+        "-h",
+        "--help",
+        action="help",
+        help="显示此帮助信息并退出。",
     )
     parser.add_argument(
         "input_path",
         nargs="?",
-        help="JSON/JSONL file or directory (simplified form).",
+        metavar="聊天记录位置",
+        help="JSON/JSONL 文件或包含这些文件的目录（简化形式）。",
     )
     parser.add_argument(
         "profile",
         nargs="?",
-        help="Stopwords profile: default, topic, or culture.",
+        metavar="过滤模式",
+        help="停用词策略：default、topic 或 culture。",
     )
     parser.add_argument(
         "positional_top",
         nargs="?",
-        help="Number of top words in simplified form (default: 100).",
+        metavar="生成词数量",
+        help="输出高频词数量（简化形式默认：100）。",
     )
     parser.add_argument(
         "--input",
         dest="input_option",
-        help="JSON/JSONL file or directory containing JSON/JSONL files.",
+        metavar="聊天记录位置",
+        help="JSON/JSONL 文件或包含这些文件的目录。",
     )
     parser.add_argument(
         "--output-dir",
         default=None,
-        help="Output directory (legacy default: output).",
+        metavar="输出目录",
+        help="输出目录（旧参数形式默认：output）。",
     )
     parser.add_argument(
         "--stopwords",
         default=None,
-        help="Explicit stopwords file; overrides the selected profile.",
+        metavar="停用词文件",
+        help="指定停用词文件；优先于位置参数中的停用词策略。",
     )
     parser.add_argument(
         "--font-path",
         default=None,
-        help="Optional local Chinese font file.",
+        metavar="字体文件",
+        help="可选的本地中文字体文件。",
     )
     parser.add_argument(
         "--top",
         default=None,
-        help="Number of top words to output (legacy default: 50).",
+        metavar="生成词数量",
+        help="输出高频词数量（旧参数形式默认：50）。",
     )
     return parser
 
