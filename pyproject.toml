@@ -15,6 +15,9 @@ dependencies = [
     "wordcloud>=1.9.3,<2",
 ]
 
+[project.scripts]
+qqchat = "qq_chat_analyzer.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8,<9",
