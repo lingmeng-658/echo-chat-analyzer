@@ -1,0 +1,201 @@
+"""Tests for the Smart Profile orchestration layer."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = PROJECT_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
+
+from qq_chat_analyzer import smart_profile
+from qq_chat_analyzer.candidates import Candidate
+from qq_chat_analyzer.parser import ParsedMessage
+from qq_chat_analyzer.smart_profile import run_smart_profile
+
+
+def test_robot_candidate_flows_through_decision_engine_and_pipeline() -> None:
+    robot_messages = [
+        _message("虚构签到助手", "固定签到播报", index)
+        for index in range(10)
+    ]
+    ordinary_message = _message(
+        "虚构普通用户",
+        "今天讨论本地测试",
+        10,
+    )
+
+    result = run_smart_profile([*robot_messages, ordinary_message])
+
+    assert result.kept_messages == [ordinary_message]
+    assert result.filtered_messages == robot_messages
+    assert len(result.applied_decisions) == 1
+    assert result.applied_decisions[0].target_type == "sender"
+    assert result.applied_decisions[0].action == "ignore"
+
+
+def test_welcome_template_flows_through_decision_engine_and_pipeline() -> None:
+    welcome_messages = [
+        _message(
+            "虚构欢迎助手",
+            f"欢迎 虚构成员{member} 加入群聊",
+            index,
+        )
+        for index, member in enumerate(("甲", "乙", "丙", "丁"))
+    ]
+    ordinary_message = _message(
+        "虚构普通用户",
+        "开始讨论课程安排",
+        4,
+    )
+
+    result = run_smart_profile([*welcome_messages, ordinary_message])
+
+    assert result.kept_messages == [ordinary_message]
+    assert result.filtered_messages == welcome_messages
+    assert len(result.applied_decisions) == 1
+    assert result.applied_decisions[0].target_type == "template"
+    assert result.applied_decisions[0].action == "ignore"
+
+
+def test_ordinary_messages_are_preserved_with_traceable_empty_result() -> None:
+    messages = [
+        _message("虚构用户甲", "今天讨论什么主题", 1),
+        _message("虚构用户乙", "晚上一起复习课程", 2),
+        _message("虚构用户丙", "明天去图书馆学习", 3),
+    ]
+
+    result = run_smart_profile(messages)
+
+    assert result.kept_messages == messages
+    assert result.filtered_messages == []
+    assert result.applied_decisions == []
+
+
+def test_interactive_bot_without_calibration_metrics_is_not_filtered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_candidates = _capture_decision_candidates(monkeypatch)
+    messages = _interactive_messages(mention_count=20)
+
+    result = run_smart_profile(messages)
+
+    interactive_candidates = [
+        candidate
+        for candidate in captured_candidates
+        if candidate.candidate_type == "automation_source"
+    ]
+    assert len(interactive_candidates) == 1
+    assert interactive_candidates[0].target == "虚构交互助手"
+    assert interactive_candidates[0].metadata == {
+        "source_kind": "interactive_bot",
+        "metrics": {
+            "mention_count": 20,
+            "response_count": 20,
+            "response_rate": 1.0,
+            "unique_trigger_source_count": 20,
+            "response_template_score": 0.05,
+        },
+    }
+    assert result.applied_decisions == []
+    assert result.filtered_messages == []
+    assert result.kept_messages == messages
+
+
+def test_all_three_detectors_merge_candidates_without_overwriting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_candidates = _capture_decision_candidates(monkeypatch)
+    robot_messages = [
+        _message("虚构固定播报助手", "虚构固定播报", index)
+        for index in range(20)
+    ]
+    welcome_messages = [
+        _message(
+            "虚构欢迎助手",
+            f"欢迎 虚构成员{member} 加入群聊",
+            100 + index,
+        )
+        for index, member in enumerate(("甲", "乙", "丙", "丁"))
+    ]
+    interactive_messages = _interactive_messages(
+        mention_count=5,
+        start_timestamp=200,
+    )
+
+    run_smart_profile(
+        [
+            *robot_messages,
+            *welcome_messages,
+            *interactive_messages,
+        ]
+    )
+
+    candidate_types = {
+        candidate.candidate_type
+        for candidate in captured_candidates
+    }
+    assert "robot_sender" in candidate_types
+    assert "welcome_template" in candidate_types
+    assert "automation_source" in candidate_types
+    assert any(
+        candidate.metadata.get("source_kind") == "interactive_bot"
+        for candidate in captured_candidates
+    )
+
+
+def _capture_decision_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[Candidate]:
+    captured_candidates: list[Candidate] = []
+    original_create_decisions = smart_profile.create_filter_decisions
+
+    def capture(candidates: list[Candidate]):
+        captured_candidates.extend(candidates)
+        return original_create_decisions(candidates)
+
+    monkeypatch.setattr(
+        smart_profile,
+        "create_filter_decisions",
+        capture,
+    )
+    return captured_candidates
+
+
+def _interactive_messages(
+    *,
+    mention_count: int,
+    start_timestamp: int = 1_700_000_000,
+) -> list[ParsedMessage]:
+    messages: list[ParsedMessage] = []
+    for index in range(mention_count):
+        timestamp = start_timestamp + index * 10
+        response_suffix = chr(0x4E00 + index)
+        messages.extend(
+            [
+                _message(
+                    f"虚构提问者{index}",
+                    "@虚构交互助手 虚构查询",
+                    timestamp,
+                ),
+                _message(
+                    "虚构交互助手",
+                    f"虚构动态响应{response_suffix}",
+                    timestamp + 1,
+                ),
+            ]
+        )
+    return messages
+
+
+def _message(sender: str, text: str, timestamp: int) -> ParsedMessage:
+    return ParsedMessage(
+        timestamp=timestamp,
+        sender=sender,
+        message_type="text",
+        text=text,
+    )

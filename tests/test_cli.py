@@ -353,6 +353,75 @@ def test_cli_generates_word_speaker_csvs_for_fictional_senders(
     assert "小白" not in captured.out
 
 
+def test_smart_profile_filtered_messages_do_not_enter_word_frequency(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    input_path = tmp_path / "fictional-smart-profile.json"
+    messages = [
+        {
+            "timestamp": 1767317200 + index,
+            "sender": {"nickname": "虚构自动播报器"},
+            "type": "text",
+            "content": {"text": "BOTNOISE BOTNOISE"},
+        }
+        for index in range(10)
+    ]
+    messages.append(
+        {
+            "timestamp": 1767317210,
+            "sender": {"nickname": "虚构普通用户"},
+            "type": "text",
+            "content": {"text": "HUMANTOPIC Python"},
+        }
+    )
+    input_path.write_text(
+        json.dumps({"messages": messages}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "output"
+
+    exit_code = main(
+        [
+            "--input",
+            str(input_path),
+            "--output-dir",
+            str(output_dir),
+            "--stopwords",
+            str(STOPWORDS_PATH),
+            "--font-path",
+            str(_available_chinese_font()),
+            "--top",
+            "10",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    output_filenames = [
+        "word_frequency.csv",
+        "wordcloud.png",
+        "word_speaker_summary.csv",
+        "word_speaker_frequency.csv",
+        "word_top_speakers.png",
+    ]
+    for filename in output_filenames:
+        assert (output_dir / filename).is_file()
+
+    with (output_dir / "word_frequency.csv").open(
+        "r",
+        encoding="utf-8-sig",
+        newline="",
+    ) as file:
+        frequency_rows = list(csv.DictReader(file))
+
+    words = [row["word"] for row in frequency_rows]
+    assert "HUMANTOPIC" in words
+    assert "Python" in words
+    assert "BOTNOISE" not in words
+    assert "BOTNOISE" not in captured.out
+    assert "虚构自动播报器" not in captured.out
+
+
 def test_directory_input_ignores_one_invalid_json_file(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

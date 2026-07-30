@@ -21,7 +21,8 @@ from .exporters import (
     generate_word_top_speakers_chart,
     generate_wordcloud,
 )
-from .parser import load_messages, parse_messages
+from .parser import ParsedMessage, load_messages, parse_messages
+from .smart_profile import run_smart_profile
 from .tokenizer import tokenize
 
 
@@ -94,24 +95,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     valid_text_count = 0
     tokens: list[str] = []
     sender_tokens: list[tuple[str, list[str]]] = []
+    parsed_messages: list[ParsedMessage] = []
 
     for json_path in json_files:
         raw_messages = load_messages(json_path)
         processed_message_count += len(raw_messages)
+        parsed_messages.extend(parse_messages(raw_messages))
 
-        for message in parse_messages(raw_messages):
-            cleaned_text = clean_text(message.text)
-            if not cleaned_text:
-                continue
+    filtering_result = run_smart_profile(parsed_messages)
+    for message in filtering_result.kept_messages:
+        cleaned_text = clean_text(message.text)
+        if not cleaned_text:
+            continue
 
-            valid_text_count += 1
-            message_tokens = tokenize(
-                cleaned_text,
-                str(configuration.stopwords_path),
-            )
-            tokens.extend(message_tokens)
-            if message_tokens:
-                sender_tokens.append((message.sender, message_tokens))
+        valid_text_count += 1
+        message_tokens = tokenize(
+            cleaned_text,
+            str(configuration.stopwords_path),
+        )
+        tokens.extend(message_tokens)
+        if message_tokens:
+            sender_tokens.append((message.sender, message_tokens))
 
     print(f"处理消息数量: {processed_message_count}")
     print(f"有效文本数量: {valid_text_count}")

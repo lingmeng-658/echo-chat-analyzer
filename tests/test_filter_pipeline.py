@@ -10,6 +10,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_ROOT))
 
+from qq_chat_analyzer.candidates import Candidate
+from qq_chat_analyzer.decision_engine import create_filter_decisions
 from qq_chat_analyzer.filter_decisions import FilterDecision
 from qq_chat_analyzer.filter_pipeline import FilterPipeline
 from qq_chat_analyzer.parser import ParsedMessage
@@ -129,6 +131,46 @@ def test_filtering_result_tracks_each_matching_ignore_decision_once() -> None:
     assert result.kept_messages == []
     assert result.filtered_messages == [first, second]
     assert result.applied_decisions == [sender_decision]
+
+
+def test_automation_source_sender_ignore_reuses_sender_filtering() -> None:
+    ignored_message = _message(
+        "虚构交互助手",
+        "这是一条虚构自动响应",
+        1,
+    )
+    kept_message = _message(
+        "虚构普通用户",
+        "这是一条虚构普通消息",
+        2,
+    )
+    decisions = create_filter_decisions(
+        [
+                Candidate(
+                    target="虚构交互助手",
+                    candidate_type="automation_source",
+                    score=0.95,
+                    metadata={
+                        "source_kind": "interactive_bot",
+                        "metrics": {
+                            "mention_count": 100,
+                            "response_rate": 0.95,
+                            "unique_trigger_source_count": 20,
+                            "concentrated_in_short_window": False,
+                        },
+                    },
+                )
+            ]
+        )
+
+    result = FilterPipeline().apply_filter_decisions(
+        [ignored_message, kept_message],
+        decisions,
+    )
+
+    assert result.kept_messages == [kept_message]
+    assert result.filtered_messages == [ignored_message]
+    assert result.applied_decisions == decisions
 
 
 def _message(sender: str, text: str, timestamp: int) -> ParsedMessage:
