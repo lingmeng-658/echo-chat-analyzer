@@ -16,6 +16,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from qq_chat_analyzer.decision_engine import create_filter_decisions
 from qq_chat_analyzer.detectors import (
+    detect_interactive_bot_candidates,
     detect_robot_candidates,
     detect_template_candidates,
 )
@@ -38,10 +39,14 @@ class ProfileReport:
     raw_message_count: int
     parsed_message_count: int
     robot_sender_candidate_count: int
+    interactive_bot_candidate_count: int
     template_candidate_count: int
     welcome_template_candidate_count: int
     repeated_template_candidate_count: int
     unknown_template_candidate_count: int
+    automation_source_decision_count: int
+    automation_source_ignore_count: int
+    automation_source_review_count: int
     filter_decision_count: int
     ignore_count: int
     review_count: int
@@ -66,6 +71,9 @@ def collect_profile_statistics(
 
     robot_candidates = detect_robot_candidates(parsed_messages)
     template_candidates = detect_template_candidates(parsed_messages)
+    interactive_bot_candidates = detect_interactive_bot_candidates(
+        parsed_messages
+    )
     welcome_template_candidate_count = sum(
         candidate.candidate_type == "welcome_template"
         for candidate in template_candidates
@@ -80,7 +88,14 @@ def collect_profile_statistics(
         - repeated_template_candidate_count
     )
     decisions = create_filter_decisions(
-        [*robot_candidates, *template_candidates]
+        [
+            *robot_candidates,
+            *template_candidates,
+            *interactive_bot_candidates,
+        ]
+    )
+    automation_source_decisions = create_filter_decisions(
+        interactive_bot_candidates
     )
     filtering_result = run_smart_profile(parsed_messages)
 
@@ -89,6 +104,9 @@ def collect_profile_statistics(
         raw_message_count=raw_message_count,
         parsed_message_count=len(parsed_messages),
         robot_sender_candidate_count=len(robot_candidates),
+        interactive_bot_candidate_count=len(
+            interactive_bot_candidates
+        ),
         template_candidate_count=len(template_candidates),
         welcome_template_candidate_count=welcome_template_candidate_count,
         repeated_template_candidate_count=(
@@ -96,6 +114,17 @@ def collect_profile_statistics(
         ),
         unknown_template_candidate_count=(
             unknown_template_candidate_count
+        ),
+        automation_source_decision_count=len(
+            automation_source_decisions
+        ),
+        automation_source_ignore_count=sum(
+            decision.action == "ignore"
+            for decision in automation_source_decisions
+        ),
+        automation_source_review_count=sum(
+            decision.action == "review"
+            for decision in automation_source_decisions
         ),
         filter_decision_count=len(decisions),
         ignore_count=sum(
@@ -161,6 +190,10 @@ def _print_report(report: ProfileReport) -> None:
         f"{report.robot_sender_candidate_count}"
     )
     print(
+        "interactive_bot candidate 数量: "
+        f"{report.interactive_bot_candidate_count}"
+    )
+    print(
         "template candidate 数量: "
         f"{report.template_candidate_count}"
     )
@@ -174,6 +207,18 @@ def _print_report(report: ProfileReport) -> None:
         f"{report.repeated_template_candidate_count}"
     )
     print(f"unknown: {report.unknown_template_candidate_count}")
+    print(
+        "automation_source decision 数量: "
+        f"{report.automation_source_decision_count}"
+    )
+    print(
+        "automation_source ignore 数量: "
+        f"{report.automation_source_ignore_count}"
+    )
+    print(
+        "automation_source review 数量: "
+        f"{report.automation_source_review_count}"
+    )
     print(f"FilterDecision 数量: {report.filter_decision_count}")
     print(f"ignore 数量: {report.ignore_count}")
     print(f"review 数量: {report.review_count}")
