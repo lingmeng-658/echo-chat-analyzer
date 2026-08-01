@@ -59,6 +59,134 @@ def test_template_ignore_filters_matching_template_messages() -> None:
     assert result.applied_decisions == [decision]
 
 
+def test_number_fingerprint_ignore_filters_matching_message() -> None:
+    ignored_message = _message(
+        "虚构运势助手",
+        "综合指数:42.5 财运指数:68",
+        1,
+    )
+    decision = _decision(
+        target="综合指数:{number} 财运指数:{number}",
+        target_type="template",
+        action="ignore",
+    )
+
+    result = FilterPipeline().apply_filter_decisions(
+        [ignored_message],
+        [decision],
+    )
+
+    assert result.filtered_messages == [ignored_message]
+    assert result.applied_decisions == [decision]
+
+
+def test_id_fingerprint_ignore_filters_matching_message() -> None:
+    ignored_message = _message(
+        "虚构查询助手",
+        "查询编号123456",
+        1,
+    )
+    decision = _decision(
+        target="查询编号{id}",
+        target_type="template",
+        action="ignore",
+    )
+
+    result = FilterPipeline().apply_filter_decisions(
+        [ignored_message],
+        [decision],
+    )
+
+    assert result.filtered_messages == [ignored_message]
+    assert result.applied_decisions == [decision]
+
+
+def test_user_fingerprint_ignore_filters_matching_message() -> None:
+    ignored_message = _message(
+        "虚构运势助手",
+        "@虚构用户 今日运势:99",
+        1,
+    )
+    decision = _decision(
+        target="@{user} 今日运势:{number}",
+        target_type="template",
+        action="ignore",
+    )
+
+    result = FilterPipeline().apply_filter_decisions(
+        [ignored_message],
+        [decision],
+    )
+
+    assert result.filtered_messages == [ignored_message]
+    assert result.applied_decisions == [decision]
+
+
+def test_url_fingerprint_ignore_filters_matching_message() -> None:
+    ignored_message = _message(
+        "虚构查询助手",
+        "详情:https://example.test/a/42，版本:3",
+        1,
+    )
+    decision = _decision(
+        target="详情:{url}，版本:{number}",
+        target_type="template",
+        action="ignore",
+    )
+
+    result = FilterPipeline().apply_filter_decisions(
+        [ignored_message],
+        [decision],
+    )
+
+    assert result.filtered_messages == [ignored_message]
+    assert result.applied_decisions == [decision]
+
+
+def test_fingerprint_ignore_keeps_different_static_structure() -> None:
+    kept_message = _message(
+        "虚构普通用户",
+        "综合指数:42 事业指数:68",
+        1,
+    )
+    decision = _decision(
+        target="综合指数:{number} 财运指数:{number}",
+        target_type="template",
+        action="ignore",
+    )
+
+    result = FilterPipeline().apply_filter_decisions(
+        [kept_message],
+        [decision],
+    )
+
+    assert result.kept_messages == [kept_message]
+    assert result.filtered_messages == []
+    assert result.applied_decisions == []
+
+
+def test_number_fingerprint_does_not_match_long_integer_id() -> None:
+    kept_message = _message(
+        "虚构查询助手",
+        "综合指数:123456",
+        1,
+    )
+    decision = _decision(
+        target="综合指数:{number}",
+        target_type="template",
+        action="ignore",
+    )
+
+    result = FilterPipeline().apply_filter_decisions(
+        [kept_message],
+        [decision],
+    )
+
+    assert result.kept_messages == [kept_message]
+    assert result.filtered_messages == []
+    assert result.applied_decisions == []
+
+
 def test_keep_decision_does_not_filter_messages() -> None:
     message = _message("虚构助手", "保留这条虚构消息", 1)
     decision = _decision(

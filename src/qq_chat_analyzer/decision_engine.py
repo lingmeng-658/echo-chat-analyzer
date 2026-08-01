@@ -45,8 +45,6 @@ def create_filter_decisions(
             target_type = "sender"
             source_kind = candidate.metadata.get("source_kind")
             if source_kind == "interactive_bot":
-                if candidate.score < 0.6:
-                    continue
                 if _has_strong_interactive_bot_evidence(candidate):
                     action = "ignore"
                     reason = "high_confidence_interactive_bot"
@@ -91,21 +89,12 @@ def _has_strong_interactive_bot_evidence(
 
     mention_count = metrics.get("mention_count")
     response_rate = metrics.get("response_rate")
-    unique_trigger_source_count = metrics.get(
-        "unique_trigger_source_count"
-    )
-    concentrated_in_short_window = metrics.get(
-        "concentrated_in_short_window"
-    )
 
     return (
         type(mention_count) is int
         and mention_count >= 30
         and type(response_rate) is float
-        and 0.8 <= response_rate <= 1.0
-        and type(unique_trigger_source_count) is int
-        and unique_trigger_source_count >= 5
-        and concentrated_in_short_window is False
+        and response_rate >= 0.8
     )
 
 

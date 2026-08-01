@@ -10,7 +10,16 @@ from .filter_decisions import FilterDecision
 from .parser import ParsedMessage
 
 
-_TEMPLATE_VARIABLE = "{variable}"
+_TEMPLATE_PLACEHOLDER_PATTERN = re.compile(
+    r"\{(?P<kind>variable|number|id|user|url)\}"
+)
+_TEMPLATE_PLACEHOLDER_REGEXES = {
+    "variable": r".+?",
+    "number": r"(?:\d+\.\d+|\d{1,5})",
+    "id": r"\d{6,}",
+    "user": r"[^\s，,。.!！?？、:：;；）)\]】}]+",
+    "url": r"(?i:https?)://[^\s，,。！!？、；;）)\]】}]+",
+}
 _TERMINAL_PUNCTUATION = "。.!！?？"
 
 
@@ -83,9 +92,23 @@ def _decision_matches_message(
 def _template_matches(template: str, text: str) -> bool:
     normalized_template = _normalize_template_text(template)
     normalized_text = _normalize_template_text(text)
-    parts = normalized_template.split(_TEMPLATE_VARIABLE)
-    pattern = ".+?".join(re.escape(part) for part in parts)
+    pattern = _template_pattern(normalized_template)
     return re.fullmatch(pattern, normalized_text) is not None
+
+
+def _template_pattern(template: str) -> str:
+    parts: list[str] = []
+    position = 0
+
+    for match in _TEMPLATE_PLACEHOLDER_PATTERN.finditer(template):
+        parts.append(re.escape(template[position : match.start()]))
+        parts.append(
+            _TEMPLATE_PLACEHOLDER_REGEXES[match.group("kind")]
+        )
+        position = match.end()
+
+    parts.append(re.escape(template[position:]))
+    return "".join(parts)
 
 
 def _normalize_template_text(text: str) -> str:

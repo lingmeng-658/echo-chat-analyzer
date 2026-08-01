@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
@@ -16,13 +17,24 @@ MAX_TEMPLATE_EXAMPLES = 3
 
 _WELCOME_PATTERN = re.compile(r"^欢迎\s+(.+?)\s+加入群聊$")
 _NUMBER_PATTERN = re.compile(r"\d+(?:\.\d+)?")
+_FINGERPRINT_PATTERN = re.compile(
+    r"(?P<url>https?://[^\s，,。！!？、；;）)\]】}]+)"
+    r"|(?P<user>@[^\s，,。.!！?？、:：;；）)\]】}]+)"
+    r"|(?P<number>\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+_VARIABLE_TOKEN_PATTERN = re.compile(
+    r"\{(?P<kind>variable|user|number|id|url)\}"
+)
 _TERMINAL_PUNCTUATION = "。.!！?？"
+_MIN_ID_DIGITS = 6
 
 
 @dataclass(slots=True)
 class _TemplateGroup:
     candidate_type: str
     examples: list[str] = field(default_factory=list)
+    senders: list[str] = field(default_factory=list)
 
 
 def detect_template_candidates(
@@ -51,6 +63,7 @@ def detect_template_candidates(
             _TemplateGroup(candidate_type=candidate_type),
         )
         group.examples.append(text)
+        group.senders.append(message.sender)
 
     if total_message_count == 0:
         return []
@@ -71,6 +84,8 @@ def detect_template_candidates(
             frequency_strength * 0.5 + similarity * 0.5,
             4,
         )
+        variable_counts = _variable_counts(template)
+        sender_counts = Counter(group.senders)
 
         candidates.append(
             Candidate(
@@ -79,12 +94,25 @@ def detect_template_candidates(
                 score=score,
                 reasons=["high_frequency", "high_similarity"],
                 metadata={
+                    "fingerprint": template,
+                    "occurrence_count": matched_message_count,
                     "matched_message_count": matched_message_count,
                     "match_ratio": round(match_ratio, 4),
                     "template_examples": group.examples[
                         :MAX_TEMPLATE_EXAMPLES
                     ],
                     "similarity": similarity,
+                    "static_character_count": (
+                        _static_template_length(template)
+                    ),
+                    "variable_count": sum(variable_counts.values()),
+                    "variable_counts": dict(variable_counts),
+                    "unique_sender_count": len(sender_counts),
+                    "top_sender_ratio": round(
+                        max(sender_counts.values())
+                        / matched_message_count,
+                        4,
+                    ),
                 },
             )
         )
@@ -102,8 +130,8 @@ def _normalize_template(text: str) -> tuple[str, str] | None:
     if welcome_match is not None:
         return "欢迎 {variable} 加入群聊", "welcome_template"
 
-    template, replacement_count = _NUMBER_PATTERN.subn(
-        "{variable}",
+    template, replacement_count = _FINGERPRINT_PATTERN.subn(
+        _fingerprint_replacement,
         text,
     )
     if replacement_count == 0:
@@ -112,5 +140,24 @@ def _normalize_template(text: str) -> tuple[str, str] | None:
 
 
 def _static_template_length(template: str) -> int:
-    static_text = template.replace("{variable}", "")
+    static_text = _VARIABLE_TOKEN_PATTERN.sub("", template)
     return len(re.sub(r"\W+", "", static_text))
+
+
+def _fingerprint_replacement(match: re.Match[str]) -> str:
+    if match.lastgroup == "url":
+        return "{url}"
+    if match.lastgroup == "user":
+        return "@{user}"
+
+    number = match.group("number")
+    if number.isdigit() and len(number) >= _MIN_ID_DIGITS:
+        return "{id}"
+    return "{number}"
+
+
+def _variable_counts(template: str) -> Counter[str]:
+    return Counter(
+        match.group("kind")
+        for match in _VARIABLE_TOKEN_PATTERN.finditer(template)
+    )

@@ -109,7 +109,7 @@ def test_low_confidence_robot_sender_has_no_decision() -> None:
     assert create_filter_decisions([candidate]) == []
 
 
-def test_interactive_bot_with_complete_evidence_is_ignored() -> None:
+def test_interactive_bot_uses_only_mentions_and_response_rate() -> None:
     candidate = Candidate(
         target="虚构交互助手",
         candidate_type="automation_source",
@@ -119,8 +119,9 @@ def test_interactive_bot_with_complete_evidence_is_ignored() -> None:
             "metrics": {
                 "mention_count": 100,
                 "response_rate": 0.95,
-                "unique_trigger_source_count": 20,
-                "concentrated_in_short_window": False,
+                "unique_trigger_source_count": 1,
+                "response_template_score": 0.0,
+                "concentrated_in_short_window": True,
             },
         },
     )
@@ -169,7 +170,63 @@ def test_interactive_bot_with_small_sample_is_reviewed() -> None:
     ]
 
 
-def test_interactive_bot_concentrated_in_short_window_is_reviewed() -> None:
+def test_interactive_bot_below_ten_mentions_is_reviewed() -> None:
+    candidate = Candidate(
+        target="fictional_low_volume_source",
+        candidate_type="automation_source",
+        score=0.99,
+        metadata={
+            "source_kind": "interactive_bot",
+            "metrics": {
+                "mention_count": 9,
+                "response_rate": 1.0,
+            },
+        },
+    )
+
+    decisions = create_filter_decisions([candidate])
+
+    assert decisions == [
+        FilterDecision(
+            target="fictional_low_volume_source",
+            target_type="sender",
+            action="review",
+            confidence=0.99,
+            reason="possible_interactive_bot",
+            source="auto",
+        )
+    ]
+
+
+def test_interactive_bot_below_response_rate_threshold_is_reviewed() -> None:
+    candidate = Candidate(
+        target="fictional_low_response_source",
+        candidate_type="automation_source",
+        score=0.99,
+        metadata={
+            "source_kind": "interactive_bot",
+            "metrics": {
+                "mention_count": 100,
+                "response_rate": 0.79,
+            },
+        },
+    )
+
+    decisions = create_filter_decisions([candidate])
+
+    assert decisions == [
+        FilterDecision(
+            target="fictional_low_response_source",
+            target_type="sender",
+            action="review",
+            confidence=0.99,
+            reason="possible_interactive_bot",
+            source="auto",
+        )
+    ]
+
+
+def test_interactive_bot_concentration_does_not_prevent_ignore() -> None:
     candidate = Candidate(
         target="虚构集中触发助手",
         candidate_type="automation_source",
@@ -191,15 +248,15 @@ def test_interactive_bot_concentrated_in_short_window_is_reviewed() -> None:
         FilterDecision(
             target="虚构集中触发助手",
             target_type="sender",
-            action="review",
+            action="ignore",
             confidence=0.96,
-            reason="possible_interactive_bot",
+            reason="high_confidence_interactive_bot",
             source="auto",
         )
     ]
 
 
-def test_interactive_bot_with_unknown_concentration_is_reviewed() -> None:
+def test_interactive_bot_without_old_evidence_fields_is_ignored() -> None:
     candidate = Candidate(
         target="虚构单来源互动助手",
         candidate_type="automation_source",
@@ -221,9 +278,9 @@ def test_interactive_bot_with_unknown_concentration_is_reviewed() -> None:
         FilterDecision(
             target="虚构单来源互动助手",
             target_type="sender",
-            action="review",
+            action="ignore",
             confidence=0.97,
-            reason="possible_interactive_bot",
+            reason="high_confidence_interactive_bot",
             source="auto",
         )
     ]
@@ -259,8 +316,8 @@ def test_interactive_bot_with_invalid_metrics_is_reviewed() -> None:
     ]
 
 
-def test_interactive_bot_with_invalid_response_rate_is_reviewed() -> None:
-    for response_rate in (float("inf"), 1.01):
+def test_interactive_bot_with_invalid_response_rate_type_is_reviewed() -> None:
+    for response_rate in ("0.95", None):
         candidate = Candidate(
             target="虚构响应率异常助手",
             candidate_type="automation_source",
@@ -312,15 +369,30 @@ def test_medium_confidence_interactive_bot_is_reviewed() -> None:
     ]
 
 
-def test_low_confidence_interactive_bot_has_no_decision() -> None:
+def test_interactive_bot_score_does_not_participate_in_decision() -> None:
     candidate = Candidate(
         target="虚构低置信助手",
         candidate_type="automation_source",
         score=0.59,
-        metadata={"source_kind": "interactive_bot"},
+        metadata={
+            "source_kind": "interactive_bot",
+            "metrics": {
+                "mention_count": 30,
+                "response_rate": 0.8,
+            },
+        },
     )
 
-    assert create_filter_decisions([candidate]) == []
+    assert create_filter_decisions([candidate]) == [
+        FilterDecision(
+            target="虚构低置信助手",
+            target_type="sender",
+            action="ignore",
+            confidence=0.59,
+            reason="high_confidence_interactive_bot",
+            source="auto",
+        )
+    ]
 
 
 def test_unknown_automation_source_kind_is_reviewed() -> None:
