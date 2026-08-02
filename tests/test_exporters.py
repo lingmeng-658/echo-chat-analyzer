@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import csv
 import os
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
 from matplotlib.font_manager import FontProperties
 from PIL import Image
 
@@ -41,6 +44,42 @@ SPEAKER_SUMMARIES = [
         top_speaker_share_percent=100.0,
     ),
 ]
+
+
+def test_importing_exporters_preserves_selected_matplotlib_backend(
+    tmp_path: Path,
+) -> None:
+    environment = os.environ.copy()
+    existing_pythonpath = environment.get("PYTHONPATH")
+    environment["PYTHONPATH"] = os.pathsep.join(
+        part
+        for part in (str(SRC_ROOT), existing_pythonpath)
+        if part
+    )
+    environment["MPLCONFIGDIR"] = str(tmp_path / "matplotlib-config")
+    import_check = """
+import matplotlib
+
+matplotlib.use("svg")
+backend_before_import = matplotlib.get_backend()
+
+import qq_chat_analyzer.exporters
+
+backend_after_import = matplotlib.get_backend()
+if backend_after_import.lower() != backend_before_import.lower():
+    print(f"{backend_before_import} -> {backend_after_import}")
+    raise SystemExit(1)
+"""
+
+    completed = subprocess.run(
+        [sys.executable, "-c", import_check],
+        capture_output=True,
+        check=False,
+        env=environment,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
 def test_csv_creates_parent_directory_and_utf8_bom(tmp_path: Path) -> None:
@@ -217,7 +256,9 @@ def test_chart_orders_by_share_and_uses_percentage_axis_without_mutating_input(
     ]
     assert summaries == original_order
 
-    figure, axes = exporters.plt.subplots()
+    figure = Figure()
+    FigureCanvasAgg(figure)
+    axes = figure.subplots()
     try:
         font = FontProperties(fname=str(_available_chinese_font()))
         exporters._draw_word_top_speakers_axes(axes, ordered, font)
@@ -239,7 +280,7 @@ def test_chart_orders_by_share_and_uses_percentage_axis_without_mutating_input(
         assert axes.get_xlabel() == "主要发送者占该词总次数的比例（%）"
         assert axes.get_title() == "高频词主要发送者占比 Top 25"
     finally:
-        exporters.plt.close(figure)
+        figure.clear()
 
 
 def test_chart_ordering_selects_overall_top_twenty_five_before_share_sort(

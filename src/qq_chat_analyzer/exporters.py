@@ -7,12 +7,9 @@ import os
 from collections.abc import Sequence
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
-
-from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
 from matplotlib.font_manager import FontProperties
 from matplotlib.ticker import PercentFormatter
 from wordcloud import WordCloud
@@ -141,7 +138,9 @@ def generate_word_top_speakers_chart(
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     figure_height = max(6.0, len(displayed_summaries) * 0.5 + 2.5)
-    figure, axes = plt.subplots(figsize=(16, figure_height))
+    figure = Figure(figsize=(16, figure_height))
+    FigureCanvasAgg(figure)
+    axes = figure.subplots()
 
     try:
         _draw_word_top_speakers_axes(
@@ -152,7 +151,7 @@ def generate_word_top_speakers_chart(
         figure.tight_layout()
         figure.savefig(destination, dpi=120, bbox_inches="tight")
     finally:
-        plt.close(figure)
+        figure.clear()
 
 
 def _order_word_top_speaker_summaries(
