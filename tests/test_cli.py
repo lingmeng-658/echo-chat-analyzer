@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import csv
 import json
 import os
@@ -22,6 +23,16 @@ STOPWORDS_PATH = PROJECT_ROOT / "stopwords.txt"
 sys.path.insert(0, str(SRC_ROOT))
 
 from qq_chat_analyzer import cli as cli_module
+from qq_chat_analyzer.application import (
+    AnalysisRequestDTO,
+    AnalysisResultDTO,
+    AnalysisStatus,
+    ArtifactGenerationFailed,
+    InputPathNotFound,
+    InvalidAnalysisRequest,
+    NoSupportedInput,
+    WordFrequencyDTO,
+)
 from qq_chat_analyzer.cli import main
 
 
@@ -168,6 +179,106 @@ def test_simplified_file_input_uses_filename_without_json_suffix() -> None:
     assert configuration.output_directory == Path("output") / "fictional chat"
 
 
+def test_main_adapts_cli_configuration_to_application_service(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    input_path = tmp_path / "private-chat.json"
+    output_directory = tmp_path / "private-output"
+    stopwords_path = tmp_path / "private-stopwords.txt"
+    font_path = str(tmp_path / "private-font.ttf")
+    requests: list[AnalysisRequestDTO] = []
+
+    class FakeAnalysisApplicationService:
+        def execute(self, request: AnalysisRequestDTO) -> AnalysisResultDTO:
+            requests.append(request)
+            return AnalysisResultDTO(
+                status=AnalysisStatus.COMPLETED,
+                processed_message_count=4,
+                valid_text_count=2,
+                top_words=(WordFrequencyDTO(word="Python", count=3),),
+            )
+
+    monkeypatch.setattr(
+        cli_module,
+        "AnalysisApplicationService",
+        FakeAnalysisApplicationService,
+    )
+
+    exit_code = main(
+        [
+            "--input",
+            str(input_path),
+            "--output-dir",
+            str(output_directory),
+            "--stopwords",
+            str(stopwords_path),
+            "--font-path",
+            font_path,
+            "--top",
+            "9",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert requests == [
+        AnalysisRequestDTO(
+            input_path=input_path,
+            output_directory=output_directory,
+            stopwords_path=stopwords_path,
+            font_path=font_path,
+            top=9,
+        )
+    ]
+    assert exit_code == 0
+    assert "处理消息数量: 4" in captured.out
+    assert "有效文本数量: 2" in captured.out
+    assert "Top 9" in captured.out
+    assert "Python\t3" in captured.out
+    assert captured.err == ""
+    assert str(input_path) not in captured.out
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_message"),
+    [
+        (AnalysisStatus.NO_VALID_TEXT, "没有有效文本"),
+        (AnalysisStatus.NO_TOKENS, "有效文本未产生可统计词语"),
+    ],
+)
+def test_main_displays_empty_analysis_status_without_top_words(
+    status: AnalysisStatus,
+    expected_message: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class EmptyAnalysisApplicationService:
+        def execute(self, request: AnalysisRequestDTO) -> AnalysisResultDTO:
+            return AnalysisResultDTO(
+                status=status,
+                processed_message_count=4,
+                valid_text_count=2,
+            )
+
+    monkeypatch.setattr(
+        cli_module,
+        "AnalysisApplicationService",
+        EmptyAnalysisApplicationService,
+    )
+
+    exit_code = main(["--input", str(tmp_path / "private-chat.json")])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "处理消息数量: 4" in captured.out
+    assert "有效文本数量: 2" in captured.out
+    assert expected_message in captured.out
+    assert "Top " not in captured.out
+    assert captured.err == ""
+
+
 def test_simplified_cli_path_with_spaces_uses_automatic_output_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -221,6 +332,90 @@ def test_invalid_simplified_top_returns_friendly_error(
     assert "top" in captured.err.lower()
     assert invalid_top in captured.err
     assert "Traceback" not in captured.err
+
+
+@pytest.mark.parametrize(
+    ("application_error", "expected_exit_code", "expected_message"),
+    [
+        (InputPathNotFound(), 2, "输入路径不存在"),
+        (NoSupportedInput(), 2, "未找到可处理的 JSON 或 JSONL 文件"),
+        (InvalidAnalysisRequest(), 2, "分析请求无效"),
+        (ArtifactGenerationFailed(), 1, "生成输出失败"),
+    ],
+)
+def test_main_maps_application_errors_without_exposing_private_paths(
+    application_error: Exception,
+    expected_exit_code: int,
+    expected_message: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    private_input_path = tmp_path / "private-chat.json"
+
+    class FailingAnalysisApplicationService:
+        def execute(self, request: AnalysisRequestDTO) -> AnalysisResultDTO:
+            raise application_error
+
+    monkeypatch.setattr(
+        cli_module,
+        "AnalysisApplicationService",
+        FailingAnalysisApplicationService,
+    )
+
+    exit_code = main(["--input", str(private_input_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == expected_exit_code
+    assert expected_message in captured.err
+    assert str(private_input_path) not in captured.err
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+
+
+def test_cli_does_not_directly_import_core_pipeline_modules() -> None:
+    source = Path(cli_module.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    package_name = "qq_chat_analyzer"
+    forbidden_modules = {
+        f"{package_name}.analyzer",
+        f"{package_name}.cleaner",
+        f"{package_name}.exporters",
+        f"{package_name}.parser",
+        f"{package_name}.smart_profile",
+        f"{package_name}.tokenizer",
+    }
+    imported_modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_modules.update(alias.name for alias in node.names)
+            continue
+        if not isinstance(node, ast.ImportFrom):
+            continue
+
+        if node.level == 1:
+            import_base = package_name
+            if node.module:
+                import_base = f"{import_base}.{node.module}"
+        elif node.level == 0 and node.module:
+            import_base = node.module
+        else:
+            continue
+
+        imported_modules.add(import_base)
+        imported_modules.update(
+            f"{import_base}.{alias.name}" for alias in node.names
+        )
+
+    direct_core_imports = {
+        imported_module
+        for imported_module in imported_modules
+        for forbidden_module in forbidden_modules
+        if imported_module == forbidden_module
+        or imported_module.startswith(f"{forbidden_module}.")
+    }
+
+    assert direct_core_imports == set()
 
 
 def test_module_cli_file_input_generates_outputs_without_printing_chat(
