@@ -1,0 +1,53 @@
+"""Privacy-safe data transfer objects for application use cases."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
+
+
+class AnalysisStatus(str, Enum):
+    """Outcome states for a completed analysis use case."""
+
+    COMPLETED = "completed"
+    NO_VALID_TEXT = "no_valid_text"
+    NO_TOKENS = "no_tokens"
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisRequestDTO:
+    """In-process command for one local analysis run."""
+
+    input_path: Path = field(repr=False)
+    output_directory: Path = field(repr=False)
+    stopwords_path: Path = field(repr=False)
+    font_path: str | None = field(default=None, repr=False)
+    top: int = 50
+
+
+@dataclass(frozen=True, slots=True)
+class WordFrequencyDTO:
+    """One aggregate word-frequency result."""
+
+    word: str
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactDTO:
+    """Public descriptor for one locally generated artifact."""
+
+    kind: str
+    filename: str
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisResultDTO:
+    """Privacy-safe result returned by the analysis use case."""
+
+    status: AnalysisStatus
+    processed_message_count: int
+    valid_text_count: int
+    top_words: tuple[WordFrequencyDTO, ...] = ()
+    artifacts: tuple[ArtifactDTO, ...] = ()
