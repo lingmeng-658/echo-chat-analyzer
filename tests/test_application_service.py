@@ -162,7 +162,6 @@ def test_execute_returns_completed_privacy_safe_result_without_cli_output(
 
 def test_execute_returns_no_valid_text_without_exporting(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     application = _application_module()
     service_module = _service_module()
@@ -179,25 +178,19 @@ def test_execute_returns_no_valid_text_without_exporting(
         ],
     )
 
-    def fail_export(*args: object) -> None:
-        raise AssertionError("empty analysis must not export artifacts")
-
-    monkeypatch.setattr(service_module, "_export_artifacts", fail_export)
-
-    result = service_module.AnalysisApplicationService().execute(
-        _request(application, tmp_path, input_path)
-    )
+    request = _request(application, tmp_path, input_path)
+    result = service_module.AnalysisApplicationService().execute(request)
 
     assert result == application.AnalysisResultDTO(
         status=application.AnalysisStatus.NO_VALID_TEXT,
         processed_message_count=1,
         valid_text_count=0,
     )
+    assert not request.output_directory.exists()
 
 
 def test_execute_returns_no_tokens_without_exporting(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     application = _application_module()
     service_module = _service_module()
@@ -214,25 +207,20 @@ def test_execute_returns_no_tokens_without_exporting(
         ],
     )
 
-    def fail_export(*args: object) -> None:
-        raise AssertionError("tokenless analysis must not export artifacts")
-
-    monkeypatch.setattr(service_module, "_export_artifacts", fail_export)
-
-    result = service_module.AnalysisApplicationService().execute(
-        _request(
-            application,
-            tmp_path,
-            input_path,
-            stopwords="Python\n",
-        )
+    request = _request(
+        application,
+        tmp_path,
+        input_path,
+        stopwords="Python\n",
     )
+    result = service_module.AnalysisApplicationService().execute(request)
 
     assert result == application.AnalysisResultDTO(
         status=application.AnalysisStatus.NO_TOKENS,
         processed_message_count=1,
         valid_text_count=1,
     )
+    assert not request.output_directory.exists()
 
 
 def test_execute_rejects_non_positive_top(tmp_path: Path) -> None:
