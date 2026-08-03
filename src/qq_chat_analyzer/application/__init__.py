@@ -1,5 +1,6 @@
 """Stable application-layer contracts for local chat analysis."""
 
+from .analysis_service import AnalysisApplicationService
 from .dto import (
     AnalysisRequestDTO,
     AnalysisResultDTO,
@@ -16,6 +17,7 @@ from .errors import (
 )
 
 __all__ = [
+    "AnalysisApplicationService",
     "AnalysisRequestDTO",
     "AnalysisResultDTO",
     "AnalysisStatus",
