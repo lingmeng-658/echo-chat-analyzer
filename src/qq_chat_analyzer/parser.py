@@ -4,22 +4,15 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from .message import ChatMessage
 
 
 SUPPORTED_MESSAGE_TYPES = frozenset({"text", "reply"})
 
-
-@dataclass(frozen=True, slots=True)
-class ParsedMessage:
-    """A text-bearing chat message normalized for later processing."""
-
-    timestamp: int | float | str
-    sender: str
-    message_type: str
-    text: str
+ParsedMessage = ChatMessage
 
 
 def load_messages(path: str | Path) -> list[Any]:
@@ -74,9 +67,9 @@ def _load_jsonl_messages(path: Path) -> list[Any]:
     return messages
 
 
-def parse_messages(raw_messages: Iterable[Any]) -> list[ParsedMessage]:
+def parse_messages(raw_messages: Iterable[Any]) -> list[ChatMessage]:
     """Normalize supported messages while isolating malformed entries."""
-    parsed_messages: list[ParsedMessage] = []
+    parsed_messages: list[ChatMessage] = []
 
     try:
         iterator = iter(raw_messages)
@@ -91,7 +84,7 @@ def parse_messages(raw_messages: Iterable[Any]) -> list[ParsedMessage]:
     return parsed_messages
 
 
-def _parse_message(raw_message: Any) -> ParsedMessage | None:
+def _parse_message(raw_message: Any) -> ChatMessage | None:
     if not isinstance(raw_message, Mapping):
         return None
 
@@ -121,7 +114,7 @@ def _parse_message(raw_message: Any) -> ParsedMessage | None:
     if not isinstance(text, str):
         return None
 
-    return ParsedMessage(
+    return ChatMessage(
         timestamp=timestamp,
         sender=sender,
         message_type=message_type,

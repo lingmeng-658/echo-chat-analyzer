@@ -19,7 +19,8 @@ from ..exporters import (
     generate_word_top_speakers_chart,
     generate_wordcloud,
 )
-from ..parser import ParsedMessage, load_messages, parse_messages
+from ..message import ChatMessage
+from ..parser import load_messages, parse_messages
 from ..smart_profile import run_smart_profile
 from ..tokenizer import tokenize
 from .dto import (
@@ -155,9 +156,9 @@ def _find_supported_input_files(input_path: Path) -> list[Path]:
 
 def _load_and_parse_messages(
     input_files: list[Path],
-) -> tuple[int, list[ParsedMessage]]:
+) -> tuple[int, list[ChatMessage]]:
     processed_message_count = 0
-    parsed_messages: list[ParsedMessage] = []
+    parsed_messages: list[ChatMessage] = []
     for input_file in input_files:
         raw_messages = load_messages(input_file)
         processed_message_count += len(raw_messages)
@@ -166,7 +167,7 @@ def _load_and_parse_messages(
 
 
 def _analyze_kept_messages(
-    messages: list[ParsedMessage],
+    messages: list[ChatMessage],
     stopwords_path: Path,
 ) -> _AnalyzedMessages:
     valid_text_count = 0

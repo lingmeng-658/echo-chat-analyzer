@@ -8,7 +8,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from ..candidates import Candidate
-from ..parser import ParsedMessage
+from ..message import ChatMessage
 
 
 MIN_MATCHED_MESSAGE_COUNT = 3
@@ -38,7 +38,7 @@ class _TemplateGroup:
 
 
 def detect_template_candidates(
-    messages: Iterable[ParsedMessage],
+    messages: Iterable[ChatMessage],
 ) -> list[Candidate]:
     """Return repeated structure candidates without filtering messages."""
     groups: dict[str, _TemplateGroup] = {}
