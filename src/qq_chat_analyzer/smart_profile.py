@@ -11,11 +11,11 @@ from .detectors import (
     detect_template_candidates,
 )
 from .filter_pipeline import FilterPipeline, FilteringResult
-from .parser import ParsedMessage
+from .message import ChatMessage
 
 
 def run_smart_profile(
-    messages: Iterable[ParsedMessage],
+    messages: Iterable[ChatMessage],
 ) -> FilteringResult:
     """Detect candidates, create decisions, and apply explicit filters."""
     message_list = list(messages)

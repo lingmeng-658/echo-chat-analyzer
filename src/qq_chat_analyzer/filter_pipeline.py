@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from .filter_decisions import FilterDecision
-from .parser import ParsedMessage
+from .message import ChatMessage
 
 
 _TEMPLATE_PLACEHOLDER_PATTERN = re.compile(
@@ -27,8 +27,8 @@ _TERMINAL_PUNCTUATION = "。.!！?？"
 class FilteringResult:
     """Traceable result of applying filtering decisions."""
 
-    kept_messages: list[ParsedMessage]
-    filtered_messages: list[ParsedMessage]
+    kept_messages: list[ChatMessage]
+    filtered_messages: list[ChatMessage]
     applied_decisions: list[FilterDecision]
 
 
@@ -37,14 +37,14 @@ class FilterPipeline:
 
     def apply_filter_decisions(
         self,
-        messages: Iterable[ParsedMessage],
+        messages: Iterable[ChatMessage],
         decisions: Iterable[FilterDecision],
     ) -> FilteringResult:
         """Partition messages while preserving their original order."""
         decision_list = list(decisions)
         applied_flags = [False] * len(decision_list)
-        kept_messages: list[ParsedMessage] = []
-        filtered_messages: list[ParsedMessage] = []
+        kept_messages: list[ChatMessage] = []
+        filtered_messages: list[ChatMessage] = []
 
         for message in messages:
             should_filter = False
@@ -80,7 +80,7 @@ class FilterPipeline:
 
 def _decision_matches_message(
     decision: FilterDecision,
-    message: ParsedMessage,
+    message: ChatMessage,
 ) -> bool:
     if decision.target_type == "sender":
         return message.sender == decision.target

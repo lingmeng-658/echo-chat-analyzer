@@ -7,7 +7,7 @@ from collections import Counter
 from collections.abc import Iterable
 
 from ..candidates import Candidate
-from ..parser import ParsedMessage
+from ..message import ChatMessage
 
 
 MIN_MESSAGE_COUNT = 5
@@ -24,7 +24,7 @@ _NUMBER_PATTERN = re.compile(r"\d+")
 
 
 def detect_robot_candidates(
-    messages: Iterable[ParsedMessage],
+    messages: Iterable[ChatMessage],
 ) -> list[Candidate]:
     """Return suspected robot senders without changing or filtering messages."""
     sender_texts: dict[str, list[str]] = {}

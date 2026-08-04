@@ -7,7 +7,7 @@ from collections import Counter
 from collections.abc import Iterable
 
 from ..candidates import Candidate
-from ..parser import ParsedMessage
+from ..message import ChatMessage
 from .template_detector import _NUMBER_PATTERN, _normalize_message_text
 
 
@@ -24,7 +24,7 @@ _MENTION_BOUNDARY = r"(?=$|[\s。，！？，、,:;；])"
 
 
 def detect_interactive_bot_candidates(
-    messages: Iterable[ParsedMessage],
+    messages: Iterable[ChatMessage],
 ) -> list[Candidate]:
     """Return interactive automation candidates without changing messages."""
     message_list = list(messages)
@@ -152,11 +152,11 @@ def _compile_mention_pattern(
 
 
 def _find_response_in_window(
-    messages: list[ParsedMessage],
+    messages: list[ChatMessage],
     *,
     mention_index: int,
     target_sender: str,
-) -> ParsedMessage | None:
+) -> ChatMessage | None:
     mention_timestamp = _timestamp_seconds(
         messages[mention_index].timestamp
     )
