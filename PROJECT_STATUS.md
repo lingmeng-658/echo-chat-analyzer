@@ -25,17 +25,33 @@ Local Chat Analyzer 是一个隐私优先、本地运行的聊天记录分析工
 
 main
 
-当前 commit：
+当前基线 commit：
 
-36b314a
+282694a
 
-测试状态：
+当前工作区状态：
 
-176 passed
+-   Phase 5.2A Application Service 已完成
+-   Phase 5.2B ChatMessage 中性消息模型已完成
+-   微信 detailed JSON 第一版支持已完成
+-   多来源分析流程验证已完成
+-   微信接入相关改动尚未提交到 main
+
+最近完整 pytest：
+
+196 passed
+
+1 failed
+
+失败项：
+
+test_cli.py::test_console_script_and_module_help_are_consistent
+
+原因：当前 .venv 的 editable 安装指向 D:\Word cloud，qqchat.exe 运行的是旧包；与微信接入无关。
 
 当前版本目标：
 
-v0.5.0 Analysis Core Complete
+v0.6.0 Multi-Source v1
 
 ------------------------------------------------------------------------
 
@@ -43,15 +59,23 @@ v0.5.0 Analysis Core Complete
 
 当前架构：
 
-CLI
+QQ JSON/JSONL          WeChat detailed JSON
 
 ↓
 
-Application Service
+QQ Parser / WeChat Parser
 
 ↓
 
-Core Analysis Modules
+统一消息模型 ChatMessage
+
+↓
+
+AnalysisApplicationService
+
+↓
+
+Core Analysis Pipeline
 
 ↓
 
@@ -61,12 +85,18 @@ Exporter
 
 CLI ↓ Application ↓ Parser / Cleaner / Tokenizer / Analyzer / Exporter
 
+输入方向：
+
+来源 Parser ↓ ChatMessage ↓ Application ↓ Core Analysis
+
 原则：
 
 -   Core 模块不能依赖 CLI；
 -   Core 模块不能依赖 Application；
 -   Application 负责业务流程编排；
 -   CLI 只负责用户交互和参数转换。
+-   来源 Parser 只负责把来源消息转换为 ChatMessage；
+-   核心分析层不关心 QQ、微信或其他来源的具体结构。
 
 ------------------------------------------------------------------------
 
@@ -111,6 +141,7 @@ CLI ↓ Application ↓ Parser / Cleaner / Tokenizer / Analyzer / Exporter
 -   AnalysisResultDTO
 -   AnalysisStatus
 -   ArtifactDTO
+-   WordFrequencyDTO
 
 ### Application Service
 
@@ -153,39 +184,91 @@ CLI ↓ AnalysisApplicationService ↓ Analysis Core
 
 ------------------------------------------------------------------------
 
-# Current Task
-
 ## Phase 5.2A Application Public Entry
 
-目标：
+已完成：
 
-让 Application Service 成为稳定公开入口。
-
-当前希望：
-
-从：
-
-from qq_chat_analyzer.application.analysis_service import
-AnalysisApplicationService
-
-变为：
+-   Application Service 已成为稳定公开入口；
+-   可直接使用：
 
 from qq_chat_analyzer.application import AnalysisApplicationService
 
-计划修改：
+-   CLI 与核心分析逻辑解耦；
+-   原有 analysis_service 导入路径仍可用。
 
--   application/**init**.py
--   tests/test_application_public_api.py
+------------------------------------------------------------------------
 
-禁止扩大范围：
+## Phase 5.2B ChatMessage 中性消息模型
 
-不要修改：
+已完成：
 
--   CLI
--   AnalysisApplicationService 实现
--   DTO
--   Errors
--   Core modules
+新增：
+
+-   src/qq_chat_analyzer/message.py
+
+统一模型：
+
+-   ChatMessage
+
+说明：
+
+-   timestamp、sender、message_type、text 是分析必需字段；
+-   platform、source_type 保留来源信息；
+-   已有 QQ parser 兼容旧入口 ParsedMessage。
+
+------------------------------------------------------------------------
+
+## WeChat detailed JSON 第一版支持
+
+已完成：
+
+新增：
+
+-   src/qq_chat_analyzer/wechat_parser.py
+
+能力：
+
+-   识别微信 detailed JSON 导出；
+-   将“文本消息”“引用消息”转换为 ChatMessage；
+-   设置 platform="wechat"；
+-   保留 source_type 原始类型；
+-   接入 AnalysisApplicationService；
+-   进入现有 smart_profile、cleaner、tokenizer、analyzer 流程；
+-   不修改 analyzer.py、tokenizer.py、cleaner.py；
+-   新增测试：
+    -   tests/test_wechat_parser.py
+    -   tests/test_wechat_application_service.py
+
+------------------------------------------------------------------------
+
+## 多来源分析流程验证
+
+已完成：
+
+-   QQ 输入 → ChatMessage；
+-   微信 detailed JSON → ChatMessage；
+-   两者进入同一个 AnalysisApplicationService；
+-   输出 AnalysisResultDTO、CSV 导出、PNG 导出的格式保持一致。
+
+------------------------------------------------------------------------
+
+# Current Task
+
+## 当前状态
+
+当前没有进行中的实现任务。
+
+最近完成：
+
+-   Phase 5.2A Application Service；
+-   Phase 5.2B ChatMessage；
+-   微信 detailed JSON 第一版；
+-   多来源分析流程验证。
+
+待办（不纳入当前实现范围）：
+
+-   微信 JSONL 支持：未实现，后续另行设计；
+-   其他聊天来源格式：待真实样例确认后再决定。
 
 ------------------------------------------------------------------------
 
@@ -197,11 +280,11 @@ from qq_chat_analyzer.application import AnalysisApplicationService
 
 完善 Application 边界。
 
-包括：
+状态：
 
--   Public Service Entry
--   Message Model 中性化
--   文档和 metadata 整理
+-   Public Service Entry 已完成；
+-   Message Model 中性化已完成；
+-   文档和 metadata 整理：本次更新。
 
 ## Phase 6 Multi-source Support
 
@@ -209,19 +292,19 @@ from qq_chat_analyzer.application import AnalysisApplicationService
 
 支持新的聊天来源。
 
-重点：
+状态：
 
-微信聊天记录读取。
+-   微信 detailed JSON 第一版已完成；
+-   微信 JSONL 待后续；
+-   其他来源格式待调研。
 
 设计原则：
 
-不同来源只负责转换成统一消息模型。
-
-分析核心不关心：
-
--   QQ
--   微信
--   其他来源
+-   不同来源只负责转换成统一消息模型；
+-   分析核心不关心 QQ、微信或其他来源；
+-   新增来源使用独立 parser；
+-   不复制 QQ parser；
+-   不引入微信专用模型到核心分析层。
 
 ## Phase 7 Productization
 
@@ -283,20 +366,15 @@ Design ↓ RED Test ↓ GREEN Implementation ↓ Full Test ↓ Review ↓ PR
 
 # Future Notes
 
-微信接入前：
+微信接入现状：
 
-需要先完成：
+-   微信 detailed JSON 已支持；
+-   微信 JSONL 未支持，不纳入本次范围。
 
-1.  Application Public Entry
-2.  Message Model 中性化
+后续新增来源时：
 
-不要直接复制 QQ Parser 到微信 Parser。
-
-目标架构：
-
-QQ Reader\
-\
-Unified Message Model \| \| AnalysisApplicationService \| \| Analysis
-Core \| \| Result DTO
-
-WeChat Reader
+1.  继续使用 ChatMessage 作为统一消息模型；
+2.  为每个来源建立独立 parser；
+3.  不要直接复制 QQ parser 到微信 parser；
+4.  不要在 analyzer、tokenizer、cleaner 中引入平台判断；
+5.  先按真实样例确认字段，再决定第一版支持格式。

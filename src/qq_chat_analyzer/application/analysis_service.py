@@ -20,9 +20,17 @@ from ..exporters import (
     generate_wordcloud,
 )
 from ..message import ChatMessage
-from ..parser import load_messages, parse_messages
+from ..parser import (
+    load_messages as load_qq_messages,
+    parse_messages as parse_qq_messages,
+)
 from ..smart_profile import run_smart_profile
 from ..tokenizer import tokenize
+from ..wechat_parser import (
+    is_wechat_export,
+    load_messages as load_wechat_messages,
+    parse_messages as parse_wechat_messages,
+)
 from .dto import (
     AnalysisRequestDTO,
     AnalysisResultDTO,
@@ -160,9 +168,14 @@ def _load_and_parse_messages(
     processed_message_count = 0
     parsed_messages: list[ChatMessage] = []
     for input_file in input_files:
-        raw_messages = load_messages(input_file)
+        if is_wechat_export(input_file):
+            raw_messages = load_wechat_messages(input_file)
+            file_messages = parse_wechat_messages(raw_messages)
+        else:
+            raw_messages = load_qq_messages(input_file)
+            file_messages = parse_qq_messages(raw_messages)
         processed_message_count += len(raw_messages)
-        parsed_messages.extend(parse_messages(raw_messages))
+        parsed_messages.extend(file_messages)
     return processed_message_count, parsed_messages
 
 
