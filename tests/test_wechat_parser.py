@@ -134,8 +134,27 @@ def test_text_message_maps_to_chat_message() -> None:
             text="Hello from WeChat",
             platform="wechat",
             source_type=TEXT_TYPE,
+            message_id="fictional-wechat-message-001",
+            sender_id="wxid_fictional_sender",
+            conversation_id=None,
+            is_system=False,
+            recalled=False,
         )
     ]
+
+
+def test_text_message_maps_v2_metadata_fields() -> None:
+    raw_message = _text_message()
+    raw_message["platformMessageId"] = "fictional-wechat-v2-message"
+    raw_message["senderUsername"] = "wxid_v2_sender"
+
+    parsed = parse_messages([raw_message])
+
+    assert parsed[0].message_id == "fictional-wechat-v2-message"
+    assert parsed[0].sender_id == "wxid_v2_sender"
+    assert parsed[0].conversation_id is None
+    assert parsed[0].is_system is False
+    assert parsed[0].recalled is False
 
 
 def test_reply_message_uses_only_current_text() -> None:

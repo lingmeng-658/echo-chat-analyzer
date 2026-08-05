@@ -15,3 +15,8 @@ class ChatMessage:
     text: str
     platform: str = "unknown"
     source_type: str | int | None = None
+    message_id: str | None = None
+    sender_id: str | None = None
+    conversation_id: str | None = None
+    is_system: bool = False
+    recalled: bool = False

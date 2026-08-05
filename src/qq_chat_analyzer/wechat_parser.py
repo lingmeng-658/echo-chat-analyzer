@@ -136,4 +136,8 @@ def _parse_message(raw_message: Any) -> ChatMessage | None:
         text=text,
         platform=WECHAT_PLATFORM,
         source_type=source_type,
+        message_id=raw_message.get("platformMessageId"),
+        sender_id=raw_message.get("senderUsername"),
+        is_system=False,
+        recalled=False,
     )

@@ -104,9 +104,58 @@ def test_text_message_extracts_the_normalized_fields(
 
     message = parsed[0]
     assert message.timestamp == 1767315600
+    assert message.message_id == "fictional-message-001"
+    assert message.sender_id == "100000001"
+    assert message.is_system is False
+    assert message.recalled is False
+    assert message.conversation_id is None
     assert message.sender == "虚构用户甲"
     assert message.message_type == "text"
     assert message.text == "今天一起学习 Python 数据分析"
+
+
+def test_text_message_maps_v2_metadata_fields() -> None:
+    raw_message = {
+        "messageId": "fictional-message-v2",
+        "timestamp": 1767316300,
+        "sender": {
+            "uid": "u_fictional_sender",
+            "uin": "100000020",
+            "nickname": "Fictional V2 Sender",
+        },
+        "type": "text",
+        "content": {"text": "V2 fields"},
+        "system": True,
+        "recalled": True,
+    }
+
+    parsed = parse_messages([raw_message])
+
+    assert parsed[0].message_id == "fictional-message-v2"
+    assert parsed[0].sender_id == "u_fictional_sender"
+    assert parsed[0].is_system is True
+    assert parsed[0].recalled is True
+    assert parsed[0].conversation_id is None
+
+
+def test_text_message_falls_back_to_id_and_sender_uin() -> None:
+    raw_message = {
+        "id": "fictional-jsonl-v2-message",
+        "timestamp": 1767316320,
+        "sender": {
+            "uin": "100000021",
+            "nickname": "Fictional Fallback Sender",
+        },
+        "type": "text",
+        "content": {"text": "Fallback id fields"},
+    }
+
+    parsed = parse_messages([raw_message])
+
+    assert parsed[0].message_id == "fictional-jsonl-v2-message"
+    assert parsed[0].sender_id == "100000021"
+    assert parsed[0].is_system is False
+    assert parsed[0].recalled is False
 
 
 def test_reply_extracts_only_the_repliers_new_text(

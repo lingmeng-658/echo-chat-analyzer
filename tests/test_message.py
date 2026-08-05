@@ -95,3 +95,19 @@ def test_chat_message_has_source_neutral_defaults() -> None:
 
     assert message.platform == "unknown"
     assert message.source_type is None
+
+
+def test_chat_message_new_fields_have_defaults() -> None:
+    ChatMessage = _chat_message_class()
+    message = ChatMessage(
+        timestamp=1,
+        sender="Fictional Alice",
+        message_type="text",
+        text="Hello",
+    )
+
+    assert message.message_id is None
+    assert message.sender_id is None
+    assert message.conversation_id is None
+    assert message.is_system is False
+    assert message.recalled is False

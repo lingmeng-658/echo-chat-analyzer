@@ -31,6 +31,11 @@ def test_parse_messages_preserves_fields_in_chat_message() -> None:
             text="Hello from QQ",
             platform="unknown",
             source_type=None,
+            message_id=None,
+            sender_id=None,
+            conversation_id=None,
+            is_system=False,
+            recalled=False,
         )
     ]
 

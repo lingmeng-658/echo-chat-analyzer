@@ -119,4 +119,8 @@ def _parse_message(raw_message: Any) -> ChatMessage | None:
         sender=sender,
         message_type=message_type,
         text=text,
+        message_id=raw_message.get("messageId") or raw_message.get("id"),
+        sender_id=sender_data.get("uid") or sender_data.get("uin"),
+        is_system=raw_message.get("system", False),
+        recalled=raw_message.get("recalled", False),
     )
