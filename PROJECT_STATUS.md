@@ -27,27 +27,24 @@ main
 
 当前基线 commit：
 
-282694a
+04782b1
 
 当前工作区状态：
 
 -   Phase 5.2A Application Service 已完成
 -   Phase 5.2B ChatMessage 中性消息模型已完成
+-   ChatMessage v2 基础字段已完成
 -   微信 detailed JSON 第一版支持已完成
 -   多来源分析流程验证已完成
--   微信接入相关改动尚未提交到 main
+-   Phase 6.1 Application 产品模型已完成
+-   Phase 6.2 Import Pipeline 基础架构已完成
+-   AnalysisApplicationService 已接入 ImportService
 
 最近完整 pytest：
 
-196 passed
+221 passed
 
-1 failed
-
-失败项：
-
-test_cli.py::test_console_script_and_module_help_are_consistent
-
-原因：当前 .venv 的 editable 安装指向 D:\Word cloud，qqchat.exe 运行的是旧包；与微信接入无关。
+历史状态：Phase 5.2 阶段曾出现 196 passed + 1 个与 .venv editable 安装指向相关的环境失败。
 
 当前版本目标：
 
@@ -71,6 +68,10 @@ QQ Parser / WeChat Parser
 
 ↓
 
+ImportService（文件发现、格式识别、parser 路由）
+
+↓
+
 AnalysisApplicationService
 
 ↓
@@ -87,13 +88,15 @@ CLI ↓ Application ↓ Parser / Cleaner / Tokenizer / Analyzer / Exporter
 
 输入方向：
 
-来源 Parser ↓ ChatMessage ↓ Application ↓ Core Analysis
+来源 Parser ↓ ChatMessage ↓ ImportService ↓ Application ↓ Core Analysis
 
 原则：
 
 -   Core 模块不能依赖 CLI；
 -   Core 模块不能依赖 Application；
 -   Application 负责业务流程编排；
+-   ImportService 负责文件发现、格式识别和 parser 路由；
+-   AnalysisApplicationService 不再直接负责文件发现和消息解析；
 -   CLI 只负责用户交互和参数转换。
 -   来源 Parser 只负责把来源消息转换为 ChatMessage；
 -   核心分析层不关心 QQ、微信或其他来源的具体结构。
@@ -252,6 +255,41 @@ from qq_chat_analyzer.application import AnalysisApplicationService
 
 ------------------------------------------------------------------------
 
+## ChatMessage v2 基础字段
+
+已完成：
+
+-   新增字段：message_id、sender_id、conversation_id、is_system、recalled；
+-   所有新增字段带默认值；
+-   ChatMessage 保持 frozen=True、slots=True；
+-   QQ parser 与微信 parser 已填充 message_id、sender_id、is_system、recalled；
+-   conversation_id 保持 None，待会话上下文接入。
+
+------------------------------------------------------------------------
+
+## Phase 6.1 Application 产品模型
+
+已完成：
+
+-   AnalysisTask：表达一次用户分析任务；
+-   ExportConfig：隐私优先的导出范围配置；
+-   ImportResult：公开的导入摘要，不保存聊天正文和消息列表。
+
+------------------------------------------------------------------------
+
+## Phase 6.2 Import Pipeline
+
+已完成：
+
+-   ImportRequest：输入路径 + 可选平台，平台为 None 时自动检测；
+-   ImportOutcome：内部管道对象，携带 ImportResult、ChatMessage 和原始消息数；
+-   ImportService：负责路径校验、文件发现、来源识别、调用现有 parser；
+-   AnalysisApplicationService 已接入 ImportService；
+-   已移除 AnalysisApplicationService 中旧的文件发现与解析 helper；
+-   未修改 parser.py、wechat_parser.py、ChatMessage、CLI。
+
+------------------------------------------------------------------------
+
 # Current Task
 
 ## 当前状态
@@ -260,15 +298,23 @@ from qq_chat_analyzer.application import AnalysisApplicationService
 
 最近完成：
 
--   Phase 5.2A Application Service；
--   Phase 5.2B ChatMessage；
--   微信 detailed JSON 第一版；
--   多来源分析流程验证。
+-   Phase 6.1 Application 产品模型；
+-   Phase 6.2 Import Pipeline 基础架构；
+-   ImportService 已接入主流程；
+-   pytest 221 passed。
+
+下一阶段：研究并设计 QQChatExporter 与 CipherTalk 的数据导入接入方式。
+
+-   导出流程分析；
+-   输出格式分析；
+-   Export Adapter 设计；
+-   用户选择 QQ/微信、群聊/私聊、时间范围、隐私选项的产品流程设计。
 
 待办（不纳入当前实现范围）：
 
--   微信 JSONL 支持：未实现，后续另行设计；
--   其他聊天来源格式：待真实样例确认后再决定。
+-   微信 JSONL 支持：未实现；
+-   自动导出：未实现；
+-   GUI、AI、API 接入：未实现。
 
 ------------------------------------------------------------------------
 
@@ -295,8 +341,10 @@ from qq_chat_analyzer.application import AnalysisApplicationService
 状态：
 
 -   微信 detailed JSON 第一版已完成；
+-   Phase 6.2 Import Pipeline 基础架构已完成；
 -   微信 JSONL 待后续；
--   其他来源格式待调研。
+-   其他来源格式待调研；
+-   下一阶段：QQChatExporter / CipherTalk 数据导入接入方式设计。
 
 设计原则：
 
