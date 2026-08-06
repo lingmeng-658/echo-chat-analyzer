@@ -31,14 +31,15 @@ main
 
 当前工作区状态：
 
--   Phase 5.2A Application Service 已完成
--   Phase 5.2B ChatMessage 中性消息模型已完成
--   ChatMessage v2 基础字段已完成
--   微信 detailed JSON 第一版支持已完成
--   多来源分析流程验证已完成
--   Phase 6.1 Application 产品模型已完成
--   Phase 6.2 Import Pipeline 基础架构已完成
--   AnalysisApplicationService 已接入 ImportService
+- Phase 5.2A Application Service 已完成
+- Phase 5.2B ChatMessage 中性消息模型已完成
+- ChatMessage v2 基础字段已完成
+- 微信 detailed JSON 第一版支持已完成
+- 微信 CipherTalk chatlab JSONL 支持已完成
+- ImportService 已支持 chatlab JSONL 自动路由到微信 parser
+- 多来源分析流程验证已完成
+- Phase 6.2 Import Pipeline 基础架构已完成
+- AnalysisApplicationService 已接入 ImportService
 
 最近完整 pytest：
 
@@ -340,19 +341,18 @@ from qq_chat_analyzer.application import AnalysisApplicationService
 
 状态：
 
--   微信 detailed JSON 第一版已完成；
--   Phase 6.2 Import Pipeline 基础架构已完成；
--   微信 JSONL 待后续；
--   其他来源格式待调研；
--   下一阶段：QQChatExporter / CipherTalk 数据导入接入方式设计。
+- 微信 detailed JSON 第一版已完成；
+- 微信 CipherTalk chatlab JSONL 已完成；
+- ImportService 已支持多格式来源识别和 parser 路由；
+- 其他来源格式待调研。
 
 设计原则：
 
--   不同来源只负责转换成统一消息模型；
--   分析核心不关心 QQ、微信或其他来源；
--   新增来源使用独立 parser；
--   不复制 QQ parser；
--   不引入微信专用模型到核心分析层。
+- 不同来源只负责转换成统一消息模型；
+- 分析核心不关心 QQ、微信或其他来源；
+- 新增来源使用独立 parser；
+- 不复制 QQ parser；
+- 不引入微信专用模型到核心分析层。
 
 ## Phase 7 Productization
 

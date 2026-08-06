@@ -6,7 +6,8 @@ Local Chat Analyzer is a privacy-first local chat analysis tool.
 
 Current supported sources:
 - QQChatExporter exported JSON/JSONL files
-- WeChat CipherTalk detailed JSON exports (first version)
+- WeChat CipherTalk detailed JSON exports
+- WeChat CipherTalk chatlab JSONL exports
 
 The project is designed to:
 - run locally;
@@ -130,7 +131,7 @@ configuration; - virtual environments.
 
 Current architecture:
 
-    Input sources (QQ JSON/JSONL, WeChat detailed JSON)
+    Input sources (QQ JSON/JSONL, WeChat detailed JSON/JSONL)
 
         ↓
 
@@ -177,7 +178,7 @@ ImportService handles:
 
 Source parsers:
 - QQ parser converts QQChatExporter JSON/JSONL into ChatMessage;
-- WeChat parser converts WeChat detailed JSON into ChatMessage;
+- WeChat parser converts WeChat detailed JSON/JSONL into ChatMessage;
 - parsers must not depend on analysis core or UI layers.
 
 Future API/Desktop interfaces should call Application Service instead of
@@ -197,7 +198,6 @@ CLI/Application layers or source-specific types.
 - Do not copy the QQ parser when adding a new source.
 - Do not introduce platform branches in analyzer.py, tokenizer.py, or cleaner.py.
 - Confirm real sample fields before choosing the first supported format.
-- WeChat JSONL is not supported in the current version.
 
 ------------------------------------------------------------------------
 
