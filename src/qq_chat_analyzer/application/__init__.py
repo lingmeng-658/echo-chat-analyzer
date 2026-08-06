@@ -8,6 +8,7 @@ from .dto import (
     ArtifactDTO,
     WordFrequencyDTO,
 )
+from .export_config import ExportConfig
 from .errors import (
     ApplicationServiceError,
     ArtifactGenerationFailed,
@@ -15,15 +16,20 @@ from .errors import (
     InvalidAnalysisRequest,
     NoSupportedInput,
 )
+from .import_result import ImportResult
+from .task import AnalysisTask
 
 __all__ = [
     "AnalysisApplicationService",
     "AnalysisRequestDTO",
     "AnalysisResultDTO",
     "AnalysisStatus",
+    "AnalysisTask",
     "ApplicationServiceError",
     "ArtifactDTO",
     "ArtifactGenerationFailed",
+    "ExportConfig",
+    "ImportResult",
     "InputPathNotFound",
     "InvalidAnalysisRequest",
     "NoSupportedInput",
