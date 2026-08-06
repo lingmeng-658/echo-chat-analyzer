@@ -16,7 +16,10 @@ from .errors import (
     InvalidAnalysisRequest,
     NoSupportedInput,
 )
+from .import_outcome import ImportOutcome
+from .import_request import ImportRequest
 from .import_result import ImportResult
+from .import_service import ImportService
 from .task import AnalysisTask
 
 __all__ = [
@@ -29,7 +32,10 @@ __all__ = [
     "ArtifactDTO",
     "ArtifactGenerationFailed",
     "ExportConfig",
+    "ImportOutcome",
+    "ImportRequest",
     "ImportResult",
+    "ImportService",
     "InputPathNotFound",
     "InvalidAnalysisRequest",
     "NoSupportedInput",
