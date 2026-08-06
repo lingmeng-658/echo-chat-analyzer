@@ -191,10 +191,15 @@ def _import_wechat_file(
         raw_messages,
         parsed_messages,
     )
+    file_format = (
+        "chatlab-jsonl"
+        if input_file.suffix.lower() == ".jsonl"
+        else "detailed-json"
+    )
     return (
         "wechat",
         parsed_messages,
-        "detailed-json",
+        file_format,
         warnings,
         len(raw_messages),
     )
@@ -223,6 +228,8 @@ def _matches_platform_shape(input_file: Path, platform: str) -> bool:
 
 def _looks_like_qq_export(input_file: Path) -> bool:
     if input_file.suffix.lower() == ".jsonl":
+        if is_wechat_export(input_file):
+            return False
         return bool(load_qq_messages(input_file))
 
     payload = _load_json_object(input_file)
