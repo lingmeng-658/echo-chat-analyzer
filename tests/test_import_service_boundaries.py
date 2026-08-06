@@ -311,3 +311,78 @@ def test_known_qq_and_wechat_detection(tmp_path):
 
     assert qq_result.result.platform == "qq"
     assert wx_result.result.platform == "wechat"
+
+
+# ----------------------------
+# platform hint mismatch with parsable payload
+# ----------------------------
+
+
+def test_wechat_file_with_qq_hint_warns_mismatch(tmp_path):
+    path = tmp_path / "wechat.json"
+    write_wechat_json(path)
+
+    result = ImportService().execute(
+        ImportRequest(path, platform="qq")
+    )
+
+    assert result.result.platform == "qq"
+    assert result.result.message_count == 0
+    assert PLATFORM_HINT_FORMAT_MISMATCH in result.result.warnings
+
+
+def test_qq_file_with_wechat_hint_warns_mismatch(tmp_path):
+    path = tmp_path / "qq.json"
+    write_qq_json(path)
+
+    result = ImportService().execute(
+        ImportRequest(path, platform="wechat")
+    )
+
+    assert result.result.platform == "wechat"
+    assert result.result.message_count == 0
+    assert PLATFORM_HINT_FORMAT_MISMATCH in result.result.warnings
+
+
+def test_mismatch_warning_hides_filename(tmp_path):
+    path = tmp_path / "\u7fa4\u804a_\u79d8\u5bc6\u7fa4123456.json"
+    write_wechat_json(path)
+
+    result = ImportService().execute(
+        ImportRequest(path, platform="qq")
+    )
+
+    for warning in result.result.warnings:
+        assert "\u79d8\u5bc6\u7fa4" not in warning
+        assert "123456" not in warning
+        assert path.name not in warning
+
+
+# ----------------------------
+# unresolved platform
+# ----------------------------
+
+
+def test_unresolved_platform_is_none(tmp_path):
+    path = tmp_path / "unknown.json"
+    write_unknown_json(path)
+
+    result = ImportService().execute(
+        ImportRequest(path)
+    )
+
+    assert result.result.platform is None
+
+
+def test_only_sidecar_platform_is_none(tmp_path):
+    directory = tmp_path / "export"
+    directory.mkdir()
+
+    write_manifest(directory / "manifest.json")
+    write_avatars(directory / "avatars.json")
+
+    result = ImportService().execute(
+        ImportRequest(directory)
+    )
+
+    assert result.result.platform is None
