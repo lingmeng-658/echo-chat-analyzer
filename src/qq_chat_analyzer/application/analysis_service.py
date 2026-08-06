@@ -20,17 +20,8 @@ from ..exporters import (
     generate_wordcloud,
 )
 from ..message import ChatMessage
-from ..parser import (
-    load_messages as load_qq_messages,
-    parse_messages as parse_qq_messages,
-)
 from ..smart_profile import run_smart_profile
 from ..tokenizer import tokenize
-from ..wechat_parser import (
-    is_wechat_export,
-    load_messages as load_wechat_messages,
-    parse_messages as parse_wechat_messages,
-)
 from .dto import (
     AnalysisRequestDTO,
     AnalysisResultDTO,
@@ -42,11 +33,11 @@ from .errors import (
     ArtifactGenerationFailed,
     InputPathNotFound,
     InvalidAnalysisRequest,
-    NoSupportedInput,
 )
+from .import_request import ImportRequest
+from .import_service import ImportService
 
 
-_SUPPORTED_INPUT_SUFFIXES = frozenset({".json", ".jsonl"})
 _ARTIFACT_FILENAMES = {
     "word_frequency_csv": "word_frequency.csv",
     "wordcloud": "wordcloud.png",
@@ -69,12 +60,11 @@ class AnalysisApplicationService:
     def execute(self, request: AnalysisRequestDTO) -> AnalysisResultDTO:
         """Analyze supported local exports and return a privacy-safe result."""
         _validate_request(request)
-        input_files = _find_supported_input_files(request.input_path)
-        if not input_files:
-            raise NoSupportedInput()
-        processed_message_count, parsed_messages = _load_and_parse_messages(
-            input_files
+        outcome = ImportService().execute(
+            ImportRequest(input_path=request.input_path)
         )
+        processed_message_count = outcome.processed_message_count
+        parsed_messages = list(outcome.messages)
         filtering_result = run_smart_profile(parsed_messages)
         analyzed = _analyze_kept_messages(
             filtering_result.kept_messages,
@@ -146,37 +136,6 @@ def _validate_request(request: AnalysisRequestDTO) -> None:
         raise InvalidAnalysisRequest()
     if not request.input_path.exists():
         raise InputPathNotFound()
-
-
-def _find_supported_input_files(input_path: Path) -> list[Path]:
-    if input_path.is_file():
-        if input_path.suffix.lower() in _SUPPORTED_INPUT_SUFFIXES:
-            return [input_path]
-        return []
-    if not input_path.is_dir():
-        return []
-    return sorted(
-        path
-        for path in input_path.rglob("*")
-        if path.is_file() and path.suffix.lower() in _SUPPORTED_INPUT_SUFFIXES
-    )
-
-
-def _load_and_parse_messages(
-    input_files: list[Path],
-) -> tuple[int, list[ChatMessage]]:
-    processed_message_count = 0
-    parsed_messages: list[ChatMessage] = []
-    for input_file in input_files:
-        if is_wechat_export(input_file):
-            raw_messages = load_wechat_messages(input_file)
-            file_messages = parse_wechat_messages(raw_messages)
-        else:
-            raw_messages = load_qq_messages(input_file)
-            file_messages = parse_qq_messages(raw_messages)
-        processed_message_count += len(raw_messages)
-        parsed_messages.extend(file_messages)
-    return processed_message_count, parsed_messages
 
 
 def _analyze_kept_messages(

@@ -13,4 +13,5 @@ class ImportOutcome:
     """Internal pipeline result combining public summary with messages."""
 
     result: ImportResult
+    processed_message_count: int
     messages: tuple[ChatMessage, ...]

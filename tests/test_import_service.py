@@ -144,6 +144,7 @@ def test_qq_json_import_returns_result_and_messages(tmp_path: Path) -> None:
     )
 
     assert isinstance(outcome, ImportOutcome)
+    assert outcome.processed_message_count == 2
     assert outcome.result == ImportResult(
         platform="qq",
         message_count=1,
@@ -251,6 +252,7 @@ def test_corrupt_json_returns_warning_and_empty_result(tmp_path: Path) -> None:
     )
 
     assert outcome.result.message_count == 0
+    assert outcome.processed_message_count == 0
     assert outcome.result.valid_text_count == 0
     assert outcome.result.warnings
     assert outcome.messages == ()

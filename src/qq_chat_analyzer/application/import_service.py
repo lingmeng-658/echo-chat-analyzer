@@ -37,9 +37,16 @@ class ImportService:
         warnings: list[str] = []
         formats: set[str] = set()
         detected_platforms: list[str] = []
+        processed_message_count = 0
 
         for input_file in input_files:
-            platform, file_messages, file_format, file_warnings = _import_file(
+            (
+                platform,
+                file_messages,
+                file_format,
+                file_warnings,
+                file_raw_count,
+            ) = _import_file(
                 input_file,
                 request.platform,
             )
@@ -47,6 +54,7 @@ class ImportService:
             messages.extend(file_messages)
             warnings.extend(file_warnings)
             formats.add(file_format)
+            processed_message_count += file_raw_count
 
         valid_text_count = sum(1 for message in messages if message.text.strip())
         result = ImportResult(
@@ -56,7 +64,11 @@ class ImportService:
             warnings=tuple(warnings),
             format=_single_format(formats),
         )
-        return ImportOutcome(result=result, messages=tuple(messages))
+        return ImportOutcome(
+            result=result,
+            processed_message_count=processed_message_count,
+            messages=tuple(messages),
+        )
 
 
 def _validate_input_path(input_path: Path) -> None:
@@ -81,7 +93,7 @@ def _find_supported_input_files(input_path: Path) -> list[Path]:
 def _import_file(
     input_file: Path,
     platform_hint: str | None,
-) -> tuple[str, tuple[ChatMessage, ...], str, tuple[str, ...]]:
+) -> tuple[str, tuple[ChatMessage, ...], str, tuple[str, ...], int]:
     if platform_hint == "wechat":
         return _import_wechat_file(input_file)
     if platform_hint == "qq":
@@ -93,7 +105,7 @@ def _import_file(
 
 def _import_qq_file(
     input_file: Path,
-) -> tuple[str, tuple[ChatMessage, ...], str, tuple[str, ...]]:
+) -> tuple[str, tuple[ChatMessage, ...], str, tuple[str, ...], int]:
     raw_messages = load_qq_messages(input_file)
     warnings: tuple[str, ...] = ()
     if not raw_messages:
@@ -104,12 +116,13 @@ def _import_qq_file(
         tuple(parse_qq_messages(raw_messages)),
         file_format,
         warnings,
+        len(raw_messages),
     )
 
 
 def _import_wechat_file(
     input_file: Path,
-) -> tuple[str, tuple[ChatMessage, ...], str, tuple[str, ...]]:
+) -> tuple[str, tuple[ChatMessage, ...], str, tuple[str, ...], int]:
     raw_messages = load_wechat_messages(input_file)
     warnings: tuple[str, ...] = ()
     if not raw_messages:
@@ -119,6 +132,7 @@ def _import_wechat_file(
         tuple(parse_wechat_messages(raw_messages)),
         "detailed-json",
         warnings,
+        len(raw_messages),
     )
 
 
