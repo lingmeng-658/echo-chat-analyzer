@@ -1,4 +1,4 @@
-"""Stable application-layer contracts for local chat analysis."""
+﻿"""Stable application-layer contracts for local chat analysis."""
 
 from .analysis_service import AnalysisApplicationService
 from .dto import (
@@ -20,6 +20,13 @@ from .import_outcome import ImportOutcome
 from .import_request import ImportRequest
 from .import_result import ImportResult
 from .import_service import ImportService
+from .qq_export_import_service import (
+    QQExportFileMissing,
+    QQExportImportRequest,
+    QQExportImportService,
+    QQExportProvider,
+    QQExportUnavailable,
+)
 from .task import AnalysisTask
 
 __all__ = [
@@ -39,5 +46,10 @@ __all__ = [
     "InputPathNotFound",
     "InvalidAnalysisRequest",
     "NoSupportedInput",
+    "QQExportFileMissing",
+    "QQExportImportRequest",
+    "QQExportImportService",
+    "QQExportProvider",
+    "QQExportUnavailable",
     "WordFrequencyDTO",
 ]

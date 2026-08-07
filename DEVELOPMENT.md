@@ -214,10 +214,67 @@ Completed:
 
 Next phase:
 
-- Research QQChatExporter and CipherTalk data import integration.
-- Analyze export flows and output formats.
-- Design Export Adapter boundaries.
-- Design user-facing selection flow: QQ/WeChat, group/private, time range, and privacy options.
+This research phase is complete: the QQChatExporter data source integration
+described in section 7.3 is implemented and accepted against the real QCE
+desktop application.
+
+------------------------------------------------------------------------
+
+## 7.3 QQChatExporter Data Source Integration
+
+Completed:
+
+- QCE HTTP Provider: health check, security.json token, group list, export task creation and polling.
+- QCE JSON Adapter: recognizes single-file QCE JSON exports and converts text/reply messages to ChatMessage.
+- QQExportImportService: orchestrates export, then import through the existing ImportService; exposes export_only() and list_groups().
+- CLI qce commands: `qqchat qce list` and `qqchat qce analyze --group <group_code>`.
+- CLI reaches the QCE flow only through the Application layer; it does not construct a provider directly.
+
+Module responsibilities in the QCE flow:
+
+- Provider: external data acquisition only. Talks to the QCE HTTP API, manages
+  export tasks, and returns a local QCE JSON path.
+- Adapter: format conversion only. Recognizes QCE single-file JSON and converts
+  it to ChatMessage.
+- Application layer: business orchestration. QQExportImportService ties
+  export, then import together; the CLI never calls Provider or Adapter directly.
+- CLI: user interaction only. Parses commands and delegates to Application
+  layer services.
+
+Architecture rules for this integration:
+
+- Provider only fetches data from the QCE HTTP service.
+- Adapter only converts QCE JSON to ChatMessage.
+- Application layer owns orchestration.
+- CLI and future GUI call Application layer services.
+- parser.py, provider internals, and ImportService core routing were not modified.
+
+Real QCE desktop acceptance:
+
+- QCE desktop app ran normally on the acceptance machine.
+- Provider read the real token from the desktop config directory
+  `%LOCALAPPDATA%\QQChatExporter\.qce-config\security.json`.
+- `qqchat qce list` returned the real QQ group list.
+- `qqchat qce analyze --group <group_code>` completed the full flow:
+  QQ export -> QCE JSON -> Adapter -> ChatMessage -> analysis -> output files.
+- Real group chat data was processed on the user's machine.
+
+Token path compatibility fix:
+
+- `QCE_CONFIG_DIR` keeps the highest priority.
+- Windows desktop default path `%LOCALAPPDATA%\QQChatExporter\.qce-config\security.json`
+  was added ahead of the legacy fallback.
+- The legacy `~/.qq-chat-exporter/security.json` fallback remains supported.
+- Candidate resolution is covered by provider tests.
+
+Current limits:
+
+- QCE must already be running; the CLI does not start it.
+- Chunked manifest/chunks exports are not supported.
+- Group chat only.
+- JSON format only.
+- Non-text messages are skipped for analysis.
+- No GUI yet.
 
 ------------------------------------------------------------------------
 
@@ -248,11 +305,12 @@ Tests must use fictional data only.
 ------------------------------------------------------------------------
 
 Current working state:
-- Architecture: Phase 6.2 Import Pipeline integrated into AnalysisApplicationService
-- Models: AnalysisTask, ExportConfig, ImportResult, ImportRequest, ImportOutcome, ImportService
+- Architecture: QCE Provider -> QCE JSON -> Adapter -> ChatMessage -> ImportService -> AnalysisApplicationService
+- Models: AnalysisTask, ExportConfig, ImportResult, ImportRequest, ImportOutcome, ImportService, QQExportImportService
+- QCE integration: Provider, Adapter, orchestration, CLI qce commands, and real desktop acceptance completed
 - ChatMessage: v2 fields added and populated by QQ/WeChat parsers
-- Tests: 221 passed
-- Next phase: QQChatExporter / CipherTalk import adapter research and design
+- Tests: 359 passed
+- Next phase: productization direction (packaging, install flow, GUI direction)
 
 See PROJECT_STATUS.md for current progress and next steps.
 

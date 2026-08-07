@@ -40,10 +40,15 @@ main
 - 多来源分析流程验证已完成
 - Phase 6.2 Import Pipeline 基础架构已完成
 - AnalysisApplicationService 已接入 ImportService
+- QQChatExporter Provider 已完成
+- QQChatExporter Adapter 已完成
+- QQ 导出→分析闭环已完成
+- CLI qce 入口已完成
+- QQChatExporter 集成真实环境验收已完成
 
 最近完整 pytest：
 
-221 passed
+359 passed
 
 历史状态：Phase 5.2 阶段曾出现 196 passed + 1 个与 .venv editable 安装指向相关的环境失败。
 
@@ -53,7 +58,72 @@ v0.6.0 Multi-Source v1
 
 ------------------------------------------------------------------------
 
+# Current User Flow
+
+QQ 导出→分析闭环已可通过 CLI 使用：
+
+qqchat qce list
+
+↓
+
+选择 group_code
+
+↓
+
+qqchat qce analyze --group <group_code>
+
+↓
+
+自动导出并进入已有分析流程
+
+------------------------------------------------------------------------
+
+# Real Acceptance
+
+QQChatExporter 集成已在真实环境完成验收：
+
+- QQChatExporter 桌面版正常运行；
+- Provider 成功读取真实 security.json token；
+- qqchat qce list 成功获取真实 QQ 群列表；
+- qqchat qce analyze --group <group_code> 成功完成：
+  QQ 导出 → QCE JSON → Adapter → ChatMessage → 分析核心 → 输出文件；
+- 真实群聊数据测试成功；
+- 当前测试基线：359 passed。
+
+------------------------------------------------------------------------
+
+# Current Limitations
+
+当前已知限制：
+
+- 不自动启动 QCE，需要用户先启动并登录 QQChatExporter 桌面版；
+- 不支持分片 manifest/chunks；
+- 只支持群聊；
+- 只支持 JSON；
+- 非文本消息暂未进入分析；
+- GUI 尚未实现。
+
+------------------------------------------------------------------------
+
 # Architecture Overview
+
+当前 QQ 导出→分析链路：
+
+QQChatExporter 桌面版
+        ↓
+QQChatExporter Provider（HTTP API）
+        ↓
+QCE JSON 文件
+        ↓
+QQChatExporter Adapter
+        ↓
+ChatMessage
+        ↓
+ImportService
+        ↓
+AnalysisApplicationService
+        ↓
+Core Analysis Pipeline / Exporter
 
 当前架构：
 
@@ -291,6 +361,19 @@ from qq_chat_analyzer.application import AnalysisApplicationService
 
 ------------------------------------------------------------------------
 
+## QQChatExporter 集成
+
+已完成：
+
+-   QQChatExporter Provider：HTTP 客户端，负责健康检查、token 读取、群列表、导出任务创建与轮询；
+-   QQChatExporter Adapter：识别 QCE 单文件 JSON，转换为 ChatMessage；
+-   QQExportImportService：导出→导入编排层，提供 export_only() 与 list_groups()；
+-   CLI qce 入口：qqchat qce list / qqchat qce analyze --group <group_code>；
+-   CLI 通过 Application 层调用，不直接依赖 Provider；
+-   未修改 parser.py、Provider 内部逻辑、ImportService 核心路径。
+
+------------------------------------------------------------------------
+
 # Current Task
 
 ## 当前状态
@@ -299,22 +382,24 @@ from qq_chat_analyzer.application import AnalysisApplicationService
 
 最近完成：
 
--   Phase 6.1 Application 产品模型；
--   Phase 6.2 Import Pipeline 基础架构；
--   ImportService 已接入主流程；
--   pytest 221 passed。
+-   QQChatExporter Provider / Adapter / 编排层；
+-   QQ 导出→分析闭环；
+-   CLI qce 入口；
+-   QQChatExporter 集成真实环境验收；
+-   pytest 359 passed。
 
-下一阶段：研究并设计 QQChatExporter 与 CipherTalk 的数据导入接入方式。
+下一阶段：后续产品化方向（不提前展开实现细节）。
 
--   导出流程分析；
--   输出格式分析；
--   Export Adapter 设计；
--   用户选择 QQ/微信、群聊/私聊、时间范围、隐私选项的产品流程设计。
+-   Windows 可执行打包；
+-   普通用户安装流程；
+-   依赖封装；
+-   GUI（方向待定）。
 
 待办（不纳入当前实现范围）：
 
--   微信 JSONL 支持：未实现；
--   自动导出：未实现；
+-   QCE 自动启动：未实现；
+-   分片 manifest/chunks 支持：未实现；
+-   微信 CLI 集成：未纳入 QQ 导出阶段；
 -   GUI、AI、API 接入：未实现。
 
 ------------------------------------------------------------------------

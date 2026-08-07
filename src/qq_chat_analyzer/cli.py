@@ -11,15 +11,20 @@ from pathlib import Path
 from .application import (
     AnalysisRequestDTO,
     AnalysisStatus,
+    ApplicationServiceError,
     ArtifactGenerationFailed,
     InputPathNotFound,
     InvalidAnalysisRequest,
     NoSupportedInput,
+    QQExportImportRequest,
+    QQExportImportService,
 )
 from .application.analysis_service import AnalysisApplicationService
 
 
 SUPPORTED_INPUT_SUFFIXES = frozenset({".json", ".jsonl"})
+QCE_COMMAND = "qce"
+QCE_SUBCOMMANDS = ("list", "analyze")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROFILE_STOPWORD_FILES = {
     "default": "stopwords.txt",
@@ -59,8 +64,12 @@ class ChineseArgumentParser(argparse.ArgumentParser):
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Adapt command-line input and output to the application service."""
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == QCE_COMMAND:
+        return _run_qce_command(arguments[1:])
+
     try:
-        configuration = _parse_cli_configuration(argv)
+        configuration = _parse_cli_configuration(arguments)
     except CliUsageError as error:
         print(f"错误：{error}", file=sys.stderr)
         return 2
@@ -287,6 +296,132 @@ def _automatic_output_directory(input_path: Path) -> Path:
     if input_name in {"", ".", ".."}:
         input_name = "analysis"
     return Path("output") / input_name
+
+
+
+
+# ------------------------------------------------------------------ qce commands
+
+
+def _build_qce_service() -> QQExportImportService:
+    """Build the QCE application service.
+
+    Isolated in one function so tests can substitute a stub-backed service
+    without touching a real QCE instance. Importing the provider lazily keeps
+    the default CLI path free of provider import cost.
+    """
+    from .providers import QQChatExporterProvider
+
+    return QQExportImportService(QQChatExporterProvider())
+
+
+def _run_qce_command(arguments: list[str]) -> int:
+    """Dispatch the ``qce`` sub-commands ahead of the legacy parser."""
+    if not arguments:
+        print(_qce_usage_message(), file=sys.stderr)
+        return 2
+
+    subcommand, rest = arguments[0], arguments[1:]
+    if subcommand == "list":
+        return _run_qce_list(rest)
+    if subcommand == "analyze":
+        return _run_qce_analyze(rest)
+
+    print(
+        f"\u9519\u8bef\uff1a\u672a\u77e5\u7684 qce \u5b50\u547d\u4ee4 {subcommand!r}\u3002",
+        file=sys.stderr,
+    )
+    print(_qce_usage_message(), file=sys.stderr)
+    return 2
+
+
+def _qce_usage_message() -> str:
+    return "\u7528\u6cd5\uff1aqqchat qce {list|analyze --group <group_code>}"
+
+
+def _run_qce_list(arguments: list[str]) -> int:
+    """Print the groups the local QCE service can export."""
+    if arguments:
+        print(
+            "\u9519\u8bef\uff1aqce list \u4e0d\u63a5\u53d7\u989d\u5916\u53c2\u6570\u3002",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        groups = _build_qce_service().list_groups()
+    except ApplicationServiceError as error:
+        return _report_qce_error(error)
+
+    if not groups:
+        print("\u672a\u627e\u5230\u53ef\u5bfc\u51fa\u7684\u7fa4\u804a\u3002")
+        return 0
+
+    print(f"\u5171 {len(groups)} \u4e2a\u7fa4\u804a\uff1a")
+    for group in groups:
+        code = getattr(group, "group_code", "")
+        name = getattr(group, "group_name", "") or "(\u672a\u547d\u540d)"
+        member_count = getattr(group, "member_count", None)
+        if member_count is None:
+            print(f"  {code}  {name}")
+        else:
+            print(f"  {code}  {name}  ({member_count} \u4eba)")
+    return 0
+
+
+def _run_qce_analyze(arguments: list[str]) -> int:
+    """Export one group through QCE and analyse the resulting JSON."""
+    parser = argparse.ArgumentParser(
+        prog="qqchat qce analyze",
+        description="\u5bfc\u51fa\u5e76\u5206\u6790\u4e00\u4e2a QQ \u7fa4\u804a\u3002",
+        add_help=False,
+    )
+    parser.add_argument("--group", dest="group_code")
+    parser.add_argument("--output-dir", dest="output_dir")
+    parser.add_argument("--profile", dest="profile", default="default")
+    known, unknown = parser.parse_known_args(arguments)
+    if unknown:
+        print(
+            f"\u9519\u8bef\uff1a\u4e0d\u8ba4\u8bc6\u7684\u53c2\u6570 {unknown[0]!r}\u3002",
+            file=sys.stderr,
+        )
+        return 2
+
+    group_code = (known.group_code or """""").strip()
+    if not group_code:
+        print(
+            "\u9519\u8bef\uff1a\u7f3a\u5c11 --group \u53c2\u6570\uff0c"
+            "\u8bf7\u5148\u8fd0\u884c qqchat qce list \u67e5\u770b\u7fa4\u53f7\u3002",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        export_path = _build_qce_service().export_only(
+            QQExportImportRequest(group_code=group_code)
+        )
+    except ApplicationServiceError as error:
+        return _report_qce_error(error)
+
+    print(f"\u5df2\u5bfc\u51fa\uff1a{export_path}")
+
+    forwarded = [str(export_path)]
+    if known.profile:
+        forwarded.append(known.profile)
+    if known.output_dir:
+        forwarded += ["--output-dir", known.output_dir]
+    return main(forwarded)
+
+
+def _report_qce_error(error: ApplicationServiceError) -> int:
+    """Render an application-layer failure as a Chinese CLI message.
+
+    Provider and orchestration errors already carry a user-facing message, so
+    the CLI only prefixes it and maps everything to a single exit status.
+    """
+    message = getattr(error, "public_message", "") or str(error)
+    print(f"\u9519\u8bef\uff1a{message}", file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":

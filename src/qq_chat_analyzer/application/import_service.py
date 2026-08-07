@@ -10,6 +10,16 @@ from ..parser import (
     load_messages as load_qq_messages,
     parse_messages as parse_qq_messages,
 )
+from ..qq_chat_exporter_adapter import (
+    is_qce_export,
+    load_qce_json,
+    parse_qce_messages,
+)
+from ..wechat_cli_adapter import (
+    is_cli_export as is_wechat_cli_export,
+    load_messages as load_wechat_cli_messages,
+    parse_messages as parse_wechat_cli_messages,
+)
 from ..wechat_parser import (
     is_wechat_export,
     load_messages as load_wechat_messages,
@@ -23,6 +33,9 @@ from .import_result import ImportResult
 
 _SUPPORTED_INPUT_SUFFIXES = frozenset({".json", ".jsonl"})
 _SUPPORTED_PLATFORMS = frozenset({"qq", "wechat"})
+
+WECHAT_CLI_FORMAT = "cli-json"
+QQ_QCE_FORMAT = "qce-json"
 
 _SIDECAR_FILE_NAMES = frozenset({"manifest.json", "avatars.json"})
 _SIDECAR_DIR_NAMES = frozenset({"resources"})
@@ -153,6 +166,8 @@ def _import_file(
         return _import_qq_file(input_file)
     if is_wechat_export(input_file):
         return _import_wechat_file(input_file)
+    if is_wechat_cli_export(input_file):
+        return _import_wechat_cli_file(input_file)
     if _looks_like_qq_export(input_file):
         return _import_qq_file(input_file)
     return (
@@ -167,6 +182,9 @@ def _import_file(
 def _import_qq_file(
     input_file: Path,
 ) -> tuple[str, tuple[ChatMessage, ...], str, tuple[str, ...], int]:
+    if is_qce_export(input_file):
+        return _import_qce_file(input_file)
+
     raw_messages = load_qq_messages(input_file)
     parsed_messages = tuple(parse_qq_messages(raw_messages))
     warnings = _import_warnings(input_file, "qq", raw_messages, parsed_messages)
@@ -180,11 +198,34 @@ def _import_qq_file(
     )
 
 
+def _import_qce_file(
+    input_file: Path,
+) -> tuple[str, tuple[ChatMessage, ...], str, tuple[str, ...], int]:
+    payload = load_qce_json(input_file)
+    raw_messages = payload.get("messages", []) if payload is not None else []
+    parsed_messages, parse_warnings = parse_qce_messages(raw_messages)
+    warnings = (
+        *parse_warnings,
+        *_import_warnings(input_file, "qq", raw_messages, parsed_messages),
+    )
+    return (
+        "qq",
+        tuple(parsed_messages),
+        QQ_QCE_FORMAT,
+        warnings,
+        len(raw_messages),
+    )
+
+
 def _import_wechat_file(
     input_file: Path,
 ) -> tuple[str, tuple[ChatMessage, ...], str, tuple[str, ...], int]:
     raw_messages = load_wechat_messages(input_file)
     parsed_messages = tuple(parse_wechat_messages(raw_messages))
+    if not raw_messages and not parsed_messages:
+        cli_rows = load_wechat_cli_messages(input_file)
+        if cli_rows:
+            return _import_wechat_cli_file(input_file)
     warnings = _import_warnings(
         input_file,
         "wechat",
@@ -200,6 +241,23 @@ def _import_wechat_file(
         "wechat",
         parsed_messages,
         file_format,
+        warnings,
+        len(raw_messages),
+    )
+
+
+def _import_wechat_cli_file(
+    input_file: Path,
+) -> tuple[str, tuple[ChatMessage, ...], str, tuple[str, ...], int]:
+    raw_messages = load_wechat_cli_messages(input_file)
+    parsed_messages = tuple(parse_wechat_cli_messages(raw_messages))
+    warnings: tuple[str, ...] = ()
+    if not parsed_messages and not raw_messages:
+        warnings = (WARNING_NO_MESSAGES_LOADED,)
+    return (
+        "wechat",
+        parsed_messages,
+        WECHAT_CLI_FORMAT,
         warnings,
         len(raw_messages),
     )
@@ -222,7 +280,9 @@ def _import_warnings(
 
 def _matches_platform_shape(input_file: Path, platform: str) -> bool:
     if platform == "wechat":
-        return is_wechat_export(input_file)
+        return is_wechat_export(input_file) or is_wechat_cli_export(input_file)
+    if platform == "qq":
+        return is_qce_export(input_file) or _looks_like_qq_export(input_file)
     return _looks_like_qq_export(input_file)
 
 
@@ -231,6 +291,9 @@ def _looks_like_qq_export(input_file: Path) -> bool:
         if is_wechat_export(input_file):
             return False
         return bool(load_qq_messages(input_file))
+
+    if is_wechat_cli_export(input_file):
+        return False
 
     payload = _load_json_object(input_file)
     if payload is None:

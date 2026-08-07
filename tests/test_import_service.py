@@ -22,6 +22,9 @@ from qq_chat_analyzer.application import (
 )
 from qq_chat_analyzer.application.errors import InputPathNotFound, NoSupportedInput
 from qq_chat_analyzer.message import ChatMessage
+from qq_chat_analyzer.qq_chat_exporter_adapter import (
+    WARNING_QCE_NON_TEXT_MESSAGE_SKIPPED,
+)
 
 
 WECHAT_TEXT_TYPE = "\u6587\u672c\u6d88\u606f"
@@ -95,6 +98,71 @@ def _write_qq_jsonl(path: Path) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def _write_qce_json(path: Path) -> None:
+    payload = {
+        "metadata": {
+            "name": "QQChatExporter",
+            "copyright": "fictional-example",
+            "version": "0.0.0-test",
+        },
+        "chatInfo": {
+            "name": "Fictional Group",
+            "type": "group",
+            "participantCount": 3,
+        },
+        "statistics": {"totalMessages": 3},
+        "messages": [
+            {
+                "id": "fictional-qce-001",
+                "seq": "1",
+                "timestamp": 1750000000000,
+                "time": "2025-06-15 12:00:00",
+                "sender": {
+                    "uid": "user-1001",
+                    "uin": "1001",
+                    "name": "Fictional Alice",
+                    "nickname": "Fictional Alice",
+                },
+                "type": "text",
+                "content": {"text": "Hello from QCE", "elements": []},
+                "recalled": False,
+                "system": False,
+            },
+            {
+                "id": "fictional-qce-002",
+                "seq": "2",
+                "timestamp": 1750000001000,
+                "time": "2025-06-15 12:00:01",
+                "sender": {
+                    "uid": "user-1002",
+                    "uin": "1002",
+                    "name": "Fictional Bob",
+                },
+                "type": "reply",
+                "content": {"text": "Reply from QCE", "elements": []},
+                "recalled": False,
+                "system": False,
+            },
+            {
+                "id": "fictional-qce-003",
+                "seq": "3",
+                "timestamp": 1750000002000,
+                "time": "2025-06-15 12:00:02",
+                "sender": {
+                    "uid": "user-1003",
+                    "uin": "1003",
+                    "name": "Fictional Carol",
+                },
+                "type": "file",
+                "content": {"text": "[file]", "elements": []},
+                "recalled": False,
+                "system": False,
+            },
+        ],
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
 def _write_wechat_json(path: Path) -> None:
@@ -174,6 +242,43 @@ def test_qq_jsonl_import_returns_result_and_messages(tmp_path: Path) -> None:
         "Hello from QQ JSONL",
         "Reply from QQ JSONL",
     ]
+
+
+def test_qce_json_import_returns_result_messages_and_warning(
+    tmp_path: Path,
+) -> None:
+    input_path = tmp_path / "qce.json"
+    _write_qce_json(input_path)
+
+    outcome = ImportService().execute(
+        ImportRequest(input_path=input_path, platform="qq")
+    )
+
+    assert outcome.processed_message_count == 3
+    assert outcome.result == ImportResult(
+        platform="qq",
+        message_count=2,
+        valid_text_count=2,
+        format="qce-json",
+        warnings=(WARNING_QCE_NON_TEXT_MESSAGE_SKIPPED,),
+    )
+    assert [message.text for message in outcome.messages] == [
+        "Hello from QCE",
+        "Reply from QCE",
+    ]
+
+
+def test_qce_json_auto_detection_without_platform(tmp_path: Path) -> None:
+    input_path = tmp_path / "qce.json"
+    _write_qce_json(input_path)
+
+    outcome = ImportService().execute(
+        ImportRequest(input_path=input_path)
+    )
+
+    assert outcome.result.platform == "qq"
+    assert outcome.result.format == "qce-json"
+    assert len(outcome.messages) == 2
 
 
 def test_wechat_detailed_json_import_returns_result_and_messages(
