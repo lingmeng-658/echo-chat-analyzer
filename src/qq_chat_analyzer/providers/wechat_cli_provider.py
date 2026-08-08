@@ -1,4 +1,4 @@
-﻿"""Invoke the optional CipherTalk CLI (``miyu``) as a WeChat data source.
+"""Invoke the optional CipherTalk CLI (``miyu``) as a WeChat data source.
 
 This module only shells out to an externally installed ``miyu`` binary. It does
 not read WeChat databases, extract keys, or reimplement any CipherTalk logic.
@@ -26,8 +26,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import wechat_cli_adapter
-from .message import ChatMessage
+from .. import wechat_cli_adapter
+from ..message import ChatMessage
 
 
 CLI_EXECUTABLE = "miyu"

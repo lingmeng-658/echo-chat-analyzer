@@ -1,10 +1,18 @@
-"""Application orchestration for one local chat analysis run."""
+﻿"""Application orchestration for one local chat analysis run."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..analysis.analyzers import (
+    ActivityAnalyzer,
+    ConversationAnalyzer,
+    MessageLengthAnalyzer,
+    UserProfileAnalyzer,
+)
+from ..analysis.models import AnalysisReports
 from ..analyzer import (
     WordSpeakerSummary,
     count_word_speakers,
@@ -66,8 +74,9 @@ class AnalysisApplicationService:
         processed_message_count = outcome.processed_message_count
         parsed_messages = list(outcome.messages)
         filtering_result = run_smart_profile(parsed_messages)
+        kept_messages = filtering_result.kept_messages
         analyzed = _analyze_kept_messages(
-            filtering_result.kept_messages,
+            kept_messages,
             request.stopwords_path,
         )
 
@@ -91,6 +100,13 @@ class AnalysisApplicationService:
                 processed_message_count=processed_message_count,
                 valid_text_count=analyzed.valid_text_count,
             )
+
+        reports = _build_reports(
+            kept_messages,
+            analyzed.sender_tokens,
+            speaker_names=request.speaker_names,
+            conversation_names=request.conversation_names,
+        )
         word_sender_counts = count_word_speakers(analyzed.sender_tokens)
         speaker_summaries = top_word_speaker_summary(word_sender_counts)
         speaker_frequency_rows = [
@@ -124,7 +140,35 @@ class AnalysisApplicationService:
                 ArtifactDTO(kind=kind, filename=filename)
                 for kind, filename in _ARTIFACT_FILENAMES.items()
             ),
+            reports=reports,
         )
+
+
+def _build_reports(
+    messages: list[ChatMessage],
+    sender_tokens: list[tuple[str, list[str]]],
+    speaker_names: Mapping[str, str] | None = None,
+    conversation_names: Mapping[str, str] | None = None,
+) -> AnalysisReports:
+    """Run every extended analyzer over the messages kept for analysis.
+
+    Display names are supplied by the caller and simply forwarded. The
+    analysis core therefore stays unaware of QQ or WeChat naming rules, and
+    omitting the mappings keeps the previous raw-identifier behavior.
+    """
+    return AnalysisReports(
+        activity=ActivityAnalyzer().analyze(messages),
+        message_length=MessageLengthAnalyzer().analyze(messages),
+        user_profiles=UserProfileAnalyzer().analyze(
+            messages,
+            sender_tokens=sender_tokens,
+            speaker_names=speaker_names,
+        ),
+        conversations=ConversationAnalyzer().analyze(
+            messages,
+            conversation_names=conversation_names,
+        ),
+    )
 
 
 def _validate_request(request: AnalysisRequestDTO) -> None:

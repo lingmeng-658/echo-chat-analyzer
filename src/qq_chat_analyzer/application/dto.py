@@ -1,10 +1,17 @@
-"""Privacy-safe data transfer objects for application use cases."""
+﻿"""Privacy-safe data transfer objects for application use cases."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from types import MappingProxyType
+
+from ..analysis.models import AnalysisReports
+
+
+_EMPTY_NAMES: Mapping[str, str] = MappingProxyType({})
 
 
 class AnalysisStatus(str, Enum):
@@ -24,6 +31,14 @@ class AnalysisRequestDTO:
     stopwords_path: Path = field(repr=False)
     font_path: str | None = field(default=None, repr=False)
     top: int = 50
+    speaker_names: Mapping[str, str] = field(
+        default=_EMPTY_NAMES,
+        repr=False,
+    )
+    conversation_names: Mapping[str, str] = field(
+        default=_EMPTY_NAMES,
+        repr=False,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,3 +66,7 @@ class AnalysisResultDTO:
     valid_text_count: int
     top_words: tuple[WordFrequencyDTO, ...] = ()
     artifacts: tuple[ArtifactDTO, ...] = ()
+    reports: AnalysisReports = field(
+        default_factory=AnalysisReports,
+        repr=False,
+    )

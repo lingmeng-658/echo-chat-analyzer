@@ -1,0 +1,749 @@
+"""Behavior tests for the ChatAnalyzerFacade application entry point."""
+
+from __future__ import annotations
+
+import dataclasses
+import importlib
+import sys
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = PROJECT_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
+
+
+def _facade_module():
+    return importlib.import_module("qq_chat_analyzer.application.facade")
+
+
+def _analysis_models():
+    return importlib.import_module("qq_chat_analyzer.analysis.models")
+
+
+def _dto():
+    return importlib.import_module("qq_chat_analyzer.application.dto")
+
+
+def _errors():
+    return importlib.import_module("qq_chat_analyzer.application.errors")
+
+
+class _FakeQQGroup:
+    """Mirror the fields of the real QQ ExportGroup without importing it."""
+
+    def __init__(
+        self,
+        group_code: str,
+        group_name: str,
+        member_count: int | None = None,
+    ) -> None:
+        self.group_code = group_code
+        self.group_name = group_name
+        self.member_count = member_count
+
+
+class _FakeWeChatSession:
+    """Mirror the fields of a real WeChat session listing."""
+
+    def __init__(
+        self,
+        session_id: str,
+        display_name: str,
+        session_type: str = "friend",
+        message_count: int | None = None,
+    ) -> None:
+        self.session_id = session_id
+        self.display_name = display_name
+        self.session_type = session_type
+        self.message_count = message_count
+
+
+class _StubQQService:
+    def __init__(self, groups=(), export_path: Path | None = None, error=None):
+        self._groups = list(groups)
+        self._export_path = export_path
+        self._error = error
+        self.export_requests: list[object] = []
+        self.list_calls = 0
+
+    def list_groups(self):
+        self.list_calls += 1
+        if self._error is not None:
+            raise self._error
+        return self._groups
+
+    def export_only(self, request):
+        self.export_requests.append(request)
+        if self._error is not None:
+            raise self._error
+        return self._export_path
+
+
+class _StubWeChatService:
+    def __init__(self, sessions=(), export_path: Path | None = None, error=None):
+        self._sessions = None if sessions is None else list(sessions)
+        self._export_path = export_path
+        self._error = error
+        self.export_requests: list[object] = []
+        self.list_calls = 0
+
+    def list_sessions(self):
+        self.list_calls += 1
+        if self._error is not None:
+            raise self._error
+        return self._sessions
+
+    def export_only(self, request):
+        self.export_requests.append(request)
+        if self._error is not None:
+            raise self._error
+        return self._export_path
+
+
+def _reports(message_count: int = 2):
+    models = _analysis_models()
+    return models.AnalysisReports(
+        activity=models.ActivityReport(
+            total_message_count=message_count,
+            dated_message_count=message_count,
+            hourly_counts=tuple(
+                models.HourlyActivity(hour=hour, count=0) for hour in range(24)
+            ),
+            weekday_counts=tuple(
+                models.WeekdayActivity(weekday=day, count=0) for day in range(7)
+            ),
+            busiest_hour=9,
+            busiest_weekday=0,
+        ),
+        user_profiles=models.UserProfileReport(
+            total_message_count=message_count,
+            speaker_count=1,
+            profiles=(
+                models.UserProfile(
+                    speaker="Fictional-Alice",
+                    message_count=message_count,
+                    message_share_percent=100.0,
+                    average_length=5.0,
+                    max_length=7,
+                ),
+            ),
+        ),
+        conversations=models.ConversationReport(conversation_count=1),
+    )
+
+
+def _result(message_count: int = 2):
+    dto = _dto()
+    return dto.AnalysisResultDTO(
+        status=dto.AnalysisStatus.COMPLETED,
+        processed_message_count=message_count,
+        valid_text_count=message_count,
+        top_words=(dto.WordFrequencyDTO(word="deck", count=3),),
+        reports=_reports(message_count),
+    )
+
+
+class _StubAnalysisService:
+    def __init__(self, result=None, error=None):
+        self._result = result
+        self._error = error
+        self.requests: list[object] = []
+
+    def execute(self, request):
+        self.requests.append(request)
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
+class _RecordingBuilder:
+    def __init__(self, view=None):
+        self.calls: list[object] = []
+        self._view = view
+
+    def build(self, reports, top_words=()):
+        self.calls.append((reports, tuple(top_words)))
+        if self._view is not None:
+            return self._view
+        presentation = importlib.import_module("qq_chat_analyzer.presentation")
+        return presentation.build_dashboard_view(reports, top_words=top_words)
+
+
+def _facade(**overrides):
+    module = _facade_module()
+    defaults = {
+        "analysis_service": _StubAnalysisService(result=_result()),
+    }
+    defaults.update(overrides)
+    return module.ChatAnalyzerFacade(**defaults)
+
+
+def _export_file(tmp_path: Path, name: str = "export.json") -> Path:
+    path = tmp_path / name
+    path.write_text('{"messages": []}', encoding="utf-8")
+    return path
+
+
+# --------------------------------------------------------------- data models
+
+
+def test_chat_source_covers_every_supported_origin() -> None:
+    module = _facade_module()
+
+    assert {source.value for source in module.ChatSource} == {
+        "qq",
+        "wechat",
+        "local_file",
+    }
+
+
+def test_facade_models_are_frozen_dataclasses() -> None:
+    module = _facade_module()
+
+    for model_type in (
+        module.SessionInfo,
+        module.SourceInfo,
+        module.AnalysisConfig,
+        module.AnalysisOutcome,
+    ):
+        assert dataclasses.is_dataclass(model_type)
+
+    session = module.SessionInfo(
+        source=module.ChatSource.QQ,
+        session_id="fictional-1",
+        display_name="Fictional Group",
+    )
+    try:
+        session.session_id = "changed"
+    except dataclasses.FrozenInstanceError:
+        pass
+    else:  # pragma: no cover - guards the immutability contract
+        raise AssertionError("SessionInfo should be immutable")
+
+
+def test_analysis_config_has_no_acquaintance_field() -> None:
+    module = _facade_module()
+
+    field_names = {
+        field.name for field in dataclasses.fields(module.AnalysisConfig)
+    }
+
+    assert "start_time" in field_names
+    assert "end_time" in field_names
+    assert {"top", "profile", "output_directory"} <= field_names
+    for forbidden in (
+        "acquaintance_time",
+        "known_since",
+        "relationship_duration",
+        "first_met",
+    ):
+        assert forbidden not in field_names
+
+
+def test_analysis_config_copy_sets_output_directory(tmp_path: Path) -> None:
+    module = _facade_module()
+
+    config = module.AnalysisConfig(top=10)
+    updated = config.with_output_directory(tmp_path)
+
+    assert config.output_directory is None
+    assert updated.output_directory == tmp_path
+    assert updated.top == 10
+
+
+# ------------------------------------------------------------------ listing
+
+
+def test_list_sources_flags_unwired_sources() -> None:
+    module = _facade_module()
+    facade = _facade(qq_service=_StubQQService())
+
+    sources = {info.source: info for info in facade.list_sources()}
+
+    assert sources[module.ChatSource.QQ].available is True
+    assert sources[module.ChatSource.WECHAT].available is False
+    assert sources[module.ChatSource.WECHAT].description != ""
+    assert sources[module.ChatSource.LOCAL_FILE].available is True
+
+
+def test_list_sessions_converts_qq_groups_into_session_info() -> None:
+    module = _facade_module()
+    service = _StubQQService(
+        groups=[
+            _FakeQQGroup("10001", "Fictional Board Games", member_count=12),
+            _FakeQQGroup("10002", "Fictional Study Room"),
+        ]
+    )
+    facade = _facade(qq_service=service)
+
+    sessions = facade.list_sessions(module.ChatSource.QQ)
+
+    assert service.list_calls == 1
+    assert [session.session_id for session in sessions] == ["10001", "10002"]
+    assert sessions[0].display_name == "Fictional Board Games"
+    assert sessions[0].source is module.ChatSource.QQ
+    assert sessions[0].session_type == "group"
+    assert sessions[0].message_count == 12
+    assert sessions[1].message_count is None
+
+
+def test_list_sessions_converts_wechat_sessions_into_session_info() -> None:
+    module = _facade_module()
+    service = _StubWeChatService(
+        sessions=[
+            _FakeWeChatSession(
+                "wxid_fictional_a",
+                "Fictional Alice",
+                session_type="friend",
+                message_count=40,
+            ),
+            _FakeWeChatSession("fictional@chatroom", "Fictional Room", "group"),
+        ]
+    )
+    facade = _facade(wechat_service=service)
+
+    sessions = facade.list_sessions(module.ChatSource.WECHAT)
+
+    assert service.list_calls == 1
+    assert sessions[0].session_id == "wxid_fictional_a"
+    assert sessions[0].display_name == "Fictional Alice"
+    assert sessions[0].source is module.ChatSource.WECHAT
+    assert sessions[0].message_count == 40
+    assert sessions[1].session_type == "group"
+
+
+def test_both_sources_produce_the_same_session_shape() -> None:
+    module = _facade_module()
+    qq_sessions = _facade(
+        qq_service=_StubQQService(groups=[_FakeQQGroup("1", "Fictional QQ")])
+    ).list_sessions(module.ChatSource.QQ)
+    wechat_sessions = _facade(
+        wechat_service=_StubWeChatService(
+            sessions=[_FakeWeChatSession("2", "Fictional WeChat")]
+        )
+    ).list_sessions(module.ChatSource.WECHAT)
+
+    assert type(qq_sessions[0]) is type(wechat_sessions[0])
+    assert qq_sessions[0].source is not wechat_sessions[0].source
+
+
+def test_list_sessions_accepts_a_plain_source_string() -> None:
+    service = _StubQQService(groups=[_FakeQQGroup("1", "Fictional QQ")])
+    facade = _facade(qq_service=service)
+
+    sessions = facade.list_sessions("qq")
+
+    assert len(sessions) == 1
+
+
+def test_list_sessions_returns_empty_for_local_files() -> None:
+    module = _facade_module()
+
+    assert _facade().list_sessions(module.ChatSource.LOCAL_FILE) == []
+
+
+def test_list_sessions_handles_a_source_with_no_conversations() -> None:
+    module = _facade_module()
+    facade = _facade(wechat_service=_StubWeChatService(sessions=[]))
+
+    assert facade.list_sessions(module.ChatSource.WECHAT) == []
+
+
+def test_list_sessions_tolerates_a_service_returning_none() -> None:
+    module = _facade_module()
+    facade = _facade(wechat_service=_StubWeChatService(sessions=None))
+
+    assert facade.list_sessions(module.ChatSource.WECHAT) == []
+
+
+# ----------------------------------------------------------------- analysis
+
+
+def test_analyze_file_runs_analysis_then_presentation(tmp_path: Path) -> None:
+    module = _facade_module()
+    analysis_service = _StubAnalysisService(result=_result(message_count=5))
+    builder = _RecordingBuilder()
+    facade = _facade(
+        analysis_service=analysis_service,
+        presentation_builder=builder,
+    )
+    export_path = _export_file(tmp_path)
+
+    outcome = facade.analyze_file(
+        export_path,
+        module.AnalysisConfig(
+            top=25,
+            output_directory=tmp_path / "out",
+        ),
+    )
+
+    assert len(analysis_service.requests) == 1
+    request = analysis_service.requests[0]
+    assert request.input_path == export_path
+    assert request.top == 25
+    assert request.output_directory == tmp_path / "out"
+    assert (tmp_path / "out").is_dir()
+    assert len(builder.calls) == 1
+    assert outcome.source is module.ChatSource.LOCAL_FILE
+    assert outcome.session is None
+    assert outcome.view.has_data is True
+    assert outcome.result.processed_message_count == 5
+
+
+def test_analyze_file_accepts_a_string_path(tmp_path: Path) -> None:
+    export_path = _export_file(tmp_path)
+    facade = _facade()
+
+    outcome = facade.analyze_file(str(export_path))
+
+    assert outcome.view is not None
+
+
+def test_analyze_file_uses_defaults_without_a_config(tmp_path: Path) -> None:
+    module = _facade_module()
+    analysis_service = _StubAnalysisService(result=_result())
+    facade = _facade(analysis_service=analysis_service)
+
+    facade.analyze_file(_export_file(tmp_path))
+
+    request = analysis_service.requests[0]
+    assert request.top == module.DEFAULT_TOP
+    assert request.output_directory.is_absolute()
+
+
+def test_analyze_file_maps_profile_to_a_stopwords_file(tmp_path: Path) -> None:
+    module = _facade_module()
+    analysis_service = _StubAnalysisService(result=_result())
+    facade = module.ChatAnalyzerFacade(
+        analysis_service=analysis_service,
+        stopwords_directory=tmp_path,
+    )
+
+    facade.analyze_file(
+        _export_file(tmp_path),
+        module.AnalysisConfig(profile="topic"),
+    )
+
+    assert analysis_service.requests[0].stopwords_path == (
+        tmp_path / "stopwords_topic.txt"
+    )
+
+
+def test_unknown_profile_falls_back_to_the_default_stopwords(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    analysis_service = _StubAnalysisService(result=_result())
+    facade = module.ChatAnalyzerFacade(
+        analysis_service=analysis_service,
+        stopwords_directory=tmp_path,
+    )
+
+    facade.analyze_file(
+        _export_file(tmp_path),
+        module.AnalysisConfig(profile="not-a-profile"),
+    )
+
+    assert analysis_service.requests[0].stopwords_path == (
+        tmp_path / "stopwords.txt"
+    )
+
+
+def test_analyze_session_dispatches_to_the_qq_service(tmp_path: Path) -> None:
+    module = _facade_module()
+    export_path = _export_file(tmp_path, "qq_export.json")
+    qq_service = _StubQQService(export_path=export_path)
+    wechat_service = _StubWeChatService(export_path=export_path)
+    analysis_service = _StubAnalysisService(result=_result())
+    facade = _facade(
+        qq_service=qq_service,
+        wechat_service=wechat_service,
+        analysis_service=analysis_service,
+    )
+
+    outcome = facade.analyze_session(
+        module.ChatSource.QQ,
+        "10001",
+        module.AnalysisConfig(start_time="2024-01-01", end_time="2024-02-01"),
+    )
+
+    assert len(qq_service.export_requests) == 1
+    assert wechat_service.export_requests == []
+    request = qq_service.export_requests[0]
+    assert request.group_code == "10001"
+    assert request.start_time == "2024-01-01"
+    assert request.end_time == "2024-02-01"
+    assert analysis_service.requests[0].input_path == export_path
+    assert outcome.source is module.ChatSource.QQ
+    assert outcome.session.session_id == "10001"
+
+
+def test_analyze_session_dispatches_to_the_wechat_service(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    export_path = _export_file(tmp_path, "wechat_export.json")
+    qq_service = _StubQQService(export_path=export_path)
+    wechat_service = _StubWeChatService(export_path=export_path)
+    facade = _facade(qq_service=qq_service, wechat_service=wechat_service)
+
+    outcome = facade.analyze_session(
+        module.ChatSource.WECHAT,
+        "wxid_fictional_a",
+    )
+
+    assert len(wechat_service.export_requests) == 1
+    assert qq_service.export_requests == []
+    request = wechat_service.export_requests[0]
+    assert request.session_id == "wxid_fictional_a"
+    assert request.output_path.name.endswith(".json")
+    assert outcome.source is module.ChatSource.WECHAT
+
+
+def test_analyze_session_hides_the_intermediate_export_file(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    export_path = _export_file(tmp_path)
+    facade = _facade(wechat_service=_StubWeChatService(export_path=export_path))
+
+    outcome = facade.analyze_session(module.ChatSource.WECHAT, "fictional")
+
+    public_values = [
+        getattr(outcome, field.name)
+        for field in dataclasses.fields(outcome)
+        if field.name != "artifact_directory"
+    ]
+    assert not any(isinstance(value, Path) for value in public_values)
+    assert not hasattr(outcome, "export_path")
+
+
+def test_analyze_session_rejects_the_local_file_source() -> None:
+    module = _facade_module()
+    facade = _facade()
+
+    try:
+        facade.analyze_session(module.ChatSource.LOCAL_FILE, "anything")
+    except module.FacadeError as error:
+        assert error.code == "session_not_supported"
+    else:  # pragma: no cover
+        raise AssertionError("expected a FacadeError")
+
+
+def test_analyze_reports_empty_data_without_crashing(tmp_path: Path) -> None:
+    dto = _dto()
+    empty_result = dto.AnalysisResultDTO(
+        status=dto.AnalysisStatus.NO_VALID_TEXT,
+        processed_message_count=0,
+        valid_text_count=0,
+    )
+    facade = _facade(analysis_service=_StubAnalysisService(result=empty_result))
+
+    outcome = facade.analyze_file(_export_file(tmp_path))
+
+    assert outcome.result.processed_message_count == 0
+    assert outcome.view.user_cards == ()
+    assert outcome.view.conversation_cards == ()
+
+
+# ------------------------------------------------------------------- errors
+
+
+def test_application_errors_become_facade_errors(tmp_path: Path) -> None:
+    module = _facade_module()
+    errors = _errors()
+    facade = _facade(
+        analysis_service=_StubAnalysisService(error=errors.InputPathNotFound())
+    )
+
+    try:
+        facade.analyze_file(_export_file(tmp_path))
+    except module.FacadeError as error:
+        assert error.code == "input_not_found"
+        assert error.public_message != ""
+        assert error.source is module.ChatSource.LOCAL_FILE
+    else:  # pragma: no cover
+        raise AssertionError("expected a FacadeError")
+
+
+def test_qq_provider_errors_become_facade_errors() -> None:
+    module = _facade_module()
+
+    class _QQServiceDown(Exception):
+        code = "qq_service_unavailable"
+        public_message = "QQ \u5bfc\u51fa\u670d\u52a1\u672a\u8fd0\u884c\u3002"
+
+    facade = _facade(qq_service=_StubQQService(error=_QQServiceDown()))
+
+    try:
+        facade.list_sessions(module.ChatSource.QQ)
+    except module.FacadeError as error:
+        assert error.code == "qq_service_unavailable"
+        assert error.public_message == "QQ \u5bfc\u51fa\u670d\u52a1\u672a\u8fd0\u884c\u3002"
+        assert error.source is module.ChatSource.QQ
+    else:  # pragma: no cover
+        raise AssertionError("expected a FacadeError")
+
+
+def test_wechat_provider_errors_become_facade_errors() -> None:
+    module = _facade_module()
+
+    class KeyUnavailable(Exception):
+        public_message = "\u65e0\u6cd5\u83b7\u53d6\u5fae\u4fe1\u5bc6\u94a5\u3002"
+
+    facade = _facade(wechat_service=_StubWeChatService(error=KeyUnavailable()))
+
+    try:
+        facade.list_sessions(module.ChatSource.WECHAT)
+    except module.FacadeError as error:
+        assert error.code == "key_unavailable"
+        assert error.source is module.ChatSource.WECHAT
+    else:  # pragma: no cover
+        raise AssertionError("expected a FacadeError")
+
+
+def test_unlabelled_errors_still_produce_a_safe_message() -> None:
+    module = _facade_module()
+    facade = _facade(wechat_service=_StubWeChatService(error=RuntimeError()))
+
+    try:
+        facade.list_sessions(module.ChatSource.WECHAT)
+    except module.FacadeError as error:
+        assert error.code == "runtime_error"
+        assert error.public_message.strip() != ""
+    else:  # pragma: no cover
+        raise AssertionError("expected a FacadeError")
+
+
+def test_unknown_source_raises_a_facade_error() -> None:
+    module = _facade_module()
+    facade = _facade()
+
+    try:
+        facade.list_sessions("myspace")
+    except module.FacadeError as error:
+        assert error.code == "unknown_source"
+    else:  # pragma: no cover
+        raise AssertionError("expected a FacadeError")
+
+
+def test_unwired_source_raises_a_facade_error() -> None:
+    module = _facade_module()
+    facade = _facade()
+
+    try:
+        facade.list_sessions(module.ChatSource.QQ)
+    except module.FacadeError as error:
+        assert error.code == "source_unavailable"
+        assert error.source is module.ChatSource.QQ
+    else:  # pragma: no cover
+        raise AssertionError("expected a FacadeError")
+
+
+def test_missing_analysis_service_raises_a_facade_error(tmp_path: Path) -> None:
+    module = _facade_module()
+    facade = module.ChatAnalyzerFacade()
+
+    try:
+        facade.analyze_file(_export_file(tmp_path))
+    except module.FacadeError as error:
+        assert error.code == "source_unavailable"
+    else:  # pragma: no cover
+        raise AssertionError("expected a FacadeError")
+
+
+def test_facade_errors_are_not_re_wrapped(tmp_path: Path) -> None:
+    module = _facade_module()
+    original = module.FacadeError(code="already_wrapped", public_message="x")
+    facade = _facade(analysis_service=_StubAnalysisService(error=original))
+
+    try:
+        facade.analyze_file(_export_file(tmp_path))
+    except module.FacadeError as error:
+        assert error is original
+    else:  # pragma: no cover
+        raise AssertionError("expected a FacadeError")
+
+
+# -------------------------------------------------------- injection & layering
+
+
+def test_every_collaborator_can_be_injected(tmp_path: Path) -> None:
+    module = _facade_module()
+    qq_service = _StubQQService(export_path=_export_file(tmp_path))
+    wechat_service = _StubWeChatService()
+    analysis_service = _StubAnalysisService(result=_result())
+    builder = _RecordingBuilder()
+
+    facade = module.ChatAnalyzerFacade(
+        qq_service=qq_service,
+        wechat_service=wechat_service,
+        analysis_service=analysis_service,
+        presentation_builder=builder,
+    )
+    facade.analyze_session(module.ChatSource.QQ, "10001")
+
+    assert qq_service.export_requests
+    assert analysis_service.requests
+    assert builder.calls
+
+
+def test_injected_builder_receives_reports_untouched(tmp_path: Path) -> None:
+    result = _result(message_count=7)
+    builder = _RecordingBuilder()
+    facade = _facade(
+        analysis_service=_StubAnalysisService(result=result),
+        presentation_builder=builder,
+    )
+
+    facade.analyze_file(_export_file(tmp_path))
+
+    reports, top_words = builder.calls[0]
+    assert reports is result.reports
+    assert top_words == result.top_words
+
+
+def test_facade_falls_back_to_the_default_builder(tmp_path: Path) -> None:
+    presentation = importlib.import_module("qq_chat_analyzer.presentation")
+    facade = _facade()
+
+    outcome = facade.analyze_file(_export_file(tmp_path))
+
+    assert isinstance(outcome.view, presentation.DashboardView)
+
+
+def test_facade_does_not_recompute_presentation_values() -> None:
+    module = _facade_module()
+    source = Path(module.__file__).read_text(encoding="utf-8")
+    code_lines = [
+        line
+        for line in source.splitlines()
+        if not line.lstrip().startswith(("#", "*"))
+    ]
+    code = "\n".join(code_lines)
+
+    for forbidden in ("Counter(", "sorted(", "statistics.", "tokenize("):
+        assert forbidden not in code
+
+
+def test_facade_imports_no_gui_framework() -> None:
+    module = _facade_module()
+    source = Path(module.__file__).read_text(encoding="utf-8")
+
+    for forbidden in ("PyQt", "PySide", "tkinter", "flask", "django"):
+        assert forbidden not in source
+
+
+def test_facade_is_exported_from_the_application_package() -> None:
+    application = importlib.import_module("qq_chat_analyzer.application")
+
+    for name in (
+        "ChatAnalyzerFacade",
+        "ChatSource",
+        "SessionInfo",
+        "AnalysisConfig",
+        "FacadeError",
+    ):
+        assert name in application.__all__
+        assert hasattr(application, name)

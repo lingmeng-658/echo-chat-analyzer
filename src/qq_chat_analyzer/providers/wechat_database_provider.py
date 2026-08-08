@@ -1,0 +1,420 @@
+"""Read WeChat 4.x databases through the bundled read-only ``wcdb_cli`` helper.
+
+This provider only *acquires* data. It locates the WeChat data directory, runs
+the already-built ``wcdb_cli`` executable against ``session.db`` and the right
+``message_N.db`` shard, and writes the rows to a JSON document. Turning those
+rows into :class:`~qq_chat_analyzer.message.ChatMessage` objects is the job of
+``wechat_db_adapter``; orchestration is the job of the application layer.
+
+Schema facts confirmed against a real WeChat 4.x install:
+
+* ``session.db``   -> ``SessionTable.username`` identifies a conversation
+* ``md5(username)`` -> the ``Msg_<md5>`` table inside a ``message_N.db`` shard
+* ``Msg_<md5>.local_type = 1`` marks a plain text message
+* ``Msg_<md5>.real_sender_id`` -> ``Name2Id.rowid`` -> ``user_name``
+
+The database key is only ever held in memory and passed to the helper through
+the ``WX_DB_KEY`` environment variable, never written to disk or logged.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import subprocess
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable
+
+
+DEFAULT_TIMEOUT_SECONDS = 180
+DEFAULT_SESSION_LIMIT = 200
+DEFAULT_MESSAGE_LIMIT = 100000
+DB_KEY_ENVIRONMENT_VARIABLE = "WX_DB_KEY"
+
+SESSION_DB_NAME = "session.db"
+MESSAGE_DB_GLOB = "message_*.db"
+WCDB_DLL_NAME = "WCDB.dll"
+
+_DB_STORAGE_DIR_NAMES = ("db_storage",)
+_SESSION_TABLE = "SessionTable"
+
+
+class WeChatDatabaseError(Exception):
+    """Base error for WeChat database access failures."""
+
+    code = "wechat_database_error"
+    public_message = "\u5fae\u4fe1\u6570\u636e\u5e93\u8bfb\u53d6\u5931\u8d25\u3002"
+
+    def __init__(self, public_message: str | None = None) -> None:
+        self.public_message = public_message or type(self).public_message
+        super().__init__(self.public_message)
+
+
+class WcdbHelperNotFound(WeChatDatabaseError):
+    """Raised when the ``wcdb_cli`` helper executable is unavailable."""
+
+    code = "wcdb_helper_not_found"
+    public_message = (
+        "\u672a\u627e\u5230 wcdb_cli \u8f85\u52a9\u7a0b\u5e8f\u3002"
+        "\u8bf7\u5148\u6784\u5efa src/qq_chat_analyzer/native/wcdb_cli\u3002"
+    )
+
+
+class WcdbLibraryNotFound(WeChatDatabaseError):
+    """Raised when ``WCDB.dll`` cannot be located."""
+
+    code = "wcdb_library_not_found"
+    public_message = (
+        "\u672a\u627e\u5230 WCDB.dll\u3002"
+        "\u8bf7\u786e\u8ba4\u5fae\u4fe1\u5df2\u5b89\u88c5\uff0c"
+        "\u6216\u624b\u52a8\u6307\u5b9a WCDB.dll \u8def\u5f84\u3002"
+    )
+
+
+class DatabaseNotFound(WeChatDatabaseError):
+    """Raised when the WeChat data directory or its databases are missing."""
+
+    code = "database_not_found"
+    public_message = (
+        "\u672a\u627e\u5230\u5fae\u4fe1\u6570\u636e\u76ee\u5f55\u3002"
+        "\u8bf7\u786e\u8ba4\u5fae\u4fe1\u5df2\u5728\u672c\u673a\u767b\u5f55\u8fc7\uff0c"
+        "\u6216\u624b\u52a8\u6307\u5b9a\u6570\u636e\u76ee\u5f55\u3002"
+    )
+
+
+class KeyUnavailable(WeChatDatabaseError):
+    """Raised when no database key was supplied."""
+
+    code = "key_unavailable"
+    public_message = (
+        "\u7f3a\u5c11\u5fae\u4fe1\u6570\u636e\u5e93\u5bc6\u94a5\u3002"
+        "\u8bf7\u5148\u83b7\u53d6 DbKey \u540e\u91cd\u8bd5\u3002"
+    )
+
+
+class QueryFailed(WeChatDatabaseError):
+    """Raised when the helper could not run a query."""
+
+    code = "query_failed"
+    public_message = (
+        "\u8bfb\u53d6\u5fae\u4fe1\u6570\u636e\u5e93\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5\u3002"
+    )
+
+
+class SessionNotFound(WeChatDatabaseError):
+    """Raised when a session has no message table in any shard."""
+
+    code = "session_not_found"
+    public_message = (
+        "\u672a\u627e\u5230\u8be5\u804a\u5929\uff0c"
+        "\u6216\u6240\u9009\u65f6\u95f4\u8303\u56f4\u5185\u6ca1\u6709\u6d88\u606f\u3002"
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class WeChatSession:
+    """Privacy-safe descriptor for one WeChat conversation."""
+
+    session_id: str
+    display_name: str
+    session_type: str = "other"
+    message_count: int | None = None
+
+
+def message_table_name(username: str) -> str:
+    """Return the ``Msg_<md5>`` table name WeChat uses for ``username``."""
+    digest = hashlib.md5(username.encode("utf-8")).hexdigest()
+    return f"Msg_{digest}"
+
+
+def default_data_root() -> Path | None:
+    """Best-effort guess of the local WeChat 4.x data directory."""
+    candidates = [
+        Path.home() / "Documents" / "xwechat_files",
+        Path.home() / "Documents" / "WeChat Files",
+    ]
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+class WeChatDatabaseProvider:
+    """Acquire raw WeChat rows from local databases via ``wcdb_cli``."""
+
+    def __init__(
+        self,
+        data_root: str | Path | None = None,
+        db_key: str | None = None,
+        wcdb_cli_path: str | Path | None = None,
+        wcdb_dll_path: str | Path | None = None,
+        timeout: int = DEFAULT_TIMEOUT_SECONDS,
+        runner: Callable[..., Any] | None = None,
+    ) -> None:
+        self._data_root = Path(data_root) if data_root is not None else None
+        self._db_key = db_key
+        self._wcdb_cli_path = (
+            Path(wcdb_cli_path) if wcdb_cli_path is not None else None
+        )
+        self._wcdb_dll_path = (
+            Path(wcdb_dll_path) if wcdb_dll_path is not None else None
+        )
+        self._timeout = timeout
+        self._runner = runner or _run_subprocess
+
+    # ---------------------------------------------------------------- listing
+
+    def list_sessions(self, limit: int = DEFAULT_SESSION_LIMIT) -> list[WeChatSession]:
+        """List conversations found in ``session.db``."""
+        session_db = self._session_db_path()
+        sql = (
+            "SELECT username, summary, last_timestamp "
+            f"FROM {_SESSION_TABLE} ORDER BY last_timestamp DESC"
+        )
+        rows = self._query(session_db, sql, limit=limit)
+
+        sessions: list[WeChatSession] = []
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            username = row.get("username")
+            if not isinstance(username, str) or not username.strip():
+                continue
+            sessions.append(
+                WeChatSession(
+                    session_id=username,
+                    display_name=username,
+                    session_type=_session_type(username),
+                )
+            )
+        return sessions
+
+    # -------------------------------------------------------------- exporting
+
+    def export_session_json(
+        self,
+        session_id: str,
+        output_path: str | Path,
+        start_time: int | None = None,
+        end_time: int | None = None,
+        limit: int = DEFAULT_MESSAGE_LIMIT,
+    ) -> Path:
+        """Write one conversation's raw rows to ``output_path`` as JSON."""
+        rows = self.read_session_rows(
+            session_id,
+            start_time=start_time,
+            end_time=end_time,
+            limit=limit,
+        )
+        destination = Path(output_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        document = {
+            "source": "wechat-db",
+            "conversation": {"username": session_id},
+            "messages": rows,
+        }
+        destination.write_text(
+            json.dumps(document, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return destination
+
+    def read_session_rows(
+        self,
+        session_id: str,
+        start_time: int | None = None,
+        end_time: int | None = None,
+        limit: int = DEFAULT_MESSAGE_LIMIT,
+    ) -> list[Any]:
+        """Return raw message rows for one conversation, sender names resolved."""
+        cleaned_session = (session_id or "").strip()
+        if not cleaned_session:
+            raise SessionNotFound()
+
+        table = message_table_name(cleaned_session)
+        message_db = self._find_message_db(table)
+        conditions = ["m.local_type = 1"]
+        if isinstance(start_time, int) and not isinstance(start_time, bool):
+            conditions.append(f"m.create_time >= {start_time}")
+        if isinstance(end_time, int) and not isinstance(end_time, bool):
+            conditions.append(f"m.create_time <= {end_time}")
+        where_clause = " AND ".join(conditions)
+
+        sql = (
+            "SELECT m.local_id, m.server_id, m.local_type, m.create_time, "
+            "m.message_content, n.user_name "
+            f"FROM {table} AS m "
+            "LEFT JOIN Name2Id AS n ON n.rowid = m.real_sender_id "
+            f"WHERE {where_clause} ORDER BY m.create_time ASC"
+        )
+        return self._query(message_db, sql, limit=limit)
+
+    # --------------------------------------------------------------- internals
+
+    def _query(self, db_path: Path, sql: str, limit: int) -> list[Any]:
+        command = [
+            str(self._resolve_helper()),
+            "--wcdb",
+            str(self._resolve_library()),
+            "--db",
+            str(db_path),
+            "--sql",
+            sql,
+        ]
+        if limit > 0:
+            command.extend(["--limit", str(limit)])
+
+        environment = dict(os.environ)
+        environment[DB_KEY_ENVIRONMENT_VARIABLE] = self._resolve_key()
+
+        try:
+            completed = self._runner(command, self._timeout, environment)
+        except FileNotFoundError as error:
+            raise WcdbHelperNotFound() from error
+        except subprocess.TimeoutExpired as error:
+            raise QueryFailed(
+                "\u8bfb\u53d6\u5fae\u4fe1\u6570\u636e\u8d85\u65f6\uff0c\u8bf7\u91cd\u8bd5\u3002"
+            ) from error
+
+        payload = _parse_result(getattr(completed, "stdout", "") or "")
+        if payload is None:
+            raise QueryFailed()
+        if payload.get("ok") is not True:
+            raise QueryFailed()
+
+        rows = payload.get("rows")
+        return rows if isinstance(rows, list) else []
+
+    def _resolve_key(self) -> str:
+        key = self._db_key or os.environ.get(DB_KEY_ENVIRONMENT_VARIABLE)
+        if not key or not key.strip():
+            raise KeyUnavailable()
+        return key.strip()
+
+    def _resolve_helper(self) -> Path:
+        if self._wcdb_cli_path is not None:
+            if not self._wcdb_cli_path.exists():
+                raise WcdbHelperNotFound()
+            return self._wcdb_cli_path
+
+        for candidate in _helper_candidates():
+            if candidate.exists():
+                self._wcdb_cli_path = candidate
+                return candidate
+        raise WcdbHelperNotFound()
+
+    def _resolve_library(self) -> Path:
+        if self._wcdb_dll_path is not None:
+            if not self._wcdb_dll_path.exists():
+                raise WcdbLibraryNotFound()
+            return self._wcdb_dll_path
+        raise WcdbLibraryNotFound()
+
+    def _resolve_data_root(self) -> Path:
+        root = self._data_root or default_data_root()
+        if root is None or not root.is_dir():
+            raise DatabaseNotFound()
+        return root
+
+    def _session_db_path(self) -> Path:
+        root = self._resolve_data_root()
+        for candidate in _iter_db_directories(root):
+            session_db = candidate / SESSION_DB_NAME
+            if session_db.is_file():
+                return session_db
+        raise DatabaseNotFound()
+
+    def _find_message_db(self, table: str) -> Path:
+        root = self._resolve_data_root()
+        shards = [
+            shard
+            for directory in _iter_db_directories(root)
+            for shard in sorted(directory.glob(MESSAGE_DB_GLOB))
+        ]
+        if not shards:
+            raise DatabaseNotFound()
+
+        for shard in shards:
+            if self._table_exists(shard, table):
+                return shard
+        raise SessionNotFound()
+
+    def _table_exists(self, db_path: Path, table: str) -> bool:
+        escaped = table.replace("'", "''")
+        sql = (
+            "SELECT name FROM sqlite_master "
+            f"WHERE type = 'table' AND name = '{escaped}'"
+        )
+        try:
+            rows = self._query(db_path, sql, limit=1)
+        except WeChatDatabaseError:
+            return False
+        return bool(rows)
+
+
+def _helper_candidates() -> list[Path]:
+    package_root = Path(__file__).resolve().parents[1]
+    project_root = package_root.parents[1]
+    return [
+        package_root / "native" / "wcdb_cli" / "wcdb_cli.exe",
+        project_root / "build" / "wcdb_cli" / "Release" / "wcdb_cli.exe",
+        project_root / "build" / "wcdb_cli" / "Debug" / "wcdb_cli.exe",
+    ]
+
+
+def _iter_db_directories(root: Path) -> list[Path]:
+    directories: list[Path] = []
+    if (root / SESSION_DB_NAME).is_file() or list(root.glob(MESSAGE_DB_GLOB)):
+        directories.append(root)
+
+    for name in _DB_STORAGE_DIR_NAMES:
+        for candidate in sorted(root.rglob(name)):
+            if candidate.is_dir():
+                directories.append(candidate)
+                directories.extend(
+                    child for child in sorted(candidate.iterdir()) if child.is_dir()
+                )
+    return directories
+
+
+def _session_type(username: str) -> str:
+    if username.endswith("@chatroom"):
+        return "group"
+    if username.startswith("gh_"):
+        return "official"
+    return "private"
+
+
+def _parse_result(stdout: str) -> Mapping[str, Any] | None:
+    for line in reversed(stdout.strip().splitlines()):
+        stripped = line.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return None
+
+
+def _run_subprocess(
+    command: Sequence[str],
+    timeout: int,
+    environment: Mapping[str, str],
+) -> subprocess.CompletedProcess:
+    return subprocess.run(  # noqa: S603 - resolved executable, list form, no shell
+        list(command),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+        shell=False,
+        check=False,
+        env=dict(environment),
+    )

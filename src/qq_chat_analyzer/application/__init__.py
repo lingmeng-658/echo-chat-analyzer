@@ -1,5 +1,12 @@
-﻿"""Stable application-layer contracts for local chat analysis."""
+"""Stable application-layer contracts for local chat analysis."""
 
+from ..analysis.models import (
+    ActivityReport,
+    AnalysisReports,
+    ConversationReport,
+    MessageLengthReport,
+    UserProfileReport,
+)
 from .analysis_service import AnalysisApplicationService
 from .dto import (
     AnalysisRequestDTO,
@@ -16,6 +23,17 @@ from .errors import (
     InvalidAnalysisRequest,
     NoSupportedInput,
 )
+from .facade import (
+    AnalysisConfig,
+    AnalysisOutcome,
+    ChatAnalyzerFacade,
+    ChatSource,
+    FacadeError,
+    SessionInfo,
+    SourceInfo,
+    SourceUnavailable,
+    UnknownChatSource,
+)
 from .import_outcome import ImportOutcome
 from .import_request import ImportRequest
 from .import_result import ImportResult
@@ -27,10 +45,21 @@ from .qq_export_import_service import (
     QQExportProvider,
     QQExportUnavailable,
 )
+from .wechat_export_import_service import (
+    WeChatExportFileMissing,
+    WeChatExportImportRequest,
+    WeChatExportImportService,
+    WeChatExportProvider,
+    WeChatExportUnavailable,
+)
 from .task import AnalysisTask
 
 __all__ = [
+    "ActivityReport",
     "AnalysisApplicationService",
+    "AnalysisConfig",
+    "AnalysisOutcome",
+    "AnalysisReports",
     "AnalysisRequestDTO",
     "AnalysisResultDTO",
     "AnalysisStatus",
@@ -38,18 +67,33 @@ __all__ = [
     "ApplicationServiceError",
     "ArtifactDTO",
     "ArtifactGenerationFailed",
+    "ChatAnalyzerFacade",
+    "ChatSource",
+    "ConversationReport",
     "ExportConfig",
+    "FacadeError",
     "ImportOutcome",
     "ImportRequest",
     "ImportResult",
     "ImportService",
     "InputPathNotFound",
     "InvalidAnalysisRequest",
+    "MessageLengthReport",
     "NoSupportedInput",
     "QQExportFileMissing",
     "QQExportImportRequest",
     "QQExportImportService",
     "QQExportProvider",
     "QQExportUnavailable",
+    "SessionInfo",
+    "SourceInfo",
+    "SourceUnavailable",
+    "UnknownChatSource",
+    "UserProfileReport",
+    "WeChatExportFileMissing",
+    "WeChatExportImportRequest",
+    "WeChatExportImportService",
+    "WeChatExportProvider",
+    "WeChatExportUnavailable",
     "WordFrequencyDTO",
 ]

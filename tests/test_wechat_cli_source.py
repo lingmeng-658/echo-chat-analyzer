@@ -16,7 +16,7 @@ sys.path.insert(0, str(SRC_ROOT))
 
 from qq_chat_analyzer import wechat_cli_adapter
 from qq_chat_analyzer.application import ImportRequest, ImportService
-from qq_chat_analyzer.wechat_cli_provider import (
+from qq_chat_analyzer.providers.wechat_cli_provider import (
     CliNotInstalled,
     DatabaseNotFound,
     ExportFailed,
@@ -77,7 +77,7 @@ def _provider(
     installed: bool = True,
 ) -> WeChatCliProvider:
     monkeypatch.setattr(
-        "qq_chat_analyzer.wechat_cli_provider.shutil.which",
+        "qq_chat_analyzer.providers.wechat_cli_provider.shutil.which",
         lambda _name: "/usr/local/bin/miyu" if installed else None,
     )
     return WeChatCliProvider(runner=runner)
