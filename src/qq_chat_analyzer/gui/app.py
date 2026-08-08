@@ -33,13 +33,18 @@ def build_facade() -> ChatAnalyzerFacade:
     from ..application.analysis_service import AnalysisApplicationService
 
     wechat_provider_factory = _wechat_provider_factory()
+    wechat_connection_service = _optional_wechat_connection_service(
+        wechat_provider_factory
+    )
 
     return ChatAnalyzerFacade(
         qq_service=_optional_qq_service(),
         qq_connection_service=_optional_qq_connection_service(),
         wechat_service=_optional_wechat_service(wechat_provider_factory),
-        wechat_connection_service=_optional_wechat_connection_service(
-            wechat_provider_factory
+        wechat_connection_service=wechat_connection_service,
+        wechat_setup_service=_optional_wechat_setup_service(
+            wechat_provider_factory,
+            wechat_connection_service,
         ),
         analysis_service=AnalysisApplicationService(),
         stopwords_directory=resources_dir(),
@@ -98,6 +103,18 @@ def _optional_wechat_connection_service(provider_factory: Any) -> Any:
     )
 
     return WeChatConnectionService(provider_factory=provider_factory)
+
+
+def _optional_wechat_setup_service(
+    provider_factory: Any,
+    connection_service: Any,
+) -> Any:
+    from ..application.wechat_setup_service import WeChatSetupService
+
+    return WeChatSetupService(
+        provider_factory=provider_factory,
+        connection_service=connection_service,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

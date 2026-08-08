@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from ..application.facade import AnalysisConfig, ChatSource
 from .workers import submit
+from .wechat_setup_dialog import WeChatSetupDialog
 
 
 SESSION_ID_ROLE = Qt.ItemDataRole.UserRole
@@ -94,6 +95,13 @@ class AnalysisPage(QWidget):
         self._status_label.setWordWrap(True)
         self._status_label.setVisible(False)
         layout.addWidget(self._status_label)
+
+        self._wechat_setup_button = QPushButton(
+            "\u5fae\u4fe1\u73af\u5883\u8bbe\u7f6e..."
+        )
+        self._wechat_setup_button.setVisible(False)
+        self._wechat_setup_button.clicked.connect(self.open_wechat_setup)
+        layout.addWidget(self._wechat_setup_button)
 
         self._file_button = QPushButton("\u9009\u62e9\u6587\u4ef6...")
         self._file_button.setVisible(False)
@@ -181,6 +189,7 @@ class AnalysisPage(QWidget):
         is_local = source == ChatSource.LOCAL_FILE
         self._file_button.setVisible(is_local)
         self._file_label.setVisible(is_local)
+        self._wechat_setup_button.setVisible(source == ChatSource.WECHAT)
         self._session_list.clear()
 
         if is_local:
@@ -259,6 +268,56 @@ class AnalysisPage(QWidget):
         self._hint_label.setText(message)
         self._session_list.clear()
         self._update_analyze_enabled()
+
+    def open_wechat_setup(self) -> None:
+        """Open the setup dialog, showing the current facade state."""
+        if self._selected_source is not ChatSource.WECHAT:
+            return
+        try:
+            setup_status = self._facade.get_wechat_setup_status()
+        except Exception:
+            setup_status = None
+        self._wechat_setup_dialog = WeChatSetupDialog(
+            self,
+            setup_status=setup_status,
+        )
+        self._wechat_setup_dialog.accepted.connect(
+            self._save_wechat_environment_from_dialog
+        )
+        self._wechat_setup_dialog.show()
+
+    def _save_wechat_environment_from_dialog(self) -> None:
+        dialog = getattr(self, "_wechat_setup_dialog", None)
+        if dialog is not None:
+            self.save_wechat_environment(dialog.config())
+
+    def save_wechat_environment(self, config: Any) -> None:
+        """Persist one WeChat environment through the facade."""
+        self._status_label.setVisible(True)
+        self._status_label.setText(
+            "\u6b63\u5728\u4fdd\u5b58\u5fae\u4fe1\u73af\u5883\u8bbe\u7f6e..."
+        )
+        self._status_label.setToolTip("")
+        self._executor(
+            lambda: self._facade.setup_wechat_environment(config),
+            on_success=lambda _status: self._after_wechat_environment_saved(),
+            on_error=self._handle_setup_error,
+        )
+
+    def _after_wechat_environment_saved(self) -> None:
+        self.refresh_connection_status(
+            ChatSource.WECHAT,
+            load_sessions_on_ready=True,
+        )
+
+    def _handle_setup_error(self, code: str, message: str) -> None:
+        self._status_label.setText(
+            _DISCONNECTED_PREFIX + "\u5fae\u4fe1\u73af\u5883\u8bbe\u7f6e\u5931\u8d25"
+        )
+        self._status_label.setToolTip(message)
+        self._status_label.setVisible(True)
+        self._hint_label.setText(message)
+        self.status_changed.emit(message)
 
     def _load_sessions(self, source: ChatSource) -> None:
         self._executor(

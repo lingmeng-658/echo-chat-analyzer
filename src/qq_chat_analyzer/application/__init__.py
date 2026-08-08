@@ -73,9 +73,20 @@ from .wechat_connection_service import (
 from .wechat_environment_config import (
     WeChatConfigCorrupted,
     WeChatConfigNotFound,
+    WeChatConfigWriteFailed,
     WeChatEnvironmentConfig,
     WeChatEnvironmentConfigError,
     WeChatEnvironmentConfigLoader,
+    WeChatEnvironmentConfigWriter,
+)
+from .wechat_provider_factory import (
+    WeChatProviderFactory,
+    WeChatProviderUnavailable,
+)
+from .wechat_setup_service import (
+    WeChatSetupService,
+    WeChatSetupState,
+    WeChatSetupStatus,
 )
 from .task import AnalysisTask
 
@@ -132,8 +143,15 @@ __all__ = [
     "WeChatConnectionStatus",
     "WeChatConfigCorrupted",
     "WeChatConfigNotFound",
+    "WeChatConfigWriteFailed",
     "WeChatEnvironmentConfig",
     "WeChatEnvironmentConfigError",
     "WeChatEnvironmentConfigLoader",
+    "WeChatEnvironmentConfigWriter",
+    "WeChatProviderFactory",
+    "WeChatProviderUnavailable",
+    "WeChatSetupService",
+    "WeChatSetupState",
+    "WeChatSetupStatus",
     "WordFrequencyDTO",
 ]

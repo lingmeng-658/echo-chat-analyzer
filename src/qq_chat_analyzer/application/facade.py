@@ -39,7 +39,9 @@ from .qq_connection_service import (
 )
 from .qq_export_import_service import QQExportImportRequest
 from .wechat_connection_service import WeChatConnectionStatus
+from .wechat_environment_config import WeChatEnvironmentConfig
 from .wechat_export_import_service import WeChatExportImportRequest
+from .wechat_setup_service import WeChatSetupStatus
 
 
 DEFAULT_TOP = 50
@@ -194,6 +196,7 @@ class ChatAnalyzerFacade:
         qq_connection_service: Any = None,
         wechat_service: Any = None,
         wechat_connection_service: Any = None,
+        wechat_setup_service: Any = None,
         analysis_service: Any = None,
         presentation_builder: Any = None,
         stopwords_directory: Path | None = None,
@@ -204,6 +207,7 @@ class ChatAnalyzerFacade:
         }
         self._qq_connection_service = qq_connection_service
         self._wechat_connection_service = wechat_connection_service
+        self._wechat_setup_service = wechat_setup_service
         self._analysis_service = analysis_service
         self._presentation_builder = presentation_builder
         self._stopwords_directory = stopwords_directory or resources_dir()
@@ -253,6 +257,26 @@ class ChatAnalyzerFacade:
         service = self._require_connection_service(chat_source)
         with _translated_errors(chat_source):
             return service.check_status()
+
+    def get_wechat_setup_status(self) -> WeChatSetupStatus:
+        """Report whether the WeChat environment config is usable."""
+        service = self._require_setup_service()
+        with _translated_errors(ChatSource.WECHAT):
+            return service.check_setup()
+
+    def setup_wechat_environment(
+        self,
+        config: WeChatEnvironmentConfig,
+    ) -> WeChatConnectionStatus | None:
+        """Save a WeChat environment config and re-check the connection.
+
+        The GUI hands the collected settings here instead of writing the
+        config file itself, so persistence and provider refresh stay in
+        the application layer.
+        """
+        service = self._require_setup_service()
+        with _translated_errors(ChatSource.WECHAT):
+            return service.save_environment(config)
 
     # -------------------------------------------------------------- analysis
 
@@ -423,6 +447,11 @@ class ChatAnalyzerFacade:
         if service is None:
             raise SourceUnavailable(source)
         return service
+
+    def _require_setup_service(self) -> Any:
+        if self._wechat_setup_service is None:
+            raise SourceUnavailable(ChatSource.WECHAT)
+        return self._wechat_setup_service
 
     def _require_analysis_service(self) -> Any:
         if self._analysis_service is None:

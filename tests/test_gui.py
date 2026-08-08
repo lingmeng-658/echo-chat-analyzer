@@ -79,6 +79,8 @@ class StubFacade:
         error=None,
         connection_status=None,
         connection_error=None,
+        setup_status=None,
+        setup_error=None,
     ):
         self._sources = tuple(sources)
         self._sessions = list(sessions)
@@ -86,8 +88,12 @@ class StubFacade:
         self._error = error
         self._connection_status = connection_status
         self._connection_error = connection_error
+        self._setup_status = setup_status
+        self._setup_error = setup_error
         self.list_sessions_calls: list[object] = []
         self.get_connection_status_calls: list[object] = []
+        self.get_wechat_setup_status_calls: list[object] = []
+        self.setup_wechat_environment_calls: list[object] = []
         self.analyze_session_calls: list[tuple] = []
         self.analyze_file_calls: list[tuple] = []
 
@@ -107,6 +113,30 @@ class StubFacade:
         if self._connection_status is None:
             return self._default_connection_status(source)
         return self._connection_status
+
+    def get_wechat_setup_status(self):
+        self.get_wechat_setup_status_calls.append(1)
+        if self._setup_error is not None:
+            raise self._setup_error
+        if self._setup_status is not None:
+            return self._setup_status
+        module = importlib.import_module(
+            "qq_chat_analyzer.application.wechat_setup_service"
+        )
+        return module.WeChatSetupStatus(
+            state=module.WeChatSetupState.CONFIG_MISSING,
+            configured=False,
+            message="\u5fae\u4fe1\u73af\u5883\u672a\u51c6\u5907",
+            action_hint="\u8bf7\u5148\u5b8c\u6210\u5fae\u4fe1\u73af\u5883\u8bbe\u7f6e",
+        )
+
+    def setup_wechat_environment(self, config):
+        self.setup_wechat_environment_calls.append(config)
+        if self._setup_error is not None:
+            raise self._setup_error
+        return self._connection_status or self._default_connection_status(
+            _facade_module().ChatSource.WECHAT
+        )
 
     def _default_connection_status(self, source):
         module = _facade_module()
@@ -531,6 +561,102 @@ def test_wechat_connection_error_blocks_session_loading_without_leaks(
     assert "raw provider failure" not in page._hint_label.text()
 
 
+def test_wechat_unconfigured_shows_setup_entry(qt_app) -> None:
+    module = _facade_module()
+    status = _wechat_connection_status(
+        available=False,
+        data_found=False,
+        db_key_available=False,
+        runtime_available=False,
+        message="\u672a\u627e\u5230\u5fae\u4fe1\u6570\u636e\u76ee\u5f55\u3002",
+        action_hint="\u8bf7\u5b8c\u6210\u5fae\u4fe1\u73af\u5883\u8bbe\u7f6e\u3002",
+    )
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        connection_status=status,
+    )
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+
+    assert page._wechat_setup_button.isVisibleTo(page) is True
+    assert "\u5fae\u4fe1\u73af\u5883\u8bbe\u7f6e" in page._wechat_setup_button.text()
+
+
+def test_clicking_wechat_setup_calls_facade(qt_app) -> None:
+    module = _facade_module()
+    facade = StubFacade(sources=_wechat_available_sources())
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+    page._wechat_setup_button.click()
+
+    assert facade.get_wechat_setup_status_calls == [1]
+    assert page._wechat_setup_dialog is not None
+
+
+def test_saving_wechat_environment_refreshes_status(qt_app) -> None:
+    module = _facade_module()
+    ready = _wechat_connection_status(
+        available=True,
+        data_found=True,
+        db_key_available=True,
+        runtime_available=True,
+        message="\u5fae\u4fe1\u6570\u636e\u6e90\u53ef\u7528\uff0c\u53ef\u4ee5\u5f00\u59cb\u5206\u6790\u3002",
+        action_hint="",
+    )
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        connection_status=ready,
+    )
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+    status_calls_before = len(facade.get_connection_status_calls)
+    config = module.WeChatEnvironmentConfig(
+        data_root="D:/fake_root",
+        db_key="fictional-key",
+    )
+
+    page.save_wechat_environment(config)
+    _drain(page)
+
+    assert facade.setup_wechat_environment_calls == [config]
+    assert len(facade.get_connection_status_calls) == status_calls_before + 1
+    assert "\u5fae\u4fe1\u6570\u636e\u6e90\u53ef\u7528" in page._status_label.text()
+
+
+def test_wechat_setup_failure_shows_user_prompt(qt_app) -> None:
+    module = _facade_module()
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        setup_error=module.FacadeError(
+            "wechat_config_write_failed",
+            "\u5fae\u4fe1\u73af\u5883\u8bbe\u7f6e\u4fdd\u5b58\u5931\u8d25\uff0c"
+            "\u8bf7\u68c0\u67e5\u5199\u5165\u6743\u9650\u540e\u91cd\u8bd5\u3002",
+            source=module.ChatSource.WECHAT,
+        ),
+    )
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+    page.save_wechat_environment(module.WeChatEnvironmentConfig())
+    _drain(page)
+
+    assert "\u5fae\u4fe1\u73af\u5883\u8bbe\u7f6e\u4fdd\u5b58\u5931\u8d25" in (
+        page._hint_label.text()
+    )
+    assert "Traceback" not in page._hint_label.text()
+
+
 def test_analysis_page_lists_sources_from_the_facade(qt_app, sources) -> None:
     module = _facade_module()
     page = _analysis_page(qt_app, StubFacade(sources=sources))
@@ -912,7 +1038,12 @@ def test_gui_modules_never_import_providers_or_parsers() -> None:
 def test_gui_pages_only_import_the_facade_from_application() -> None:
     gui_directory = SRC_ROOT / "qq_chat_analyzer" / "gui"
 
-    for name in ("analysis_page.py", "dashboard_page.py", "main_window.py"):
+    for name in (
+        "analysis_page.py",
+        "dashboard_page.py",
+        "main_window.py",
+        "wechat_setup_dialog.py",
+    ):
         source = (gui_directory / name).read_text(encoding="utf-8")
         for line in source.splitlines():
             stripped = line.strip()

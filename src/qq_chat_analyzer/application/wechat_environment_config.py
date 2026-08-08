@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..resources import user_data_dir
 
@@ -56,6 +56,16 @@ class WeChatConfigCorrupted(WeChatEnvironmentConfigError):
     )
 
 
+class WeChatConfigWriteFailed(WeChatEnvironmentConfigError):
+    """Raised when the configuration file cannot be written safely."""
+
+    code = "wechat_config_write_failed"
+    public_message = (
+        "\u5fae\u4fe1\u73af\u5883\u914d\u7f6e\u4fdd\u5b58\u5931\u8d25\uff0c"
+        "\u8bf7\u68c0\u67e5\u5199\u5165\u6743\u9650\u540e\u91cd\u8bd5\u3002"
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class WeChatEnvironmentConfig:
     """Durable WeChat environment settings loaded from disk."""
@@ -64,6 +74,58 @@ class WeChatEnvironmentConfig:
     db_key: str | None = None
     wcdb_cli_path: Path | None = None
     wcdb_dll_path: Path | None = None
+
+
+class WeChatEnvironmentConfigWriter:
+    """Persist a WeChat environment config as stable JSON.
+
+    The writer owns only serialization: it creates the parent directory,
+    writes a sorted, stable JSON object, and converts every failure into
+    :class:`WeChatConfigWriteFailed` so callers never see an OS error.
+    """
+
+    def __init__(
+        self,
+        config_path: str | Path | None = None,
+        *,
+        writer: Callable[[Path, str], None] | None = None,
+    ) -> None:
+        self._config_path = (
+            Path(config_path)
+            if config_path is not None
+            else user_data_dir() / CONFIG_DIRECTORY / CONFIG_FILENAME
+        )
+        self._writer = writer or self._write_file
+
+    def config_path(self) -> Path:
+        return self._config_path
+
+    def save(self, config: WeChatEnvironmentConfig) -> None:
+        """Persist one config, raising a user-safe error on failure."""
+        payload = {
+            "data_root": _stringify(config.data_root),
+            "db_key": config.db_key if config.db_key else None,
+            "wcdb_cli_path": _stringify(config.wcdb_cli_path),
+            "wcdb_dll_path": _stringify(config.wcdb_dll_path),
+        }
+        body = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+        try:
+            self._config_path.parent.mkdir(parents=True, exist_ok=True)
+            self._writer(self._config_path, body)
+        except Exception:
+            raise WeChatConfigWriteFailed() from None
+
+    @staticmethod
+    def _write_file(path: Path, body: str) -> None:
+        with path.open("w", encoding="utf-8", newline="\n") as file:
+            file.write(body)
+
+
+def _stringify(value: Path | str | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 class WeChatEnvironmentConfigLoader:
@@ -119,7 +181,9 @@ def _path_value(value: Any) -> Path | None:
 __all__ = [
     "WeChatConfigCorrupted",
     "WeChatConfigNotFound",
+    "WeChatConfigWriteFailed",
     "WeChatEnvironmentConfig",
     "WeChatEnvironmentConfigError",
     "WeChatEnvironmentConfigLoader",
+    "WeChatEnvironmentConfigWriter",
 ]
