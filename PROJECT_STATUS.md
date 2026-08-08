@@ -45,16 +45,23 @@ main
 - QQ 导出→分析闭环已完成
 - CLI qce 入口已完成
 - QQChatExporter 集成真实环境验收已完成
+- v0.7.0 Desktop MVP Foundation 已完成
+- QQ / 微信多来源支持
+- 微信数据库 Provider
+- Analysis Core v2/v3 与 Analysis Reports
+- Presentation Layer
+- ChatAnalyzerFacade
+- PySide6 GUI（Dashboard 展示）
 
 最近完整 pytest：
 
-359 passed
+528 tests passing
 
 历史状态：Phase 5.2 阶段曾出现 196 passed + 1 个与 .venv editable 安装指向相关的环境失败。
 
 当前版本目标：
 
-v0.6.0 Multi-Source v1
+v0.7.0 Desktop MVP Foundation
 
 ------------------------------------------------------------------------
 
@@ -88,7 +95,7 @@ QQChatExporter 集成已在真实环境完成验收：
 - qqchat qce analyze --group <group_code> 成功完成：
   QQ 导出 → QCE JSON → Adapter → ChatMessage → 分析核心 → 输出文件；
 - 真实群聊数据测试成功；
-- 当前测试基线：359 passed。
+- 当前测试基线：528 tests passing。
 
 ------------------------------------------------------------------------
 
@@ -101,80 +108,18 @@ QQChatExporter 集成已在真实环境完成验收：
 - 只支持群聊；
 - 只支持 JSON；
 - 非文本消息暂未进入分析；
-- GUI 尚未实现。
 
 ------------------------------------------------------------------------
 
 # Architecture Overview
 
-当前 QQ 导出→分析链路：
+当前系统架构详见 ARCHITECTURE.md。
 
-QQChatExporter 桌面版
-        ↓
-QQChatExporter Provider（HTTP API）
-        ↓
-QCE JSON 文件
-        ↓
-QQChatExporter Adapter
-        ↓
-ChatMessage
-        ↓
-ImportService
-        ↓
-AnalysisApplicationService
-        ↓
-Core Analysis Pipeline / Exporter
-
-当前架构：
-
-QQ JSON/JSONL          WeChat detailed JSON
-
-↓
-
-QQ Parser / WeChat Parser
-
-↓
-
-统一消息模型 ChatMessage
-
-↓
-
-ImportService（文件发现、格式识别、parser 路由）
-
-↓
-
-AnalysisApplicationService
-
-↓
-
-Core Analysis Pipeline
-
-↓
-
-Exporter
-
-依赖方向：
-
-CLI ↓ Application ↓ Parser / Cleaner / Tokenizer / Analyzer / Exporter
-
-输入方向：
-
-来源 Parser ↓ ChatMessage ↓ ImportService ↓ Application ↓ Core Analysis
-
-原则：
-
--   Core 模块不能依赖 CLI；
--   Core 模块不能依赖 Application；
--   Application 负责业务流程编排；
--   ImportService 负责文件发现、格式识别和 parser 路由；
--   AnalysisApplicationService 不再直接负责文件发现和消息解析；
--   CLI 只负责用户交互和参数转换。
--   来源 Parser 只负责把来源消息转换为 ChatMessage；
--   核心分析层不关心 QQ、微信或其他来源的具体结构。
+本文档不再复制架构图与分层职责副本，以 ARCHITECTURE.md 作为唯一架构事实来源。
 
 ------------------------------------------------------------------------
 
-# Completed Work
+# Completed Work# Completed Work
 
 ## Analysis Core
 
@@ -382,25 +327,26 @@ from qq_chat_analyzer.application import AnalysisApplicationService
 
 最近完成：
 
--   QQChatExporter Provider / Adapter / 编排层；
--   QQ 导出→分析闭环；
--   CLI qce 入口；
--   QQChatExporter 集成真实环境验收；
--   pytest 359 passed。
+-   v0.7.0 Desktop MVP Foundation；
+-   QQ / 微信多来源支持与微信数据库 Provider；
+-   Analysis Core v2/v3 与 Analysis Reports；
+-   Presentation Layer；
+-   ChatAnalyzerFacade；
+-   PySide6 GUI（Dashboard 展示）；
+-   全量测试 528 tests passing。
 
 下一阶段：后续产品化方向（不提前展开实现细节）。
 
 -   Windows 可执行打包；
 -   普通用户安装流程；
 -   依赖封装；
--   GUI（方向待定）。
+-   报告展示增强。
 
 待办（不纳入当前实现范围）：
 
 -   QCE 自动启动：未实现；
 -   分片 manifest/chunks 支持：未实现；
--   微信 CLI 集成：未纳入 QQ 导出阶段；
--   GUI、AI、API 接入：未实现。
+-   AI、API 接入：未实现。
 
 ------------------------------------------------------------------------
 

@@ -129,33 +129,7 @@ configuration; - virtual environments.
 
 ## 7. Architecture Rules
 
-Current architecture:
-
-    Input sources (QQ JSON/JSONL, WeChat detailed JSON/JSONL)
-
-        ↓
-
-    Source parsers (QQ parser / WeChat parser)
-
-        ↓
-
-    ChatMessage
-
-        ↓
-
-    ImportService
-
-        ↓
-
-    Application Service
-
-        ↓
-
-    Core Analysis Modules
-
-        ↓
-
-    Exporters
+完整架构设计见 ARCHITECTURE.md（唯一架构事实来源）。本文档只保留与开发流程相关的规则，不再复制架构图。
 
 CLI handles:
 - command arguments;
@@ -276,6 +250,30 @@ Current limits:
 - Non-text messages are skipped for analysis.
 - No GUI yet.
 
+
+## 7.4 GUI / Facade / Presentation 开发规则
+
+GUI 开发规则：
+
+- GUI 只能通过 ChatAnalyzerFacade 调用业务能力；
+- GUI 不得直接调用 Provider、Parser、Adapter 或 Analysis Core；
+- GUI 不包含数据解析、分析算法与过滤规则；
+- 报告展示控件保持只读（setEditTriggers(NoEditTriggers)），但保留选中与复制。
+
+Facade 规则：
+
+- ChatAnalyzerFacade 是 GUI 的唯一业务入口（application/facade.py）；
+- Facade 负责来源分派、配置整理、Service 调度与异常归一（FacadeError）；
+- GUI 只展示 FacadeError.public_message，不展示 traceback；
+- Facade 通过依赖注入构造，测试可传入 stub。
+
+Presentation 规则：
+
+- Presentation 只负责展示模型转换与格式化，不重新计算分析结果；
+- 需要的统计数字必须由 Analysis Core 的 analyzer 产出；
+- 展示名称通过 AnalysisRequestDTO.speaker_names / conversation_names 注入，
+  不在展示层做来源判断。
+
 ------------------------------------------------------------------------
 
 ## 8. Privacy Rules
@@ -305,22 +303,32 @@ Tests must use fictional data only.
 ------------------------------------------------------------------------
 
 Current working state:
-- Architecture: QCE Provider -> QCE JSON -> Adapter -> ChatMessage -> ImportService -> AnalysisApplicationService
-- Models: AnalysisTask, ExportConfig, ImportResult, ImportRequest, ImportOutcome, ImportService, QQExportImportService
-- QCE integration: Provider, Adapter, orchestration, CLI qce commands, and real desktop acceptance completed
-- ChatMessage: v2 fields added and populated by QQ/WeChat parsers
-- Tests: 359 passed
-- Next phase: productization direction (packaging, install flow, GUI direction)
+- Architecture: 见 ARCHITECTURE.md（唯一架构事实来源）
+- Sources: QQ（QCE Provider / Adapter）、微信（数据库 Provider / CLI Provider）、本地导出文件
+- Application: ImportService, AnalysisApplicationService, QQ/WeChatExportImportService, ChatAnalyzerFacade
+- Analysis: Analysis Core v2/v3（activity / length / profile / conversation reports）
+- Presentation: DashboardBuilder -> DashboardView
+- GUI: PySide6 MVP（AnalysisPage / DashboardPage）
+- Tests: 528 tests passing
+- Next phase: productization direction (packaging, install flow, report presentation enhancements)
 
 See PROJECT_STATUS.md for current progress and next steps.
 
 ## Source Structure
 
 src/qq_chat_analyzer/
-    application/       # application contracts and service
+    application/       # application contracts and services
+    application/facade.py  # ChatAnalyzerFacade: GUI 唯一业务入口
+    analysis/          # Analysis Core v2/v3: reports and analyzers
+    presentation/      # view models, formatters, builders
+    gui/               # PySide6 GUI MVP
+    providers/         # QQ / WeChat data providers
     message.py         # source-neutral ChatMessage model
     parser.py          # QQChatExporter message parsing
     wechat_parser.py   # WeChat detailed JSON parsing
+    qq_chat_exporter_adapter.py  # QCE JSON adapter
+    wechat_db_adapter.py         # WeChat DB adapter
+    wechat_cli_adapter.py        # WeChat CLI adapter
     smart_profile.py   # Smart Profile orchestration
     detectors/         # robot/template/interactive bot detectors
     cleaner.py         # text cleaning

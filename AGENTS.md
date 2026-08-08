@@ -30,6 +30,10 @@
 
 数据来源与分析逻辑分离。
 
+架构事实来源：
+
+ARCHITECTURE.md（仓库根目录）是当前唯一架构事实来源；架构与分层讨论以它为准，不在本文件复制架构图。
+
 结构：
 
 数据来源 → Parser / Provider → ChatMessage → Application Service →
@@ -96,6 +100,8 @@ AnalysisApplicationService
 ### Application Service
 
 CLI 和 GUI 的共同入口。
+
+GUI 通过 ChatAnalyzerFacade 接入（见 GUI原则）。
 
 禁止出现两套业务逻辑。
 
@@ -174,7 +180,14 @@ GUI只负责展示和交互。
 
 正确：
 
-GUI → Application Service → Core
+GUI → ChatAnalyzerFacade → Application Service → Core
+
+约束：
+
+- GUI 必须通过 ChatAnalyzerFacade 调用业务能力，不得绕过 Facade；
+- GUI 不得直接调用 Provider / Parser / Adapter / Analysis Core；
+- 禁止跨层依赖：GUI 不 import 业务层以外的内部模块；
+- 错误统一使用 FacadeError.public_message，不展示 traceback。
 
 ------------------------------------------------------------------------
 
