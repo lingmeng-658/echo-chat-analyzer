@@ -13,6 +13,7 @@ place.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
@@ -29,6 +30,8 @@ GENERIC_ERROR_MESSAGE = (
 # otherwise delete a finished QRunnable together with its signal object, and
 # any cross-thread callback still queued for the UI thread would be dropped.
 _PENDING: set["FacadeWorker"] = set()
+
+_WORKER_LOGGER = logging.getLogger("qq_chat_analyzer.desktop.worker")
 
 
 class WorkerSignals(QObject):
@@ -53,8 +56,14 @@ class FacadeWorker(QRunnable):
         try:
             result = self._operation()
         except FacadeError as error:
+            _WORKER_LOGGER.warning(
+                "facade operation failed code=%s message=%s",
+                error.code,
+                error.public_message,
+            )
             self.signals.failed.emit(error.code, error.public_message)
-        except Exception:
+        except Exception as error:
+            _WORKER_LOGGER.exception("facade operation crashed", exc_info=error)
             self.signals.failed.emit("unexpected_error", GENERIC_ERROR_MESSAGE)
         else:
             self.signals.succeeded.emit(result)

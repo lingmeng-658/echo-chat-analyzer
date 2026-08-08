@@ -43,6 +43,18 @@ _LOCAL_FILE_HINT = (
     "\u5bfc\u51fa\u6587\u4ef6\u3002"
 )
 _ANALYZING = "\u6b63\u5728\u5206\u6790\uff0c\u8bf7\u7a0d\u5019..."
+_SOURCE_DISPLAY_NAMES = {
+    ChatSource.QQ: "QQ",
+    ChatSource.WECHAT: "\u5fae\u4fe1",
+}
+_CONNECTION_STATUS_LOADING = (
+    "\u6b63\u5728\u68c0\u6d4b {source} \u8fde\u63a5\u72b6\u6001..."
+)
+_CONNECTED_PREFIX = "\U0001F7E2 "
+_DISCONNECTED_PREFIX = "\U0001F534 "
+_CONNECTION_STATUS_UNKNOWN = (
+    "\u65e0\u6cd5\u786e\u8ba4\u8fde\u63a5\u72b6\u6001\u3002"
+)
 
 
 class AnalysisPage(QWidget):
@@ -77,6 +89,11 @@ class AnalysisPage(QWidget):
         self._source_box = QGroupBox("\u6570\u636e\u6765\u6e90")
         self._source_layout = QHBoxLayout(self._source_box)
         layout.addWidget(self._source_box)
+
+        self._status_label = QLabel("")
+        self._status_label.setWordWrap(True)
+        self._status_label.setVisible(False)
+        layout.addWidget(self._status_label)
 
         self._file_button = QPushButton("\u9009\u62e9\u6587\u4ef6...")
         self._file_button.setVisible(False)
@@ -133,6 +150,7 @@ class AnalysisPage(QWidget):
             self._source_layout.removeWidget(button)
             button.deleteLater()
         self._source_buttons.clear()
+        self._status_label.setVisible(False)
 
         for info in self._facade.list_sources():
             button = QPushButton(info.display_name)
@@ -147,6 +165,9 @@ class AnalysisPage(QWidget):
             )
             self._source_layout.addWidget(button)
             self._source_buttons[info.source] = button
+
+        if ChatSource.QQ in self._source_buttons:
+            self.refresh_connection_status(ChatSource.QQ)
 
     def select_source(self, source: ChatSource) -> None:
         """Select one source and load whatever it offers."""
@@ -163,13 +184,81 @@ class AnalysisPage(QWidget):
         self._session_list.clear()
 
         if is_local:
+            self._status_label.setVisible(False)
             self._hint_label.setText(_LOCAL_FILE_HINT)
             self._update_analyze_enabled()
             return
 
-        self._hint_label.setText(_LOADING_SESSIONS)
-        self.status_changed.emit(_LOADING_SESSIONS)
-        self._load_sessions(source)
+        self._session_list.clear()
+        self.refresh_connection_status(source, load_sessions_on_ready=True)
+
+    def refresh_connection_status(
+        self,
+        source: ChatSource,
+        *,
+        load_sessions_on_ready: bool = False,
+    ) -> None:
+        """Ask the facade for one source's connection state and render it.
+
+        The status is a user-layer model produced by the application layer, so
+        this page never probes the provider itself.
+        """
+        display_name = _SOURCE_DISPLAY_NAMES.get(
+            source,
+            getattr(source, "value", str(source)),
+        )
+        self._status_label.setVisible(True)
+        self._status_label.setText(
+            _CONNECTION_STATUS_LOADING.format(source=display_name)
+        )
+        self._status_label.setToolTip("")
+        if load_sessions_on_ready:
+            self._hint_label.setText("")
+        self._executor(
+            lambda: self._facade.get_connection_status(source),
+            on_success=lambda status: self._show_connection_status(
+                source,
+                status,
+                load_sessions_on_ready,
+            ),
+            on_error=self._handle_connection_status_error,
+        )
+
+    def _show_connection_status(
+        self,
+        source: ChatSource,
+        status: Any,
+        load_sessions_on_ready: bool,
+    ) -> None:
+        """Render one source's connection status returned by the facade."""
+        if getattr(status, "available", False):
+            prefix = _CONNECTED_PREFIX
+        else:
+            prefix = _DISCONNECTED_PREFIX
+        message = getattr(status, "message", "") or _CONNECTION_STATUS_UNKNOWN
+        action_hint = getattr(status, "action_hint", "") or ""
+        self._status_label.setText(f"{prefix}{message}")
+        self._status_label.setToolTip(action_hint)
+        self._status_label.setVisible(True)
+        if load_sessions_on_ready:
+            self._hint_label.setText(action_hint)
+        self._session_list.clear()
+        self._update_analyze_enabled()
+        if load_sessions_on_ready:
+            self.status_changed.emit(action_hint or message)
+
+        if getattr(status, "available", False) and load_sessions_on_ready:
+            self._hint_label.setText(_LOADING_SESSIONS)
+            self.status_changed.emit(_LOADING_SESSIONS)
+            self._load_sessions(source)
+
+    def _handle_connection_status_error(self, code: str, message: str) -> None:
+        self._status_label.setText(_CONNECTION_STATUS_UNKNOWN)
+        self._status_label.setToolTip(message)
+        self._status_label.setVisible(True)
+        self._hint_label.setText(message)
+        self._session_list.clear()
+        self._update_analyze_enabled()
 
     def _load_sessions(self, source: ChatSource) -> None:
         self._executor(

@@ -101,6 +101,32 @@ class _StubWeChatService:
         return self._export_path
 
 
+class _StubQQConnectionService:
+    def __init__(self, status=None, error=None):
+        self._status = status
+        self._error = error
+        self.check_calls = 0
+
+    def check_status(self):
+        self.check_calls += 1
+        if self._error is not None:
+            raise self._error
+        return self._status
+
+
+class _StubWeChatConnectionService:
+    def __init__(self, status=None, error=None):
+        self._status = status
+        self._error = error
+        self.check_calls = 0
+
+    def check_status(self):
+        self.check_calls += 1
+        if self._error is not None:
+            raise self._error
+        return self._status
+
+
 def _reports(message_count: int = 2):
     models = _analysis_models()
     return models.AnalysisReports(
@@ -357,6 +383,170 @@ def test_list_sessions_tolerates_a_service_returning_none() -> None:
     assert facade.list_sessions(module.ChatSource.WECHAT) == []
 
 
+# --------------------------------------------------------------- connection
+
+
+def test_get_connection_status_delegates_to_the_connection_service() -> None:
+    module = _facade_module()
+    connection_service = _StubQQConnectionService(
+        status=module.QQConnectionStatus(
+            available=True,
+            qce_running=True,
+            authenticated=True,
+            version="4.1.0",
+            message="\u53ef\u7528",
+            action_hint="\u5f00\u59cb\u5206\u6790",
+        )
+    )
+    facade = _facade(qq_connection_service=connection_service)
+
+    status = facade.get_connection_status(module.ChatSource.QQ)
+
+    assert connection_service.check_calls == 1
+    assert status.available is True
+    assert status.qce_running is True
+    assert status.authenticated is True
+    assert status.version == "4.1.0"
+    assert status.message != ""
+    assert status.action_hint != ""
+
+
+def test_get_connection_status_accepts_a_plain_source_string() -> None:
+    module = _facade_module()
+    connection_service = _StubQQConnectionService(
+        status=module.QQConnectionStatus(
+            available=False,
+            qce_running=False,
+            authenticated=False,
+            version=None,
+            message="\u4e0d\u53ef\u7528",
+            action_hint="\u542f\u52a8 QQChatExporter",
+        )
+    )
+    facade = _facade(qq_connection_service=connection_service)
+
+    status = facade.get_connection_status("qq")
+
+    assert status.available is False
+
+
+def test_get_connection_status_without_service_raises() -> None:
+    module = _facade_module()
+    facade = _facade()
+
+    try:
+        facade.get_connection_status(module.ChatSource.QQ)
+    except module.FacadeError as error:
+        assert error.code == "source_unavailable"
+    else:  # pragma: no cover
+        raise AssertionError("expected a FacadeError")
+
+
+def test_get_connection_status_delegates_to_wechat_connection_service() -> None:
+    module = _facade_module()
+    connection_service = _StubWeChatConnectionService(
+        status=module.WeChatConnectionStatus(
+            available=True,
+            data_found=True,
+            db_key_available=True,
+            runtime_available=True,
+            message="\u5fae\u4fe1\u53ef\u7528",
+            action_hint="\u5f00\u59cb\u5206\u6790",
+        )
+    )
+    facade = _facade(wechat_connection_service=connection_service)
+
+    status = facade.get_connection_status(module.ChatSource.WECHAT)
+
+    assert connection_service.check_calls == 1
+    assert status.available is True
+    assert status.data_found is True
+    assert status.db_key_available is True
+    assert status.runtime_available is True
+    assert status.message != ""
+    assert status.action_hint != ""
+
+
+def test_get_connection_status_accepts_a_wechat_source_string() -> None:
+    module = _facade_module()
+    connection_service = _StubWeChatConnectionService(
+        status=module.WeChatConnectionStatus(
+            available=False,
+            data_found=False,
+            db_key_available=False,
+            runtime_available=False,
+            message="\u4e0d\u53ef\u7528",
+            action_hint="\u68c0\u67e5\u6570\u636e\u76ee\u5f55",
+        )
+    )
+    facade = _facade(wechat_connection_service=connection_service)
+
+    status = facade.get_connection_status("wechat")
+
+    assert connection_service.check_calls == 1
+    assert status.available is False
+
+
+def test_get_connection_status_without_wechat_service_raises() -> None:
+    module = _facade_module()
+    facade = _facade()
+
+    try:
+        facade.get_connection_status(module.ChatSource.WECHAT)
+    except module.FacadeError as error:
+        assert error.code == "source_unavailable"
+        assert error.source is module.ChatSource.WECHAT
+    else:  # pragma: no cover
+        raise AssertionError("expected a FacadeError")
+
+
+def test_get_connection_status_rejects_local_file_source() -> None:
+    module = _facade_module()
+    facade = _facade()
+
+    try:
+        facade.get_connection_status(module.ChatSource.LOCAL_FILE)
+    except module.FacadeError as error:
+        assert error.code == "unknown_source"
+    else:  # pragma: no cover
+        raise AssertionError("expected a FacadeError")
+
+
+def test_wechat_connection_service_errors_become_facade_errors() -> None:
+    module = _facade_module()
+    facade = _facade(
+        wechat_connection_service=_StubWeChatConnectionService(
+            error=RuntimeError("raw wechat connection failure")
+        )
+    )
+
+    try:
+        facade.get_connection_status(module.ChatSource.WECHAT)
+    except module.FacadeError as error:
+        assert error.code == "runtime_error"
+        assert error.public_message.strip() != ""
+        assert error.source is module.ChatSource.WECHAT
+    else:  # pragma: no cover
+        raise AssertionError("expected a FacadeError")
+
+
+def test_connection_service_errors_become_facade_errors() -> None:
+    module = _facade_module()
+    facade = _facade(
+        qq_connection_service=_StubQQConnectionService(
+            error=RuntimeError("raw connection failure")
+        )
+    )
+
+    try:
+        facade.get_connection_status(module.ChatSource.QQ)
+    except module.FacadeError as error:
+        assert error.code == "runtime_error"
+        assert error.public_message.strip() != ""
+    else:  # pragma: no cover
+        raise AssertionError("expected a FacadeError")
+
+
 # ----------------------------------------------------------------- analysis
 
 
@@ -447,6 +637,47 @@ def test_unknown_profile_falls_back_to_the_default_stopwords(
 
     assert analysis_service.requests[0].stopwords_path == (
         tmp_path / "stopwords.txt"
+    )
+
+
+def test_default_stopwords_resolve_from_resources(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _facade_module()
+    if hasattr(sys, "_MEIPASS"):
+        monkeypatch.delattr(sys, "_MEIPASS")
+    resources = importlib.import_module("qq_chat_analyzer.resources")
+    analysis_service = _StubAnalysisService(result=_result())
+    facade = module.ChatAnalyzerFacade(analysis_service=analysis_service)
+
+    facade.analyze_file(
+        _export_file(tmp_path),
+        module.AnalysisConfig(profile="topic"),
+    )
+
+    assert analysis_service.requests[0].stopwords_path == (
+        resources.resources_dir() / "stopwords_topic.txt"
+    )
+
+
+def test_default_stopwords_use_meipass_in_bundled_mode(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _facade_module()
+    fake_bundle = tmp_path / "bundle"
+    monkeypatch.setattr(sys, "_MEIPASS", str(fake_bundle), raising=False)
+    analysis_service = _StubAnalysisService(result=_result())
+    facade = module.ChatAnalyzerFacade(analysis_service=analysis_service)
+
+    facade.analyze_file(
+        _export_file(tmp_path),
+        module.AnalysisConfig(profile="culture"),
+    )
+
+    assert analysis_service.requests[0].stopwords_path == (
+        fake_bundle / "stopwords_culture.txt"
     )
 
 

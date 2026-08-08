@@ -86,11 +86,34 @@ class WeChatExportImportService:
 
     def __init__(
         self,
-        provider: WeChatExportProvider,
+        provider: WeChatExportProvider | None = None,
         import_service: ImportService | None = None,
+        *,
+        provider_factory: Any = None,
     ) -> None:
-        self._provider = provider
+        if provider is None and provider_factory is None:
+            raise TypeError(
+                "WeChatExportImportService needs a provider or a"
+                " provider_factory"
+            )
+        self._injected_provider = provider
+        self._provider_factory = provider_factory
         self._import_service = import_service or ImportService()
+
+    def provider(self) -> WeChatExportProvider:
+        """Return the provider used for exports.
+
+        When a shared provider factory is injected, the instance comes
+        from that factory, so this read path and the connection status
+        check observe the same configuration and the same provider.
+        """
+        if self._provider_factory is not None:
+            return self._provider_factory.create()
+        return self._injected_provider
+
+    @property
+    def _provider(self) -> WeChatExportProvider:
+        return self.provider()
 
     def execute(self, request: WeChatExportImportRequest) -> ImportOutcome:
         export_path = self.export_only(request)

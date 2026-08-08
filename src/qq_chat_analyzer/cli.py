@@ -20,12 +20,12 @@ from .application import (
     QQExportImportService,
 )
 from .application.analysis_service import AnalysisApplicationService
+from .resources import resource_path
 
 
 SUPPORTED_INPUT_SUFFIXES = frozenset({".json", ".jsonl"})
 QCE_COMMAND = "qce"
 QCE_SUBCOMMANDS = ("list", "analyze")
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROFILE_STOPWORD_FILES = {
     "default": "stopwords.txt",
     "topic": "stopwords_topic.txt",
@@ -261,7 +261,7 @@ def _parse_cli_configuration(
     elif not simplified:
         stopwords_path = Path("stopwords.txt")
     else:
-        stopwords_path = PROJECT_ROOT / PROFILE_STOPWORD_FILES[profile]
+        stopwords_path = resource_path(PROFILE_STOPWORD_FILES[profile])
 
     return CliConfiguration(
         input_path=input_path,

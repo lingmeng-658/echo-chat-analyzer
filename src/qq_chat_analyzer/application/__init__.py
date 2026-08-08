@@ -15,6 +15,11 @@ from .dto import (
     ArtifactDTO,
     WordFrequencyDTO,
 )
+from .export_task_manager import (
+    ExportTaskManager,
+    ExportTaskState,
+    ExportTaskStatus,
+)
 from .export_config import ExportConfig
 from .errors import (
     ApplicationServiceError,
@@ -38,6 +43,10 @@ from .import_outcome import ImportOutcome
 from .import_request import ImportRequest
 from .import_result import ImportResult
 from .import_service import ImportService
+from .qq_connection_service import (
+    QQConnectionService,
+    QQConnectionStatus,
+)
 from .qq_export_import_service import (
     QQExportFileMissing,
     QQExportImportRequest,
@@ -45,12 +54,28 @@ from .qq_export_import_service import (
     QQExportProvider,
     QQExportUnavailable,
 )
+from .runtime import (
+    QQRuntimeManager,
+    QQRuntimeState,
+    QQRuntimeStatus,
+)
 from .wechat_export_import_service import (
     WeChatExportFileMissing,
     WeChatExportImportRequest,
     WeChatExportImportService,
     WeChatExportProvider,
     WeChatExportUnavailable,
+)
+from .wechat_connection_service import (
+    WeChatConnectionService,
+    WeChatConnectionStatus,
+)
+from .wechat_environment_config import (
+    WeChatConfigCorrupted,
+    WeChatConfigNotFound,
+    WeChatEnvironmentConfig,
+    WeChatEnvironmentConfigError,
+    WeChatEnvironmentConfigLoader,
 )
 from .task import AnalysisTask
 
@@ -71,6 +96,9 @@ __all__ = [
     "ChatSource",
     "ConversationReport",
     "ExportConfig",
+    "ExportTaskManager",
+    "ExportTaskState",
+    "ExportTaskStatus",
     "FacadeError",
     "ImportOutcome",
     "ImportRequest",
@@ -85,6 +113,11 @@ __all__ = [
     "QQExportImportService",
     "QQExportProvider",
     "QQExportUnavailable",
+    "QQRuntimeManager",
+    "QQRuntimeState",
+    "QQRuntimeStatus",
+    "QQConnectionService",
+    "QQConnectionStatus",
     "SessionInfo",
     "SourceInfo",
     "SourceUnavailable",
@@ -95,5 +128,12 @@ __all__ = [
     "WeChatExportImportService",
     "WeChatExportProvider",
     "WeChatExportUnavailable",
+    "WeChatConnectionService",
+    "WeChatConnectionStatus",
+    "WeChatConfigCorrupted",
+    "WeChatConfigNotFound",
+    "WeChatEnvironmentConfig",
+    "WeChatEnvironmentConfigError",
+    "WeChatEnvironmentConfigLoader",
     "WordFrequencyDTO",
 ]

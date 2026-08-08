@@ -23,3 +23,118 @@ def test_application_package_exports_analysis_application_service() -> None:
     assert public_service is service_module.AnalysisApplicationService
     assert "AnalysisApplicationService" in application.__all__
     assert callable(public_service.execute)
+
+
+def test_application_package_exports_qq_connection_types() -> None:
+    application = importlib.import_module("qq_chat_analyzer.application")
+    service_module = importlib.import_module(
+        "qq_chat_analyzer.application.qq_connection_service"
+    )
+
+    assert application.QQConnectionService is service_module.QQConnectionService
+    assert application.QQConnectionStatus is service_module.QQConnectionStatus
+    assert "QQConnectionService" in application.__all__
+    assert "QQConnectionStatus" in application.__all__
+    assert callable(application.QQConnectionService.check_status)
+
+
+def test_application_package_exports_wechat_connection_types() -> None:
+    application = importlib.import_module("qq_chat_analyzer.application")
+    service_module = importlib.import_module(
+        "qq_chat_analyzer.application.wechat_connection_service"
+    )
+
+    assert (
+        application.WeChatConnectionService
+        is service_module.WeChatConnectionService
+    )
+    assert (
+        application.WeChatConnectionStatus
+        is service_module.WeChatConnectionStatus
+    )
+    assert "WeChatConnectionService" in application.__all__
+    assert "WeChatConnectionStatus" in application.__all__
+    assert callable(application.WeChatConnectionService.check_status)
+
+
+def test_application_package_exports_wechat_environment_config() -> None:
+    application = importlib.import_module("qq_chat_analyzer.application")
+    config_module = importlib.import_module(
+        "qq_chat_analyzer.application.wechat_environment_config"
+    )
+
+    assert (
+        application.WeChatEnvironmentConfig
+        is config_module.WeChatEnvironmentConfig
+    )
+    assert (
+        application.WeChatEnvironmentConfigLoader
+        is config_module.WeChatEnvironmentConfigLoader
+    )
+    assert (
+        application.WeChatConfigNotFound
+        is config_module.WeChatConfigNotFound
+    )
+    assert (
+        application.WeChatConfigCorrupted
+        is config_module.WeChatConfigCorrupted
+    )
+    for name in (
+        "WeChatEnvironmentConfig",
+        "WeChatEnvironmentConfigLoader",
+        "WeChatConfigNotFound",
+        "WeChatConfigCorrupted",
+        "WeChatEnvironmentConfigError",
+    ):
+        assert name in application.__all__
+
+
+def test_application_package_exports_export_task_types() -> None:
+    application = importlib.import_module("qq_chat_analyzer.application")
+    manager_module = importlib.import_module(
+        "qq_chat_analyzer.application.export_task_manager"
+    )
+
+    assert application.ExportTaskManager is manager_module.ExportTaskManager
+    assert application.ExportTaskStatus is manager_module.ExportTaskStatus
+    assert application.ExportTaskState is manager_module.ExportTaskState
+    for name in (
+        "ExportTaskManager",
+        "ExportTaskState",
+        "ExportTaskStatus",
+    ):
+        assert name in application.__all__
+    assert callable(application.ExportTaskManager.start_export)
+    assert callable(application.ExportTaskManager.get_status)
+    assert callable(application.ExportTaskManager.wait_for_completion)
+
+
+def test_application_package_exports_runtime_manager_types() -> None:
+    application = importlib.import_module("qq_chat_analyzer.application")
+    manager_module = importlib.import_module(
+        "qq_chat_analyzer.application.runtime.qq_runtime_manager"
+    )
+
+    assert application.QQRuntimeManager is manager_module.QQRuntimeManager
+    assert application.QQRuntimeStatus is manager_module.QQRuntimeStatus
+    assert application.QQRuntimeState is manager_module.QQRuntimeState
+    for name in (
+        "QQRuntimeManager",
+        "QQRuntimeState",
+        "QQRuntimeStatus",
+    ):
+        assert name in application.__all__
+    assert callable(application.QQRuntimeManager.start)
+    assert callable(application.QQRuntimeManager.stop)
+    assert callable(application.QQRuntimeManager.get_status)
+    assert callable(application.QQRuntimeManager.is_available)
+
+
+def test_runtime_package_exports_bundled_runtime_surface() -> None:
+    runtime_package = importlib.import_module("qq_chat_analyzer.runtime")
+
+    assert hasattr(runtime_package, "BundledQQRuntime")
+    assert hasattr(runtime_package, "QQRuntimeConfig")
+    assert hasattr(runtime_package, "QQChatRuntimeError")
+    assert callable(runtime_package.ChatRuntime.wait_ready)
+    assert callable(runtime_package.BundledQQRuntime.wait_ready)

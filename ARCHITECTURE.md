@@ -181,6 +181,27 @@ Adapter 与 Parser 属于**同一层的两种形态**：
 把"先导出、再导入"串起来，并提供会话列表查询。
 它们是 Provider 的唯一合法调用者。
 
+**来源连接服务** —— `QQConnectionService`。把 Provider 的健康检查与凭据状态
+翻译成用户可理解的 `QQConnectionStatus`（是否可用、QCE 是否运行、是否已授权、
+下一步操作提示）。它是应用层内 Provider 的合法调用者之一；GUI 通过 Facade
+获取状态，不直接接触 Provider。
+
+**导出任务管理** —— `ExportTaskManager`。把 QCE 底层 `ExportTask` 快照与
+Provider 异常翻译成用户层 `ExportTaskStatus`（创建 / 导出中 / 完成 / 失败 /
+已取消），不复制 Provider 的轮询逻辑。当前为轻量应用层封装，不引入异步框架；
+Facade 在后续阶段接入。
+
+**运行时管理** —— `QQRuntimeManager`。负责检测、启动、停止外部 QQ 采集
+运行环境，并把底层异常转换成用户层 `QQRuntimeStatus`。它只依赖
+`runtime/` 的 `ChatRuntime` 协议，不解析外部工具输出，也不接触 Provider
+的 HTTP 通信。启动流程包含就绪等待：进程拉起后由 Runtime 探测健康端点，
+确认可用后才进入 `RUNNING`。
+
+**运行时实现** —— `BundledQQRuntime` 与 `QQRuntimeConfig`。配置承载
+`executable_path`、`working_directory`、`base_url`、`config_directory` 与
+`security_path`；实现负责进程启动、停止、状态与 `wait_ready()` 健康探测，
+不复制 Provider 的业务解析。
+
 **AnalysisApplicationService** —— 业务流程编排：
 调用 ImportService 取得消息，driving 清洗、分词、分析，
 组装 `AnalysisResultDTO` 与 `AnalysisReports`，触发导出。
@@ -238,6 +259,7 @@ Adapter 与 Parser 属于**同一层的两种形态**：
 
 - `list_sources()` → `tuple[SourceInfo, ...]`，含可用性标记
 - `list_sessions(source)` → `list[SessionInfo]`，统一 QQ 与微信差异
+- `get_connection_status(source)` → `QQConnectionStatus`，返回来源连接状态
 - `analyze_file(path, config)` → `AnalysisOutcome`
 - `analyze_session(source, session_id, config)` → `AnalysisOutcome`
 
@@ -386,11 +408,15 @@ GUI 只装配控件、转发事件、展示状态。
 | `message.py` | 领域模型 ChatMessage |
 | `application/import_service.py` | 导入编排 |
 | `application/import_request.py` / `import_outcome.py` / `import_result.py` | 导入契约 |
+| `application/export_task_manager.py` | 导出任务管理（QQ） |
 | `application/qq_export_import_service.py` | 来源编排（QQ） |
+| `application/qq_connection_service.py` | 来源连接状态（QQ） |
+| `application/runtime/qq_runtime_manager.py` | 外部运行时管理（QQ） |
 | `application/wechat_export_import_service.py` | 来源编排（微信） |
 | `application/analysis_service.py` | 应用服务 |
 | `application/dto.py` / `errors.py` / `task.py` / `export_config.py` | 应用契约 |
 | `application/facade.py` | Facade |
+| `runtime/` | 外部运行时契约（ChatRuntime）与捆绑运行时实现（BundledQQRuntime） |
 | `cleaner.py` / `tokenizer.py` / `analyzer.py` | Analysis Core v1 |
 | `analysis/models.py` | 报告模型（v2/v3） |
 | `analysis/analyzers/*.py` | 四类 analyzer |

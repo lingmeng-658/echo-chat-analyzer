@@ -29,10 +29,16 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Iterator, Protocol, runtime_checkable
 
+from ..resources import resources_dir
 from ..presentation import DashboardView, build_dashboard_view
 from .dto import AnalysisRequestDTO, AnalysisResultDTO
 from .errors import ApplicationServiceError
+from .qq_connection_service import (
+    QQConnectionService,
+    QQConnectionStatus,
+)
 from .qq_export_import_service import QQExportImportRequest
+from .wechat_connection_service import WeChatConnectionStatus
 from .wechat_export_import_service import WeChatExportImportRequest
 
 
@@ -44,9 +50,6 @@ _PROFILE_STOPWORD_FILES = {
     "topic": "stopwords_topic.txt",
     "culture": "stopwords_culture.txt",
 }
-
-_PROJECT_ROOT = Path(__file__).resolve().parents[3]
-
 
 class ChatSource(str, Enum):
     """Every chat origin a caller may choose from."""
@@ -188,7 +191,9 @@ class ChatAnalyzerFacade:
         self,
         *,
         qq_service: Any = None,
+        qq_connection_service: Any = None,
         wechat_service: Any = None,
+        wechat_connection_service: Any = None,
         analysis_service: Any = None,
         presentation_builder: Any = None,
         stopwords_directory: Path | None = None,
@@ -197,9 +202,11 @@ class ChatAnalyzerFacade:
             ChatSource.QQ: qq_service,
             ChatSource.WECHAT: wechat_service,
         }
+        self._qq_connection_service = qq_connection_service
+        self._wechat_connection_service = wechat_connection_service
         self._analysis_service = analysis_service
         self._presentation_builder = presentation_builder
-        self._stopwords_directory = stopwords_directory or _PROJECT_ROOT
+        self._stopwords_directory = stopwords_directory or resources_dir()
 
     # ------------------------------------------------------------- discovery
 
@@ -236,6 +243,16 @@ class ChatAnalyzerFacade:
             _to_session_info(chat_source, raw_session)
             for raw_session in raw_sessions or ()
         ]
+
+    def get_connection_status(
+        self,
+        source: ChatSource,
+    ) -> QQConnectionStatus | WeChatConnectionStatus:
+        """Return the user-facing connection state for one source."""
+        chat_source = _coerce_source(source)
+        service = self._require_connection_service(chat_source)
+        with _translated_errors(chat_source):
+            return service.check_status()
 
     # -------------------------------------------------------------- analysis
 
@@ -392,6 +409,17 @@ class ChatAnalyzerFacade:
 
     def _require_service(self, source: ChatSource) -> Any:
         service = self._services.get(source)
+        if service is None:
+            raise SourceUnavailable(source)
+        return service
+
+    def _require_connection_service(self, source: ChatSource) -> Any:
+        if source is ChatSource.QQ:
+            service = self._qq_connection_service
+        elif source is ChatSource.WECHAT:
+            service = self._wechat_connection_service
+        else:
+            raise UnknownChatSource(source)
         if service is None:
             raise SourceUnavailable(source)
         return service
