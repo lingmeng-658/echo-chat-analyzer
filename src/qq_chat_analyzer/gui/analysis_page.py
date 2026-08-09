@@ -8,6 +8,7 @@ or a database.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -28,13 +29,20 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..application.facade import AnalysisConfig, ChatSource
+from ..application.facade import (
+    AnalysisConfig,
+    ChatSource,
+    WeChatEnvironmentConfig,
+)
+from .qq_setup_dialog import QQSetupDialog
 from .workers import submit
 from .wechat_setup_dialog import WeChatSetupDialog
 
 
 SESSION_ID_ROLE = Qt.ItemDataRole.UserRole
 SOURCE_ROLE = Qt.ItemDataRole.UserRole + 1
+
+_LOGGER = logging.getLogger("qq_chat_analyzer.desktop.analysis_page")
 
 _SELECT_SOURCE_HINT = "\u8bf7\u5148\u9009\u62e9\u6570\u636e\u6765\u6e90\u3002"
 _LOADING_SESSIONS = "\u6b63\u5728\u52a0\u8f7d\u4f1a\u8bdd\u5217\u8868..."
@@ -55,6 +63,34 @@ _CONNECTED_PREFIX = "\U0001F7E2 "
 _DISCONNECTED_PREFIX = "\U0001F534 "
 _CONNECTION_STATUS_UNKNOWN = (
     "\u65e0\u6cd5\u786e\u8ba4\u8fde\u63a5\u72b6\u6001\u3002"
+)
+_QQ_ENVIRONMENT_CHECKING = "\u6b63\u5728\u68c0\u6d4b QQ \u73af\u5883..."
+_QQ_RUNTIME_STARTING = "\u6b63\u5728\u542f\u52a8 QQ \u8fd0\u884c\u73af\u5883..."
+_QQ_SETUP_SAVING = "\u6b63\u5728\u4fdd\u5b58 QQ \u73af\u5883\u8bbe\u7f6e..."
+_QQ_SETUP_FAILED = "QQ \u73af\u5883\u8bbe\u7f6e\u5931\u8d25"
+_QQ_RUNTIME_OPERATION_FAILED = "QQ \u8fd0\u884c\u73af\u5883\u64cd\u4f5c\u5931\u8d25"
+_WECHAT_CONNECT_LABEL = "\u8fde\u63a5\u5fae\u4fe1"
+_WECHAT_CONNECTING = (
+    "\u6b63\u5728\u51c6\u5907\u5fae\u4fe1\u8fde\u63a5\u73af\u5883\uff0c\u8bf7\u7a0d\u5019\u3002"
+    "\u51c6\u5907\u5b8c\u6210\u540e\u4f1a\u63d0\u793a\u767b\u5f55\u5fae\u4fe1\u3002"
+)
+_WECHAT_CONNECT_FAILED = "\u5fae\u4fe1\u8fde\u63a5\u672a\u6210\u529f"
+_WECHAT_CONNECT_RETRY_HINT = (
+    "\u8bf7\u5148\u9000\u51fa\u5fae\u4fe1\u5230\u767b\u5f55\u754c\u9762\uff0c\u518d\u70b9\u51fb\u201c\u8fde\u63a5\u5fae\u4fe1\u201d\uff0c"
+    "\u5e76\u5728\u51fa\u73b0\u767b\u5f55\u63d0\u793a\u540e\u767b\u5f55\u5fae\u4fe1\u3002"
+)
+_WECHAT_INTERNAL_TERMS = (
+    "db_key",
+    "dbkey",
+    "hook",
+    "runtime",
+    "dll",
+    "wcdb",
+    "\u5bc6\u94a5",
+)
+_WECHAT_LOGIN_PREPARE = (
+    "\u6b63\u5728\u51c6\u5907\u5fae\u4fe1\u8fde\u63a5\u73af\u5883\uff0c\u8bf7\u7a0d\u5019\u3002"
+    "\u51c6\u5907\u5b8c\u6210\u540e\u4f1a\u63d0\u793a\u767b\u5f55\u5fae\u4fe1\uff0c\u5c4a\u65f6\u8bf7\u767b\u5f55\u5fae\u4fe1\u5373\u53ef\u81ea\u52a8\u5b8c\u6210\u8fde\u63a5\u3002"
 )
 
 
@@ -78,6 +114,7 @@ class AnalysisPage(QWidget):
         self._selected_source: ChatSource | None = None
         self._selected_file: Path | None = None
         self._source_buttons: dict[ChatSource, QPushButton] = {}
+        self._wechat_connect_pending = False
 
         self._build_ui()
         self.refresh_sources()
@@ -96,12 +133,29 @@ class AnalysisPage(QWidget):
         self._status_label.setVisible(False)
         layout.addWidget(self._status_label)
 
+        self._wechat_connect_button = QPushButton(_WECHAT_CONNECT_LABEL)
+        self._wechat_connect_button.setVisible(False)
+        self._wechat_connect_button.clicked.connect(self.connect_wechat)
+        layout.addWidget(self._wechat_connect_button)
+
         self._wechat_setup_button = QPushButton(
             "\u5fae\u4fe1\u73af\u5883\u8bbe\u7f6e..."
         )
         self._wechat_setup_button.setVisible(False)
         self._wechat_setup_button.clicked.connect(self.open_wechat_setup)
         layout.addWidget(self._wechat_setup_button)
+
+        self._qq_setup_button = QPushButton("QQ \u73af\u5883\u8bbe\u7f6e...")
+        self._qq_setup_button.setVisible(False)
+        self._qq_setup_button.clicked.connect(self.open_qq_setup)
+        layout.addWidget(self._qq_setup_button)
+
+        self._qq_runtime_button = QPushButton(
+            "\u542f\u52a8 QQ \u8fd0\u884c\u73af\u5883"
+        )
+        self._qq_runtime_button.setVisible(False)
+        self._qq_runtime_button.clicked.connect(self.start_qq_runtime)
+        layout.addWidget(self._qq_runtime_button)
 
         self._file_button = QPushButton("\u9009\u62e9\u6587\u4ef6...")
         self._file_button.setVisible(False)
@@ -175,7 +229,7 @@ class AnalysisPage(QWidget):
             self._source_buttons[info.source] = button
 
         if ChatSource.QQ in self._source_buttons:
-            self.refresh_connection_status(ChatSource.QQ)
+            self.refresh_qq_status()
 
     def select_source(self, source: ChatSource) -> None:
         """Select one source and load whatever it offers."""
@@ -189,13 +243,21 @@ class AnalysisPage(QWidget):
         is_local = source == ChatSource.LOCAL_FILE
         self._file_button.setVisible(is_local)
         self._file_label.setVisible(is_local)
+        self._wechat_connect_button.setVisible(source == ChatSource.WECHAT)
         self._wechat_setup_button.setVisible(source == ChatSource.WECHAT)
+        self._qq_setup_button.setVisible(source == ChatSource.QQ)
+        self._qq_runtime_button.setVisible(source == ChatSource.QQ)
         self._session_list.clear()
 
         if is_local:
             self._status_label.setVisible(False)
             self._hint_label.setText(_LOCAL_FILE_HINT)
             self._update_analyze_enabled()
+            return
+
+        if source == ChatSource.QQ:
+            self._session_list.clear()
+            self.refresh_qq_status(load_sessions_on_ready=True)
             return
 
         self._session_list.clear()
@@ -249,6 +311,9 @@ class AnalysisPage(QWidget):
         self._status_label.setText(f"{prefix}{message}")
         self._status_label.setToolTip(action_hint)
         self._status_label.setVisible(True)
+        if source == ChatSource.WECHAT:
+            self._wechat_setup_button.setVisible(not bool(getattr(status, "available", False)))
+
         if load_sessions_on_ready:
             self._hint_label.setText(action_hint)
         self._session_list.clear()
@@ -269,6 +334,222 @@ class AnalysisPage(QWidget):
         self._session_list.clear()
         self._update_analyze_enabled()
 
+    def refresh_qq_status(self, *, load_sessions_on_ready: bool = False) -> None:
+        """Ask the facade for QQ setup, runtime, and connection state."""
+        self._status_label.setVisible(True)
+        self._status_label.setText(_QQ_ENVIRONMENT_CHECKING)
+        self._status_label.setToolTip("")
+        self._qq_runtime_button.setEnabled(False)
+        self._session_list.clear()
+        self._update_analyze_enabled()
+        self._executor(
+            lambda: (
+                self._facade.get_qq_setup_status(),
+                self._facade.get_qq_runtime_status(),
+                self._facade.get_connection_status(ChatSource.QQ),
+            ),
+            on_success=lambda snapshot: self._show_qq_status(
+                snapshot[0],
+                snapshot[1],
+                snapshot[2],
+                load_sessions_on_ready,
+            ),
+            on_error=self._handle_connection_status_error,
+        )
+
+    def _show_qq_status(
+        self,
+        setup_status: Any,
+        runtime_status: Any,
+        connection_status: Any,
+        load_sessions_on_ready: bool,
+    ) -> None:
+        """Render QQ setup/runtime/connection state from the facade."""
+        configured = bool(getattr(setup_status, "configured", False))
+        runtime_state = getattr(runtime_status, "state", None)
+        running = runtime_state == "running"
+        available = bool(getattr(connection_status, "available", False))
+
+        if not configured:
+            message = (
+                getattr(setup_status, "message", "")
+                or "\u8bf7\u5148\u5b8c\u6210 QQ \u73af\u5883\u8bbe\u7f6e\u3002"
+            )
+            action_hint = getattr(setup_status, "action_hint", "") or ""
+        elif not running:
+            message = (
+                getattr(runtime_status, "message", "")
+                or "QQ \u8fd0\u884c\u73af\u5883\u672a\u8fd0\u884c\u3002"
+            )
+            action_hint = getattr(runtime_status, "action_hint", "") or ""
+        else:
+            message = (
+                getattr(connection_status, "message", "")
+                or _CONNECTION_STATUS_UNKNOWN
+            )
+            action_hint = getattr(connection_status, "action_hint", "") or ""
+
+        prefix = _CONNECTED_PREFIX if available else _DISCONNECTED_PREFIX
+        self._status_label.setText(f"{prefix}{message}")
+        self._status_label.setToolTip(action_hint)
+        self._status_label.setVisible(True)
+        self._qq_setup_button.setVisible(True)
+        self._qq_runtime_button.setVisible(True)
+        self._qq_runtime_button.setEnabled(configured and not running)
+        self._session_list.clear()
+        self._update_analyze_enabled()
+
+        if load_sessions_on_ready:
+            self._hint_label.setText(action_hint)
+            self.status_changed.emit(action_hint or message)
+
+        if available and running and load_sessions_on_ready:
+            self._hint_label.setText(_LOADING_SESSIONS)
+            self.status_changed.emit(_LOADING_SESSIONS)
+            self._load_sessions(ChatSource.QQ)
+
+    def open_qq_setup(self) -> None:
+        """Open the QQ setup dialog, showing the current facade state."""
+        if self._selected_source is not ChatSource.QQ:
+            return
+        try:
+            setup_status = self._facade.get_qq_setup_status()
+        except Exception:
+            setup_status = None
+        self._qq_setup_dialog = QQSetupDialog(
+            self,
+            setup_status=setup_status,
+        )
+        self._qq_setup_dialog.accepted.connect(
+            self._save_qq_environment_from_dialog
+        )
+        self._qq_setup_dialog.show()
+
+    def _save_qq_environment_from_dialog(self) -> None:
+        dialog = getattr(self, "_qq_setup_dialog", None)
+        if dialog is not None:
+            self.save_qq_environment(dialog.config())
+
+    def save_qq_environment(self, config: Any) -> None:
+        """Persist one QQ environment through the facade."""
+        self._status_label.setVisible(True)
+        self._status_label.setText(_QQ_SETUP_SAVING)
+        self._status_label.setToolTip("")
+        self._executor(
+            lambda: self._facade.setup_qq_environment(config),
+            on_success=lambda _status: self.refresh_qq_status(
+                load_sessions_on_ready=True
+            ),
+            on_error=self._handle_qq_setup_error,
+        )
+
+    def start_qq_runtime(self) -> None:
+        """Start the configured QQ runtime through the facade."""
+        self._qq_runtime_button.setEnabled(False)
+        self._status_label.setVisible(True)
+        self._status_label.setText(_QQ_RUNTIME_STARTING)
+        self._status_label.setToolTip("")
+        self._executor(
+            lambda: self._facade.start_qq_runtime(),
+            on_success=lambda _status: self.refresh_qq_status(
+                load_sessions_on_ready=True
+            ),
+            on_error=self._handle_qq_runtime_error,
+        )
+
+    def _handle_qq_setup_error(self, code: str, message: str) -> None:
+        self._show_qq_error(_QQ_SETUP_FAILED, message)
+
+    def _handle_qq_runtime_error(self, code: str, message: str) -> None:
+        self._show_qq_error(_QQ_RUNTIME_OPERATION_FAILED, message)
+
+    def _show_qq_error(self, title: str, message: str) -> None:
+        self._status_label.setText(_DISCONNECTED_PREFIX + title)
+        self._status_label.setToolTip(message)
+        self._status_label.setVisible(True)
+        self._hint_label.setText(message)
+        self.status_changed.emit(message)
+
+    def connect_wechat(self, detect_data_root: Any = None) -> None:
+        """Connect WeChat in one click, asking for a directory only if needed.
+
+        The detected data root is handed to the facade, which persists it and
+        acquires the database key. That call blocks while the user finishes
+        logging in, so it runs through the injected executor and never on the
+        UI thread. When nothing can be detected, the existing setup dialog
+        collects the directory instead.
+        """
+        if self._selected_source is not ChatSource.WECHAT:
+            return
+
+        detect = detect_data_root or self._facade.detect_wechat_data_root
+        try:
+            data_root = detect()
+        except Exception:
+            data_root = None
+
+        if data_root is None:
+            self._wechat_connect_pending = True
+            self.open_wechat_setup()
+            return
+
+        self._start_wechat_connect(
+            WeChatEnvironmentConfig(data_root=Path(data_root))
+        )
+
+    def _start_wechat_connect(self, config: Any) -> None:
+        """Run save-then-key for one config, off the UI thread."""
+        self._wechat_connect_button.setEnabled(False)
+        self._status_label.setVisible(True)
+        self._status_label.setText(_WECHAT_CONNECTING)
+        self._status_label.setToolTip("")
+        self._hint_label.setText(_WECHAT_LOGIN_PREPARE)
+        self.status_changed.emit(_WECHAT_CONNECTING)
+
+        self._executor(
+            lambda report: self._connect_wechat_operation(config, report),
+            on_success=lambda _result: self._after_wechat_environment_saved(),
+            on_error=self._handle_wechat_connect_error,
+            on_progress=self._handle_wechat_connect_progress,
+            on_finished=lambda: self._wechat_connect_button.setEnabled(True),
+        )
+
+    def _connect_wechat_operation(
+        self,
+        config: Any,
+        progress: Any = None,
+    ) -> Any:
+        """Save the directory, then acquire the key. Runs off the UI thread.
+
+        These are two steps because saving must not depend on WeChat being at
+        a login moment. Only the key step waits for the user to log in.
+        """
+        self._facade.setup_wechat_environment(config)
+        return self._facade.acquire_wechat_db_key(progress=progress)
+
+    def _handle_wechat_connect_progress(self, message: str) -> None:
+        """Surface a key acquisition status line through existing widgets."""
+        _LOGGER.debug("[wechat gui] received progress: %s", message)
+        self._status_label.setVisible(True)
+        self._status_label.setText(message)
+        self._hint_label.setText(message)
+        self.status_changed.emit(message)
+
+    def _handle_wechat_connect_error(self, code: str, message: str) -> None:
+        """Show a plain-language failure. Internal wording is replaced."""
+        detail = message or ""
+        lowered = detail.lower()
+        if any(term in lowered for term in _WECHAT_INTERNAL_TERMS):
+            detail = ""
+        text = detail or _WECHAT_CONNECT_RETRY_HINT
+        self._status_label.setText(
+            _DISCONNECTED_PREFIX + _WECHAT_CONNECT_FAILED
+        )
+        self._status_label.setToolTip(text)
+        self._status_label.setVisible(True)
+        self._hint_label.setText(text)
+        self.status_changed.emit(text)
+
     def open_wechat_setup(self) -> None:
         """Open the setup dialog, showing the current facade state."""
         if self._selected_source is not ChatSource.WECHAT:
@@ -277,9 +558,14 @@ class AnalysisPage(QWidget):
             setup_status = self._facade.get_wechat_setup_status()
         except Exception:
             setup_status = None
+        try:
+            detected_root = self._facade.detect_wechat_data_root()
+        except Exception:
+            detected_root = None
         self._wechat_setup_dialog = WeChatSetupDialog(
             self,
             setup_status=setup_status,
+            data_root=detected_root,
         )
         self._wechat_setup_dialog.accepted.connect(
             self._save_wechat_environment_from_dialog
@@ -288,8 +574,14 @@ class AnalysisPage(QWidget):
 
     def _save_wechat_environment_from_dialog(self) -> None:
         dialog = getattr(self, "_wechat_setup_dialog", None)
-        if dialog is not None:
-            self.save_wechat_environment(dialog.config())
+        if dialog is None:
+            return
+        pending = getattr(self, "_wechat_connect_pending", False)
+        self._wechat_connect_pending = False
+        if pending:
+            self._start_wechat_connect(dialog.config())
+            return
+        self.save_wechat_environment(dialog.config())
 
     def save_wechat_environment(self, config: Any) -> None:
         """Persist one WeChat environment through the facade."""

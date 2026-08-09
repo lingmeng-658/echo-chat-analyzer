@@ -12,7 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from ..resources import user_data_dir
+from ..resources import (
+    default_wechat_wcdb_cli_path,
+    default_wechat_wcdb_dll_path,
+    user_data_dir,
+)
 
 
 CONFIG_DIRECTORY = "config"
@@ -162,6 +166,39 @@ class WeChatEnvironmentConfigLoader:
             wcdb_dll_path=_path_value(payload.get("wcdb_dll_path")),
         )
 
+    def load_or_default(self) -> WeChatEnvironmentConfig:
+        """Load user config, falling back to bundled runtime defaults."""
+        try:
+            return self.load()
+        except WeChatConfigNotFound:
+            if bundled_wechat_runtime_available():
+                return default_wechat_environment_config()
+            raise
+
+
+def bundled_wechat_runtime_available() -> bool:
+    """Return whether bundled WeChat runtime files are present."""
+    return (
+        default_wechat_wcdb_cli_path().is_file()
+        and default_wechat_wcdb_dll_path().is_file()
+    )
+
+
+def default_wechat_environment_config() -> WeChatEnvironmentConfig:
+    """Return a config pointing at bundled WeChat runtime files."""
+    return WeChatEnvironmentConfig(
+        wcdb_cli_path=(
+            default_wechat_wcdb_cli_path()
+            if default_wechat_wcdb_cli_path().is_file()
+            else None
+        ),
+        wcdb_dll_path=(
+            default_wechat_wcdb_dll_path()
+            if default_wechat_wcdb_dll_path().is_file()
+            else None
+        ),
+    )
+
 
 def _string_value(value: Any) -> str | None:
     if isinstance(value, str) and value.strip():
@@ -186,4 +223,6 @@ __all__ = [
     "WeChatEnvironmentConfigError",
     "WeChatEnvironmentConfigLoader",
     "WeChatEnvironmentConfigWriter",
+    "bundled_wechat_runtime_available",
+    "default_wechat_environment_config",
 ]

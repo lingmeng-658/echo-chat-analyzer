@@ -7,6 +7,7 @@ path is touched.
 from __future__ import annotations
 
 import dataclasses
+import importlib
 import json
 import sys
 from pathlib import Path
@@ -88,6 +89,74 @@ def test_loader_treats_non_object_json_as_corrupted(tmp_path: Path) -> None:
 
     with pytest.raises(WeChatConfigCorrupted):
         loader.load()
+
+
+def _patch_bundled_defaults(monkeypatch, module, bundle: Path):
+    wechat = bundle / "runtime" / "wechat"
+    monkeypatch.setattr(
+        module,
+        "default_wechat_wcdb_cli_path",
+        lambda: wechat / "wcdb_cli.exe",
+    )
+    monkeypatch.setattr(
+        module,
+        "default_wechat_wcdb_dll_path",
+        lambda: wechat / "WCDB.dll",
+    )
+
+
+def test_load_or_default_uses_bundled_runtime(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "bundle"
+    wechat = bundle / "runtime" / "wechat"
+    wechat.mkdir(parents=True)
+    (wechat / "wcdb_cli.exe").write_text("fake", encoding="utf-8")
+    (wechat / "WCDB.dll").write_text("fake", encoding="utf-8")
+    module = importlib.import_module(
+        "qq_chat_analyzer.application.wechat_environment_config"
+    )
+    _patch_bundled_defaults(monkeypatch, module, bundle)
+
+    config = module.WeChatEnvironmentConfigLoader(
+        tmp_path / "absent.json"
+    ).load_or_default()
+
+    assert config.wcdb_cli_path == wechat / "wcdb_cli.exe"
+    assert config.wcdb_dll_path == wechat / "WCDB.dll"
+
+
+def test_load_or_default_raises_without_bundled_runtime(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "empty-bundle"
+    bundle.mkdir(parents=True)
+    module = importlib.import_module(
+        "qq_chat_analyzer.application.wechat_environment_config"
+    )
+    _patch_bundled_defaults(monkeypatch, module, bundle)
+
+    with pytest.raises(module.WeChatConfigNotFound):
+        module.WeChatEnvironmentConfigLoader(
+            tmp_path / "absent.json"
+        ).load_or_default()
+
+
+def test_load_or_default_prefers_user_config(tmp_path: Path) -> None:
+    loader = _loader(
+        tmp_path,
+        {
+            "wcdb_cli_path": "C:\\tools\\wcdb_cli.exe",
+            "wcdb_dll_path": "C:\\tools\\WCDB.dll",
+        },
+    )
+
+    config = loader.load_or_default()
+
+    assert config.wcdb_cli_path == Path("C:\\tools\\wcdb_cli.exe")
+    assert config.wcdb_dll_path == Path("C:\\tools\\WCDB.dll")
 
 
 def test_loader_tolerates_missing_fields(tmp_path: Path) -> None:

@@ -89,7 +89,7 @@ class WeChatProviderFactory:
     # ---------------------------------------------------------------- internals
 
     def _build(self) -> Any:
-        config = self._config_loader.load()
+        config = self._config_loader.load_or_default()
         try:
             return self._provider_builder(config)
         except WeChatEnvironmentConfigError:

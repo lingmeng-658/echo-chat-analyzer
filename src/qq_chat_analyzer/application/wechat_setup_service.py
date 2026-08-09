@@ -7,8 +7,9 @@ provider factory so the next read observes the new settings.
 
 Deliberate boundaries:
 
-* No database access, no key discovery, and no WeChat parsing happen here.
-  The service only reads and writes application configuration.
+* No database access and no WeChat parsing happen here. When no key is
+  configured, an injected key service may acquire one; otherwise this service
+  only reads and writes application configuration.
 * No GUI code. A widget calls this through
   :class:`~qq_chat_analyzer.application.facade.ChatAnalyzerFacade` and never
   writes JSON itself.
@@ -18,10 +19,11 @@ Deliberate boundaries:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .errors import ApplicationServiceError
 from .wechat_environment_config import (
@@ -29,7 +31,11 @@ from .wechat_environment_config import (
     WeChatEnvironmentConfig,
     WeChatEnvironmentConfigLoader,
     WeChatEnvironmentConfigWriter,
+    default_wechat_environment_config,
 )
+
+
+_LOGGER = logging.getLogger("qq_chat_analyzer.desktop.wechat_setup_service")
 
 
 MESSAGE_CONFIG_MISSING = (
@@ -91,17 +97,19 @@ class WeChatSetupService:
         config_writer: Any = None,
         provider_factory: Any = None,
         connection_service: Any = None,
+        key_service: Any = None,
     ) -> None:
         self._config_loader = config_loader or WeChatEnvironmentConfigLoader()
         self._config_writer = config_writer or WeChatEnvironmentConfigWriter()
         self._provider_factory = provider_factory
         self._connection_service = connection_service
+        self._key_service = key_service
 
     def check_setup(self) -> WeChatSetupStatus:
         """Report whether a usable configuration is stored, never raising."""
         config_path = self._config_path()
         try:
-            self._config_loader.load()
+            self._load_config_or_default()
         except WeChatConfigNotFound:
             return WeChatSetupStatus(
                 state=WeChatSetupState.CONFIG_MISSING,
@@ -130,6 +138,12 @@ class WeChatSetupService:
     def save_environment(self, config: WeChatEnvironmentConfig) -> Any:
         """Persist a config, refresh the provider, and re-check connection.
 
+        This only persists configuration. Acquiring the database key needs
+        WeChat to be at a login moment, so it belongs to the connect flow via
+        :meth:`acquire_db_key`; requiring it here made saving a data root fail
+        whenever the user was not logging in. An explicit ``db_key`` on the
+        incoming config is still written through untouched.
+
         The factory is invalidated only after a successful write, so a failed
         save leaves the previously working provider untouched. The return
         value is the refreshed connection status when a connection service is
@@ -138,6 +152,8 @@ class WeChatSetupService:
         if not isinstance(config, WeChatEnvironmentConfig):
             raise self.InvalidEnvironment()
 
+        config = self._merge_existing_config(config)
+        config = self._apply_default_runtime(config)
         self._config_writer.save(config)
 
         if self._provider_factory is not None:
@@ -147,7 +163,75 @@ class WeChatSetupService:
             return None
         return self._connection_service.check_status()
 
+    def acquire_db_key(
+        self,
+        progress: Callable[[str], None] | None = None,
+    ) -> str | None:
+        """Acquire the WeChat database key and persist it, for the connect flow.
+
+        Returns the key, or ``None`` when no key service is configured. A
+        failure propagates the key service's own user-safe error so the caller
+        can show it verbatim. ``progress`` is forwarded to the key service so
+        long waits can surface user-safe status lines.
+        """
+        if self._key_service is None:
+            return None
+
+        _LOGGER.info("[wechat setup] acquire_db_key progress=%s", progress is not None)
+        key = self._key_service.acquire(progress=progress)
+        if not key or not key.strip():
+            return None
+
+        key = key.strip()
+        try:
+            stored = self._config_loader.load()
+        except Exception:
+            stored = WeChatEnvironmentConfig()
+
+        config = self._apply_default_runtime(replace(stored, db_key=key))
+        self._config_writer.save(config)
+
+        if self._provider_factory is not None:
+            self._provider_factory.invalidate()
+        return key
+
     # ---------------------------------------------------------------- internals
+
+    def _merge_existing_config(
+        self,
+        config: WeChatEnvironmentConfig,
+    ) -> WeChatEnvironmentConfig:
+        """Keep advanced values already stored when the GUI submits only a root."""
+        try:
+            existing = self._config_loader.load()
+        except Exception:
+            return config
+        return replace(
+            config,
+            db_key=config.db_key or existing.db_key,
+            wcdb_cli_path=config.wcdb_cli_path or existing.wcdb_cli_path,
+            wcdb_dll_path=config.wcdb_dll_path or existing.wcdb_dll_path,
+        )
+
+    @staticmethod
+    def _apply_default_runtime(
+        config: WeChatEnvironmentConfig,
+    ) -> WeChatEnvironmentConfig:
+        defaults = default_wechat_environment_config()
+        return replace(
+            config,
+            wcdb_cli_path=config.wcdb_cli_path or defaults.wcdb_cli_path,
+            wcdb_dll_path=config.wcdb_dll_path or defaults.wcdb_dll_path,
+        )
+    def _ensure_db_key(
+        self,
+        config: WeChatEnvironmentConfig,
+    ) -> WeChatEnvironmentConfig:
+        if config.db_key and config.db_key.strip():
+            return config
+        if self._key_service is None:
+            return config
+        return replace(config, db_key=self._key_service.acquire())
 
     def _config_path(self) -> Path | None:
         getter = getattr(self._config_loader, "config_path", None)
@@ -157,6 +241,12 @@ class WeChatSetupService:
             return getter()
         except Exception:
             return None
+
+    def _load_config_or_default(self) -> WeChatEnvironmentConfig:
+        loader = getattr(self._config_loader, "load_or_default", None)
+        if callable(loader):
+            return loader()
+        return self._config_loader.load()
 
 
 __all__ = [

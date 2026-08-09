@@ -18,6 +18,9 @@ from qq_chat_analyzer.application.wechat_environment_config import (
     WeChatEnvironmentConfigLoader,
     WeChatEnvironmentConfigWriter,
 )
+from qq_chat_analyzer.application.wechat_key_service import (
+    WeChatKeyUnavailable,
+)
 from qq_chat_analyzer.application.wechat_provider_factory import (
     WeChatProviderFactory,
 )
@@ -45,6 +48,34 @@ class _StubConnectionService:
     def check_status(self) -> object:
         self.calls += 1
         return self._status
+
+
+class _StubKeyService:
+    def __init__(
+        self, *, key: str = "default_key", error: Exception | None = None, progress_callback=None
+    ) -> None:
+        self.key = key
+        self.error = error
+        self.calls = 0
+        self._progress = progress_callback
+
+    def acquire(self, progress=None) -> str:
+        self.calls += 1
+        callback = progress or self._progress
+        if callback is not None:
+            callback("helper line 1")
+            callback("helper line 2")
+        if self.error is not None:
+            raise self.error
+        return self.key
+
+
+class _CountingFactory:
+    def __init__(self) -> None:
+        self.invalidations = 0
+
+    def invalidate(self) -> None:
+        self.invalidations += 1
 
 
 # ------------------------------------------------------------------- writer
@@ -125,6 +156,30 @@ def test_check_setup_reports_missing_config(tmp_path: Path) -> None:
     assert status.action_hint
 
 
+def test_check_setup_uses_bundled_defaults(tmp_path: Path) -> None:
+    default_config = WeChatEnvironmentConfig(
+        wcdb_cli_path=tmp_path / "bundled" / "wcdb_cli.exe",
+        wcdb_dll_path=tmp_path / "bundled" / "WCDB.dll",
+    )
+
+    class _DefaultLoader:
+        def config_path(self):
+            return tmp_path / "wechat.json"
+
+        def load(self):
+            raise WeChatConfigNotFound()
+
+        def load_or_default(self):
+            return default_config
+
+    service = WeChatSetupService(config_loader=_DefaultLoader())
+
+    status = service.check_setup()
+
+    assert status.state is WeChatSetupState.CONFIG_READY
+    assert status.configured is True
+
+
 def test_check_setup_reports_ready_config(tmp_path: Path) -> None:
     target = tmp_path / "wechat.json"
     WeChatEnvironmentConfigWriter(target).save(_config(tmp_path))
@@ -188,6 +243,63 @@ def test_save_environment_persists_config(tmp_path: Path) -> None:
 
     assert WeChatEnvironmentConfigLoader(target).load() == _config(tmp_path)
     assert service.check_setup().state is WeChatSetupState.CONFIG_READY
+
+
+def test_save_environment_keeps_existing_db_key(tmp_path: Path) -> None:
+    target = tmp_path / "wechat.json"
+    key_service = _StubKeyService(key="b" * 64)
+    service = WeChatSetupService(
+        config_loader=WeChatEnvironmentConfigLoader(target),
+        config_writer=WeChatEnvironmentConfigWriter(target),
+        key_service=key_service,
+    )
+    original_key = "a" * 64
+
+    service.save_environment(
+        WeChatEnvironmentConfig(
+            data_root=tmp_path / "data",
+            db_key=original_key,
+        )
+    )
+
+    assert key_service.calls == 0
+    assert WeChatEnvironmentConfigLoader(target).load().db_key == original_key
+
+
+def test_save_environment_survives_a_key_service_crash(tmp_path: Path) -> None:
+    """A broken key service must not block saving the data root."""
+    target = tmp_path / "wechat.json"
+    key_service = _StubKeyService(error=RuntimeError("boom"))
+    factory = _CountingFactory()
+    service = WeChatSetupService(
+        config_loader=WeChatEnvironmentConfigLoader(target),
+        config_writer=WeChatEnvironmentConfigWriter(target),
+        provider_factory=factory,
+        key_service=key_service,
+    )
+
+    service.save_environment(
+        WeChatEnvironmentConfig(data_root=tmp_path / "data")
+    )
+
+    assert target.exists() is True
+    assert factory.invalidations == 1
+
+
+def test_save_environment_without_key_service_keeps_missing_key(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "wechat.json"
+    service = WeChatSetupService(
+        config_loader=WeChatEnvironmentConfigLoader(target),
+        config_writer=WeChatEnvironmentConfigWriter(target),
+    )
+
+    service.save_environment(
+        WeChatEnvironmentConfig(data_root=tmp_path / "data")
+    )
+
+    assert WeChatEnvironmentConfigLoader(target).load().db_key is None
 
 
 def test_save_environment_invalidates_provider_factory(tmp_path: Path) -> None:
@@ -330,3 +442,141 @@ def test_loader_errors_remain_distinct(tmp_path: Path) -> None:
     broken.write_text("[]", encoding="utf-8")
     with pytest.raises(WeChatConfigCorrupted):
         WeChatEnvironmentConfigLoader(broken).load()
+
+
+def test_save_environment_succeeds_when_key_acquisition_fails(
+    tmp_path: Path,
+) -> None:
+    """Saving the data root must not depend on WeChat being at a login moment."""
+    target = tmp_path / "wechat.json"
+    key_service = _StubKeyService(
+        error=WeChatKeyUnavailable(
+            "\u83b7\u53d6\u5fae\u4fe1\u6570\u636e\u5e93\u5bc6\u94a5\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5\u3002"
+        )
+    )
+    factory = _CountingFactory()
+    service = WeChatSetupService(
+        config_loader=WeChatEnvironmentConfigLoader(target),
+        config_writer=WeChatEnvironmentConfigWriter(target),
+        provider_factory=factory,
+        key_service=key_service,
+    )
+
+    service.save_environment(
+        WeChatEnvironmentConfig(data_root=tmp_path / "data")
+    )
+
+    stored = WeChatEnvironmentConfigLoader(target).load()
+    assert stored.data_root == tmp_path / "data"
+    assert stored.db_key is None
+    assert factory.invalidations == 1
+
+
+def test_save_environment_does_not_acquire_a_key(tmp_path: Path) -> None:
+    """Key acquisition belongs to the connect flow, not to saving settings."""
+    target = tmp_path / "wechat.json"
+    key_service = _StubKeyService(key="d" * 64)
+    service = WeChatSetupService(
+        config_loader=WeChatEnvironmentConfigLoader(target),
+        config_writer=WeChatEnvironmentConfigWriter(target),
+        key_service=key_service,
+    )
+
+    service.save_environment(
+        WeChatEnvironmentConfig(data_root=tmp_path / "data")
+    )
+
+    assert key_service.calls == 0
+
+
+def test_save_environment_still_keeps_an_explicit_db_key(tmp_path: Path) -> None:
+    """A key supplied by the connect flow is persisted untouched."""
+    target = tmp_path / "wechat.json"
+    supplied = "e" * 64
+    service = WeChatSetupService(
+        config_loader=WeChatEnvironmentConfigLoader(target),
+        config_writer=WeChatEnvironmentConfigWriter(target),
+        key_service=_StubKeyService(key="f" * 64),
+    )
+
+    service.save_environment(
+        WeChatEnvironmentConfig(
+            data_root=tmp_path / "data",
+            db_key=supplied,
+        )
+    )
+
+    assert WeChatEnvironmentConfigLoader(target).load().db_key == supplied
+
+
+def test_acquire_db_key_is_available_for_the_connect_flow(tmp_path: Path) -> None:
+    """The connect flow can still obtain and persist a key after saving."""
+    target = tmp_path / "wechat.json"
+    acquired = "a" * 64
+    key_service = _StubKeyService(key=acquired)
+    service = WeChatSetupService(
+        config_loader=WeChatEnvironmentConfigLoader(target),
+        config_writer=WeChatEnvironmentConfigWriter(target),
+        key_service=key_service,
+    )
+    service.save_environment(
+        WeChatEnvironmentConfig(data_root=tmp_path / "data")
+    )
+    assert WeChatEnvironmentConfigLoader(target).load().db_key is None
+
+    service.acquire_db_key()
+
+    assert key_service.calls == 1
+    stored = WeChatEnvironmentConfigLoader(target).load()
+    assert stored.db_key == acquired
+    assert stored.data_root == tmp_path / "data"
+
+
+def test_acquire_db_key_propagates_a_user_safe_error(tmp_path: Path) -> None:
+    """A failed acquisition surfaces the key service's own safe message."""
+    target = tmp_path / "wechat.json"
+    service = WeChatSetupService(
+        config_loader=WeChatEnvironmentConfigLoader(target),
+        config_writer=WeChatEnvironmentConfigWriter(target),
+        key_service=_StubKeyService(
+            error=WeChatKeyUnavailable(
+                "\u672a\u68c0\u6d4b\u5230\u5fae\u4fe1\u8fdb\u7a0b\uff0c\u8bf7\u5148\u767b\u5f55\u5fae\u4fe1\u3002"
+            )
+        ),
+    )
+
+    with pytest.raises(WeChatKeyUnavailable) as caught:
+        service.acquire_db_key()
+
+    assert caught.value.code == "wechat_key_unavailable"
+    assert "Traceback" not in caught.value.public_message
+
+
+def test_acquire_db_key_without_key_service_is_a_no_op(tmp_path: Path) -> None:
+    target = tmp_path / "wechat.json"
+    service = WeChatSetupService(
+        config_loader=WeChatEnvironmentConfigLoader(target),
+        config_writer=WeChatEnvironmentConfigWriter(target),
+    )
+
+    assert service.acquire_db_key() is None
+
+
+def test_acquire_db_key_accepts_progress_callback(tmp_path: Path) -> None:
+    """The progress callback must be passed through to the key service."""
+    target = tmp_path / "wechat.json"
+    seen = []
+    key_service = _StubKeyService(key="e" * 64, progress_callback=seen.append)
+    service = WeChatSetupService(
+        config_loader=WeChatEnvironmentConfigLoader(target),
+        config_writer=WeChatEnvironmentConfigWriter(target),
+        key_service=key_service,
+    )
+    service.save_environment(WeChatEnvironmentConfig(data_root=tmp_path / "data"))
+
+    service.acquire_db_key(progress=lambda msg: seen.append(msg))
+
+    assert key_service.calls == 1
+    assert len(seen) == 2
+    assert seen[0] == "helper line 1"
+    assert seen[1] == "helper line 2"

@@ -125,6 +125,43 @@ def test_factory_missing_config_raises_user_safe_error(tmp_path):
     assert "Traceback" not in error.value.public_message
 
 
+def test_factory_uses_load_or_default_for_missing_config(tmp_path):
+    module = _factory_module()
+    config_module = _config_module()
+    default_config = config_module.WeChatEnvironmentConfig(
+        wcdb_cli_path=tmp_path / "bundled" / "wcdb_cli.exe",
+        wcdb_dll_path=tmp_path / "bundled" / "WCDB.dll",
+    )
+
+    class _DefaultLoader:
+        def load(self):
+            raise config_module.WeChatConfigNotFound()
+
+        def load_or_default(self):
+            return default_config
+
+    built = []
+
+    def _builder(config):
+        built.append(config)
+        return _StubProvider(config)
+
+    factory = module.WeChatProviderFactory(
+        config_loader=_DefaultLoader(),
+        provider_builder=_builder,
+    )
+
+    provider = factory.create()
+
+    assert built == [default_config]
+    assert provider.config.wcdb_cli_path == (
+        tmp_path / "bundled" / "wcdb_cli.exe"
+    )
+    assert provider.config.wcdb_dll_path == (
+        tmp_path / "bundled" / "WCDB.dll"
+    )
+
+
 def test_factory_builder_failure_becomes_user_safe_error(tmp_path):
     def _explode(config):
         raise RuntimeError("wcdb handle 0x7ffd exploded")

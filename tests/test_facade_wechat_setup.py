@@ -41,6 +41,18 @@ class _StubSetupService:
         return self.status
 
 
+class _ProgressCapturingSetupService(_StubSetupService):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.progress_callbacks = []
+
+    def acquire_db_key(self, progress=None):
+        self.progress_callbacks.append(progress)
+        if progress is not None:
+            progress("relayed progress")
+        return "a" * 64
+
+
 def _config(tmp_path: Path) -> WeChatEnvironmentConfig:
     return WeChatEnvironmentConfig(
         data_root=tmp_path / "fake_root",
@@ -125,3 +137,15 @@ def test_composition_root_shares_factory_with_setup() -> None:
     setup = facade._wechat_setup_service
     connection = facade._wechat_connection_service
     assert setup._provider_factory is connection._shared_factory
+
+
+def test_facade_passes_progress_to_acquire_db_key(tmp_path: Path) -> None:
+    """The facade must relay the progress callback to the setup service."""
+    service = _ProgressCapturingSetupService()
+    facade = ChatAnalyzerFacade(wechat_setup_service=service)
+
+    seen = []
+    facade.acquire_wechat_db_key(progress=seen.append)
+
+    assert service.progress_callbacks
+    assert callable(service.progress_callbacks[0])
