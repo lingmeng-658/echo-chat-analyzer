@@ -19,12 +19,14 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QComboBox,
     QDateEdit,
     QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QPushButton,
@@ -51,6 +53,17 @@ _SELECT_SOURCE_HINT = "\u8bf7\u5148\u9009\u62e9\u6570\u636e\u6765\u6e90\u3002"
 _LOADING_SESSIONS = "\u6b63\u5728\u52a0\u8f7d\u4f1a\u8bdd\u5217\u8868..."
 _NO_SESSIONS = "\u8be5\u6765\u6e90\u6ca1\u6709\u53ef\u5206\u6790\u7684\u4f1a\u8bdd\u3002"
 _NO_MESSAGES_AVAILABLE = "\u8be5\u4f1a\u8bdd\u6ca1\u6709\u53ef\u5206\u6790\u6d88\u606f"
+_NO_MATCHING_SESSIONS = "没有匹配的会话。"
+_SESSION_SEARCH_PLACEHOLDER = "搜索群名、好友名或显示名称"
+_SESSION_SORT_LABEL = "排序"
+_SESSION_SORT_RECENT = "最近消息"
+_SESSION_SORT_MESSAGE_COUNT = "消息数量"
+_SESSION_SORT_NAME = "名称"
+_SESSION_SORT_ORDER = (
+    (_SESSION_SORT_RECENT, "recent"),
+    (_SESSION_SORT_MESSAGE_COUNT, "message_count"),
+    (_SESSION_SORT_NAME, "name"),
+)
 _LOCAL_FILE_HINT = (
     "\u672c\u5730\u6587\u4ef6\u6a21\u5f0f\uff1a\u8bf7\u9009\u62e9\u4e00\u4e2a"
     "\u5bfc\u51fa\u6587\u4ef6\u3002"
@@ -71,13 +84,24 @@ _CONNECTION_STATUS_UNKNOWN = (
 _QQ_STATUS_CHECKING = "\u6b63\u5728\u68c0\u6d4b QQ \u8fde\u63a5\u72b6\u6001..."
 _QQ_CONNECT_LABEL = "\u8fde\u63a5QQ"
 _QQ_RECONNECT_LABEL = "\u91cd\u65b0\u8fde\u63a5QQ"
-_QQ_CONNECTING = "\u6b63\u5728\u8fde\u63a5QQ..."
+_QQ_CONNECTING = (
+    "\u6b63\u5728\u51c6\u5907QQ\u8fde\u63a5\u73af\u5883\uff0c"
+    "\u8bf7\u7a0d\u5019..."
+)
 _QQ_CONNECT_PREPARE = "\u6b63\u5728\u81ea\u52a8\u8fde\u63a5 QQ\uff0c\u8bf7\u7a0d\u5019\u3002"
 _QQ_CONNECT_FAILED = "QQ \u8fde\u63a5\u5931\u8d25"
 _QQ_CONNECT_MIN_DISPLAY_MS = 500
 _QQ_STATUS_POLL_INTERVAL_MS = 2000
 _QQ_QRCODE_SIZE = 240
 _QQ_QRCODE_RELATIVE_PATH = Path("cache") / "qrcode.png"
+_QQ_LOGIN_GUIDE = (
+    "登录QQ以读取聊天记录\n\n"
+    "1. 请使用手机QQ扫描下方二维码\n"
+    "2. 打开手机QQ扫一扫功能（通常位于右上角“+”菜单中）\n"
+    "3. 扫描二维码完成QQ登录授权\n"
+    "4. 登录成功后，余音会自动加载您的聊天会话\n\n"
+    "二维码仅用于QQ登录认证，聊天数据仅在本机处理。"
+)
 _QQ_STATE_DISCONNECTED = "disconnected"
 _QQ_STATE_INITIALIZING = "initializing"
 _QQ_STATE_STARTING = "starting"
@@ -115,8 +139,29 @@ _WECHAT_STATUS_CONNECTED = (
 _WECHAT_CONNECTING = _WECHAT_STATUS_CONNECTING
 _WECHAT_CONNECT_FAILED = "\u5fae\u4fe1\u8fde\u63a5\u672a\u6210\u529f"
 _WECHAT_CONNECT_RETRY_HINT = (
-    "\u8bf7\u5148\u9000\u51fa\u5fae\u4fe1\u5230\u767b\u5f55\u754c\u9762\uff0c\u518d\u70b9\u51fb\u8fde\u63a5\u6309\u94ae\uff0c"
-    "\u5e76\u5728\u51fa\u73b0\u767b\u5f55\u63d0\u793a\u540e\u767b\u5f55\u5fae\u4fe1\u3002"
+    "请保持微信电脑版打开，在余音中重新点击连接，并按提示完成微信登录。"
+)
+_WECHAT_GUIDE_STATUS = (
+    "请保持微信电脑版打开，\n"
+    "余音将在连接过程中等待登录操作。\n"
+    "连接期间请不要退出微信或切换账号。"
+)
+_WECHAT_GUIDE_KEY = (
+    "为读取你的本地微信聊天记录，\n"
+    "余音会在本机完成微信连接准备。\n"
+    "- 仅在本机使用\n"
+    "- 不上传\n"
+    "- 不保存"
+)
+_WECHAT_GUIDE_DIRECTORY_MISSING = (
+    "如果未自动识别微信数据目录，\n"
+    "请点击上方按钮，选择微信设置中显示的存储文件夹。"
+)
+_WECHAT_DETECTED = "\u2713 \u5df2\u68c0\u6d4b\u5230\u5fae\u4fe1\u804a\u5929\u8bb0\u5f55\u4f4d\u7f6e"
+_WECHAT_NOT_DETECTED = "\u672a\u81ea\u52a8\u8bc6\u522b\u5230\u5fae\u4fe1\u5b58\u50a8\u4f4d\u7f6e"
+_WECHAT_MULTIPLE_DETECTED = (
+    "\u68c0\u6d4b\u5230\u591a\u4e2a\u5fae\u4fe1\u804a\u5929\u8bb0\u5f55\u4f4d\u7f6e\uff0c"
+    "\u8bf7\u9009\u62e9\u5176\u4e2d\u4e00\u4e2a\u3002"
 )
 _WECHAT_INTERNAL_TERMS = (
     "db_key",
@@ -128,7 +173,7 @@ _WECHAT_INTERNAL_TERMS = (
     "\u5bc6\u94a5",
 )
 _WECHAT_LOGIN_PREPARE = (
-    "\u6b63\u5728\u51c6\u5907\u5fae\u4fe1\u8fde\u63a5\u73af\u5883\uff0c\u8bf7\u7a0d\u5019\u3002"
+    "\u6b63\u5728\u51c6\u5907\u5fae\u4fe1\u8fde\u63a5\uff0c\u8bf7\u7a0d\u5019\u3002"
     "\u51c6\u5907\u5b8c\u6210\u540e\u4f1a\u63d0\u793a\u767b\u5f55\u5fae\u4fe1\uff0c\u5c4a\u65f6\u8bf7\u767b\u5f55\u5fae\u4fe1\u5373\u53ef\u81ea\u52a8\u5b8c\u6210\u8fde\u63a5\u3002"
 )
 
@@ -157,6 +202,8 @@ class AnalysisPage(QWidget):
         self._wechat_connect_pending = False
         self._qq_connect_in_flight = False
         self._message_range: tuple[int, int] | None = None
+        self._sessions: list[Any] = []
+        self._last_qq_status_message = ""
         self._qq_qrcode_path = (
             Path(qq_qrcode_path)
             if qq_qrcode_path is not None
@@ -195,6 +242,11 @@ class AnalysisPage(QWidget):
         self._wechat_setup_button.clicked.connect(self.open_wechat_setup)
         layout.addWidget(self._wechat_setup_button)
 
+        self._wechat_guide_label = QLabel("")
+        self._wechat_guide_label.setWordWrap(True)
+        self._wechat_guide_label.setVisible(False)
+        layout.addWidget(self._wechat_guide_label)
+
         self._qq_connect_button = QPushButton(_QQ_CONNECT_LABEL)
         self._qq_connect_button.setVisible(False)
         self._qq_connect_button.clicked.connect(self.connect_qq)
@@ -205,6 +257,11 @@ class AnalysisPage(QWidget):
         self._qq_qrcode_label.setFixedSize(_QQ_QRCODE_SIZE, _QQ_QRCODE_SIZE)
         self._qq_qrcode_label.setVisible(False)
         layout.addWidget(self._qq_qrcode_label)
+
+        self._qq_login_guide_label = QLabel("")
+        self._qq_login_guide_label.setWordWrap(True)
+        self._qq_login_guide_label.setVisible(False)
+        layout.addWidget(self._qq_login_guide_label)
 
         self._file_button = QPushButton("\u9009\u62e9\u6587\u4ef6...")
         self._file_button.setVisible(False)
@@ -218,12 +275,29 @@ class AnalysisPage(QWidget):
 
         session_box = QGroupBox("\u4f1a\u8bdd")
         session_layout = QVBoxLayout(session_box)
+        self._session_search = QLineEdit()
+        self._session_search.setPlaceholderText(_SESSION_SEARCH_PLACEHOLDER)
+        self._session_search.setClearButtonEnabled(True)
+        self._session_search.textChanged.connect(self._reapply_session_view)
+        session_layout.addWidget(self._session_search)
+
+        sort_row = QHBoxLayout()
+        sort_row.addWidget(QLabel(_SESSION_SORT_LABEL))
+        self._session_sort = QComboBox()
+        for label, value in _SESSION_SORT_ORDER:
+            self._session_sort.addItem(label, value)
+        sort_row.addWidget(self._session_sort, stretch=1)
+        session_layout.addLayout(sort_row)
+
         self._session_list = QListWidget()
         self._session_list.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection
         )
         self._session_list.itemSelectionChanged.connect(
             self._on_session_selection_changed
+        )
+        self._session_sort.currentIndexChanged.connect(
+            self._reapply_session_view
         )
         session_layout.addWidget(self._session_list)
         layout.addWidget(session_box, stretch=1)
@@ -291,6 +365,7 @@ class AnalysisPage(QWidget):
         if source != ChatSource.QQ:
             self._stop_qq_status_polling()
             self._hide_qq_qrcode()
+            self._hide_qq_login_guide()
 
         for candidate, button in self._source_buttons.items():
             button.setChecked(candidate == source)
@@ -300,6 +375,11 @@ class AnalysisPage(QWidget):
         self._file_label.setVisible(is_local)
         self._wechat_connect_button.setVisible(source == ChatSource.WECHAT)
         self._wechat_setup_button.setVisible(source == ChatSource.WECHAT)
+        self._wechat_guide_label.setVisible(source == ChatSource.WECHAT)
+        if source == ChatSource.WECHAT:
+            self._show_wechat_guide()
+        else:
+            self._wechat_guide_label.clear()
         self._qq_connect_button.setVisible(source == ChatSource.QQ)
         self._qq_connect_button.setEnabled(True)
         self._qq_connect_button.setToolTip("")
@@ -376,6 +456,10 @@ class AnalysisPage(QWidget):
         self._status_label.setVisible(True)
         if source == ChatSource.WECHAT:
             self._wechat_setup_button.setVisible(not available)
+            if available:
+                self._wechat_guide_label.setVisible(False)
+            else:
+                self._show_wechat_guide()
             self._wechat_connect_button.setText(
                 _WECHAT_RECONNECT_LABEL
                 if available
@@ -396,13 +480,25 @@ class AnalysisPage(QWidget):
             if source == ChatSource.WECHAT:
                 self.status_changed.emit(message)
             else:
-                self.status_changed.emit(action_hint or message)
+                self.status_changed.emit(message)
 
         if available and load_sessions_on_ready:
             self._hint_label.setText(_LOADING_SESSIONS)
             if source != ChatSource.WECHAT:
                 self.status_changed.emit(_LOADING_SESSIONS)
             self._load_sessions(source)
+
+    def _show_wechat_guide(
+        self,
+        *,
+        include_directory_help: bool = False,
+    ) -> None:
+        """Render the first-time WeChat connection guide."""
+        parts = [_WECHAT_GUIDE_STATUS, _WECHAT_GUIDE_KEY]
+        if include_directory_help:
+            parts.append(_WECHAT_GUIDE_DIRECTORY_MISSING)
+        self._wechat_guide_label.setText("\n\n".join(parts))
+        self._wechat_guide_label.setVisible(True)
 
     def _handle_connection_status_error(self, code: str, message: str) -> None:
         if self._qq_connect_in_flight and self._selected_source == ChatSource.QQ:
@@ -445,6 +541,7 @@ class AnalysisPage(QWidget):
         state = _snapshot_state(snapshot)
         message = _snapshot_message(snapshot)
         action_hint = _snapshot_hint(snapshot)
+        self._last_qq_status_message = message
 
         self._status_label.setText(f"{_snapshot_prefix(snapshot)}{message}")
         self._status_label.setToolTip(action_hint)
@@ -463,7 +560,7 @@ class AnalysisPage(QWidget):
 
         if load_sessions_on_ready:
             self._hint_label.setText(action_hint)
-            self.status_changed.emit(action_hint or message)
+            self.status_changed.emit(message)
 
         if state == _QQ_STATE_CONNECTED and load_sessions_on_ready:
             self._hint_label.setText(_LOADING_SESSIONS)
@@ -471,9 +568,11 @@ class AnalysisPage(QWidget):
             self._load_sessions(ChatSource.QQ)
 
         if state == _QQ_STATE_WAITING_AUTH:
+            self._show_qq_login_guide()
             self._start_qq_status_polling()
             self._refresh_qq_qrcode()
         else:
+            self._hide_qq_login_guide()
             self._stop_qq_status_polling()
             self._hide_qq_qrcode()
 
@@ -525,6 +624,16 @@ class AnalysisPage(QWidget):
         """Clear and hide the QR image once it is no longer needed."""
         self._qq_qrcode_label.clear()
         self._qq_qrcode_label.setVisible(False)
+
+    def _show_qq_login_guide(self) -> None:
+        """Show the first-time QR login instructions while waiting for auth."""
+        self._qq_login_guide_label.setText(_QQ_LOGIN_GUIDE)
+        self._qq_login_guide_label.setVisible(True)
+
+    def _hide_qq_login_guide(self) -> None:
+        """Hide QR login instructions once the QQ state moves on."""
+        self._qq_login_guide_label.clear()
+        self._qq_login_guide_label.setVisible(False)
 
     def connect_qq(self) -> None:
         """Start the QQ authorization flow in one click.
@@ -607,34 +716,48 @@ class AnalysisPage(QWidget):
         self._status_label.setToolTip(message)
         self._status_label.setVisible(True)
         self._hint_label.setText(message)
-        self.status_changed.emit(message)
+        self.status_changed.emit(title)
 
-    def connect_wechat(self, detect_data_root: Any = None) -> None:
+    def connect_wechat(
+        self,
+        detect_data_root: Any = None,
+        detect_data_roots: Any = None,
+    ) -> None:
         """Connect WeChat in one click, asking for a directory only if needed.
 
-        The detected data root is handed to the facade, which persists it and
-        acquires the database key. That call blocks while the user finishes
-        logging in, so it runs through the injected executor and never on the
-        UI thread. When nothing can be detected, the existing setup dialog
-        collects the directory instead.
+        A single detected data root continues the existing one-click flow. No
+        candidates fall back to the manual directory dialog with the beginner
+        guide, and several candidates are shown for the user to pick.
         """
         if self._selected_source is not ChatSource.WECHAT:
             return
 
-        detect = detect_data_root or self._facade.detect_wechat_data_root
+        detect_roots = detect_data_roots or self._facade.detect_wechat_data_roots
         try:
-            data_root = detect()
+            roots = [Path(value) for value in detect_roots() or ()]
         except Exception:
-            data_root = None
+            roots = []
 
-        if data_root is None:
-            self._wechat_connect_pending = True
-            self.open_wechat_setup()
+        self._wechat_connect_pending = True
+        if len(roots) == 1:
+            self._wechat_connect_pending = False
+            self._status_label.setVisible(True)
+            self._status_label.setText(_WECHAT_DETECTED)
+            self._status_label.setToolTip("")
+            self._start_wechat_connect(
+                WeChatEnvironmentConfig(data_root=roots[0])
+            )
             return
 
-        self._start_wechat_connect(
-            WeChatEnvironmentConfig(data_root=Path(data_root))
-        )
+        self._status_label.setVisible(True)
+        if len(roots) > 1:
+            self._status_label.setText(_WECHAT_MULTIPLE_DETECTED)
+            self.open_wechat_setup(data_roots=roots)
+            return
+
+        self._status_label.setText(_WECHAT_NOT_DETECTED)
+        self._show_wechat_guide(include_directory_help=True)
+        self.open_wechat_setup()
 
     def _start_wechat_connect(self, config: Any) -> None:
         """Run save-then-key for one config, off the UI thread."""
@@ -688,7 +811,7 @@ class AnalysisPage(QWidget):
         self._hint_label.setText(text)
         self.status_changed.emit(text)
 
-    def open_wechat_setup(self) -> None:
+    def open_wechat_setup(self, data_roots: Any = None) -> None:
         """Open the setup dialog, showing the current facade state."""
         if self._selected_source is not ChatSource.WECHAT:
             return
@@ -704,6 +827,7 @@ class AnalysisPage(QWidget):
             self,
             setup_status=setup_status,
             data_root=detected_root,
+            data_roots=data_roots,
         )
         self._wechat_setup_dialog.accepted.connect(
             self._save_wechat_environment_from_dialog
@@ -759,7 +883,7 @@ class AnalysisPage(QWidget):
     def _on_session_selection_changed(self) -> None:
         self._update_analyze_enabled()
         self._reset_time_range()
-        if self._selected_source == ChatSource.WECHAT:
+        if self._selected_source in (ChatSource.QQ, ChatSource.WECHAT):
             session_id = self.selected_session_id()
             if session_id:
                 self._request_session_time_range(session_id)
@@ -782,8 +906,11 @@ class AnalysisPage(QWidget):
         )
         if facade_method is None:
             return
+        source = self._selected_source
+        if source not in (ChatSource.QQ, ChatSource.WECHAT):
+            return
         self._executor(
-            lambda: facade_method(ChatSource.WECHAT, session_id),
+            lambda: facade_method(source, session_id),
             on_success=self._set_message_range,
             on_error=lambda *_: None,
         )
@@ -835,33 +962,76 @@ class AnalysisPage(QWidget):
 
     def _populate_sessions(self, sessions: Any) -> None:
         """Fill the list with sessions, keeping ids out of the visible text."""
+        self._sessions = list(sessions or ())
+        self._reapply_session_view()
+
+    def _reapply_session_view(self) -> None:
+        """Filter and sort the cached sessions for the current controls."""
+        query = self._session_search.text().strip().lower()
+        sort_mode = self._session_sort.currentData() or _SESSION_SORT_ORDER[0][1]
+        indexed = list(enumerate(self._sessions))
+        filtered = [
+            (index, session)
+            for index, session in indexed
+            if query in session.display_name.lower()
+        ]
+        if sort_mode == _SESSION_SORT_ORDER[2][1]:
+            filtered.sort(
+                key=lambda pair: (pair[1].display_name.casefold(), pair[0])
+            )
+        elif sort_mode == _SESSION_SORT_ORDER[1][1]:
+            filtered.sort(
+                key=lambda pair: (
+                    pair[1].message_count is None,
+                    -(pair[1].message_count or 0),
+                    pair[0],
+                )
+            )
+        else:
+            filtered.sort(key=self._recent_session_key)
+
         self._session_list.clear()
 
-        for session in sessions or ():
-            item = QListWidgetItem(session.display_name)
-            item.setData(SESSION_ID_ROLE, session.session_id)
-            item.setData(SOURCE_ROLE, session.source)
-            if not bool(getattr(session, "message_available", True)):
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
-                item.setToolTip(
-                    getattr(session, "unavailable_reason", None)
-                    or _NO_MESSAGES_AVAILABLE
-                )
-            elif session.message_count is not None:
-                item.setToolTip(
-                    f"\u6d88\u606f\u6570\uff1a{session.message_count}"
-                )
-            self._session_list.addItem(item)
+        for _, session in filtered:
+            self._add_session_item(session)
 
         count = self._session_list.count()
-        self._hint_label.setText(
-            _NO_SESSIONS
-            if count == 0
-            else f"\u5171 {count} \u4e2a\u4f1a\u8bdd\u3002"
-        )
-        if self._selected_source != ChatSource.WECHAT:
-            self.status_changed.emit(self._hint_label.text())
+        if count == 0 and self._sessions:
+            self._hint_label.setText(_NO_MATCHING_SESSIONS)
+        elif count == 0:
+            self._hint_label.setText(_NO_SESSIONS)
+        else:
+            self._hint_label.setText(f"\u5171 {count} \u4e2a\u4f1a\u8bdd\u3002")
+        if self._selected_source == ChatSource.QQ:
+            self.status_changed.emit(
+                self._last_qq_status_message
+                or _QQ_STATE_MESSAGES[_QQ_STATE_CONNECTED]
+            )
         self._update_analyze_enabled()
+
+    def _add_session_item(self, session: Any) -> None:
+        item = QListWidgetItem(session.display_name)
+        item.setData(SESSION_ID_ROLE, session.session_id)
+        item.setData(SOURCE_ROLE, session.source)
+        if not bool(getattr(session, "message_available", True)):
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+            item.setToolTip(
+                getattr(session, "unavailable_reason", None)
+                or _NO_MESSAGES_AVAILABLE
+            )
+        elif session.message_count is not None:
+            item.setToolTip(
+                f"\u6d88\u606f\u6570\uff1a{session.message_count}"
+            )
+        self._session_list.addItem(item)
+
+    @staticmethod
+    def _recent_session_key(pair: tuple[int, Any]) -> tuple[int, int, int]:
+        index, session = pair
+        timestamp = getattr(session, "last_message_time", None)
+        if isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool):
+            return (0, -int(timestamp), index)
+        return (1, 0, index)
 
     # ------------------------------------------------------------- file logic
 

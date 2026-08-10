@@ -38,7 +38,7 @@ _COMPONENTS_READY_MESSAGE = (
     "\u5fae\u4fe1\u8fde\u63a5\u7ec4\u4ef6\u5df2\u51c6\u5907\u5b8c\u6210\uff0c"
     "\u8bf7\u73b0\u5728\u6253\u5f00\u5fae\u4fe1\u5e76\u767b\u5f55"
 )
-_KEY_RECEIVED_MESSAGE = "\u5fae\u4fe1\u5bc6\u94a5\u83b7\u53d6\u6210\u529f"
+_KEY_RECEIVED_MESSAGE = "\u5fae\u4fe1\u8fde\u63a5\u51c6\u5907\u5b8c\u6210"
 
 _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.wechat_key_service")
 
@@ -47,7 +47,7 @@ class WeChatKeyUnavailable(ApplicationServiceError):
     """Raised when the WeChat database key cannot be acquired safely."""
 
     code = "wechat_key_unavailable"
-    public_message = "\u83b7\u53d6\u5fae\u4fe1\u6570\u636e\u5e93\u5bc6\u94a5\u5931\u8d25\u3002"
+    public_message = "\u5fae\u4fe1\u8fde\u63a5\u51c6\u5907\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5\u3002"
 
     def __init__(self, public_message: str | None = None) -> None:
         self.public_message = public_message or type(self).public_message
@@ -114,9 +114,9 @@ class WeChatKeyService:
         )
         if not self._dll_path.is_file():
             raise WeChatKeyUnavailable(
-                "\u672a\u627e\u5230\u5fae\u4fe1\u6570\u636e\u5e93\u5bc6\u94a5"
-                "\u7ec4\u4ef6\uff0c\u8bf7\u786e\u8ba4\u8fd0\u884c\u73af\u5883"
-                "\u5b8c\u6574\u3002"
+                "\u4f59\u97f3\u7684\u5fae\u4fe1\u8fde\u63a5\u7ec4\u4ef6"
+                "\u4e0d\u5b8c\u6574\uff0c\u8bf7\u91cd\u65b0\u5b89\u88c5"
+                "\u540e\u91cd\u8bd5\u3002"
             )
 
         if not self._legacy_injected:
@@ -125,8 +125,9 @@ class WeChatKeyService:
         pids = self._process_finder()
         if not pids:
             raise WeChatKeyUnavailable(
-                "\u672a\u68c0\u6d4b\u5230\u5fae\u4fe1\u8fdb\u7a0b\uff0c"
-                "\u8bf7\u5148\u767b\u5f55\u5fae\u4fe1\u3002"
+                "\u672a\u68c0\u6d4b\u5230\u5fae\u4fe1\uff0c"
+                "\u8bf7\u5148\u6253\u5f00\u5e76\u767b\u5f55"
+                "\u5fae\u4fe1\u7535\u8111\u7248\u3002"
             )
 
         timeout_seconds = self._timeout if timeout is None else timeout
@@ -157,7 +158,7 @@ class WeChatKeyService:
 
         raise WeChatKeyUnavailable(
             last_error
-            or "\u7b49\u5f85\u5fae\u4fe1\u6570\u636e\u5e93\u5bc6\u94a5\u8d85\u65f6\uff0c"
+            or "\u7b49\u5f85\u5fae\u4fe1\u767b\u5f55\u8d85\u65f6\uff0c"
             "\u8bf7\u91cd\u8bd5\u3002"
         )
 
@@ -168,9 +169,9 @@ class WeChatKeyService:
     ) -> str:
         if not self._helper_path.is_file():
             raise WeChatKeyUnavailable(
-                "\u672a\u627e\u5230\u5fae\u4fe1\u5bc6\u94a5\u8f85\u52a9"
-                "\u7a0b\u5e8f\uff0c\u8bf7\u786e\u8ba4\u8fd0\u884c\u73af"
-                "\u5883\u5b8c\u6574\u3002"
+                "\u4f59\u97f3\u7684\u5fae\u4fe1\u8fde\u63a5\u7ec4\u4ef6"
+                "\u4e0d\u5b8c\u6574\uff0c\u8bf7\u91cd\u65b0\u5b89\u88c5"
+                "\u540e\u91cd\u8bd5\u3002"
             )
         timeout_seconds = self._timeout if timeout is None else timeout
         command, options = self._build_helper_invocation(timeout_seconds)
@@ -219,8 +220,8 @@ class WeChatKeyService:
             raise WeChatKeyUnavailable(_helper_launch_message()) from None
         except Exception:
             raise WeChatKeyUnavailable(
-                "\u5fae\u4fe1\u6570\u636e\u5e93\u5bc6\u94a5\u83b7\u53d6"
-                "\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5\u3002"
+                "\u5fae\u4fe1\u8fde\u63a5\u51c6\u5907\u5931\u8d25\uff0c"
+                "\u8bf7\u91cd\u8bd5\u3002"
             ) from None
         if result.returncode != 0:
             raise WeChatKeyUnavailable(_helper_failure_message(result.stderr))
@@ -414,7 +415,7 @@ class WeChatKeyService:
 def _helper_timeout_message() -> str:
     """Waiting ran out of time. The user can retry while WeChat logs in."""
     return (
-        "\u7b49\u5f85\u5fae\u4fe1\u5bc6\u94a5\u8d85\u65f6\uff0c"
+        "\u7b49\u5f85\u5fae\u4fe1\u767b\u5f55\u8d85\u65f6\uff0c"
         "\u8bf7\u5728\u5fae\u4fe1\u767b\u5f55\u65f6\u91cd\u8bd5\u3002"
     )
 
@@ -422,9 +423,8 @@ def _helper_timeout_message() -> str:
 def _helper_launch_message() -> str:
     """The helper process could not start at all."""
     return (
-        "\u5fae\u4fe1\u5bc6\u94a5\u8f85\u52a9\u7a0b\u5e8f\u542f\u52a8"
-        "\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4 Node.js \u8fd0\u884c"
-        "\u73af\u5883\u53ef\u7528\u3002"
+        "\u65e0\u6cd5\u542f\u52a8\u5fae\u4fe1\u8fde\u63a5\u7ec4\u4ef6\uff0c"
+        "\u8bf7\u91cd\u65b0\u5b89\u88c5\u4f59\u97f3\u540e\u91cd\u8bd5\u3002"
     )
 
 
@@ -451,10 +451,10 @@ def _helper_failure_message(stderr: Any) -> str:
     # Native/helper details stay out of the public error surface.
     detail = str(stderr or "").strip().lower()
     if "process" in detail or "weixin" in detail:
-        return "未检测到微信进程，请先登录微信后重试。"
+        return "未检测到微信，请先打开并登录微信电脑版。"
     if "dll" in detail or "load" in detail:
-        return "微信密钥组件加载失败，请确认运行环境完整。"
-    return "获取微信数据库密钥失败，请重试。"
+        return "微信连接组件加载失败，请重新安装余音后重试。"
+    return "微信连接准备失败，请重试。"
 
 def _extract_key(buffer: Any) -> str | None:
     if hasattr(buffer, "raw"):

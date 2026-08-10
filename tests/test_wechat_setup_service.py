@@ -271,6 +271,36 @@ def test_detect_wechat_data_root_uses_provider_default() -> None:
     assert detected is None or isinstance(detected, Path)
 
 
+def test_detect_wechat_data_roots_returns_injected_roots(
+    tmp_path: Path,
+) -> None:
+    roots = [tmp_path / "xwechat_files" / "wxid_a", tmp_path / "root_b"]
+    service = WeChatSetupService(data_roots_detector=lambda: roots)
+
+    assert service.detect_wechat_data_roots() == roots
+    assert service.detect_wechat_data_root() is None
+
+
+def test_detect_wechat_data_root_returns_single_roots_value(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "xwechat_files" / "wxid_single"
+    service = WeChatSetupService(data_roots_detector=lambda: [root])
+
+    assert service.detect_wechat_data_roots() == [root]
+    assert service.detect_wechat_data_root() == root
+
+
+def test_detect_wechat_data_roots_swallows_detector_errors() -> None:
+    def _explode() -> list[Path]:
+        raise OSError("cannot read storage 0xdeadbeef")
+
+    service = WeChatSetupService(data_roots_detector=_explode)
+
+    assert service.detect_wechat_data_roots() == []
+    assert service.detect_wechat_data_root() is None
+
+
 # --------------------------------------------------------- save_environment
 
 

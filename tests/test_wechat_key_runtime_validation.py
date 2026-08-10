@@ -97,4 +97,4 @@ def test_key_failure_is_safe_exit():
         provider_factory=object(),
     )
     assert not report.ok
-    assert report.error == "微信数据库密钥获取失败。"
+    assert report.error == "微信连接准备失败，请重试。"

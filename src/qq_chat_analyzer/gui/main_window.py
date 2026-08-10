@@ -19,7 +19,7 @@ from .analysis_page import AnalysisPage
 from .dashboard_page import DashboardPage
 
 
-WINDOW_TITLE = "\u804a\u5929\u5206\u6790\u5668"
+WINDOW_TITLE = "余音 Echo"
 _READY = "\u5c31\u7eea"
 _BACK_LABEL = "\u8fd4\u56de\u9009\u62e9"
 _ERROR_TITLE = "\u5206\u6790\u5931\u8d25"
@@ -39,6 +39,7 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(WINDOW_TITLE)
+        self._facade = facade
 
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -68,6 +69,16 @@ class MainWindow(QMainWindow):
         self.analysis_page.status_changed.connect(
             self.statusBar().showMessage
         )
+
+    def closeEvent(self, event: Any) -> None:
+        """Clean up QQ processes LCA started before the window closes."""
+        shutdown = getattr(self._facade, "shutdown_qq_runtime", None)
+        if callable(shutdown):
+            try:
+                shutdown()
+            except Exception:
+                pass
+        super().closeEvent(event)
 
     def show_analysis_page(self) -> None:
         """Return to source and session selection."""

@@ -37,10 +37,12 @@ class _FakeQQGroup:
         group_code: str,
         group_name: str,
         member_count: int | None = None,
+        last_message_time: int | None = None,
     ) -> None:
         self.group_code = group_code
         self.group_name = group_name
         self.member_count = member_count
+        self.last_message_time = last_message_time
 
 
 class _FakeExportTask:
@@ -59,11 +61,13 @@ class _FakeWeChatSession:
         display_name: str,
         session_type: str = "friend",
         message_count: int | None = None,
+        last_message_time: int | None = None,
     ) -> None:
         self.session_id = session_id
         self.display_name = display_name
         self.session_type = session_type
         self.message_count = message_count
+        self.last_message_time = last_message_time
 
 
 class _StubQQService:
@@ -73,11 +77,13 @@ class _StubQQService:
         export_path: Path | None = None,
         error=None,
         tasks=(),
+        message_range=None,
     ):
         self._groups = list(groups)
         self._export_path = export_path
         self._error = error
         self._tasks = None if tasks is None else list(tasks)
+        self._message_range = message_range
         self.export_requests: list[object] = []
         self.list_calls = 0
         self.list_tasks_calls = 0
@@ -100,12 +106,24 @@ class _StubQQService:
             raise self._error
         return self._export_path
 
+    def get_session_message_range(self, group_code):
+        if self._error is not None:
+            raise self._error
+        return self._message_range
+
 
 class _StubWeChatService:
-    def __init__(self, sessions=(), export_path: Path | None = None, error=None):
+    def __init__(
+        self,
+        sessions=(),
+        export_path: Path | None = None,
+        error=None,
+        provider=None,
+    ):
         self._sessions = None if sessions is None else list(sessions)
         self._export_path = export_path
         self._error = error
+        self._provider = provider
         self.export_requests: list[object] = []
         self.list_calls = 0
 
@@ -120,6 +138,17 @@ class _StubWeChatService:
         if self._error is not None:
             raise self._error
         return self._export_path
+
+    def provider(self):
+        return self._provider
+
+
+class _FakeReadProvider:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def read_session_rows(self, session_id):
+        return self.rows
 
 
 class _StubQQConnectionService:
@@ -173,6 +202,15 @@ class _StubQQAuthBridge:
             source="qq",
             message="\u7b49\u5f85\u6388\u6743",
         )
+
+
+class _RecordingProcessRegistry:
+    def __init__(self):
+        self.terminate_calls = 0
+
+    def terminate_all(self) -> int:
+        self.terminate_calls += 1
+        return 1
 
 
 class _StubWeChatConnectionService:
@@ -372,7 +410,12 @@ def test_list_sessions_converts_qq_groups_into_session_info() -> None:
     module = _facade_module()
     service = _StubQQService(
         groups=[
-            _FakeQQGroup("10001", "Fictional Board Games", member_count=12),
+            _FakeQQGroup(
+                "10001",
+                "Fictional Board Games",
+                member_count=12,
+                last_message_time=1700003600,
+            ),
             _FakeQQGroup("10002", "Fictional Study Room"),
         ]
     )
@@ -386,6 +429,7 @@ def test_list_sessions_converts_qq_groups_into_session_info() -> None:
     assert sessions[0].source is module.ChatSource.QQ
     assert sessions[0].session_type == "group"
     assert sessions[0].message_count == 12
+    assert sessions[0].last_message_time == 1700003600
     assert sessions[1].message_count is None
 
 
@@ -475,6 +519,15 @@ def test_start_qq_auth_flow_delegates_to_the_auth_bridge() -> None:
     assert result.state is connection.ConnectionState.WAITING_AUTH
 
 
+def test_shutdown_qq_runtime_terminates_recorded_processes() -> None:
+    registry = _RecordingProcessRegistry()
+    facade = _facade(qq_process_registry=registry)
+
+    facade.shutdown_qq_runtime()
+
+    assert registry.terminate_calls == 1
+
+
 def test_list_sessions_converts_wechat_sessions_into_session_info() -> None:
     module = _facade_module()
     service = _StubWeChatService(
@@ -484,6 +537,7 @@ def test_list_sessions_converts_wechat_sessions_into_session_info() -> None:
                 "Fictional Alice",
                 session_type="friend",
                 message_count=40,
+                last_message_time=1700007200,
             ),
             _FakeWeChatSession("fictional@chatroom", "Fictional Room", "group"),
         ]
@@ -497,6 +551,7 @@ def test_list_sessions_converts_wechat_sessions_into_session_info() -> None:
     assert sessions[0].display_name == "Fictional Alice"
     assert sessions[0].source is module.ChatSource.WECHAT
     assert sessions[0].message_count == 40
+    assert sessions[0].last_message_time == 1700007200
     assert sessions[1].session_type == "group"
 
 
@@ -542,6 +597,51 @@ def test_list_sessions_tolerates_a_service_returning_none() -> None:
     facade = _facade(wechat_service=_StubWeChatService(sessions=None))
 
     assert facade.list_sessions(module.ChatSource.WECHAT) == []
+
+
+def test_get_session_message_range_uses_qq_service_range() -> None:
+    module = _facade_module()
+    service = _StubQQService(message_range=(1700000000, 1700007200))
+    facade = _facade(qq_service=service)
+
+    message_range = facade.get_session_message_range(
+        module.ChatSource.QQ,
+        "10001",
+    )
+
+    assert message_range == (1700000000, 1700007200)
+
+
+def test_get_session_message_range_keeps_wechat_provider_behavior() -> None:
+    module = _facade_module()
+    provider = _FakeReadProvider(
+        [
+            {"create_time": 1700000000},
+            {"create_time": 1700007200},
+        ]
+    )
+    facade = _facade(
+        wechat_service=_StubWeChatService(provider=provider),
+    )
+
+    message_range = facade.get_session_message_range(
+        module.ChatSource.WECHAT,
+        "wxid_fictional",
+    )
+
+    assert message_range == (1700000000, 1700007200)
+
+
+def test_get_session_message_range_returns_none_for_local_files() -> None:
+    module = _facade_module()
+
+    assert (
+        _facade().get_session_message_range(
+            module.ChatSource.LOCAL_FILE,
+            "local",
+        )
+        is None
+    )
 
 
 # --------------------------------------------------------------- connection
@@ -945,11 +1045,36 @@ def test_analyze_session_dispatches_to_the_qq_service(tmp_path: Path) -> None:
     assert wechat_service.export_requests == []
     request = qq_service.export_requests[0]
     assert request.group_code == "10001"
-    assert request.start_time == "2024-01-01"
-    assert request.end_time == "2024-02-01"
+    assert request.start_time == 1704067200000
+    assert request.end_time == 1706745600000
     assert analysis_service.requests[0].input_path == export_path
     assert outcome.source is module.ChatSource.QQ
     assert outcome.session.session_id == "10001"
+
+
+def test_analyze_session_converts_wechat_time_range_to_epoch_seconds(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    export_path = _export_file(tmp_path, "wechat_export.json")
+    wechat_service = _StubWeChatService(export_path=export_path)
+    facade = _facade(
+        wechat_service=wechat_service,
+        analysis_service=_StubAnalysisService(result=_result()),
+    )
+
+    facade.analyze_session(
+        module.ChatSource.WECHAT,
+        "wxid_fictional_a",
+        module.AnalysisConfig(
+            start_time="2024-01-01",
+            end_time="2024-02-01",
+        ),
+    )
+
+    request = wechat_service.export_requests[0]
+    assert request.start_time == 1704067200
+    assert request.end_time == 1706745600
 
 
 def test_analyze_session_dispatches_to_the_wechat_service(

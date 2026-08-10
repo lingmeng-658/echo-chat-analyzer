@@ -57,16 +57,16 @@ def validate_wechat_key_runtime(
             config = WeChatEnvironmentConfig()
         else:
             return WeChatKeyRuntimeReport(
-                False, False, False, 0, False, "微信环境配置不可用。"
+                False, False, False, 0, False, "微信连接设置不可用。"
             )
     key_acquired = bool(config.db_key and config.db_key.strip())
     if not key_acquired:
         try:
             key = key_service.acquire()
         except WeChatKeyUnavailable:
-            return WeChatKeyRuntimeReport(False, False, False, 0, False, "微信数据库密钥获取失败。")
+            return WeChatKeyRuntimeReport(False, False, False, 0, False, "微信连接准备失败，请重试。")
         except Exception:
-            return WeChatKeyRuntimeReport(False, False, False, 0, False, "微信数据库密钥获取失败。")
+            return WeChatKeyRuntimeReport(False, False, False, 0, False, "微信连接准备失败，请重试。")
         config = replace(config, db_key=key)
         key_acquired = True
 

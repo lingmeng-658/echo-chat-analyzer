@@ -145,7 +145,7 @@ def test_missing_data_directory_returns_user_facing_message() -> None:
     assert status.db_key_available is True
     assert status.runtime_available is True
     assert (
-        "\u672a\u627e\u5230\u5fae\u4fe1\u6570\u636e\u76ee\u5f55"
+        "\u672a\u627e\u5230\u5fae\u4fe1\u6570\u636e\u4f4d\u7f6e"
         in status.message
     )
     assert status.action_hint != ""
@@ -161,7 +161,7 @@ def test_missing_db_key_returns_user_facing_message() -> None:
     assert status.data_found is True
     assert status.db_key_available is False
     assert status.runtime_available is True
-    assert "\u5bc6\u94a5" in status.message
+    assert "\u8bfb\u53d6\u6388\u6743" in status.message
     assert status.action_hint != ""
 
 
@@ -191,7 +191,7 @@ def test_missing_runtime_returns_user_facing_message(missing: str) -> None:
     assert status.db_key_available is True
     assert status.runtime_available is False
     assert (
-        "\u8bfb\u53d6\u7ec4\u4ef6\u4e0d\u5b8c\u6574"
+        "\u8fde\u63a5\u7ec4\u4ef6\u4e0d\u5b8c\u6574"
         in status.message
     )
     assert status.action_hint != ""
@@ -263,7 +263,7 @@ def test_missing_config_becomes_user_facing_status() -> None:
     assert status.data_found is False
     assert status.db_key_available is False
     assert status.runtime_available is False
-    assert "\u73af\u5883\u914d\u7f6e" in status.message
+    assert "\u8fde\u63a5\u8bbe\u7f6e" in status.message
     assert status.action_hint != ""
 
 

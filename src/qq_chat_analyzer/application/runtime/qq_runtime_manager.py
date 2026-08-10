@@ -18,6 +18,10 @@ from typing import Any, Callable
 
 from qq_chat_analyzer.runtime import ChatRuntime, RuntimeInfo
 
+from ..qq_process_registry import (
+    QQProcessRegistry,
+    default_qq_process_registry,
+)
 from ..qq_webui_config import disable_qce_auto_open_browser
 
 
@@ -66,10 +70,14 @@ class QQRuntimeManager:
         runtime: ChatRuntime,
         ready_timeout: float = 30.0,
         config_preparer: Callable[[], bool] | None = None,
+        process_registry: QQProcessRegistry | None = None,
     ) -> None:
         self._runtime = runtime
         self._ready_timeout = ready_timeout
         self._config_preparer = config_preparer or disable_qce_auto_open_browser
+        self._process_registry = (
+            process_registry or default_qq_process_registry()
+        )
         self._state = (
             QQRuntimeState.STOPPED
             if runtime.is_installed()
@@ -114,6 +122,7 @@ class QQRuntimeManager:
         self._state = QQRuntimeState.RUNNING
         self._pid = _optional_int(getattr(info, "pid", None))
         self._version = _optional_str(getattr(info, "version", None))
+        self._process_registry.record(self._pid)
         return self._status(
             QQRuntimeState.RUNNING,
             message=MESSAGE_RUNNING,
@@ -146,6 +155,7 @@ class QQRuntimeManager:
             )
 
         self._state = QQRuntimeState.STOPPED
+        self._process_registry.discard(self._pid)
         self._pid = None
         return self._status(
             QQRuntimeState.STOPPED,

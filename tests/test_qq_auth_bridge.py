@@ -119,12 +119,19 @@ def _bridge(
     connection_service=None,
     manager=None,
     window_launcher=None,
+    process_registry=None,
 ):
+    if process_registry is None:
+        registry_module = importlib.import_module(
+            "qq_chat_analyzer.application.qq_process_registry"
+        )
+        process_registry = registry_module.QQProcessRegistry()
     return _bridge_module().QQAuthBridge(
         setup_service=setup_service,
         connection_service=connection_service,
         manager=manager,
         window_launcher=window_launcher,
+        process_registry=process_registry,
     )
 
 
@@ -391,6 +398,44 @@ def test_default_launcher_logs_the_actual_command(
     assert "launch command=" in caplog.text
     assert "launch spawned pid=4243" in caplog.text
     assert "NapCatWinBootMain.exe" in caplog.text
+
+
+def test_auth_flow_records_the_launched_window_pid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = _bridge_module()
+    registry_module = importlib.import_module(
+        "qq_chat_analyzer.application.qq_process_registry"
+    )
+    config = _runtime_config(tmp_path)
+    setup = _StubSetupService(
+        connect_status=_status(
+            available=False,
+            qce_running=True,
+            authenticated=False,
+        ),
+        runtime_status=_runtime_status(),
+        config=config,
+    )
+    service = _StubConnectionService(
+        _status(available=False, qce_running=True, authenticated=False)
+    )
+    registry = registry_module.QQProcessRegistry()
+
+    def _fake_popen(args, **kwargs):
+        return _FakeProcess(pid=7777)
+
+    monkeypatch.setattr(bridge.subprocess, "Popen", _fake_popen)
+
+    snapshot = _bridge(
+        setup_service=setup,
+        connection_service=service,
+        process_registry=registry,
+    ).start_auth_flow()
+
+    assert snapshot.state is _connection_module().ConnectionState.WAITING_AUTH
+    assert registry.recorded() == (7777,)
 
 
 def test_default_launcher_prefers_the_configured_qq_path(

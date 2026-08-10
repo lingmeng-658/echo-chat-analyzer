@@ -192,7 +192,7 @@ def test_missing_db_key_fails_environment_validation() -> None:
     assert report.session_read is False
     assert report.message_read is False
     assert report.analysis_ok is False
-    assert any("\u5bc6\u94a5" in error for error in report.errors)
+    assert any("\u8bfb\u53d6\u6388\u6743" in error for error in report.errors)
 
 
 @pytest.mark.parametrize("missing", ["helper", "library"])
@@ -205,10 +205,7 @@ def test_missing_wcdb_runtime_fails_environment_validation(
 
     assert report.ok is False
     assert report.environment_ok is False
-    assert any(
-        "wcdb_cli" in error or "WCDB.dll" in error
-        for error in report.errors
-    )
+    assert any("\u8fde\u63a5\u7ec4\u4ef6" in error for error in report.errors)
 
 
 def test_missing_data_directory_fails_environment_validation() -> None:
@@ -216,7 +213,7 @@ def test_missing_data_directory_fails_environment_validation() -> None:
 
     assert report.ok is False
     assert report.environment_ok is False
-    assert any("\u6570\u636e\u76ee\u5f55" in error for error in report.errors)
+    assert any("\u6570\u636e\u4f4d\u7f6e" in error for error in report.errors)
 
 
 # ------------------------------------------------------------- error handling

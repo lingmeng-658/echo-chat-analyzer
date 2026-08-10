@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -26,12 +27,12 @@ from PySide6.QtWidgets import (
 
 from ..application.facade import WeChatEnvironmentConfig
 
-DATA_ROOT_LABEL = "\u5fae\u4fe1\u6570\u636e\u76ee\u5f55"
+DATA_ROOT_LABEL = "微信数据位置"
 DATA_ROOT_HINT = (
-    "\u8bf7\u9009\u62e9\u5fae\u4fe1\u6570\u636e\u76ee\u5f55\uff0c"
-    "\u4f8b\u5982 xwechat_files"
+    "如果未自动识别微信数据目录，请点击上方按钮，"
+    "选择微信设置中显示的存储文件夹。"
 )
-BROWSE_CAPTION = "\u9009\u62e9\u5fae\u4fe1\u6570\u636e\u76ee\u5f55"
+BROWSE_CAPTION = "选择微信存储文件夹"
 
 
 class WeChatSetupDialog(QDialog):
@@ -43,20 +44,25 @@ class WeChatSetupDialog(QDialog):
         *,
         setup_status: Any = None,
         data_root: Any = None,
+        data_roots: Any = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("\u5fae\u4fe1\u73af\u5883\u8bbe\u7f6e")
+        self.setWindowTitle("微信连接设置")
         self.setMinimumWidth(520)
 
         self._data_root_edit = QLineEdit()
         self._data_root_edit.setPlaceholderText(DATA_ROOT_HINT)
         self._data_root_edit.setToolTip(DATA_ROOT_HINT)
+        self._data_root_combo: QComboBox | None = None
+        self._use_data_roots = bool(data_roots)
+        if self._use_data_roots:
+            self._data_root_combo = QComboBox()
+            for root in data_roots:
+                self._data_root_combo.addItem(str(root))
 
         form = QFormLayout()
-        form.addRow(
-            DATA_ROOT_LABEL,
-            self._path_row(self._data_root_edit, self._browse_directory),
-        )
+        control = self._data_root_combo or self._data_root_edit
+        form.addRow(DATA_ROOT_LABEL, self._path_row(control, self._browse_directory))
 
         self._hint_label = QLabel(DATA_ROOT_HINT)
         self._hint_label.setWordWrap(True)
@@ -82,19 +88,27 @@ class WeChatSetupDialog(QDialog):
 
     def set_data_root(self, path: Any) -> None:
         """Prefill the data directory, typically from auto-detection."""
-        self._data_root_edit.setText("" if path is None else str(path))
+        text = "" if path is None else str(path)
+        if self._use_data_roots and self._data_root_combo is not None:
+            index = self._data_root_combo.findText(text)
+            if index >= 0:
+                self._data_root_combo.setCurrentIndex(index)
+            elif text:
+                self._data_root_combo.addItem(text)
+            return
+        self._data_root_edit.setText(text)
 
     def config(self) -> WeChatEnvironmentConfig:
         """Return the entered values as an application-layer config."""
         return WeChatEnvironmentConfig(
-            data_root=_path_or_none(self._data_root_edit.text())
+            data_root=_path_or_none(self._control_text())
         )
 
     # ---------------------------------------------------------------- internals
 
-    def _path_row(self, edit: QLineEdit, browse: Any) -> QHBoxLayout:
+    def _path_row(self, control: Any, browse: Any) -> QHBoxLayout:
         row = QHBoxLayout()
-        row.addWidget(edit, stretch=1)
+        row.addWidget(control, stretch=1)
         button = QPushButton("...")
         button.setToolTip(BROWSE_CAPTION)
         button.clicked.connect(browse)
@@ -105,10 +119,15 @@ class WeChatSetupDialog(QDialog):
         path = QFileDialog.getExistingDirectory(
             self,
             BROWSE_CAPTION,
-            self._data_root_edit.text(),
+            self._control_text(),
         )
         if path:
             self.set_data_root(path)
+
+    def _control_text(self) -> str:
+        if self._use_data_roots and self._data_root_combo is not None:
+            return self._data_root_combo.currentText()
+        return self._data_root_edit.text()
 
     @staticmethod
     def _status_text(setup_status: Any) -> str:

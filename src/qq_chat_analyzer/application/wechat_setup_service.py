@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .errors import ApplicationServiceError
+from .wechat_data_detector import detect_wechat_data_roots
 from .wechat_environment_config import (
     WeChatConfigNotFound,
     WeChatEnvironmentConfig,
@@ -38,31 +39,23 @@ from .wechat_environment_config import (
 _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.wechat_setup_service")
 
 
-def _detect_wechat_data_root() -> Path | None:
-    """Reuse the provider's best-effort data directory discovery."""
-    from ..providers.wechat_database_provider import default_data_root
-
-    return default_data_root()
-
-
 MESSAGE_CONFIG_MISSING = (
-    "\u5c1a\u672a\u914d\u7f6e\u5fae\u4fe1\u8fd0\u884c\u73af\u5883\u3002"
+    "尚未完成微信连接设置。"
 )
 ACTION_HINT_CONFIG_MISSING = (
-    "\u8bf7\u5148\u8bbe\u7f6e\u5fae\u4fe1\u6570\u636e\u76ee\u5f55\u3001"
-    "\u6570\u636e\u5e93\u5bc6\u94a5\u548c\u8bfb\u53d6\u7ec4\u4ef6\u3002"
+    "请先完成微信连接设置，再连接微信。"
 )
 MESSAGE_CONFIG_READY = (
-    "\u5fae\u4fe1\u8fd0\u884c\u73af\u5883\u914d\u7f6e\u5df2\u4fdd\u5b58\u3002"
+    "微信连接设置已保存。"
 )
 ACTION_HINT_CONFIG_READY = (
-    "\u53ef\u4ee5\u8fd4\u56de\u5fae\u4fe1\u5165\u53e3\u68c0\u6d4b\u8fde\u63a5\u72b6\u6001\u3002"
+    "可以返回微信入口开始连接。"
 )
 MESSAGE_CONFIG_INVALID = (
-    "\u5fae\u4fe1\u73af\u5883\u914d\u7f6e\u65e0\u6cd5\u8bfb\u53d6\u3002"
+    "微信连接设置无法使用。"
 )
 ACTION_HINT_CONFIG_INVALID = (
-    "\u8bf7\u91cd\u65b0\u8bbe\u7f6e\u5fae\u4fe1\u8fd0\u884c\u73af\u5883\u3002"
+    "请重新设置微信连接。"
 )
 
 
@@ -93,8 +86,7 @@ class WeChatSetupService:
 
         code = "wechat_invalid_environment"
         public_message = (
-            "\u5fae\u4fe1\u73af\u5883\u53c2\u6570\u65e0\u6548\uff0c"
-            "\u8bf7\u91cd\u65b0\u586b\u5199\u3002"
+            "微信连接设置无效，请重新填写。"
         )
 
     def __init__(
@@ -106,14 +98,16 @@ class WeChatSetupService:
         connection_service: Any = None,
         key_service: Any = None,
         data_root_detector: Callable[[], Path | None] | None = None,
+        data_roots_detector: Callable[[], list[Path]] | None = None,
     ) -> None:
         self._config_loader = config_loader or WeChatEnvironmentConfigLoader()
         self._config_writer = config_writer or WeChatEnvironmentConfigWriter()
         self._provider_factory = provider_factory
         self._connection_service = connection_service
         self._key_service = key_service
-        self._data_root_detector = (
-            data_root_detector or _detect_wechat_data_root
+        self._data_root_detector = data_root_detector
+        self._data_roots_detector = (
+            data_roots_detector or detect_wechat_data_roots
         )
 
     def check_setup(self) -> WeChatSetupStatus:
@@ -148,13 +142,37 @@ class WeChatSetupService:
 
     def detect_wechat_data_root(self) -> Path | None:
         """Return a detected local WeChat data directory, or ``None``."""
+        if self._data_root_detector is not None:
+            try:
+                detected = self._data_root_detector()
+            except Exception:
+                return None
+            if detected is None:
+                return None
+            return Path(detected)
+        roots = self.detect_wechat_data_roots()
+        if len(roots) == 1:
+            return roots[0]
+        return None
+
+    def detect_wechat_data_roots(self) -> list[Path]:
+        """Return every valid WeChat data directory detected locally.
+
+        The caller decides what to do with several candidates; this service
+        never picks one on the user's behalf.
+        """
         try:
-            detected = self._data_root_detector()
+            detected = self._data_roots_detector()
         except Exception:
-            return None
-        if detected is None:
-            return None
-        return Path(detected)
+            return []
+        roots: list[Path] = []
+        for value in detected or ():
+            if value is None:
+                continue
+            path = Path(value)
+            if path not in roots:
+                roots.append(path)
+        return roots
 
     def save_environment(self, config: WeChatEnvironmentConfig) -> Any:
         """Persist a config, refresh the provider, and re-check connection.

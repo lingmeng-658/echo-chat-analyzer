@@ -81,6 +81,7 @@ class SessionInfo:
     message_count: int | None = None
     message_available: bool = True
     unavailable_reason: str | None = None
+    last_message_time: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,6 +209,7 @@ class ChatAnalyzerFacade:
         qq_setup_service: Any = None,
         qq_connection_manager: Any = None,
         qq_auth_bridge: Any = None,
+        qq_process_registry: Any = None,
         wechat_service: Any = None,
         wechat_connection_service: Any = None,
         wechat_setup_service: Any = None,
@@ -226,6 +228,7 @@ class ChatAnalyzerFacade:
         self._qq_setup_service = qq_setup_service
         self._qq_connection_manager = qq_connection_manager
         self._qq_auth_bridge = qq_auth_bridge
+        self._qq_process_registry = qq_process_registry
         self._wechat_connection_service_value = wechat_connection_service
         self._wechat_setup_service_value = wechat_setup_service
         self._source_builders = dict(source_builders or {})
@@ -365,6 +368,19 @@ class ChatAnalyzerFacade:
         """
         return self._require_qq_auth_bridge().start_auth_flow()
 
+    def shutdown_qq_runtime(self) -> None:
+        """Stop only QQ processes LCA started.
+
+        This is the application exit hook: the registry records the QCE and
+        NapCat PIDs LCA created, so a user's own QQ client is never touched.
+        Cleanup is best-effort and never raises.
+        """
+        registry = self._require_qq_process_registry()
+        try:
+            registry.terminate_all()
+        except Exception:
+            pass
+
     def get_wechat_setup_status(self) -> WeChatSetupStatus:
         """Report whether the WeChat environment config is usable."""
         service = self._require_setup_service()
@@ -381,6 +397,17 @@ class ChatAnalyzerFacade:
         service = self._require_setup_service()
         with _translated_errors(ChatSource.WECHAT):
             return service.detect_wechat_data_root()
+
+    def detect_wechat_data_roots(self) -> list[Path]:
+        """Return every valid WeChat data directory detected locally.
+
+        When several accounts or storage locations exist, the caller shows
+        the list and lets the user choose; the application layer never picks
+        one automatically.
+        """
+        service = self._require_setup_service()
+        with _translated_errors(ChatSource.WECHAT):
+            return service.detect_wechat_data_roots()
 
     def setup_wechat_environment(
         self,
@@ -422,13 +449,18 @@ class ChatAnalyzerFacade:
     ) -> tuple[int, int] | None:
         """Return earliest and latest message timestamps for one session."""
         chat_source = _coerce_source(source)
-        if chat_source is not ChatSource.WECHAT:
+        if chat_source is ChatSource.LOCAL_FILE:
             return None
         service = self._require_service(chat_source)
-        provider_factory = getattr(service, "provider", None)
-        if provider_factory is None:
-            return None
         try:
+            if chat_source is ChatSource.QQ:
+                range_method = getattr(service, "get_session_message_range", None)
+                if range_method is None:
+                    return None
+                return range_method(session_id)
+            provider_factory = getattr(service, "provider", None)
+            if provider_factory is None:
+                return None
             rows = provider_factory().read_session_rows(session_id)
         except Exception:
             return None
@@ -592,12 +624,14 @@ class ChatAnalyzerFacade:
         scratch_directory: Path,
     ) -> Path:
         """Ask the matching service for an export file."""
+        start_epoch = to_epoch_seconds(config.start_time)
+        end_epoch = to_epoch_seconds(config.end_time)
         if source is ChatSource.QQ:
             return service.export_only(
                 QQExportImportRequest(
                     group_code=session_id,
-                    start_time=config.start_time,
-                    end_time=config.end_time,
+                    start_time=_epoch_millis(start_epoch),
+                    end_time=_epoch_millis(end_epoch),
                 )
             )
 
@@ -605,8 +639,8 @@ class ChatAnalyzerFacade:
             WeChatExportImportRequest(
                 session_id=session_id,
                 output_path=scratch_directory / "wechat_export.json",
-                start_time=config.start_time,
-                end_time=config.end_time,
+                start_time=start_epoch,
+                end_time=end_epoch,
             )
         )
 
@@ -670,8 +704,19 @@ class ChatAnalyzerFacade:
                 setup_service=self._optional_qq_setup_service(),
                 connection_service=self._optional_qq_connection_service(),
                 manager=self._require_qq_connection_manager(),
+                process_registry=self._require_qq_process_registry(),
             )
         return self._qq_auth_bridge
+
+    def _require_qq_process_registry(self) -> Any:
+        """Return the shared QQ process registry for this application."""
+        if self._qq_process_registry is None:
+            from .qq_process_registry import (
+                default_qq_process_registry,
+            )
+
+            self._qq_process_registry = default_qq_process_registry()
+        return self._qq_process_registry
 
     def _optional_qq_setup_service(self) -> Any:
         try:
@@ -787,6 +832,13 @@ def _snake_case(name: str) -> str:
     return "".join(characters)
 
 
+def _epoch_millis(epoch_seconds: int | None) -> int | None:
+    """Convert epoch seconds to milliseconds for the QCE export API."""
+    if epoch_seconds is None:
+        return None
+    return epoch_seconds * 1000
+
+
 def _coerce_source(source: Any) -> ChatSource:
     """Accept a :class:`ChatSource` or its string value."""
     if isinstance(source, ChatSource):
@@ -831,6 +883,11 @@ def _to_session_info(source: ChatSource, raw_session: Any) -> SessionInfo:
         ),
         session_type=session_type,
         message_count=_first_int(raw_session, "message_count", "member_count"),
+        last_message_time=_first_epoch(
+            raw_session,
+            "last_message_time",
+            "last_timestamp",
+        ),
         message_available=bool(
             getattr(raw_session, "message_available", True)
         ),
@@ -851,4 +908,15 @@ def _first_int(raw_session: Any, *names: str) -> int | None:
         value = getattr(raw_session, name, None)
         if isinstance(value, int) and not isinstance(value, bool):
             return value
+    return None
+
+
+def _first_epoch(raw_session: Any, *names: str) -> int | None:
+    for name in names:
+        value = getattr(raw_session, name, None)
+        if value is None:
+            continue
+        epoch = to_epoch_seconds(value)
+        if epoch is not None:
+            return epoch
     return None

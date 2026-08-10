@@ -23,6 +23,10 @@ from typing import Any, Callable
 
 from .models import ConnectionSnapshot, ConnectionState
 from .qq_connection_manager import QQConnectionManager, SOURCE_QQ
+from ..qq_process_registry import (
+    QQProcessRegistry,
+    default_qq_process_registry,
+)
 
 
 _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.qq_auth_bridge")
@@ -74,11 +78,15 @@ class QQAuthBridge:
         connection_service: Any = None,
         manager: Any = None,
         window_launcher: Callable[[], None] | None = None,
+        process_registry: QQProcessRegistry | None = None,
     ) -> None:
         self._setup_service = setup_service
         self._connection_service = connection_service
         self._manager = manager
         self._window_launcher = window_launcher
+        self._process_registry = (
+            process_registry or default_qq_process_registry()
+        )
 
     def start_auth_flow(self) -> ConnectionSnapshot:
         """Start QQ authorization and return the immediate lifecycle state.
@@ -167,7 +175,10 @@ class QQAuthBridge:
             _config_summary(config),
         )
         launcher = default_auth_window_launcher(config)
-        launcher()
+        process = launcher()
+        pid = getattr(process, "pid", None)
+        if pid is not None:
+            self._process_registry.record(pid)
 
     @staticmethod
     def _error_snapshot(message: str, action_hint: str) -> ConnectionSnapshot:
@@ -307,7 +318,7 @@ def _launch_auth_window(
     boot_main: Path,
     hook_dll: Path,
     qq_path: Path,
-) -> None:
+) -> Any:
     """Open the runtime login window once, without waiting for login."""
     _ensure_load_script(runtime_directory)
     (runtime_directory / "logs").mkdir(parents=True, exist_ok=True)
@@ -342,6 +353,7 @@ def _launch_auth_window(
         getattr(process, "pid", None),
         process.poll(),
     )
+    return process
 
 
 def _ensure_load_script(runtime_directory: Path) -> None:

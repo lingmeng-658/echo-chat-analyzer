@@ -10,7 +10,8 @@ Deliberate boundaries:
 * No HTTP lives here. The provider is injected and only has to satisfy
   :class:`QQExportProvider`, so tests can supply a stub.
 * The adapter is untouched and stays unaware that a provider exists. It is
-  reached indirectly, through the normal ``ImportService`` file dispatch.
+  reached indirectly through the normal ``ImportService`` file dispatch and,
+  for time-range defaults, through ``load_qce_json`` without any adapter edits.
 * ``parser.py`` and the analysis core are not involved.
 
 The provider contract is intentionally narrow: given a group code and an
@@ -21,8 +22,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any, Protocol, runtime_checkable
 
+from ..analysis.timestamps import to_epoch_seconds
+from ..qq_chat_exporter_adapter import load_qce_json
 from .errors import ApplicationServiceError
 from .import_outcome import ImportOutcome
 from .import_request import ImportRequest
@@ -134,6 +138,36 @@ class QQExportImportService:
         unchanged because they already carry user-facing messages.
         """
         return self._provider.list_tasks()
+
+    def get_session_message_range(
+        self,
+        group_code: str,
+    ) -> tuple[int, int] | None:
+        """Return earliest and latest message timestamps for one group.
+
+        The range comes from the actual exported QCE JSON so QQ defaults are
+        based on real messages instead of a fixed window. Non-text messages are
+        included because they still carry a real message time.
+        """
+        export_path = self.export_only(
+            QQExportImportRequest(group_code=group_code)
+        )
+        payload = load_qce_json(export_path)
+        if not isinstance(payload, Mapping):
+            return None
+        raw_messages = payload.get("messages")
+        if not isinstance(raw_messages, list):
+            return None
+        epochs = [
+            epoch
+            for row in raw_messages
+            if isinstance(row, Mapping)
+            for epoch in (to_epoch_seconds(row.get("timestamp")),)
+            if epoch is not None
+        ]
+        if not epochs:
+            return None
+        return min(epochs), max(epochs)
 
     def export_only(self, request: QQExportImportRequest) -> Path:
         """Export one QQ group and return the finished JSON file path.

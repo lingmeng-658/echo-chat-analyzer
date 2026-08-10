@@ -28,13 +28,16 @@ class _StubSetupService:
         status: object = None,
         error: Exception | None = None,
         detected_root: Path | None = None,
+        detected_roots: list[Path] | None = None,
     ):
         self.status = status
         self.error = error
         self.detected_root = detected_root
+        self.detected_roots = list(detected_roots or [])
         self.saved: list[WeChatEnvironmentConfig] = []
         self.checks = 0
         self.detects = 0
+        self.detects_roots = 0
 
     def check_setup(self) -> object:
         self.checks += 1
@@ -47,6 +50,12 @@ class _StubSetupService:
         if self.error is not None:
             raise self.error
         return self.detected_root
+
+    def detect_wechat_data_roots(self) -> list[Path]:
+        self.detects_roots += 1
+        if self.error is not None:
+            raise self.error
+        return list(self.detected_roots)
 
     def save_environment(self, config: WeChatEnvironmentConfig) -> object:
         if self.error is not None:
@@ -103,6 +112,18 @@ def test_facade_detects_wechat_data_root(tmp_path: Path) -> None:
     assert setup.detects == 1
 
 
+def test_facade_detects_wechat_data_roots(tmp_path: Path) -> None:
+    roots = [
+        tmp_path / "xwechat_files" / "wxid_fictional_a",
+        tmp_path / "xwechat_files" / "wxid_fictional_b",
+    ]
+    setup = _StubSetupService(detected_roots=roots)
+    facade = ChatAnalyzerFacade(wechat_setup_service=setup)
+
+    assert facade.detect_wechat_data_roots() == roots
+    assert setup.detects_roots == 1
+
+
 def test_facade_detect_requires_setup_service() -> None:
     facade = ChatAnalyzerFacade()
 
@@ -119,6 +140,20 @@ def test_facade_translates_detect_failure(tmp_path: Path) -> None:
 
     with pytest.raises(FacadeError) as caught:
         facade.detect_wechat_data_root()
+
+    assert caught.value.source is ChatSource.WECHAT
+    assert isinstance(caught.value.public_message, str)
+
+
+def test_facade_translates_data_roots_failure(tmp_path: Path) -> None:
+    facade = ChatAnalyzerFacade(
+        wechat_setup_service=_StubSetupService(
+            error=RuntimeError("detector 0xdeadbeef")
+        )
+    )
+
+    with pytest.raises(FacadeError) as caught:
+        facade.detect_wechat_data_roots()
 
     assert caught.value.source is ChatSource.WECHAT
     assert isinstance(caught.value.public_message, str)

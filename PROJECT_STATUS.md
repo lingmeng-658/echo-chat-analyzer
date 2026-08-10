@@ -1,15 +1,16 @@
-# Local Chat Analyzer Project Status
+# 余音 Echo Project Status
 
 ## 项目定位
 
-Local Chat Analyzer 是一个隐私优先、本地运行的聊天记录分析工具。
+余音 Echo 是一个隐私优先、本地运行的聊天记忆分析工具。
 
 目标：
 
 -   读取本地导出的聊天记录；
 -   完成本地文本分析；
 -   生成词频、词云、发送者关联等统计结果；
--   未来支持更多聊天来源、API、桌面界面和 AI 辅助分析。
+-   桌面界面已可用；
+-   未来支持更多聊天来源和 AI 辅助分析。
 
 隐私原则：
 
@@ -25,39 +26,29 @@ Local Chat Analyzer 是一个隐私优先、本地运行的聊天记录分析工
 
 main
 
-当前基线 commit：
+当前 HEAD commit：
 
-04782b1
+9deeac8
 
 当前工作区状态：
 
-- Phase 5.2A Application Service 已完成
-- Phase 5.2B ChatMessage 中性消息模型已完成
-- ChatMessage v2 基础字段已完成
-- 微信 detailed JSON 第一版支持已完成
-- 微信 CipherTalk chatlab JSONL 支持已完成
-- ImportService 已支持 chatlab JSONL 自动路由到微信 parser
-- 多来源分析流程验证已完成
-- Phase 6.2 Import Pipeline 基础架构已完成
-- AnalysisApplicationService 已接入 ImportService
-- QQChatExporter Provider 已完成
-- QQChatExporter Adapter 已完成
-- QQ 导出→分析闭环已完成
-- CLI qce 入口已完成
-- QQChatExporter 集成真实环境验收已完成
+- 产品名：余音 Echo
+- QQ 登录闭环已完成：二维码等待、自动轮询、登录后加载会话
+- QQ 会话分析已完成：真实会话 → ChatMessage → 分析报告
+- 微信连接闭环已完成：数据目录识别、Key 获取、数据库读取、会话分析
+- GUI 基础体验已完成：来源选择、会话列表、搜索排序、时间范围、Dashboard
+- ChatAnalyzerFacade / Application / Presentation 分层已完成
 - v0.7.0 Desktop MVP Foundation 已完成
-- QQ / 微信多来源支持
-- 微信数据库 Provider
-- Analysis Core v2/v3 与 Analysis Reports
-- Presentation Layer
-- ChatAnalyzerFacade
-- PySide6 GUI（Dashboard 展示）
+- 当前处于提交前状态，工作区包含上述未提交修改
 
 最近完整 pytest：
 
-528 tests passing
+905 passed + 1 个已知失败
 
-历史状态：Phase 5.2 阶段曾出现 196 passed + 1 个与 .venv editable 安装指向相关的环境失败。
+已知失败：
+
+- test_conversation_analyzer_ignores_zero_timestamp_for_span
+- 原因：ConversationAnalyzer 当前把 timestamp=0 当作有效时间，测试预期忽略该值。
 
 当前版本目标：
 
@@ -67,21 +58,27 @@ v0.7.0 Desktop MVP Foundation
 
 # Current User Flow
 
-QQ 导出→分析闭环已可通过 CLI 使用：
+桌面端 QQ / 微信流程：
 
-qqchat qce list
-
-↓
-
-选择 group_code
+选择 QQ 或微信
 
 ↓
 
-qqchat qce analyze --group <group_code>
+连接来源（QQ 扫码登录 / 微信保持打开并完成登录）
 
 ↓
 
-自动导出并进入已有分析流程
+加载会话列表
+
+↓
+
+选择会话与时间范围
+
+↓
+
+开始分析并查看 Dashboard
+
+CLI 的 QQ 导出与分析入口仍然可用。
 
 ------------------------------------------------------------------------
 
@@ -95,7 +92,7 @@ QQChatExporter 集成已在真实环境完成验收：
 - qqchat qce analyze --group <group_code> 成功完成：
   QQ 导出 → QCE JSON → Adapter → ChatMessage → 分析核心 → 输出文件；
 - 真实群聊数据测试成功；
-- 当前测试基线：528 tests passing。
+- 当前测试基线：905 passed + 1 个已知失败。
 
 ------------------------------------------------------------------------
 
@@ -103,11 +100,12 @@ QQChatExporter 集成已在真实环境完成验收：
 
 当前已知限制：
 
-- 不自动启动 QCE，需要用户先启动并登录 QQChatExporter 桌面版；
 - 不支持分片 manifest/chunks；
 - 只支持群聊；
 - 只支持 JSON；
 - 非文本消息暂未进入分析；
+- ConversationAnalyzer 对 timestamp=0 的处理与测试预期不一致；
+- 微信 / QQ 桌面 MVP 已可用，但安装包与普通用户安装流程尚未完成。
 
 ------------------------------------------------------------------------
 
@@ -323,17 +321,16 @@ from qq_chat_analyzer.application import AnalysisApplicationService
 
 ## 当前状态
 
-当前没有进行中的实现任务。
+当前准备提交。
 
 最近完成：
 
--   v0.7.0 Desktop MVP Foundation；
--   QQ / 微信多来源支持与微信数据库 Provider；
--   Analysis Core v2/v3 与 Analysis Reports；
--   Presentation Layer；
--   ChatAnalyzerFacade；
--   PySide6 GUI（Dashboard 展示）；
--   全量测试 528 tests passing。
+- QQ 登录闭环与等待页面引导；
+- 微信连接流程与数据目录 / Key 获取；
+- 会话列表搜索与排序；
+- 会话默认时间范围基于真实消息初始化；
+- 桌面端 Dashboard 分析报告展示；
+- 全量测试 905 passed + 1 个已知失败。
 
 下一阶段：后续产品化方向（不提前展开实现细节）。
 
@@ -344,9 +341,9 @@ from qq_chat_analyzer.application import AnalysisApplicationService
 
 待办（不纳入当前实现范围）：
 
--   QCE 自动启动：未实现；
 -   分片 manifest/chunks 支持：未实现；
 -   AI、API 接入：未实现。
+-   安装包与普通用户安装流程：未实现。
 
 ------------------------------------------------------------------------
 
@@ -390,6 +387,11 @@ from qq_chat_analyzer.application import AnalysisApplicationService
 目标：
 
 让普通用户无需 Python/CLI。
+
+状态：
+
+- QQ / 微信桌面 MVP 已完成；
+- Windows 安装打包未完成。
 
 可能方向：
 
@@ -447,8 +449,9 @@ Design ↓ RED Test ↓ GREEN Implementation ↓ Full Test ↓ Review ↓ PR
 
 微信接入现状：
 
+-   微信数据库 Provider 已支持；
 -   微信 detailed JSON 已支持；
--   微信 JSONL 未支持，不纳入本次范围。
+-   微信 chatlab JSONL 已支持。
 
 后续新增来源时：
 

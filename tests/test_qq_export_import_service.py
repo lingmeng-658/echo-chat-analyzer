@@ -344,6 +344,31 @@ def test_export_only_does_not_import_messages(tmp_path: Path) -> None:
     assert calls == []
 
 
+def test_get_session_message_range_uses_real_message_timestamps(
+    tmp_path: Path,
+) -> None:
+    export_path = tmp_path / "range_export.json"
+    payload = {
+        "chatInfo": {"chatType": 2, "peerUid": "700000002", "name": "Fictional"},
+        "messages": [
+            _qce_message("fake-1", timestamp=1700000000),
+            _qce_message("fake-2", "image", timestamp=1700007200),
+            {"id": "fake-3", "timestamp": None},
+        ],
+    }
+    export_path.write_text(
+        json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    provider = _StubProvider(export_path)
+    service = QQExportImportService(provider)
+
+    message_range = service.get_session_message_range("700000002")
+
+    assert message_range == (1700000000, 1700007200)
+    assert provider.calls == [("700000002", None, None)]
+
+
 def test_export_only_returning_none_raises_unavailable() -> None:
     service = QQExportImportService(_StubProvider(None))
 

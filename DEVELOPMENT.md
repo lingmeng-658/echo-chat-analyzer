@@ -1,13 +1,14 @@
-# Development Guide
+# 余音 Echo Development Guide
 
 ## 1. Project Overview
 
-Local Chat Analyzer is a privacy-first local chat analysis tool.
+余音 Echo is a privacy-first local chat analysis tool.
 
 Current supported sources:
-- QQChatExporter exported JSON/JSONL files
-- WeChat CipherTalk detailed JSON exports
-- WeChat CipherTalk chatlab JSONL exports
+- QQChatExporter desktop runtime (QQ login, session analysis)
+- WeChat local database (data directory detection, key acquisition, session analysis)
+- WeChat CipherTalk detailed JSON / chatlab JSONL exports
+- Local exported JSON / JSONL files
 
 The project is designed to:
 - run locally;
@@ -243,12 +244,12 @@ Token path compatibility fix:
 
 Current limits:
 
-- QCE must already be running; the CLI does not start it.
+- Desktop QQ flow starts the bundled runtime; the CLI `qce` commands still require a running service.
 - Chunked manifest/chunks exports are not supported.
 - Group chat only.
 - JSON format only.
 - Non-text messages are skipped for analysis.
-- No GUI yet.
+- Desktop GUI MVP is available.
 
 
 ## 7.4 GUI / Facade / Presentation 开发规则
@@ -304,13 +305,14 @@ Tests must use fictional data only.
 
 Current working state:
 - Architecture: 见 ARCHITECTURE.md（唯一架构事实来源）
-- Sources: QQ（QCE Provider / Adapter）、微信（数据库 Provider / CLI Provider）、本地导出文件
+- Product: 余音 Echo
+- Sources: QQ（QCE Provider / Adapter、登录闭环）、微信（数据库 Provider / CLI Provider）、本地导出文件
 - Application: ImportService, AnalysisApplicationService, QQ/WeChatExportImportService, ChatAnalyzerFacade
 - Analysis: Analysis Core v2/v3（activity / length / profile / conversation reports）
 - Presentation: DashboardBuilder -> DashboardView
-- GUI: PySide6 MVP（AnalysisPage / DashboardPage）
-- Tests: 528 tests passing
-- Next phase: productization direction (packaging, install flow, report presentation enhancements)
+- GUI: PySide6 MVP（AnalysisPage / DashboardPage；会话搜索排序、时间范围、QQ 登录引导）
+- Tests: 905 passed + 1 个已知失败（ConversationAnalyzer timestamp=0）
+- Next phase: Windows packaging, normal-user install flow, report presentation enhancements
 
 See PROJECT_STATUS.md for current progress and next steps.
 

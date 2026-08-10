@@ -124,7 +124,7 @@ def test_acquire_without_weixin_process_is_user_safe(tmp_path: Path) -> None:
     with pytest.raises(module.WeChatKeyUnavailable) as caught:
         service.acquire()
 
-    assert "\u5fae\u4fe1\u8fdb\u7a0b" in caught.value.public_message
+    assert "\u672a\u68c0\u6d4b\u5230\u5fae\u4fe1" in caught.value.public_message
 
 
 def test_hook_failure_is_normalized(tmp_path: Path) -> None:
@@ -217,7 +217,7 @@ def test_helper_failure_is_normalized(tmp_path: Path):
     service = _helper_service(tmp_path, _Completed(1, stderr="no Weixin process"))
     with pytest.raises(module.WeChatKeyUnavailable) as caught:
         service.acquire()
-    assert "微信进程" in caught.value.public_message
+    assert "未检测到微信" in caught.value.public_message
 
 
 def test_helper_empty_stdout_is_rejected(tmp_path: Path):
@@ -241,7 +241,7 @@ def test_helper_subprocess_exception_is_normalized(tmp_path: Path):
     service = _helper_service(tmp_path, runner=fail)
     with pytest.raises(module.WeChatKeyUnavailable) as caught:
         service.acquire()
-    assert "Node.js" in caught.value.public_message
+    assert "\u5fae\u4fe1\u8fde\u63a5\u7ec4\u4ef6" in caught.value.public_message
 
 def test_helper_default_timeout_is_600_seconds(tmp_path: Path):
     calls = []
@@ -523,7 +523,7 @@ def test_streaming_node_missing_still_mentions_node(tmp_path: Path):
     service = _streaming_service(tmp_path, launcher)
     with pytest.raises(module.WeChatKeyUnavailable) as caught:
         service.acquire()
-    assert "Node.js" in caught.value.public_message
+    assert "\u5fae\u4fe1\u8fde\u63a5\u7ec4\u4ef6" in caught.value.public_message
 
 
 def test_streaming_failure_uses_collected_stderr(tmp_path: Path):
@@ -536,7 +536,7 @@ def test_streaming_failure_uses_collected_stderr(tmp_path: Path):
     service = _streaming_service(tmp_path, lambda *_a, **_k: proc)
     with pytest.raises(module.WeChatKeyUnavailable) as caught:
         service.acquire()
-    assert "\u5fae\u4fe1\u8fdb\u7a0b" in caught.value.public_message
+    assert "\u672a\u68c0\u6d4b\u5230\u5fae\u4fe1" in caught.value.public_message
 
 
 def test_streaming_and_injected_runner_share_invocation(tmp_path: Path):

@@ -96,6 +96,7 @@ class StubFacade:
         setup_status=None,
         setup_error=None,
         data_root=None,
+        data_roots=(),
         qq_setup_status=None,
         qq_runtime_status=None,
         qq_environment_config=None,
@@ -111,6 +112,7 @@ class StubFacade:
         self._setup_status = setup_status
         self._setup_error = setup_error
         self._data_root = data_root
+        self._data_roots = list(data_roots)
         self._qq_setup_status = qq_setup_status
         self._qq_runtime_status = qq_runtime_status
         self._qq_environment_config = qq_environment_config
@@ -120,6 +122,7 @@ class StubFacade:
         self.get_wechat_setup_status_calls: list[object] = []
         self.setup_wechat_environment_calls: list[object] = []
         self.detect_wechat_data_root_calls: list[object] = []
+        self.detect_wechat_data_roots_calls: list[object] = []
         self.acquire_wechat_db_key_calls: list[object] = []
         self.get_qq_setup_status_calls: list[object] = []
         self.get_qq_runtime_status_calls: list[object] = []
@@ -129,6 +132,7 @@ class StubFacade:
         self.connect_qq_calls: list[object] = []
         self.start_qq_auth_flow_calls: list[object] = []
         self.get_qq_connection_snapshot_calls: list[object] = []
+        self.shutdown_qq_runtime_calls: list[object] = []
         self.get_session_message_range_calls: list[tuple] = []
         self.analyze_session_calls: list[tuple] = []
         self.analyze_file_calls: list[tuple] = []
@@ -217,6 +221,9 @@ class StubFacade:
             raise self._connection_error
         return self._qq_snapshot()
 
+    def shutdown_qq_runtime(self):
+        self.shutdown_qq_runtime_calls.append(1)
+
     def _qq_snapshot(self):
         """Map the stubbed QQ status onto the connection lifecycle model."""
         module = _facade_module()
@@ -253,6 +260,14 @@ class StubFacade:
     def detect_wechat_data_root(self):
         self.detect_wechat_data_root_calls.append(1)
         return self._data_root
+
+    def detect_wechat_data_roots(self):
+        self.detect_wechat_data_roots_calls.append(1)
+        if self._data_roots:
+            return [Path(value) for value in self._data_roots]
+        if self._data_root is not None:
+            return [Path(self._data_root)]
+        return []
 
     def acquire_wechat_db_key(self, progress=None):
         self.acquire_wechat_db_key_calls.append(progress)
@@ -299,14 +314,28 @@ class StubFacade:
         return self._outcome
 
 
-def _session(source, session_id: str, display_name: str, count=None):
+def _session(
+    source,
+    session_id: str,
+    display_name: str,
+    count=None,
+    last_message_time=None,
+):
     module = _facade_module()
     return module.SessionInfo(
         source=source,
         session_id=session_id,
         display_name=display_name,
         message_count=count,
+        last_message_time=last_message_time,
     )
+
+
+def _sort_index(page, value: str) -> int:
+    for index in range(page._session_sort.count()):
+        if page._session_sort.itemData(index) == value:
+            return index
+    raise AssertionError(f"missing sort mode {value}")
 
 
 def _dashboard_view(*, has_data: bool = True):
@@ -463,6 +492,15 @@ def test_main_window_builds_both_pages(qt_app, sources) -> None:
     assert window.stack.count() == 2
     assert window.windowTitle() != ""
     assert window.stack.currentIndex() == 0
+
+
+def test_main_window_close_cleans_up_qq_runtime(qt_app, sources) -> None:
+    facade = StubFacade(sources=sources)
+    window = _main_window(qt_app, facade)
+
+    window.close()
+
+    assert facade.shutdown_qq_runtime_calls == [1]
 
 
 def _connection_status(
@@ -1288,7 +1326,10 @@ def test_qq_connect_disables_button_while_connecting(qt_app, sources) -> None:
 
     assert executor.operation is not None
     assert page._qq_connect_button.isEnabled() is False
-    assert "\u6b63\u5728\u8fde\u63a5QQ" in page._status_label.text()
+    assert (
+        "\u6b63\u5728\u51c6\u5907QQ\u8fde\u63a5\u73af\u5883\uff0c\u8bf7\u7a0d\u5019"
+        in page._status_label.text()
+    )
 
     executor.succeed(facade._qq_snapshot())
     _drain(page)
@@ -1392,7 +1433,7 @@ def test_clicking_wechat_connect_completes_without_uncaught_error(
     page._wechat_connect_button.click()
     _drain(page)
 
-    assert facade.detect_wechat_data_root_calls
+    assert facade.detect_wechat_data_roots_calls
     assert facade.setup_wechat_environment_calls == [
         module.WeChatEnvironmentConfig(
             data_root=Path("D:/fake_xwechat_files")
@@ -1418,6 +1459,110 @@ def test_clicking_wechat_connect_without_detected_root_opens_setup(
 
     assert page._wechat_setup_dialog is not None
     assert facade.setup_wechat_environment_calls == []
+
+
+def test_wechat_guide_shows_status_confirmation(qt_app) -> None:
+    module = _facade_module()
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        connection_status=_wechat_connection_status(
+            available=False,
+            data_found=False,
+            db_key_available=False,
+            runtime_available=False,
+            message="\u672a\u627e\u5230\u5fae\u4fe1\u6570\u636e",
+            action_hint="\u8bf7\u767b\u5f55\u5fae\u4fe1\u6216\u914d\u7f6e\u6570\u636e\u76ee\u5f55\u3002",
+        ),
+    )
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+
+    assert page._wechat_guide_label.isVisibleTo(page) is True
+    assert "\u8bf7\u4fdd\u6301\u5fae\u4fe1\u7535\u8111\u7248\u6253\u5f00" in (
+        page._wechat_guide_label.text()
+    )
+    assert "\u4f59\u97f3\u5c06\u5728\u8fde\u63a5\u8fc7\u7a0b\u4e2d\u7b49\u5f85\u767b\u5f55\u64cd\u4f5c" in (
+        page._wechat_guide_label.text()
+    )
+    assert "\u4ec5\u5728\u672c\u673a\u4f7f\u7528" in (
+        page._wechat_guide_label.text()
+    )
+    assert "\u4e0d\u4e0a\u4f20" in page._wechat_guide_label.text()
+    assert "\u4e0d\u4fdd\u5b58" in page._wechat_guide_label.text()
+    assert "LCA" not in page._wechat_guide_label.text()
+
+
+def test_wechat_auto_detected_root_continues_connect(qt_app) -> None:
+    module = _facade_module()
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        data_root="D:/fake_xwechat_files",
+    )
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+    page._wechat_connect_button.click()
+    _drain(page)
+
+    assert facade.detect_wechat_data_roots_calls == [1]
+    assert getattr(page, "_wechat_setup_dialog", None) is None
+    assert facade.setup_wechat_environment_calls == [
+        module.WeChatEnvironmentConfig(
+            data_root=Path("D:/fake_xwechat_files")
+        )
+    ]
+
+
+def test_wechat_multiple_roots_offer_choice(qt_app) -> None:
+    module = _facade_module()
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        data_roots=[
+            Path("D:/xwechat_files/wxid_first"),
+            Path("D:/xwechat_files/wxid_second"),
+        ],
+    )
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+    page._wechat_connect_button.click()
+    _drain(page)
+
+    assert "\u591a\u4e2a" in page._status_label.text()
+    assert page._wechat_setup_dialog is not None
+    dialog = page._wechat_setup_dialog
+    assert dialog._use_data_roots is True
+    assert dialog._data_root_combo is not None
+    assert dialog._data_root_combo.count() == 2
+    assert facade.setup_wechat_environment_calls == []
+
+
+def test_wechat_not_detected_shows_directory_help(qt_app) -> None:
+    module = _facade_module()
+    facade = StubFacade(sources=_wechat_available_sources())
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+    page._wechat_connect_button.click()
+    _drain(page)
+
+    assert "\u672a\u81ea\u52a8\u8bc6\u522b\u5230\u5fae\u4fe1\u5b58\u50a8\u4f4d\u7f6e" in (
+        page._status_label.text()
+    )
+    assert page._wechat_setup_dialog is not None
+    assert "\u5982\u679c\u672a\u81ea\u52a8\u8bc6\u522b\u5fae\u4fe1\u6570\u636e\u76ee\u5f55" in (
+        page._wechat_guide_label.text()
+    )
+    assert "\u5b58\u50a8\u6587\u4ef6\u5939" in page._wechat_guide_label.text()
 
 
 def test_saving_wechat_environment_refreshes_status(qt_app) -> None:
@@ -1590,6 +1735,84 @@ def test_empty_session_list_is_reported(qt_app, sources) -> None:
 
     assert page._session_list.count() == 0
     assert page._hint_label.text() != ""
+
+
+def test_session_search_filters_display_names(qt_app) -> None:
+    module = _facade_module()
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        sessions=[
+            _session(module.ChatSource.WECHAT, "wxid_a", "Alice"),
+            _session(module.ChatSource.WECHAT, "wxid_b", "Board Game"),
+            _session(module.ChatSource.WECHAT, "wxid_c", "Alice's Study Room"),
+        ],
+    )
+    page = _analysis_page(qt_app, facade)
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+    page._session_search.setText("alice")
+
+    assert page._session_list.count() == 2
+    assert [page._session_list.item(i).text() for i in range(2)] == [
+        "Alice",
+        "Alice's Study Room",
+    ]
+
+    page._session_search.setText("board")
+
+    assert page._session_list.count() == 1
+    assert page._session_list.item(0).text() == "Board Game"
+
+
+def test_session_sort_modes_reorder_the_list(qt_app) -> None:
+    module = _facade_module()
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        sessions=[
+            _session(
+                module.ChatSource.WECHAT,
+                "wxid_old",
+                "Alpha",
+                count=50,
+                last_message_time=100,
+            ),
+            _session(
+                module.ChatSource.WECHAT,
+                "wxid_new",
+                "Beta",
+                count=1,
+                last_message_time=300,
+            ),
+            _session(
+                module.ChatSource.WECHAT,
+                "wxid_mid",
+                "Gamma",
+                count=30,
+                last_message_time=200,
+            ),
+        ],
+    )
+    page = _analysis_page(qt_app, facade)
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+
+    def names():
+        return [
+            page._session_list.item(i).text()
+            for i in range(page._session_list.count())
+        ]
+
+    assert names() == ["Beta", "Gamma", "Alpha"]
+
+    page._session_sort.setCurrentIndex(
+        _sort_index(page, "message_count")
+    )
+    assert names() == ["Alpha", "Gamma", "Beta"]
+
+    page._session_sort.setCurrentIndex(_sort_index(page, "name"))
+    assert names() == ["Alpha", "Beta", "Gamma"]
 
 
 def test_wechat_session_without_messages_is_disabled_and_not_analyzable(
@@ -1778,6 +2001,47 @@ def test_enabled_time_range_uses_session_message_range(qt_app) -> None:
 
     assert facade.get_session_message_range_calls == [
         (module.ChatSource.WECHAT, session_id)
+    ]
+    assert page._start_date.date().toPython() == datetime.fromtimestamp(
+        start
+    ).date()
+    assert page._end_date.date().toPython() == datetime.fromtimestamp(
+        end
+    ).date()
+
+
+def test_qq_selection_initializes_time_range_from_session_messages(
+    qt_app,
+    sources,
+) -> None:
+    from datetime import datetime
+
+    module = _facade_module()
+    session_id = "10001"
+    start = 1704067200
+    end = 1704153600
+    facade = StubFacade(
+        sources=sources,
+        sessions=[
+            _session(
+                module.ChatSource.QQ,
+                session_id,
+                "Fictional Group",
+            )
+        ],
+        message_range=(start, end),
+    )
+    page = _analysis_page(qt_app, facade)
+
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+    page._session_list.setCurrentRow(0)
+    _drain(page)
+    page._start_enabled.setChecked(True)
+    page._end_enabled.setChecked(True)
+
+    assert facade.get_session_message_range_calls == [
+        (module.ChatSource.QQ, session_id)
     ]
     assert page._start_date.date().toPython() == datetime.fromtimestamp(
         start
@@ -2133,6 +2397,68 @@ def test_disconnected_state_invites_the_user_to_connect(
     assert page._session_list.count() == 0
 
 
+def test_qq_status_text_is_not_duplicated_in_status_bar(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    message = "QQ \u5c1a\u672a\u8fde\u63a5\u3002"
+    action_hint = "\u8bf7\u70b9\u51fb\u300c\u8fde\u63a5QQ\u300d\u81ea\u52a8\u5b8c\u6210\u8fde\u63a5\u3002"
+    status = _connection_status(
+        available=False,
+        qce_running=False,
+        authenticated=False,
+        message=message,
+        action_hint=action_hint,
+    )
+    facade = StubFacade(
+        sources=sources,
+        connection_status=status,
+    )
+    page = _analysis_page(qt_app, facade)
+    received: list[str] = []
+    page.status_changed.connect(received.append)
+    _drain(page)
+
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+
+    assert page._hint_label.text() == action_hint
+    assert received == [message]
+    assert action_hint not in received
+
+
+def test_qq_session_count_is_not_duplicated_in_status_bar(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    ready = _connection_status(
+        available=True,
+        qce_running=True,
+        authenticated=True,
+        message="QQ \u5df2\u8fde\u63a5\u3002",
+        action_hint="",
+    )
+    facade = StubFacade(
+        sources=sources,
+        connection_status=ready,
+        sessions=[
+            _session(module.ChatSource.QQ, "10001", "\u865a\u6784\u7fa4 A"),
+        ],
+    )
+    page = _analysis_page(qt_app, facade)
+    received: list[str] = []
+    page.status_changed.connect(received.append)
+    _drain(page)
+
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+
+    assert page._hint_label.text() == "\u5171 1 \u4e2a\u4f1a\u8bdd\u3002"
+    assert "\u5171 1 \u4e2a\u4f1a\u8bdd\u3002" not in received
+
+
 def test_starting_state_reports_progress_and_disables_the_button(
     qt_app,
     sources,
@@ -2193,6 +2519,37 @@ def test_waiting_auth_is_visually_distinct_from_disconnected(
     )._status_label.text()
 
     assert waiting != disconnected
+
+
+def test_waiting_auth_state_shows_login_guide(qt_app, sources) -> None:
+    page = _qq_page_in_state(
+        qt_app,
+        sources,
+        _qq_snapshot("waiting_auth"),
+    )
+
+    assert page._qq_login_guide_label.isVisibleTo(page) is True
+    text = page._qq_login_guide_label.text()
+    assert "登录QQ以读取聊天记录" in text
+    assert "1. 请使用手机QQ扫描下方二维码" in text
+    assert "2. 打开手机QQ扫一扫功能（通常位于右上角“+”菜单中）" in text
+    assert "3. 扫描二维码完成QQ登录授权" in text
+    assert "4. 登录成功后，余音会自动加载您的聊天会话" in text
+    assert "二维码仅用于QQ登录认证，聊天数据仅在本机处理。" in text
+    lowered = text.lower()
+    for forbidden in ("QCE", "NapCat", "API", "token", "runtime"):
+        assert forbidden.lower() not in lowered
+
+
+def test_connected_state_hides_login_guide(qt_app, sources) -> None:
+    page = _qq_page_in_state(
+        qt_app,
+        sources,
+        _qq_snapshot("connected"),
+    )
+
+    assert page._qq_login_guide_label.isVisibleTo(page) is False
+    assert page._qq_login_guide_label.text() == ""
 
 
 def test_error_state_shows_a_user_safe_message(qt_app, sources) -> None:
@@ -2332,6 +2689,7 @@ def test_login_refresh_hides_qrcode_after_connected(
     _drain(page)
 
     assert page._qq_qrcode_label.isVisibleTo(page) is True
+    assert page._qq_login_guide_label.isVisibleTo(page) is True
 
     facade.set_snapshot(
         _qq_snapshot("connected", message="QQ \u5df2\u8fde\u63a5\u3002")
@@ -2339,6 +2697,7 @@ def test_login_refresh_hides_qrcode_after_connected(
     page._poll_qq_status()
 
     assert page._qq_qrcode_label.isVisibleTo(page) is False
+    assert page._qq_login_guide_label.isVisibleTo(page) is False
 
 
 def test_connected_state_stops_automatic_refresh(qt_app, sources) -> None:
