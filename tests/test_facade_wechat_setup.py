@@ -22,17 +22,31 @@ from qq_chat_analyzer.application.wechat_environment_config import (
 
 
 class _StubSetupService:
-    def __init__(self, *, status: object = None, error: Exception | None = None):
+    def __init__(
+        self,
+        *,
+        status: object = None,
+        error: Exception | None = None,
+        detected_root: Path | None = None,
+    ):
         self.status = status
         self.error = error
+        self.detected_root = detected_root
         self.saved: list[WeChatEnvironmentConfig] = []
         self.checks = 0
+        self.detects = 0
 
     def check_setup(self) -> object:
         self.checks += 1
         if self.error is not None:
             raise self.error
         return self.status
+
+    def detect_wechat_data_root(self) -> Path | None:
+        self.detects += 1
+        if self.error is not None:
+            raise self.error
+        return self.detected_root
 
     def save_environment(self, config: WeChatEnvironmentConfig) -> object:
         if self.error is not None:
@@ -78,6 +92,36 @@ def test_facade_reports_wechat_setup_status(tmp_path: Path) -> None:
     )
 
     assert facade.get_wechat_setup_status() is sentinel
+
+
+def test_facade_detects_wechat_data_root(tmp_path: Path) -> None:
+    detected = tmp_path / "xwechat_files"
+    setup = _StubSetupService(detected_root=detected)
+    facade = ChatAnalyzerFacade(wechat_setup_service=setup)
+
+    assert facade.detect_wechat_data_root() == detected
+    assert setup.detects == 1
+
+
+def test_facade_detect_requires_setup_service() -> None:
+    facade = ChatAnalyzerFacade()
+
+    with pytest.raises(SourceUnavailable):
+        facade.detect_wechat_data_root()
+
+
+def test_facade_translates_detect_failure(tmp_path: Path) -> None:
+    facade = ChatAnalyzerFacade(
+        wechat_setup_service=_StubSetupService(
+            error=RuntimeError("home 0xdeadbeef")
+        )
+    )
+
+    with pytest.raises(FacadeError) as caught:
+        facade.detect_wechat_data_root()
+
+    assert caught.value.source is ChatSource.WECHAT
+    assert isinstance(caught.value.public_message, str)
 
 
 def test_facade_requires_setup_service(tmp_path: Path) -> None:

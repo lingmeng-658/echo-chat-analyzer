@@ -191,7 +191,7 @@ def _analyze_kept_messages(
     sender_tokens: list[tuple[str, list[str]]] = []
 
     for message in messages:
-        cleaned_text = clean_text(message.text)
+        cleaned_text = clean_text(message.text, platform=message.platform)
         if not cleaned_text:
             continue
         valid_text_count += 1

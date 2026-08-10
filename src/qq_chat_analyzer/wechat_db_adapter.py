@@ -117,9 +117,10 @@ def parse_message(raw_message: Any) -> ChatMessage | None:
     if not isinstance(text, str):
         return None
 
-    sender = _clean_string(raw_message.get("user_name"))
-    if sender is None:
+    sender_id = _clean_string(raw_message.get("user_name"))
+    if sender_id is None:
         return None
+    sender = _clean_string(raw_message.get("sender_name")) or sender_id
 
     return ChatMessage(
         timestamp=timestamp,
@@ -130,7 +131,7 @@ def parse_message(raw_message: Any) -> ChatMessage | None:
         source_type=local_type,
         message_id=_stringify_id(raw_message.get("server_id"))
         or _stringify_id(raw_message.get("local_id")),
-        sender_id=sender,
+        sender_id=sender_id,
         conversation_id=_clean_string(raw_message.get("username")),
         is_system=False,
         recalled=False,

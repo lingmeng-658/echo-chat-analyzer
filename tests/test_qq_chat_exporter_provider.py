@@ -104,7 +104,7 @@ def test_health_check_reports_available_service():
     assert health.available is True
     assert health.status == "healthy"
     assert health.version == "4.1.0"
-    assert transport.calls[0]["url"] == f"{DEFAULT_BASE_URL}/api/health"
+    assert transport.calls[0]["url"] == f"{DEFAULT_BASE_URL}/health"
 
 
 def test_health_check_does_not_send_authorization_header():
@@ -134,6 +134,12 @@ def test_health_check_survives_error_envelope():
 # ------------------------------------------------------------------------ token
 
 
+def _isolate_token_home(monkeypatch, tmp_path):
+    monkeypatch.delenv("QCE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
+
+
 def test_read_token_reads_access_token(tmp_path):
     target = tmp_path / "security.json"
     target.write_text(json.dumps({"accessToken": FAKE_TOKEN}), encoding="utf-8")
@@ -141,18 +147,22 @@ def test_read_token_reads_access_token(tmp_path):
     assert read_token(target) == FAKE_TOKEN
 
 
-def test_read_token_returns_none_for_missing_file(tmp_path):
+def test_read_token_returns_none_for_missing_file(monkeypatch, tmp_path):
+    _isolate_token_home(monkeypatch, tmp_path)
+
     assert read_token(tmp_path / "absent.json") is None
 
 
-def test_read_token_returns_none_for_malformed_json(tmp_path):
+def test_read_token_returns_none_for_malformed_json(monkeypatch, tmp_path):
+    _isolate_token_home(monkeypatch, tmp_path)
     target = tmp_path / "security.json"
     target.write_text("{not json", encoding="utf-8")
 
     assert read_token(target) is None
 
 
-def test_read_token_returns_none_when_token_blank(tmp_path):
+def test_read_token_returns_none_when_token_blank(monkeypatch, tmp_path):
+    _isolate_token_home(monkeypatch, tmp_path)
     target = tmp_path / "security.json"
     target.write_text(json.dumps({"accessToken": "   "}), encoding="utf-8")
 
@@ -175,38 +185,45 @@ def test_resolve_security_candidates_config_dir_wins(monkeypatch, tmp_path):
     assert candidates == (tmp_path / "security.json",)
 
 
-def test_resolve_security_path_prefers_windows_desktop_path(monkeypatch, tmp_path):
+def test_resolve_security_path_prefers_user_profile_path(monkeypatch, tmp_path):
     monkeypatch.delenv("QCE_CONFIG_DIR", raising=False)
     local = tmp_path / "Local"
     monkeypatch.setenv("LOCALAPPDATA", str(local))
-    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
+    home = tmp_path / "Home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
 
     resolved = resolve_security_path()
 
-    assert resolved == local / "QQChatExporter" / ".qce-config" / "security.json"
+    assert resolved == home / ".qq-chat-exporter" / "security.json"
 
 
 def test_resolve_security_candidates_includes_windows_desktop_path(monkeypatch, tmp_path):
     monkeypatch.delenv("QCE_CONFIG_DIR", raising=False)
     local = tmp_path / "Local"
     monkeypatch.setenv("LOCALAPPDATA", str(local))
-    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
+    home = tmp_path / "Home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
 
     candidates = resolve_security_candidates()
 
+    home_path = home / ".qq-chat-exporter" / "security.json"
     expected = local / "QQChatExporter" / ".qce-config" / "security.json"
-    assert candidates[0] == expected
+    assert candidates[0] == home_path
     assert expected in candidates
+    assert candidates.index(home_path) < candidates.index(expected)
 
 
-def test_resolve_security_candidates_keeps_home_fallback(monkeypatch, tmp_path):
+def test_resolve_security_candidates_puts_user_profile_first(monkeypatch, tmp_path):
     monkeypatch.delenv("QCE_CONFIG_DIR", raising=False)
-    monkeypatch.delenv("LOCALAPPDATA", raising=False)
-    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
+    local = tmp_path / "Local"
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    home = tmp_path / "Home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
 
     candidates = resolve_security_candidates()
 
-    assert candidates[-1] == tmp_path / ".qq-chat-exporter" / "security.json"
+    assert candidates[0] == home / ".qq-chat-exporter" / "security.json"
+    assert candidates[-1] == local / "QQChatExporter" / ".qce-config" / "security.json"
 
 
 def test_read_token_falls_back_to_home_when_windows_path_missing(monkeypatch, tmp_path):
@@ -223,6 +240,20 @@ def test_read_token_falls_back_to_home_when_windows_path_missing(monkeypatch, tm
     assert read_token() == FAKE_TOKEN
 
 
+def test_read_token_explicit_path_falls_back_to_user_profile(
+    monkeypatch,
+    tmp_path,
+):
+    _isolate_token_home(monkeypatch, tmp_path)
+    home_path = tmp_path / ".qq-chat-exporter" / "security.json"
+    home_path.parent.mkdir(parents=True)
+    home_path.write_text(json.dumps({"accessToken": FAKE_TOKEN}), encoding="utf-8")
+
+    token = read_token(tmp_path / "app-config" / "security.json")
+
+    assert token == FAKE_TOKEN
+
+
 def test_authenticated_request_sends_bearer_token(tmp_path):
     target = tmp_path / "security.json"
     target.write_text(json.dumps({"accessToken": FAKE_TOKEN}), encoding="utf-8")
@@ -234,7 +265,27 @@ def test_authenticated_request_sends_bearer_token(tmp_path):
     assert transport.calls[0]["headers"]["Authorization"] == f"Bearer {FAKE_TOKEN}"
 
 
-def test_missing_token_raises_token_unavailable(tmp_path):
+def test_authenticated_request_falls_back_to_user_profile_token(
+    monkeypatch,
+    tmp_path,
+):
+    _isolate_token_home(monkeypatch, tmp_path)
+    home_path = tmp_path / ".qq-chat-exporter" / "security.json"
+    home_path.parent.mkdir(parents=True)
+    home_path.write_text(json.dumps({"accessToken": FAKE_TOKEN}), encoding="utf-8")
+    transport = _StubTransport([(200, _envelope({"groups": []}))])
+    provider = QQChatExporterProvider(
+        transport=transport,
+        security_path=tmp_path / "app-config" / "security.json",
+    )
+
+    provider.list_groups()
+
+    assert transport.calls[0]["headers"]["Authorization"] == f"Bearer {FAKE_TOKEN}"
+
+
+def test_missing_token_raises_token_unavailable(monkeypatch, tmp_path):
+    _isolate_token_home(monkeypatch, tmp_path)
     transport = _StubTransport([(200, _envelope({"groups": []}))])
     provider = QQChatExporterProvider(
         transport=transport, security_path=tmp_path / "absent.json"
@@ -299,6 +350,97 @@ def test_list_groups_returns_empty_for_unexpected_shape():
     provider, _ = _provider([(200, _envelope({"unexpected": True}))])
 
     assert provider.list_groups() == []
+
+
+# ----------------------------------------------------------------- task list
+
+
+def test_list_tasks_maps_multiple_tasks_and_new_fields():
+    payload = {
+        "tasks": [
+            {
+                "taskId": "export_20",
+                "id": "export_20",
+                "status": "running",
+                "progress": 42,
+                "messageCount": 123,
+                "sessionName": "Fictional Group A",
+                "peer": {"chatType": 2, "peerUid": "10001"},
+                "message": "\u6b63\u5728\u5bfc\u51fa 42%",
+                "createdAt": "2026-01-01T00:00:00Z",
+                "completedAt": "",
+                "downloadUrl": "/downloads/a.json",
+                "filePath": "D:/a.json",
+                "fileName": "a.json",
+            },
+            {
+                "taskId": "export_21",
+                "id": "export_21",
+                "status": "completed",
+                "progress": 100,
+                "messageCount": 456,
+                "sessionName": "Fictional Group B",
+                "peer": {"chatType": 1, "peerUid": "20002"},
+                "progressMessage": "\u5bfc\u51fa\u5b8c\u6210",
+                "createdAt": "2026-01-02T00:00:00Z",
+                "completedAt": "2026-01-02T00:01:00Z",
+                "downloadUrl": "/downloads/b.json",
+                "filePath": "D:/b.json",
+                "fileName": "b.json",
+            },
+        ]
+    }
+    provider, transport = _provider([(200, _envelope(payload))])
+
+    tasks = provider.list_tasks()
+
+    assert transport.calls[0]["url"] == f"{DEFAULT_BASE_URL}/api/tasks"
+    assert [task.task_id for task in tasks] == ["export_20", "export_21"]
+    first, second = tasks
+    assert first.status == "running"
+    assert first.progress == 42
+    assert first.message_count == 123
+    assert first.session_name == "Fictional Group A"
+    assert first.chat_type == 2
+    assert first.peer_uid == "10001"
+    assert first.progress_message == "\u6b63\u5728\u5bfc\u51fa 42%"
+    assert first.created_at == "2026-01-01T00:00:00Z"
+    assert first.completed_at == ""
+    assert first.download_url == "/downloads/a.json"
+    assert second.chat_type == 1
+    assert second.peer_uid == "20002"
+    assert second.progress_message == "\u5bfc\u51fa\u5b8c\u6210"
+    assert second.completed_at == "2026-01-02T00:01:00Z"
+
+
+def test_list_tasks_returns_empty_list_for_empty_tasks():
+    provider, _ = _provider([(200, _envelope({"tasks": []}))])
+
+    assert provider.list_tasks() == []
+
+
+def test_list_tasks_returns_empty_for_unexpected_shape():
+    provider, _ = _provider([(200, _envelope({"unexpected": True}))])
+
+    assert provider.list_tasks() == []
+
+
+def test_list_tasks_raises_on_server_error():
+    provider, _ = _provider([(500, _error_envelope("INTERNAL", "boom"))])
+
+    with pytest.raises(RequestFailed):
+        provider.list_tasks()
+
+
+def test_list_tasks_raises_on_unsuccessful_envelope():
+    provider, _ = _provider(
+        [(200, _error_envelope("GET_TASKS_FAILED", "task list failed"))]
+    )
+
+    with pytest.raises(RequestFailed) as excinfo:
+        provider.list_tasks()
+
+    assert "task list failed" in excinfo.value.public_message
 
 
 # ----------------------------------------------------------------- create export

@@ -298,3 +298,18 @@ def test_conversation_analyzer_reports_no_span_without_valid_timestamps() -> Non
     assert conversation.start_timestamp is None
     assert conversation.end_timestamp is None
     assert conversation.duration_seconds is None
+
+
+def test_conversation_analyzer_ignores_zero_timestamp_for_span() -> None:
+    start = _epoch(hour=9)
+    messages = (
+        _message(timestamp=0),
+        _message(timestamp=start),
+    )
+
+    report = _analyzers().ConversationAnalyzer().analyze(messages)
+
+    conversation = report.conversations[0]
+    assert conversation.start_timestamp == start
+    assert conversation.end_timestamp == start
+    assert conversation.duration_seconds == 0

@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib
 import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PySide6", reason="PySide6 is required for the GUI layer")
 
+from PySide6.QtCore import QThreadPool, Qt  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 
@@ -68,6 +71,16 @@ def sources():
     )
 
 
+class _StaticConnectionService:
+    """Return one fixed QQ connection status."""
+
+    def __init__(self, status):
+        self._status = status
+
+    def check_status(self):
+        return self._status
+
+
 class StubFacade:
     """Stand in for ChatAnalyzerFacade with recorded calls."""
 
@@ -79,8 +92,14 @@ class StubFacade:
         error=None,
         connection_status=None,
         connection_error=None,
+        connect_qq_error=None,
         setup_status=None,
         setup_error=None,
+        data_root=None,
+        qq_setup_status=None,
+        qq_runtime_status=None,
+        qq_environment_config=None,
+        message_range=None,
     ):
         self._sources = tuple(sources)
         self._sessions = list(sessions)
@@ -88,12 +107,28 @@ class StubFacade:
         self._error = error
         self._connection_status = connection_status
         self._connection_error = connection_error
+        self._connect_qq_error = connect_qq_error
         self._setup_status = setup_status
         self._setup_error = setup_error
+        self._data_root = data_root
+        self._qq_setup_status = qq_setup_status
+        self._qq_runtime_status = qq_runtime_status
+        self._qq_environment_config = qq_environment_config
+        self._message_range = message_range
         self.list_sessions_calls: list[object] = []
         self.get_connection_status_calls: list[object] = []
         self.get_wechat_setup_status_calls: list[object] = []
         self.setup_wechat_environment_calls: list[object] = []
+        self.detect_wechat_data_root_calls: list[object] = []
+        self.acquire_wechat_db_key_calls: list[object] = []
+        self.get_qq_setup_status_calls: list[object] = []
+        self.get_qq_runtime_status_calls: list[object] = []
+        self.get_qq_environment_config_calls: list[object] = []
+        self.setup_qq_environment_calls: list[object] = []
+        self.start_qq_runtime_calls: list[object] = []
+        self.connect_qq_calls: list[object] = []
+        self.get_qq_connection_snapshot_calls: list[object] = []
+        self.get_session_message_range_calls: list[tuple] = []
         self.analyze_session_calls: list[tuple] = []
         self.analyze_file_calls: list[tuple] = []
 
@@ -114,6 +149,84 @@ class StubFacade:
             return self._default_connection_status(source)
         return self._connection_status
 
+    def get_qq_setup_status(self):
+        self.get_qq_setup_status_calls.append(1)
+        if self._qq_setup_status is not None:
+            return self._qq_setup_status
+        module = importlib.import_module(
+            "qq_chat_analyzer.application.qq_setup_service"
+        )
+        return module.QQSetupStatus(
+            state=module.QQSetupState.CONFIG_MISSING,
+            configured=False,
+            runtime_available=False,
+            message="QQ \u5c1a\u672a\u8fde\u63a5\u3002",
+            action_hint="\u8bf7\u70b9\u51fb\u300c\u8fde\u63a5QQ\u300d\u81ea\u52a8\u5b8c\u6210\u8fde\u63a5\u3002",
+        )
+
+    def get_qq_runtime_status(self):
+        self.get_qq_runtime_status_calls.append(1)
+        if self._qq_runtime_status is not None:
+            return self._qq_runtime_status
+        module = importlib.import_module("qq_chat_analyzer.application.runtime")
+        return module.QQRuntimeStatus(
+            state=module.QQRuntimeState.STOPPED,
+            available=False,
+            message="QQ \u672a\u8fde\u63a5\u3002",
+            action_hint="\u8bf7\u70b9\u51fb\u300c\u8fde\u63a5QQ\u300d\u3002",
+        )
+
+    def get_qq_environment_config(self):
+        self.get_qq_environment_config_calls.append(1)
+        return self._qq_environment_config
+
+    def setup_qq_environment(self, config):
+        self.setup_qq_environment_calls.append(config)
+        if self._setup_error is not None:
+            raise self._setup_error
+        return None
+
+    def start_qq_runtime(self):
+        self.start_qq_runtime_calls.append(1)
+        if self._qq_runtime_status is not None:
+            return self._qq_runtime_status
+        module = importlib.import_module("qq_chat_analyzer.application.runtime")
+        return module.QQRuntimeStatus(
+            state=module.QQRuntimeState.RUNNING,
+            available=True,
+            message="QQ \u5df2\u8fde\u63a5\u3002",
+            action_hint="",
+        )
+
+    def connect_qq(self):
+        self.connect_qq_calls.append(1)
+        if self._connect_qq_error is not None:
+            raise self._connect_qq_error
+        return self._qq_snapshot()
+
+    def get_qq_connection_snapshot(self):
+        self.get_qq_connection_snapshot_calls.append(1)
+        if self._connection_error is not None:
+            raise self._connection_error
+        return self._qq_snapshot()
+
+    def _qq_snapshot(self):
+        """Map the stubbed QQ status onto the connection lifecycle model."""
+        module = _facade_module()
+        status = self._connection_status
+        if status is None:
+            status = self._default_connection_status(module.ChatSource.QQ)
+        manager = importlib.import_module(
+            "qq_chat_analyzer.application.connection.qq_connection_manager"
+        )
+        return manager.QQConnectionManager(
+            connection_service=_StaticConnectionService(status),
+        ).get_snapshot()
+
+    def get_session_message_range(self, source, session_id):
+        self.get_session_message_range_calls.append((source, session_id))
+        return self._message_range
+
     def get_wechat_setup_status(self):
         self.get_wechat_setup_status_calls.append(1)
         if self._setup_error is not None:
@@ -129,6 +242,14 @@ class StubFacade:
             message="\u5fae\u4fe1\u73af\u5883\u672a\u51c6\u5907",
             action_hint="\u8bf7\u5148\u5b8c\u6210\u5fae\u4fe1\u73af\u5883\u8bbe\u7f6e",
         )
+
+    def detect_wechat_data_root(self):
+        self.detect_wechat_data_root_calls.append(1)
+        return self._data_root
+
+    def acquire_wechat_db_key(self, progress=None):
+        self.acquire_wechat_db_key_calls.append(progress)
+        return "fictional-key-64"
 
     def setup_wechat_environment(self, config):
         self.setup_wechat_environment_calls.append(config)
@@ -246,9 +367,12 @@ class _StubOutcome:
         self.view = view
 
 
-def _analysis_page(qt_app, facade):
+def _analysis_page(qt_app, facade, executor=None):
     module = importlib.import_module("qq_chat_analyzer.gui.analysis_page")
-    return module.AnalysisPage(facade, executor=_inline_executor())
+    return module.AnalysisPage(
+        facade,
+        executor=executor or _inline_executor(),
+    )
 
 
 def _dashboard_page(qt_app):
@@ -271,9 +395,55 @@ def _inline_executor():
     return module.run_inline
 
 
+class _DeferredExecutor:
+    """Capture a facade call and let the test finish it manually."""
+
+    def __init__(self):
+        self.operation = None
+        self.on_success = None
+        self.on_error = None
+        self.on_finished = None
+
+    def __call__(
+        self,
+        operation,
+        *,
+        on_success,
+        on_error,
+        on_finished=None,
+        on_progress=None,
+    ):
+        self.operation = operation
+        self.on_success = on_success
+        self.on_error = on_error
+        self.on_finished = on_finished
+
+    def succeed(self, result):
+        if self.on_success is not None:
+            self.on_success(result)
+        if self.on_finished is not None:
+            self.on_finished()
+
+    def fail(self, code, message):
+        if self.on_error is not None:
+            self.on_error(code, message)
+        if self.on_finished is not None:
+            self.on_finished()
+
+
 def _drain(page):
     """No-op: the injected executor already ran everything synchronously."""
     return None
+
+
+def _settle_workers(timeout_ms: int = 5000) -> None:
+    """Wait for real thread-pool work and deliver queued GUI callbacks."""
+    deadline = time.monotonic() + timeout_ms / 1000
+    pool = QThreadPool.globalInstance()
+    while time.monotonic() < deadline:
+        pool.waitForDone(100)
+        QTest.qWait(20)
+        QApplication.processEvents()
 
 
 # ------------------------------------------------------------ initialization
@@ -327,6 +497,44 @@ def _wechat_connection_status(
     )
 
 
+def _qq_setup_status(
+    *,
+    configured: bool,
+    runtime_available: bool = False,
+    message: str = "",
+    action_hint: str = "",
+):
+    module = importlib.import_module(
+        "qq_chat_analyzer.application.qq_setup_service"
+    )
+    return module.QQSetupStatus(
+        state=(
+            module.QQSetupState.CONFIG_READY
+            if configured
+            else module.QQSetupState.CONFIG_MISSING
+        ),
+        configured=configured,
+        runtime_available=runtime_available,
+        message=message,
+        action_hint=action_hint,
+    )
+
+
+def _qq_runtime_status(
+    *,
+    state: str,
+    message: str = "",
+    action_hint: str = "",
+):
+    module = importlib.import_module("qq_chat_analyzer.application.runtime")
+    return module.QQRuntimeStatus(
+        state=module.QQRuntimeState(state),
+        available=state == "running",
+        message=message,
+        action_hint=action_hint,
+    )
+
+
 def _wechat_available_sources():
     module = _facade_module()
     return (
@@ -358,18 +566,30 @@ def test_analysis_page_gets_qq_status_through_the_facade(
         qce_running=True,
         authenticated=True,
         version="4.1.0",
-        message="\u5df2\u8fde\u63a5 QQChatExporter\u3002",
+        message="QQ \u5df2\u8fde\u63a5\u3002",
         action_hint="\u53ef\u4ee5\u5f00\u59cb\u5bfc\u51fa\u3002",
     )
-    facade = StubFacade(sources=sources, connection_status=status)
+    facade = StubFacade(
+        sources=sources,
+        connection_status=status,
+        qq_setup_status=_qq_setup_status(
+            configured=True,
+            runtime_available=True,
+        ),
+        qq_runtime_status=_qq_runtime_status(state="running"),
+    )
 
     page = _analysis_page(qt_app, facade)
     _drain(page)
 
-    assert facade.get_connection_status_calls == [module.ChatSource.QQ]
+    assert facade.get_qq_connection_snapshot_calls == []
+
+    page._source_buttons[module.ChatSource.QQ].click()
+    _drain(page)
+
+    assert facade.get_qq_connection_snapshot_calls == [1]
     assert page._status_label.isVisibleTo(page) is True
-    assert "\u5df2\u8fde\u63a5" in page._status_label.text()
-    assert "\u5df2\u8fde\u63a5 QQChatExporter\u3002" in page._status_label.text()
+    assert "QQ \u5df2\u8fde\u63a5" in page._status_label.text()
     assert page._status_label.toolTip() == "\u53ef\u4ee5\u5f00\u59cb\u5bfc\u51fa\u3002"
 
 
@@ -382,21 +602,34 @@ def test_disconnected_qq_status_is_shown_with_an_action_hint(
         available=False,
         qce_running=False,
         authenticated=False,
-        message="\u672a\u68c0\u6d4b\u5230 QQChatExporter \u670d\u52a1\u3002",
-        action_hint="\u8bf7\u5148\u542f\u52a8 QQChatExporter\u3002",
+        message="QQ \u670d\u52a1\u672a\u8fd0\u884c\u3002",
+        action_hint="\u8bf7\u5148\u8fde\u63a5 QQ\u3002",
     )
-    facade = StubFacade(sources=sources, connection_status=status)
+    facade = StubFacade(
+        sources=sources,
+        connection_status=status,
+        qq_setup_status=_qq_setup_status(
+            configured=True,
+            runtime_available=True,
+        ),
+        qq_runtime_status=_qq_runtime_status(state="running"),
+    )
 
     page = _analysis_page(qt_app, facade)
     _drain(page)
 
-    assert facade.get_connection_status_calls == [module.ChatSource.QQ]
+    assert facade.get_qq_connection_snapshot_calls == []
+
+    page._source_buttons[module.ChatSource.QQ].click()
+    _drain(page)
+
+    assert facade.get_qq_connection_snapshot_calls == [1]
     assert page._status_label.isVisibleTo(page) is True
     assert "\U0001F534" in page._status_label.text()
-    assert "\u672a\u68c0\u6d4b\u5230 QQChatExporter \u670d\u52a1\u3002" in (
+    assert "QQ \u670d\u52a1\u672a\u8fd0\u884c\u3002" in (
         page._status_label.text()
     )
-    assert page._status_label.toolTip() == "\u8bf7\u5148\u542f\u52a8 QQChatExporter\u3002"
+    assert page._status_label.toolTip() == "\u8bf7\u5148\u8fde\u63a5 QQ\u3002"
 
 
 def test_selecting_qq_refreshes_the_connection_status(
@@ -417,17 +650,19 @@ def test_selecting_qq_refreshes_the_connection_status(
             _session(module.ChatSource.QQ, "10001", "\u865a\u6784\u7fa4 A", 12)
         ],
         connection_status=status,
+        qq_setup_status=_qq_setup_status(
+            configured=True,
+            runtime_available=True,
+        ),
+        qq_runtime_status=_qq_runtime_status(state="running"),
     )
     page = _analysis_page(qt_app, facade)
     _drain(page)
 
-    page.select_source(module.ChatSource.QQ)
+    page._source_buttons[module.ChatSource.QQ].click()
     _drain(page)
 
-    assert facade.get_connection_status_calls == [
-        module.ChatSource.QQ,
-        module.ChatSource.QQ,
-    ]
+    assert facade.get_qq_connection_snapshot_calls == [1]
     assert page._session_list.count() == 1
 
 
@@ -462,8 +697,9 @@ def test_selecting_wechat_checks_status_then_loads_sessions(qt_app) -> None:
     assert facade.list_sessions_calls == [module.ChatSource.WECHAT]
     assert page._session_list.count() == 1
     assert page._status_label.text() == (
-        "\U0001F7E2 \u5fae\u4fe1\u6570\u636e\u5df2\u5c31\u7eea"
+        "\U0001F7E2 \u5fae\u4fe1\u5df2\u8fde\u63a5\uff0c\u53ef\u4ee5\u5f00\u59cb\u5206\u6790"
     )
+    assert page._wechat_connect_button.text() == "\u91cd\u65b0\u8fde\u63a5\u5fae\u4fe1"
 
 
 def test_selecting_wechat_without_ready_status_does_not_load_sessions(
@@ -498,7 +734,7 @@ def test_selecting_wechat_without_ready_status_does_not_load_sessions(
     assert facade.list_sessions_calls == []
     assert page._session_list.count() == 0
     assert page._status_label.text() == (
-        "\U0001F534 \u672a\u627e\u5230\u5fae\u4fe1\u6570\u636e"
+        "\U0001F534 \u5fae\u4fe1\u672a\u8fde\u63a5"
     )
     assert page._status_label.toolTip() == (
         "\u8bf7\u767b\u5f55\u5fae\u4fe1\u6216\u914d\u7f6e\u6570\u636e\u76ee\u5f55\u3002"
@@ -507,6 +743,145 @@ def test_selecting_wechat_without_ready_status_does_not_load_sessions(
         "\u8bf7\u767b\u5f55\u5fae\u4fe1\u6216\u914d\u7f6e\u6570\u636e\u76ee\u5f55\u3002"
     )
     assert page._analyze_button.isEnabled() is False
+
+
+def test_wechat_disconnected_button_offers_connect(qt_app) -> None:
+    module = _facade_module()
+    status = _wechat_connection_status(
+        available=False,
+        data_found=False,
+        db_key_available=False,
+        runtime_available=False,
+        message="\u672a\u627e\u5230\u5fae\u4fe1\u6570\u636e",
+        action_hint="\u8bf7\u767b\u5f55\u5fae\u4fe1\u6216\u914d\u7f6e\u6570\u636e\u76ee\u5f55\u3002",
+    )
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        connection_status=status,
+    )
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+
+    assert page._wechat_connect_button.text() == "\u8fde\u63a5\u5fae\u4fe1"
+
+
+def test_wechat_status_bar_uses_unified_disconnected_text(qt_app) -> None:
+    module = _facade_module()
+    status = _wechat_connection_status(
+        available=False,
+        data_found=False,
+        db_key_available=False,
+        runtime_available=False,
+        message="\u672a\u627e\u5230\u5fae\u4fe1\u6570\u636e",
+        action_hint="\u8bf7\u767b\u5f55\u5fae\u4fe1\u6216\u914d\u7f6e\u6570\u636e\u76ee\u5f55\u3002",
+    )
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        connection_status=status,
+    )
+    page = _analysis_page(qt_app, facade)
+    received: list[str] = []
+    page.status_changed.connect(received.append)
+    _drain(page)
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+
+    assert received == ["\u5fae\u4fe1\u672a\u8fde\u63a5"]
+
+
+def test_wechat_status_bar_stays_connected_after_session_load(qt_app) -> None:
+    module = _facade_module()
+    status = _wechat_connection_status(
+        available=True,
+        data_found=True,
+        db_key_available=True,
+        runtime_available=True,
+        message="\u5fae\u4fe1\u6570\u636e\u6e90\u53ef\u7528",
+        action_hint="\u53ef\u4ee5\u5f00\u59cb\u9009\u62e9\u4f1a\u8bdd\u3002",
+    )
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        sessions=[
+            _session(
+                module.ChatSource.WECHAT,
+                "wxid_fictional",
+                "Fictional Alice",
+            )
+        ],
+        connection_status=status,
+    )
+    page = _analysis_page(qt_app, facade)
+    received: list[str] = []
+    page.status_changed.connect(received.append)
+    _drain(page)
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+
+    assert received == ["\u5fae\u4fe1\u5df2\u8fde\u63a5\uff0c\u53ef\u4ee5\u5f00\u59cb\u5206\u6790"]
+    assert not any("\u52a0\u8f7d\u4f1a\u8bdd" in text for text in received)
+
+
+def test_wechat_connecting_uses_unified_status(qt_app) -> None:
+    module = _facade_module()
+    facade = StubFacade(sources=_wechat_available_sources())
+
+    def deferred(operation, **kwargs) -> None:
+        return None
+
+    page = _analysis_page(qt_app, facade, deferred)
+    received: list[str] = []
+    page.status_changed.connect(received.append)
+
+    page._start_wechat_connect(
+        module.WeChatEnvironmentConfig(data_root="D:/fake_root")
+    )
+
+    assert page._status_label.text() == "\u6b63\u5728\u8fde\u63a5\u5fae\u4fe1..."
+    assert received == ["\u6b63\u5728\u8fde\u63a5\u5fae\u4fe1..."]
+
+
+def test_wechat_connect_progress_keeps_unified_status(qt_app) -> None:
+    module = _facade_module()
+    facade = StubFacade(sources=_wechat_available_sources())
+
+    def deferred(operation, **kwargs) -> None:
+        return None
+
+    page = _analysis_page(qt_app, facade, deferred)
+    received: list[str] = []
+    page.status_changed.connect(received.append)
+    page._start_wechat_connect(
+        module.WeChatEnvironmentConfig(data_root="D:/fake_root")
+    )
+
+    page._handle_wechat_connect_progress("\u6b63\u5728\u7b49\u5f85\u5fae\u4fe1\u767b\u5f55...")
+
+    assert page._status_label.text() == "\u6b63\u5728\u8fde\u63a5\u5fae\u4fe1..."
+    assert page._hint_label.text() == "\u6b63\u5728\u7b49\u5f85\u5fae\u4fe1\u767b\u5f55..."
+    assert received == ["\u6b63\u5728\u8fde\u63a5\u5fae\u4fe1..."]
+
+
+def test_wechat_connect_failure_surfaces_a_user_message(qt_app) -> None:
+    module = _facade_module()
+    facade = StubFacade(sources=_wechat_available_sources())
+    page = _analysis_page(qt_app, facade)
+    received: list[str] = []
+    page.status_changed.connect(received.append)
+
+    page._handle_wechat_connect_error(
+        "key_timeout",
+        "\u767b\u5f55\u8d85\u65f6\uff0c\u8bf7\u91cd\u65b0\u5c1d\u8bd5\u3002",
+    )
+
+    assert page._status_label.text() == (
+        "\U0001F534 \u5fae\u4fe1\u8fde\u63a5\u672a\u6210\u529f"
+    )
+    assert received == ["\u767b\u5f55\u8d85\u65f6\uff0c\u8bf7\u91cd\u65b0\u5c1d\u8bd5\u3002"]
 
 
 def test_selecting_qq_without_ready_status_does_not_load_sessions(
@@ -519,12 +894,17 @@ def test_selecting_qq_without_ready_status_does_not_load_sessions(
         qce_running=False,
         authenticated=False,
         message="QQ \u6570\u636e\u6e90\u4e0d\u53ef\u7528",
-        action_hint="\u8bf7\u5148\u542f\u52a8 QQChatExporter\u3002",
+        action_hint="\u8bf7\u5148\u8fde\u63a5 QQ\u3002",
     )
     facade = StubFacade(
         sources=sources,
         sessions=[_session(module.ChatSource.QQ, "10001", "\u865a\u6784\u7fa4")],
         connection_status=status,
+        qq_setup_status=_qq_setup_status(
+            configured=True,
+            runtime_available=True,
+        ),
+        qq_runtime_status=_qq_runtime_status(state="running"),
     )
     page = _analysis_page(qt_app, facade)
     _drain(page)
@@ -534,7 +914,380 @@ def test_selecting_qq_without_ready_status_does_not_load_sessions(
 
     assert facade.list_sessions_calls == []
     assert page._session_list.count() == 0
-    assert page._hint_label.text() == "\u8bf7\u5148\u542f\u52a8 QQChatExporter\u3002"
+    assert page._hint_label.text() == "\u8bf7\u5148\u8fde\u63a5 QQ\u3002"
+
+
+def test_clicking_qq_source_button_checks_status_without_opening_dialog(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    status = _connection_status(
+        available=False,
+        qce_running=False,
+        authenticated=False,
+        message="QQ \u6570\u636e\u6e90\u4e0d\u53ef\u7528",
+        action_hint="\u8bf7\u70b9\u51fb\u300c\u8fde\u63a5QQ\u300d\u81ea\u52a8\u5b8c\u6210\u8fde\u63a5\u3002",
+    )
+    facade = StubFacade(sources=sources, connection_status=status)
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+
+    assert facade.get_qq_connection_snapshot_calls == []
+
+    page._source_buttons[module.ChatSource.QQ].click()
+    _drain(page)
+
+    assert facade.get_qq_connection_snapshot_calls == [1]
+    assert not hasattr(page, "_qq_setup_dialog")
+    assert page._qq_connect_button.isVisibleTo(page) is True
+
+
+def test_qq_not_ready_shows_connect_button_instead_of_auto_dialog(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    status = _connection_status(
+        available=False,
+        qce_running=False,
+        authenticated=False,
+        message="QQ \u6570\u636e\u6e90\u4e0d\u53ef\u7528",
+        action_hint="\u8bf7\u70b9\u51fb\u300c\u8fde\u63a5QQ\u300d\u81ea\u52a8\u5b8c\u6210\u8fde\u63a5\u3002",
+    )
+    facade = StubFacade(sources=sources, connection_status=status)
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+
+    assert not hasattr(page, "_qq_setup_dialog")
+    assert page._qq_connect_button.isVisibleTo(page) is True
+    assert "\u8fde\u63a5QQ" in page._qq_connect_button.text()
+    assert page._qq_connect_button.isEnabled() is True
+    assert facade.list_sessions_calls == []
+
+
+def test_clicking_qq_connect_calls_the_facade(qt_app, sources) -> None:
+    module = _facade_module()
+    status = _connection_status(
+        available=True,
+        qce_running=True,
+        authenticated=True,
+        message="QQ \u5df2\u8fde\u63a5\u3002",
+        action_hint="",
+    )
+    facade = StubFacade(
+        sources=sources,
+        sessions=[
+            _session(module.ChatSource.QQ, "10001", "\u865a\u6784\u7fa4 A")
+        ],
+        connection_status=status,
+        qq_setup_status=_qq_setup_status(
+            configured=True,
+            runtime_available=True,
+        ),
+        qq_runtime_status=_qq_runtime_status(state="running"),
+    )
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+    page._qq_connect_button.click()
+    _drain(page)
+    QTest.qWait(600)
+
+    assert facade.connect_qq_calls == [1]
+    assert page._session_list.count() == 1
+
+
+def test_clicking_qq_connect_through_the_real_worker_updates_the_page(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    status = _connection_status(
+        available=True,
+        qce_running=True,
+        authenticated=True,
+        message="QQ \u5df2\u8fde\u63a5\u3002",
+        action_hint="",
+    )
+    facade = StubFacade(
+        sources=sources,
+        sessions=[
+            _session(module.ChatSource.QQ, "10001", "\u865a\u6784\u7fa4 A")
+        ],
+        connection_status=status,
+        qq_setup_status=_qq_setup_status(
+            configured=True,
+            runtime_available=True,
+        ),
+        qq_runtime_status=_qq_runtime_status(state="running"),
+    )
+    workers = importlib.import_module("qq_chat_analyzer.gui.workers")
+    page = _analysis_page(qt_app, facade, executor=workers.submit)
+    page.show()
+
+    page._source_buttons[module.ChatSource.QQ].click()
+    _settle_workers()
+
+    assert facade.connect_qq_calls == []
+    assert page._session_list.count() == 1
+    assert "\u5df2\u8fde\u63a5" in page._status_label.text()
+
+    page._qq_connect_button.click()
+    _settle_workers()
+
+    assert facade.connect_qq_calls == [1]
+    assert page._session_list.count() == 1
+    assert "\u5df2\u8fde\u63a5" in page._status_label.text()
+    assert "\u91cd\u65b0\u8fde\u63a5QQ" in page._qq_connect_button.text()
+    assert page._qq_connect_button.isEnabled() is True
+
+
+def test_qq_connect_accepts_a_string_source_value(qt_app, sources) -> None:
+    module = _facade_module()
+    facade = StubFacade(sources=sources)
+    page = _analysis_page(qt_app, facade)
+
+    page.select_source(module.ChatSource.QQ.value)
+    _drain(page)
+    page._qq_connect_button.click()
+    _drain(page)
+
+    assert facade.connect_qq_calls == [1]
+
+
+def test_qq_configured_but_not_connected_shows_connect_button(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    status = _connection_status(
+        available=False,
+        qce_running=False,
+        authenticated=False,
+        message="QQ \u672a\u8fde\u63a5\u3002",
+        action_hint="\u8bf7\u70b9\u51fb\u300c\u8fde\u63a5QQ\u300d\u3002",
+    )
+    facade = StubFacade(
+        sources=sources,
+        connection_status=status,
+        qq_setup_status=_qq_setup_status(
+            configured=True,
+            runtime_available=True,
+        ),
+        qq_runtime_status=_qq_runtime_status(state="stopped"),
+    )
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+
+    assert page._qq_connect_button.isVisibleTo(page) is True
+    assert page._qq_connect_button.isEnabled() is True
+    assert "\u8fde\u63a5QQ" in page._qq_connect_button.text()
+    assert facade.list_sessions_calls == []
+
+
+def test_qq_setup_dialog_prefills_effective_config(qt_app) -> None:
+    module = _facade_module()
+    dialog_module = importlib.import_module(
+        "qq_chat_analyzer.gui.qq_setup_dialog"
+    )
+    config = module.QQEnvironmentConfig(
+        runtime_directory=Path("D:/fake_runtime"),
+        qce_path=Path("D:/fake_qce_server.exe"),
+        base_url="http://127.0.0.1:40653",
+    )
+
+    dialog = dialog_module.QQSetupDialog(config=config)
+
+    assert dialog._runtime_dir_edit.text() == str(Path("D:/fake_runtime"))
+    assert dialog._qce_path_edit.text() == str(Path("D:/fake_qce_server.exe"))
+    assert dialog._base_url_edit.text() == "http://127.0.0.1:40653"
+
+
+def test_qq_ready_shows_reconnect_button_and_loads_sessions(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    status = _connection_status(
+        available=True,
+        qce_running=True,
+        authenticated=True,
+        message="QQ \u5df2\u8fde\u63a5\u3002",
+        action_hint="",
+    )
+    facade = StubFacade(
+        sources=sources,
+        sessions=[
+            _session(module.ChatSource.QQ, "10001", "\u865a\u6784\u7fa4 A")
+        ],
+        connection_status=status,
+        qq_setup_status=_qq_setup_status(
+            configured=True,
+            runtime_available=True,
+        ),
+        qq_runtime_status=_qq_runtime_status(state="running"),
+    )
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+
+    assert page._qq_connect_button.isVisibleTo(page) is True
+    assert page._qq_connect_button.isEnabled() is True
+    assert "\u91cd\u65b0\u8fde\u63a5QQ" in page._qq_connect_button.text()
+    assert facade.list_sessions_calls == [module.ChatSource.QQ]
+    assert page._session_list.count() == 1
+
+
+def test_qq_connect_failure_shows_user_safe_message(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    error = module.FacadeError(
+        code="qq_connect_failed",
+        public_message=(
+            "\u65e0\u6cd5\u8fde\u63a5 QQ \u6570\u636e\u6e90\uff0c"
+            "\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002"
+        ),
+        source=module.ChatSource.QQ,
+    )
+    facade = StubFacade(
+        sources=sources,
+        connect_qq_error=error,
+        connection_status=_connection_status(
+            available=False,
+            qce_running=False,
+            authenticated=False,
+            message="QQ \u672a\u8fde\u63a5\u3002",
+            action_hint="",
+        ),
+        qq_setup_status=_qq_setup_status(
+            configured=True,
+            runtime_available=True,
+        ),
+        qq_runtime_status=_qq_runtime_status(state="stopped"),
+    )
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+    page._qq_connect_button.click()
+    _drain(page)
+    QTest.qWait(600)
+
+    assert facade.connect_qq_calls == [1]
+    assert "QQ \u8fde\u63a5\u5931\u8d25" in page._status_label.text()
+    assert (
+        "\u65e0\u6cd5\u8fde\u63a5 QQ \u6570\u636e\u6e90"
+        in page._hint_label.text()
+    )
+    assert "Traceback" not in page._hint_label.text()
+    assert facade.list_sessions_calls == []
+
+
+def test_qq_connect_unavailable_status_is_not_silent(qt_app, sources) -> None:
+    module = _facade_module()
+    status = _connection_status(
+        available=False,
+        qce_running=False,
+        authenticated=False,
+        message="\u65e0\u6cd5\u8fde\u63a5 QQ\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
+        action_hint=(
+            "QQ \u6570\u636e\u6e90\u6682\u4e0d\u53ef\u7528\uff0c"
+            "\u8bf7\u786e\u8ba4\u5e94\u7528\u5b89\u88c5\u5b8c\u6574\u540e\u91cd\u8bd5\u3002"
+        ),
+    )
+    facade = StubFacade(
+        sources=sources,
+        connection_status=status,
+        qq_setup_status=_qq_setup_status(
+            configured=False,
+            runtime_available=False,
+        ),
+        qq_runtime_status=_qq_runtime_status(state="stopped"),
+    )
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+    page._qq_connect_button.click()
+    _drain(page)
+    QTest.qWait(600)
+
+    assert facade.connect_qq_calls == [1]
+    assert "\u65e0\u6cd5\u8fde\u63a5 QQ" in page._status_label.text()
+    assert "QQ \u6570\u636e\u6e90\u6682\u4e0d\u53ef\u7528" in (
+        page._hint_label.text()
+    )
+
+
+def test_qq_connect_remains_clickable_when_no_runtime_detected(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    facade = StubFacade(sources=sources)
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+
+    assert page._qq_connect_button.isEnabled() is True
+    page._qq_connect_button.click()
+    _drain(page)
+
+    assert facade.connect_qq_calls == [1]
+
+
+def test_qq_connect_disables_button_while_connecting(qt_app, sources) -> None:
+    module = _facade_module()
+    status = _connection_status(
+        available=True,
+        qce_running=True,
+        authenticated=True,
+        message="QQ \u5df2\u8fde\u63a5\u3002",
+        action_hint="",
+    )
+    facade = StubFacade(
+        sources=sources,
+        connection_status=status,
+        qq_setup_status=_qq_setup_status(
+            configured=True,
+            runtime_available=True,
+        ),
+        qq_runtime_status=_qq_runtime_status(state="running"),
+    )
+    executor = _DeferredExecutor()
+    page = _analysis_page(qt_app, facade, executor=executor)
+
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+    page._qq_connect_button.click()
+
+    assert executor.operation is not None
+    assert page._qq_connect_button.isEnabled() is False
+    assert "\u6b63\u5728\u8fde\u63a5QQ" in page._status_label.text()
+
+    executor.succeed(facade._qq_snapshot())
+    _drain(page)
+    QTest.qWait(600)
+
+    assert page._qq_connect_button.isEnabled() is True
+    assert "\u91cd\u65b0\u8fde\u63a5QQ" in page._qq_connect_button.text()
 
 
 def test_wechat_connection_error_blocks_session_loading_without_leaks(
@@ -599,6 +1352,66 @@ def test_clicking_wechat_setup_calls_facade(qt_app) -> None:
     assert page._wechat_setup_dialog is not None
 
 
+def test_clicking_wechat_connect_completes_without_uncaught_error(
+    qt_app,
+) -> None:
+    module = _facade_module()
+    ready = _wechat_connection_status(
+        available=True,
+        data_found=True,
+        db_key_available=True,
+        runtime_available=True,
+        message="\u5fae\u4fe1\u6570\u636e\u6e90\u53ef\u7528",
+        action_hint="",
+    )
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        sessions=[
+            _session(
+                module.ChatSource.WECHAT,
+                "wxid_fictional",
+                "Fictional Alice",
+            )
+        ],
+        connection_status=ready,
+        data_root="D:/fake_xwechat_files",
+    )
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+    page._wechat_connect_button.click()
+    _drain(page)
+
+    assert facade.detect_wechat_data_root_calls
+    assert facade.setup_wechat_environment_calls == [
+        module.WeChatEnvironmentConfig(
+            data_root=Path("D:/fake_xwechat_files")
+        )
+    ]
+    assert len(facade.acquire_wechat_db_key_calls) == 1
+    assert page._wechat_connect_button.isEnabled() is True
+    assert "\u5fae\u4fe1\u5df2\u8fde\u63a5" in page._status_label.text()
+
+
+def test_clicking_wechat_connect_without_detected_root_opens_setup(
+    qt_app,
+) -> None:
+    module = _facade_module()
+    facade = StubFacade(sources=_wechat_available_sources())
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+    page._wechat_connect_button.click()
+    _drain(page)
+
+    assert page._wechat_setup_dialog is not None
+    assert facade.setup_wechat_environment_calls == []
+
+
 def test_saving_wechat_environment_refreshes_status(qt_app) -> None:
     module = _facade_module()
     ready = _wechat_connection_status(
@@ -629,7 +1442,7 @@ def test_saving_wechat_environment_refreshes_status(qt_app) -> None:
 
     assert facade.setup_wechat_environment_calls == [config]
     assert len(facade.get_connection_status_calls) == status_calls_before + 1
-    assert "\u5fae\u4fe1\u6570\u636e\u6e90\u53ef\u7528" in page._status_label.text()
+    assert "\u5fae\u4fe1\u5df2\u8fde\u63a5" in page._status_label.text()
 
 
 def test_wechat_setup_failure_shows_user_prompt(qt_app) -> None:
@@ -703,6 +1516,11 @@ def test_selecting_a_source_loads_sessions_through_the_facade(
             _session(module.ChatSource.QQ, "10001", "\u865a\u6784\u7fa4 A", 12),
             _session(module.ChatSource.QQ, "10002", "\u865a\u6784\u7fa4 B"),
         ],
+        qq_setup_status=_qq_setup_status(
+            configured=True,
+            runtime_available=True,
+        ),
+        qq_runtime_status=_qq_runtime_status(state="running"),
     )
     page = _analysis_page(qt_app, facade)
 
@@ -726,6 +1544,11 @@ def test_session_ids_are_stored_but_never_displayed(qt_app, sources) -> None:
                 "\u865a\u6784\u7fa4 A",
             )
         ],
+        qq_setup_status=_qq_setup_status(
+            configured=True,
+            runtime_available=True,
+        ),
+        qq_runtime_status=_qq_runtime_status(state="running"),
     )
     page = _analysis_page(qt_app, facade)
 
@@ -761,6 +1584,39 @@ def test_empty_session_list_is_reported(qt_app, sources) -> None:
     assert page._hint_label.text() != ""
 
 
+def test_wechat_session_without_messages_is_disabled_and_not_analyzable(
+    qt_app,
+) -> None:
+    module = _facade_module()
+    sessions = [
+        module.SessionInfo(
+            source=module.ChatSource.WECHAT,
+            session_id="wxid_no_messages",
+            display_name="No messages",
+            message_available=False,
+            unavailable_reason="\u8be5\u4f1a\u8bdd\u6ca1\u6709\u53ef\u5206\u6790\u6d88\u606f",
+        )
+    ]
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        sessions=sessions,
+    )
+    page = _analysis_page(qt_app, facade)
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+
+    item = page._session_list.item(0)
+    assert not (item.flags() & Qt.ItemFlag.ItemIsEnabled)
+    assert "\u8be5\u4f1a\u8bdd\u6ca1\u6709\u53ef\u5206\u6790\u6d88\u606f" in item.toolTip()
+    assert page._analyze_button.isEnabled() is False
+
+    page.start_analysis()
+    _drain(page)
+
+    assert facade.analyze_session_calls == []
+
+
 # ------------------------------------------------------------------ analysis
 
 
@@ -772,6 +1628,11 @@ def test_analyze_button_stays_disabled_until_a_session_is_chosen(
     facade = StubFacade(
         sources=sources,
         sessions=[_session(module.ChatSource.QQ, "10001", "\u865a\u6784\u7fa4")],
+        qq_setup_status=_qq_setup_status(
+            configured=True,
+            runtime_available=True,
+        ),
+        qq_runtime_status=_qq_runtime_status(state="running"),
     )
     page = _analysis_page(qt_app, facade)
 
@@ -790,6 +1651,11 @@ def test_start_analysis_calls_analyze_session(qt_app, sources) -> None:
         sources=sources,
         sessions=[_session(module.ChatSource.QQ, "10001", "\u865a\u6784\u7fa4")],
         outcome=_StubOutcome(_dashboard_view()),
+        qq_setup_status=_qq_setup_status(
+            configured=True,
+            runtime_available=True,
+        ),
+        qq_runtime_status=_qq_runtime_status(state="running"),
     )
     page = _analysis_page(qt_app, facade)
     page.select_source(module.ChatSource.QQ)
@@ -854,6 +1720,15 @@ def test_time_range_is_optional(qt_app, sources) -> None:
     assert config.end_time is None
 
 
+def test_time_range_shows_unset_when_disabled(qt_app, sources) -> None:
+    page = _analysis_page(qt_app, StubFacade(sources=sources))
+
+    assert "\u672a\u9009\u62e9" in page._start_date.text()
+    assert "\u672a\u9009\u62e9" in page._end_date.text()
+    assert page.build_config().start_time is None
+    assert page.build_config().end_time is None
+
+
 def test_enabled_time_range_reaches_the_config(qt_app, sources) -> None:
     page = _analysis_page(qt_app, StubFacade(sources=sources))
 
@@ -863,6 +1738,45 @@ def test_enabled_time_range_reaches_the_config(qt_app, sources) -> None:
 
     assert config.start_time is not None
     assert config.end_time is not None
+
+
+def test_enabled_time_range_uses_session_message_range(qt_app) -> None:
+    from datetime import datetime
+
+    module = _facade_module()
+    session_id = "wxid_time_range"
+    start = 1704067200
+    end = 1704153600
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        sessions=[
+            _session(
+                module.ChatSource.WECHAT,
+                session_id,
+                "Fictional Room",
+                1,
+            )
+        ],
+        message_range=(start, end),
+    )
+    page = _analysis_page(qt_app, facade)
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+    page._session_list.setCurrentRow(0)
+    _drain(page)
+    page._start_enabled.setChecked(True)
+    page._end_enabled.setChecked(True)
+
+    assert facade.get_session_message_range_calls == [
+        (module.ChatSource.WECHAT, session_id)
+    ]
+    assert page._start_date.date().toPython() == datetime.fromtimestamp(
+        start
+    ).date()
+    assert page._end_date.date().toPython() == datetime.fromtimestamp(
+        end
+    ).date()
 
 
 # ----------------------------------------------------------------- dashboard
@@ -922,6 +1836,11 @@ def test_successful_analysis_switches_to_the_dashboard(
         sources=sources,
         sessions=[_session(module.ChatSource.QQ, "10001", "\u865a\u6784\u7fa4")],
         outcome=_StubOutcome(view),
+        qq_setup_status=_qq_setup_status(
+            configured=True,
+            runtime_available=True,
+        ),
+        qq_runtime_status=_qq_runtime_status(state="running"),
     )
     window = _main_window(qt_app, facade)
     window.analysis_page.select_source(module.ChatSource.QQ)
@@ -952,7 +1871,15 @@ def test_facade_errors_surface_as_public_messages(qt_app, sources) -> None:
         code="wechat_export_unavailable",
         public_message="\u5fae\u4fe1\u5bfc\u51fa\u4e0d\u53ef\u7528\u3002",
     )
-    facade = StubFacade(sources=sources, error=error)
+    facade = StubFacade(
+        sources=sources,
+        error=error,
+        qq_setup_status=_qq_setup_status(
+            configured=True,
+            runtime_available=True,
+        ),
+        qq_runtime_status=_qq_runtime_status(state="running"),
+    )
     page = _analysis_page(qt_app, facade)
     received: list[tuple[str, str]] = []
     page.analysis_failed.connect(lambda code, msg: received.append((code, msg)))
@@ -968,7 +1895,15 @@ def test_facade_errors_surface_as_public_messages(qt_app, sources) -> None:
 
 def test_unexpected_errors_never_leak_a_traceback(qt_app, sources) -> None:
     module = _facade_module()
-    facade = StubFacade(sources=sources, error=RuntimeError("boom internal"))
+    facade = StubFacade(
+        sources=sources,
+        error=RuntimeError("boom internal"),
+        qq_setup_status=_qq_setup_status(
+            configured=True,
+            runtime_available=True,
+        ),
+        qq_runtime_status=_qq_runtime_status(state="running"),
+    )
     page = _analysis_page(qt_app, facade)
     received: list[tuple[str, str]] = []
     page.analysis_failed.connect(lambda code, msg: received.append((code, msg)))

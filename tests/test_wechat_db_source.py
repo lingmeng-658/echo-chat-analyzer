@@ -137,6 +137,20 @@ def test_text_row_becomes_chat_message_with_mapped_fields(tmp_path: Path) -> Non
     assert message.recalled is False
 
 
+def test_db_row_uses_resolved_sender_name(tmp_path: Path) -> None:
+    export = tmp_path / "session.json"
+    row = _db_row()
+    row["sender_name"] = "\u5907\u6ce8\u540d"
+    _write_db_export(export, [row])
+
+    messages = wechat_db_adapter.parse_messages(
+        wechat_db_adapter.load_messages(export)
+    )
+
+    assert messages[0].sender == "\u5907\u6ce8\u540d"
+    assert messages[0].sender_id == "wxid_fictional_sender"
+
+
 def test_non_text_local_types_are_skipped(tmp_path: Path) -> None:
     export = tmp_path / "session.json"
     _write_db_export(
@@ -243,26 +257,156 @@ def test_list_sessions_returns_privacy_safe_descriptors(tmp_path: Path) -> None:
     rows = [
         {"username": FICTIONAL_SESSION, "last_timestamp": 1753412900},
         {"username": "wxid_friend", "last_timestamp": 1753412800},
-        {"username": "gh_official", "last_timestamp": 1753412700},
         {"username": "   ", "last_timestamp": 1},
         "junk",
     ]
 
     def runner(command, timeout, environment):
-        assert "SessionTable" in " ".join(command)
-        return _FakeCompleted(stdout=_helper_result(rows))
+        sql = " ".join(command)
+        if "SessionTable" in sql:
+            return _FakeCompleted(stdout=_helper_result(rows))
+        if "sqlite_master" in sql:
+            return _FakeCompleted(
+                stdout=_helper_result([], columns=["name"])
+            )
+        raise AssertionError(f"unexpected query: {sql}")
 
     sessions = _provider(tmp_path, runner).list_sessions()
 
     assert [session.session_id for session in sessions] == [
         FICTIONAL_SESSION,
         "wxid_friend",
-        "gh_official",
     ]
     assert [session.session_type for session in sessions] == [
         "group",
         "private",
-        "official",
+    ]
+
+
+def test_list_sessions_marks_missing_msg_tables_unavailable(
+    tmp_path: Path,
+) -> None:
+    available_session = "wxid_has_messages"
+    missing_session = "wxid_no_messages"
+    available_table = message_table_name(available_session)
+    session_rows = [
+        {"username": available_session, "last_timestamp": 1753412900},
+        {"username": missing_session, "last_timestamp": 1753412800},
+    ]
+
+    def runner(command, timeout, environment):
+        sql = " ".join(command)
+        if "SessionTable" in sql:
+            return _FakeCompleted(stdout=_helper_result(session_rows))
+        if "sqlite_master" in sql:
+            return _FakeCompleted(
+                stdout=_helper_result(
+                    [{"name": available_table}],
+                    columns=["name"],
+                )
+            )
+        raise AssertionError(f"unexpected query: {sql}")
+
+    sessions = _provider(tmp_path, runner).list_sessions()
+
+    assert len(sessions) == 2
+    assert sessions[0].message_available is True
+    assert sessions[0].unavailable_reason is None
+    assert sessions[1].message_available is False
+    assert sessions[1].unavailable_reason
+
+
+def test_list_sessions_resolves_contact_display_names(tmp_path: Path) -> None:
+    private_session = "wxid_friend"
+    no_contact_session = "wxid_no_contact"
+    group_session = "room@chatroom"
+    session_rows = [
+        {"username": private_session, "last_timestamp": 1753412900},
+        {"username": no_contact_session, "last_timestamp": 1753412800},
+        {"username": group_session, "last_timestamp": 1753412700},
+    ]
+    contact_rows = [
+        {
+            "username": private_session,
+            "remark": "\u5907\u6ce8\u540d",
+            "nick_name": "\u6635\u79f0",
+        },
+        {
+            "username": group_session,
+            "remark": "",
+            "nick_name": "\u7fa4\u804a\u540d",
+        },
+    ]
+
+    def runner(command, timeout, environment):
+        sql = " ".join(command)
+        if "SessionTable" in sql:
+            return _FakeCompleted(stdout=_helper_result(session_rows))
+        if "FROM contact" in sql:
+            return _FakeCompleted(
+                stdout=_helper_result(
+                    contact_rows,
+                    columns=["username", "remark", "nick_name"],
+                )
+            )
+        if "sqlite_master" in sql:
+            return _FakeCompleted(
+                stdout=_helper_result([], columns=["name"])
+            )
+        raise AssertionError(f"unexpected query: {sql}")
+
+    provider = _provider(tmp_path, runner)
+    contact_dir = (
+        tmp_path
+        / "xwechat_files"
+        / "wxid_owner"
+        / "db_storage"
+        / "contact"
+    )
+    contact_dir.mkdir(parents=True, exist_ok=True)
+    (contact_dir / "contact.db").write_bytes(b"fake")
+
+    sessions = provider.list_sessions()
+
+    assert [session.display_name for session in sessions] == [
+        "\u5907\u6ce8\u540d",
+        no_contact_session,
+        "\u7fa4\u804a\u540d",
+    ]
+
+
+def test_list_sessions_filters_official_and_system_sessions(
+    tmp_path: Path,
+) -> None:
+    private_session = "wxid_friend"
+    group_session = "room@chatroom"
+    session_rows = [
+        {"username": private_session, "last_timestamp": 1753412900},
+        {"username": group_session, "last_timestamp": 1753412800},
+        {"username": "gh_official", "last_timestamp": 1753412700},
+        {"username": "notify", "last_timestamp": 1753412600},
+        {"username": "unknown-system-account", "last_timestamp": 1753412500},
+    ]
+
+    def runner(command, timeout, environment):
+        sql = " ".join(command)
+        if "SessionTable" in sql:
+            return _FakeCompleted(stdout=_helper_result(session_rows))
+        if "sqlite_master" in sql:
+            return _FakeCompleted(
+                stdout=_helper_result([], columns=["name"])
+            )
+        raise AssertionError(f"unexpected query: {sql}")
+
+    sessions = _provider(tmp_path, runner).list_sessions()
+
+    assert [session.session_id for session in sessions] == [
+        private_session,
+        group_session,
+    ]
+    assert [session.session_type for session in sessions] == [
+        "private",
+        "group",
     ]
 
 
@@ -292,6 +436,50 @@ def test_export_session_json_writes_provider_document(tmp_path: Path) -> None:
     assert table in message_sql
     assert "local_type = 1" in message_sql
     assert "Name2Id" in message_sql
+
+
+def test_export_session_json_resolves_sender_display_names(
+    tmp_path: Path,
+) -> None:
+    table = message_table_name(FICTIONAL_SESSION)
+    sender = "wxid_fictional_sender"
+    contact_rows = [
+        {
+            "username": sender,
+            "remark": "\u5907\u6ce8\u540d",
+            "nick_name": "\u6635\u79f0",
+        }
+    ]
+
+    def runner(command, timeout, environment):
+        sql = command[command.index("--sql") + 1]
+        if "FROM contact" in sql:
+            return _FakeCompleted(
+                stdout=_helper_result(
+                    contact_rows,
+                    columns=["username", "remark", "nick_name"],
+                )
+            )
+        if "sqlite_master" in sql:
+            return _FakeCompleted(stdout=_helper_result([{"name": table}]))
+        return _FakeCompleted(stdout=_helper_result([_db_row(user_name=sender)]))
+
+    provider = _provider(tmp_path, runner)
+    contact_dir = (
+        tmp_path
+        / "xwechat_files"
+        / "wxid_owner"
+        / "db_storage"
+        / "contact"
+    )
+    contact_dir.mkdir(parents=True, exist_ok=True)
+    (contact_dir / "contact.db").write_bytes(b"fake")
+    output = tmp_path / "out" / "session.json"
+
+    provider.export_session_json(FICTIONAL_SESSION, output)
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["messages"][0]["sender_name"] == "\u5907\u6ce8\u540d"
 
 
 def test_time_window_is_pushed_into_the_query(tmp_path: Path) -> None:

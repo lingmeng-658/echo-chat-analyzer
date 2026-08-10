@@ -80,6 +80,8 @@ class QQRuntimeConfig:
     base_url: str = "http://127.0.0.1:40653"
     config_directory: Path | None = None
     security_path: Path | None = None
+    static_directory: Path | None = None
+    bridge_url: str | None = None
     version: str | None = None
 
     def __post_init__(self) -> None:
@@ -99,13 +101,19 @@ class QQRuntimeConfig:
             )
         if self.security_path is not None:
             object.__setattr__(self, "security_path", Path(self.security_path))
+        if self.static_directory is not None:
+            object.__setattr__(
+                self,
+                "static_directory",
+                Path(self.static_directory),
+            )
 
 
 def default_health_checker(base_url: str) -> bool:
-    """Probe ``/api/health`` without parsing any provider-specific payload."""
+    """Probe the QCE v6.x public ``/health`` endpoint."""
     try:
         with urllib.request.urlopen(  # noqa: S310 - local runtime only
-            f"{base_url.rstrip('/')}/api/health",
+            f"{base_url.rstrip('/')}/health",
             timeout=1,
         ) as response:
             return response.status == 200

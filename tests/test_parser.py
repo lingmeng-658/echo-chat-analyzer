@@ -158,6 +158,49 @@ def test_text_message_falls_back_to_id_and_sender_uin() -> None:
     assert parsed[0].recalled is False
 
 
+def test_text_message_uses_sender_name_when_nickname_is_missing() -> None:
+    raw_message = {
+        "id": "fictional-message-name-only",
+        "timestamp": 1767316340,
+        "sender": {
+            "uid": "u_fictional",
+            "uin": "100000022",
+            "name": "Fictional Name Sender",
+            "nickname": "",
+        },
+        "type": "text",
+        "content": {"text": "nickname missing but name present"},
+    }
+
+    parsed = parse_messages([raw_message])
+
+    assert len(parsed) == 1
+    assert parsed[0].sender == "Fictional Name Sender"
+    assert parsed[0].platform == "qq"
+
+
+def test_text_message_falls_back_to_uin_and_unknown_user() -> None:
+    uin_only = {
+        "id": "fictional-message-uin-only",
+        "timestamp": 1767316360,
+        "sender": {"uid": "u_fictional", "uin": "100000023"},
+        "type": "text",
+        "content": {"text": "uin fallback"},
+    }
+    empty_sender = {
+        "id": "fictional-message-empty-sender",
+        "timestamp": 1767316380,
+        "sender": {},
+        "type": "text",
+        "content": {"text": "unknown user fallback"},
+    }
+
+    parsed = parse_messages([uin_only, empty_sender])
+
+    assert parsed[0].sender == "100000023"
+    assert parsed[1].sender == "\u672a\u77e5\u7528\u6237"
+
+
 def test_reply_extracts_only_the_repliers_new_text(
     fixture_messages: list[dict],
 ) -> None:

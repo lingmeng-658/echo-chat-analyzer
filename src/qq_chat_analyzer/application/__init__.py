@@ -1,4 +1,4 @@
-"""Stable application-layer contracts for local chat analysis."""
+﻿"""Stable application-layer contracts for local chat analysis."""
 
 from ..analysis.models import (
     ActivityReport,
@@ -8,6 +8,11 @@ from ..analysis.models import (
     UserProfileReport,
 )
 from .analysis_service import AnalysisApplicationService
+from .connection import (
+    ConnectionSnapshot,
+    ConnectionState,
+    QQConnectionManager,
+)
 from .dto import (
     AnalysisRequestDTO,
     AnalysisResultDTO,
@@ -105,6 +110,8 @@ __all__ = [
     "ArtifactGenerationFailed",
     "ChatAnalyzerFacade",
     "ChatSource",
+    "ConnectionSnapshot",
+    "ConnectionState",
     "ConversationReport",
     "ExportConfig",
     "ExportTaskManager",
@@ -127,6 +134,7 @@ __all__ = [
     "QQRuntimeManager",
     "QQRuntimeState",
     "QQRuntimeStatus",
+    "QQConnectionManager",
     "QQConnectionService",
     "QQConnectionStatus",
     "SessionInfo",

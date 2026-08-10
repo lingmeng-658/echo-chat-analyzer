@@ -115,6 +115,21 @@ class _FailingProvider:
         raise self._Boom()
 
 
+class _TaskStubProvider:
+    """Provider used to test task-list delegation only."""
+
+    def __init__(self, tasks: list[object] | None = None, error: Exception | None = None):
+        self._tasks = tasks
+        self._error = error
+        self.calls = 0
+
+    def list_tasks(self):
+        self.calls += 1
+        if self._error is not None:
+            raise self._error
+        return self._tasks
+
+
 # ------------------------------------------------------ 1. provider -> adapter
 
 
@@ -203,6 +218,31 @@ def test_provider_error_propagates_unchanged(tmp_path: Path) -> None:
 
     with pytest.raises(ApplicationServiceError) as excinfo:
         service.execute(QQExportImportRequest(group_code="700000001"))
+
+    assert excinfo.value.code == "qce_service_unreachable"
+
+
+def test_list_tasks_delegates_to_provider() -> None:
+    tasks = [
+        {"taskId": "export_1", "status": "running", "progress": 42},
+        {"taskId": "export_2", "status": "completed", "progress": 100},
+    ]
+    provider = _TaskStubProvider(tasks=tasks)
+    service = QQExportImportService(provider)
+
+    result = service.list_tasks()
+
+    assert result == tasks
+    assert provider.calls == 1
+
+
+def test_list_tasks_propagates_provider_error() -> None:
+    service = QQExportImportService(
+        _TaskStubProvider(error=_FailingProvider._Boom())
+    )
+
+    with pytest.raises(ApplicationServiceError) as excinfo:
+        service.list_tasks()
 
     assert excinfo.value.code == "qce_service_unreachable"
 

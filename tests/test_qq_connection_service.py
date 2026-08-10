@@ -95,7 +95,8 @@ def test_qce_not_running_returns_user_facing_message() -> None:
     assert status.qce_running is False
     assert status.authenticated is True
     assert status.version is None
-    assert "QQChatExporter" in status.message
+    assert "QQChatExporter" not in status.message
+    assert status.message != ""
     assert status.action_hint != ""
 
 
@@ -108,7 +109,8 @@ def test_missing_token_requests_initialization() -> None:
     assert status.available is False
     assert status.qce_running is True
     assert status.authenticated is False
-    assert "QQChatExporter" in status.message
+    assert "QQChatExporter" not in status.message
+    assert status.message != ""
     assert status.action_hint != ""
 
 
@@ -165,4 +167,3 @@ def test_service_calls_health_check_and_token_resolution() -> None:
 
     assert provider.health_calls == 1
     assert provider.token_calls == 1
-

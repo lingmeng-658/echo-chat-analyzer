@@ -110,11 +110,16 @@ def test_factory_reloads_config_after_invalidate(tmp_path):
 
 def test_factory_missing_config_raises_user_safe_error(tmp_path):
     config_module = _config_module()
-    loader = config_module.WeChatEnvironmentConfigLoader(
-        tmp_path / "absent.json"
-    )
+
+    class _MissingLoader:
+        def load(self):
+            raise config_module.WeChatConfigNotFound()
+
+        def load_or_default(self):
+            raise config_module.WeChatConfigNotFound()
+
     factory = _factory_module().WeChatProviderFactory(
-        config_loader=loader,
+        config_loader=_MissingLoader(),
         provider_builder=_StubProvider,
     )
 

@@ -100,10 +100,6 @@ def _parse_message(raw_message: Any) -> ChatMessage | None:
     if not isinstance(sender_data, Mapping):
         return None
 
-    sender = sender_data.get("nickname")
-    if not isinstance(sender, str):
-        return None
-
     content = raw_message.get("content")
     if not isinstance(content, Mapping):
         return None
@@ -116,11 +112,20 @@ def _parse_message(raw_message: Any) -> ChatMessage | None:
 
     return ChatMessage(
         timestamp=timestamp,
-        sender=sender,
+        sender=_resolve_sender_name(sender_data),
         message_type=message_type,
         text=text,
+        platform="qq",
         message_id=raw_message.get("messageId") or raw_message.get("id"),
         sender_id=sender_data.get("uid") or sender_data.get("uin"),
         is_system=raw_message.get("system", False),
         recalled=raw_message.get("recalled", False),
     )
+
+
+def _resolve_sender_name(sender_data: Mapping[Any, Any]) -> str:
+    for key in ("nickname", "name", "groupCard", "remark", "uin", "uid"):
+        value = sender_data.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return "\u672a\u77e5\u7528\u6237"

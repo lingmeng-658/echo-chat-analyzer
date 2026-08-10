@@ -58,6 +58,31 @@ def test_preserves_common_group_chat_expressions() -> None:
     assert clean_text("哈哈 笑死 太强了") == "哈哈 笑死 太强了"
 
 
+def test_wechat_clean_removes_internal_ids() -> None:
+    assert clean_text("今天开会 wxid_test", platform="wechat") == "今天开会"
+    assert clean_text(
+        "内部 xa66c49rvh7212 hvly3bywwfbz22 记录",
+        platform="wechat",
+    ) == "内部 记录"
+
+
+def test_wechat_clean_preserves_emojis_and_normal_text() -> None:
+    assert clean_text(
+        "[旺柴] 😂 [捂脸] 明天见",
+        platform="wechat",
+    ) == "[旺柴] 😂 [捂脸] 明天见"
+
+
+def test_wechat_clean_does_not_affect_other_platforms() -> None:
+    assert clean_text("内部 wxid_test xa66c49rvh7212") == (
+        "内部 wxid_test xa66c49rvh7212"
+    )
+    assert clean_text(
+        "内部 wxid_test xa66c49rvh7212",
+        platform="qq",
+    ) == "内部 wxid_test xa66c49rvh7212"
+
+
 def test_structural_only_text_cleans_to_empty_string() -> None:
     raw_text = "@全体成员 [图片] [回复消息]\u200b \x00"
 

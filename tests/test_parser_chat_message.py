@@ -26,11 +26,11 @@ def test_parse_messages_preserves_fields_in_chat_message() -> None:
     assert parsed == [
         ChatMessage(
             timestamp=1767315600,
-            sender="Fictional Alice",
-            message_type="text",
-            text="Hello from QQ",
-            platform="unknown",
-            source_type=None,
+                sender="Fictional Alice",
+                message_type="text",
+                text="Hello from QQ",
+                platform="qq",
+                source_type=None,
             message_id=None,
             sender_id=None,
             conversation_id=None,

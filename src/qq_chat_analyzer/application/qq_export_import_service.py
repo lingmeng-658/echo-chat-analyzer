@@ -36,19 +36,14 @@ class QQExportUnavailable(ApplicationServiceError):
     """Raised when the QCE service could not produce an export file."""
 
     code = "qq_export_unavailable"
-    public_message = (
-        "\u65e0\u6cd5\u4ece QQChatExporter \u83b7\u53d6\u5bfc\u51fa\u6587\u4ef6\u3002"
-    )
+    public_message = "无法获取 QQ 聊天记录导出文件。"
 
 
 class QQExportFileMissing(ApplicationServiceError):
     """Raised when the export reports success but the file is not on disk."""
 
     code = "qq_export_file_missing"
-    public_message = (
-        "QQChatExporter \u62a5\u544a\u5bfc\u51fa\u5b8c\u6210\uff0c"
-        "\u4f46\u672a\u627e\u5230\u5bfc\u51fa\u6587\u4ef6\u3002"
-    )
+    public_message = "QQ 聊天记录导出未生成文件，请稍后重试。"
 
 
 @runtime_checkable
@@ -57,6 +52,10 @@ class QQExportProvider(Protocol):
 
     def list_groups(self) -> list[Any]:  # pragma: no cover - contract only
         """Return the groups that are available for export."""
+        ...
+
+    def list_tasks(self) -> list[Any]:  # pragma: no cover - contract only
+        """Return the current QCE export task list."""
         ...
 
     def export_group_json(
@@ -82,11 +81,33 @@ class QQExportImportService:
 
     def __init__(
         self,
-        provider: QQExportProvider,
+        provider: QQExportProvider | None = None,
         import_service: ImportService | None = None,
+        *,
+        provider_factory: Any = None,
     ) -> None:
-        self._provider = provider
+        if provider is None and provider_factory is None:
+            raise TypeError(
+                "QQExportImportService needs a provider or provider_factory"
+            )
+        self._injected_provider = provider
+        self._provider_factory = provider_factory
         self._import_service = import_service or ImportService()
+
+    def provider(self) -> QQExportProvider:
+        """Return the provider used for exports.
+
+        When a shared provider factory is injected, the instance comes from
+        that factory, so session listing and export use the same configuration
+        and provider as the connection status check.
+        """
+        if self._provider_factory is not None:
+            return self._provider_factory.create()
+        return self._injected_provider
+
+    @property
+    def _provider(self) -> QQExportProvider:
+        return self.provider()
 
     def execute(self, request: QQExportImportRequest) -> ImportOutcome:
         export_path = self.export_only(request)
@@ -104,6 +125,15 @@ class QQExportImportService:
         unchanged; they already carry user-facing messages.
         """
         return self._provider.list_groups()
+
+    def list_tasks(self) -> list[Any]:
+        """Delegate QCE task listing to the injected provider.
+
+        This is the application-layer entry point a future GUI can call
+        without touching the provider directly. Provider errors propagate
+        unchanged because they already carry user-facing messages.
+        """
+        return self._provider.list_tasks()
 
     def export_only(self, request: QQExportImportRequest) -> Path:
         """Export one QQ group and return the finished JSON file path.

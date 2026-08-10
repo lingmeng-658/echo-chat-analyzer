@@ -30,6 +30,7 @@ GENERIC_ERROR_MESSAGE = (
 # otherwise delete a finished QRunnable together with its signal object, and
 # any cross-thread callback still queued for the UI thread would be dropped.
 _PENDING: set["FacadeWorker"] = set()
+_RELAYS: set["_CallbackRelay"] = set()
 
 _WORKER_LOGGER = logging.getLogger("qq_chat_analyzer.desktop.worker")
 
@@ -56,6 +57,49 @@ class WorkerSignals(QObject):
     progress = Signal(str)
 
 
+class _CallbackRelay(QObject):
+    """Deliver worker callbacks on the thread that created the worker.
+
+    Qt only queues a signal to a QObject receiver. Connecting a signal
+    directly to a plain Python lambda runs it on the worker thread, where
+    widget updates and ``QTimer.singleShot`` do not behave correctly. This
+    relay lives on the GUI thread, so its slots are queued back to it.
+    """
+
+    def __init__(
+        self,
+        on_success: Callable[[Any], None],
+        on_error: Callable[[str, str], None],
+        on_finished: Callable[[], None] | None,
+        on_progress: Callable[[str], None] | None,
+    ) -> None:
+        super().__init__()
+        self._on_success = on_success
+        self._on_error = on_error
+        self._on_finished = on_finished
+        self._on_progress = on_progress
+
+    @Slot(object)
+    def _succeeded(self, result: Any) -> None:
+        self._on_success(result)
+
+    @Slot(str, str)
+    def _failed(self, code: str, message: str) -> None:
+        self._on_error(code, message)
+
+    @Slot(str)
+    def _progress(self, message: str) -> None:
+        _WORKER_LOGGER.info("[worker] forward progress: %s", message)
+        if self._on_progress is not None:
+            self._on_progress(message)
+
+    @Slot()
+    def _finished(self) -> None:
+        if self._on_finished is not None:
+            self._on_finished()
+        _RELAYS.discard(self)
+
+
 class FacadeWorker(QRunnable):
     """Run one facade call off the UI thread."""
 
@@ -64,15 +108,17 @@ class FacadeWorker(QRunnable):
         operation: Callable[..., Any],
         *,
         reports_progress: bool = False,
+        signals_parent: QObject | None = None,
     ) -> None:
         super().__init__()
         self._operation = operation
         self._reports_progress = reports_progress
-        self.signals = WorkerSignals()
+        self.signals = WorkerSignals(signals_parent)
         self.setAutoDelete(False)
 
     @Slot()
     def run(self) -> None:
+        _WORKER_LOGGER.info("[worker] facade operation started")
         try:
             def _report_progress(message: str) -> None:
                 _WORKER_LOGGER.info("[wechat worker] emit progress: %s", message)
@@ -93,6 +139,7 @@ class FacadeWorker(QRunnable):
             _WORKER_LOGGER.exception("facade operation crashed", exc_info=error)
             self.signals.failed.emit("unexpected_error", GENERIC_ERROR_MESSAGE)
         else:
+            _WORKER_LOGGER.info("[worker] facade operation succeeded")
             self.signals.succeeded.emit(result)
         finally:
             self.signals.finished.emit()
@@ -114,20 +161,21 @@ def submit(
     back to the UI thread through a Qt signal, so callers never touch widgets
     from the worker thread.
     """
-    worker = FacadeWorker(operation, reports_progress=on_progress is not None)
-    worker.signals.succeeded.connect(on_success)
-    worker.signals.failed.connect(on_error)
-    if on_progress is not None:
-        def _forward_progress(message: str) -> None:
-            _WORKER_LOGGER.info("[wechat worker] forward progress: %s", message)
-            on_progress(message)
-
-        worker.signals.progress.connect(_forward_progress)
-    if on_finished is not None:
-        worker.signals.finished.connect(on_finished)
+    relay = _CallbackRelay(on_success, on_error, on_finished, on_progress)
+    worker = FacadeWorker(
+        operation,
+        reports_progress=on_progress is not None,
+        signals_parent=relay,
+    )
+    worker.signals.succeeded.connect(relay._succeeded)
+    worker.signals.failed.connect(relay._failed)
+    worker.signals.progress.connect(relay._progress)
+    worker.signals.finished.connect(relay._finished)
     worker.signals.finished.connect(lambda: _PENDING.discard(worker))
+    worker._callback_relay = relay
 
     _PENDING.add(worker)
+    _RELAYS.add(relay)
     (pool or QThreadPool.globalInstance()).start(worker)
     return worker
 

@@ -115,3 +115,48 @@ def test_bundled_data_files_lists_stopwords(
         (str(fake_bundle / "stopwords_topic.txt"), "."),
         (str(fake_bundle / "stopwords_culture.txt"), "."),
     ]
+
+
+def test_bundled_runtime_dir_points_at_project_runtime_in_dev(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _fresh_module(monkeypatch)
+    if hasattr(module.sys, "_MEIPASS"):
+        monkeypatch.delattr(module.sys, "_MEIPASS")
+
+    assert module.bundled_runtime_dir() == PROJECT_ROOT / "runtime"
+
+
+def test_default_wechat_runtime_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _fresh_module(monkeypatch)
+    if hasattr(module.sys, "_MEIPASS"):
+        monkeypatch.delattr(module.sys, "_MEIPASS")
+
+    root = PROJECT_ROOT / "runtime" / "wechat"
+    assert module.default_wechat_runtime_directory() == root
+    assert module.default_wechat_wcdb_cli_path() == root / "wcdb_cli.exe"
+    assert module.default_wechat_wcdb_dll_path() == root / "WCDB.dll"
+    assert module.default_wechat_wx_key_dll_path() == root / "wx_key.dll"
+
+
+def test_bundled_runtime_dir_points_at_meipass_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _fresh_module(monkeypatch)
+    fake_bundle = PROJECT_ROOT / ".tmp-runtime-bundle"
+    monkeypatch.setattr(
+        module.sys,
+        "_MEIPASS",
+        str(fake_bundle),
+        raising=False,
+    )
+
+    assert module.bundled_runtime_dir() == fake_bundle / "runtime"
+    assert module.default_wechat_wcdb_cli_path() == (
+        fake_bundle / "runtime" / "wechat" / "wcdb_cli.exe"
+    )
+    assert module.default_wechat_wcdb_dll_path() == (
+        fake_bundle / "runtime" / "wechat" / "WCDB.dll"
+    )

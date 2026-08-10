@@ -20,25 +20,26 @@ from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from ..providers.qq_chat_exporter_provider import TokenUnavailable
-
-
-MESSAGE_AVAILABLE = (
-    "QQ \u6570\u636E\u6E90\u53EF\u7528\uFF0CQQChatExporter \u670D\u52A1\u5DF2\u8FDE\u63A5\u3002"
-)
-MESSAGE_NOT_RUNNING = (
-    "QQChatExporter \u670D\u52A1\u672A\u8FD0\u884C\uFF0CQQ \u6570\u636E\u6E90\u5F53\u524D\u4E0D\u53EF\u7528\u3002"
-)
-MESSAGE_TOKEN_MISSING = (
-    "QQChatExporter \u8BBF\u95EE\u51ED\u636E\u4E0D\u5B58\u5728\uFF0C\u9700\u8981\u5148\u5B8C\u6210\u521D\u59CB\u5316\u6216\u6388\u6743\u3002"
-)
-MESSAGE_UNKNOWN_ERROR = (
-    "\u65E0\u6CD5\u786E\u8BA4 QQ \u6570\u636E\u6E90\u72B6\u6001\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002"
+from .qq_environment_config import (
+    QQConfigCorrupted,
+    QQConfigNotFound,
+    QQEnvironmentConfigError,
 )
 
-ACTION_HINT_AVAILABLE = "\u53EF\u4EE5\u5F00\u59CB\u5BFC\u51FA\u7FA4\u804A\u8BB0\u5F55\u3002"
-ACTION_HINT_START_QCE = "\u8BF7\u5148\u542F\u52A8\u5E76\u767B\u5F55 QQChatExporter\uFF0C\u7136\u540E\u91CD\u8BD5\u3002"
-ACTION_HINT_AUTHORIZE = "\u8BF7\u786E\u8BA4 QQChatExporter \u5DF2\u6B63\u5E38\u542F\u52A8\u8FC7\u4E00\u6B21\uFF0C\u518D\u91CD\u65B0\u6388\u6743\u3002"
-ACTION_HINT_RETRY = "\u8BF7\u7A0D\u540E\u91CD\u8BD5\uFF0C\u6216\u786E\u8BA4 QQChatExporter \u5DF2\u542F\u52A8\u5E76\u6388\u6743\u3002"
+
+MESSAGE_AVAILABLE = "QQ 数据源已连接。"
+MESSAGE_NOT_RUNNING = "QQ 服务未运行，QQ 数据源当前不可用。"
+MESSAGE_TOKEN_MISSING = "QQ 需要先登录并授权才能读取聊天记录。"
+MESSAGE_UNKNOWN_ERROR = "无法确认 QQ 数据源状态，请稍后重试。"
+MESSAGE_CONFIG_MISSING = "QQ 数据源尚未连接。"
+MESSAGE_CONFIG_INVALID = "QQ 数据源暂不可用，请稍后重试。"
+
+ACTION_HINT_AVAILABLE = "可以开始选择 QQ 账号分析聊天记录。"
+ACTION_HINT_START_QCE = "请打开并登录 QQ 后重试。"
+ACTION_HINT_AUTHORIZE = "请在 QQ 中完成登录授权后重试。"
+ACTION_HINT_RETRY = "请稍后重试，或确认 QQ 已完成登录授权。"
+ACTION_HINT_CONFIG_MISSING = "请点击「连接QQ」自动完成连接。"
+ACTION_HINT_CONFIG_INVALID = "请稍后重试。"
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,8 +75,33 @@ class QQConnectionProvider(Protocol):
 class QQConnectionService:
     """Turn provider health and token state into a stable user status."""
 
-    def __init__(self, provider: QQConnectionProvider) -> None:
-        self._provider = provider
+    def __init__(
+        self,
+        provider: QQConnectionProvider | None = None,
+        *,
+        provider_factory: Any = None,
+    ) -> None:
+        if provider is None and provider_factory is None:
+            raise TypeError(
+                "QQConnectionService needs a provider or provider_factory"
+            )
+        self._injected_provider = provider
+        self._provider_factory = provider_factory
+
+    def provider(self) -> QQConnectionProvider:
+        """Return the provider used for probes.
+
+        When a shared provider factory is injected, the instance comes from
+        that factory, so connection checks and session reads use the same
+        configuration and provider.
+        """
+        if self._provider_factory is not None:
+            return self._provider_factory.create()
+        return self._injected_provider
+
+    @property
+    def _provider(self) -> QQConnectionProvider:
+        return self.provider()
 
     def check_status(self) -> QQConnectionStatus:
         """Ask the provider once and translate the answer for a caller.
@@ -85,7 +111,16 @@ class QQConnectionService:
         only composes them into user-visible state.
         """
         try:
-            health = self._provider.health_check()
+            provider = self.provider()
+        except QQConfigNotFound:
+            return self._config_missing_status()
+        except (QQConfigCorrupted, QQEnvironmentConfigError):
+            return self._config_invalid_status()
+        except Exception:
+            return self._unknown_status()
+
+        try:
+            health = provider.health_check()
             running = bool(getattr(health, "available", False))
             version = getattr(health, "version", None) or None
         except Exception:
@@ -138,4 +173,24 @@ class QQConnectionService:
             version=None,
             message=MESSAGE_UNKNOWN_ERROR,
             action_hint=ACTION_HINT_RETRY,
+        )
+
+    def _config_missing_status(self) -> QQConnectionStatus:
+        return QQConnectionStatus(
+            available=False,
+            qce_running=False,
+            authenticated=False,
+            version=None,
+            message=MESSAGE_CONFIG_MISSING,
+            action_hint=ACTION_HINT_CONFIG_MISSING,
+        )
+
+    def _config_invalid_status(self) -> QQConnectionStatus:
+        return QQConnectionStatus(
+            available=False,
+            qce_running=False,
+            authenticated=False,
+            version=None,
+            message=MESSAGE_CONFIG_INVALID,
+            action_hint=ACTION_HINT_CONFIG_INVALID,
         )

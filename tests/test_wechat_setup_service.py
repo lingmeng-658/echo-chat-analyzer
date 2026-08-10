@@ -144,8 +144,17 @@ def test_writer_converts_os_error_to_user_safe_error(tmp_path: Path) -> None:
 
 
 def test_check_setup_reports_missing_config(tmp_path: Path) -> None:
-    loader = WeChatEnvironmentConfigLoader(tmp_path / "absent.json")
-    service = WeChatSetupService(config_loader=loader)
+    class _MissingLoader:
+        def config_path(self):
+            return tmp_path / "wechat.json"
+
+        def load(self):
+            raise WeChatConfigNotFound()
+
+        def load_or_default(self):
+            raise WeChatConfigNotFound()
+
+    service = WeChatSetupService(config_loader=_MissingLoader())
 
     status = service.check_setup()
 
@@ -227,6 +236,39 @@ def test_check_setup_exposes_config_path(tmp_path: Path) -> None:
     )
 
     assert service.check_setup().config_path == target
+
+
+# ------------------------------------------------------ detect_data_root
+
+
+def test_detect_wechat_data_root_returns_detected_path(tmp_path: Path) -> None:
+    detected = tmp_path / "xwechat_files"
+    service = WeChatSetupService(data_root_detector=lambda: detected)
+
+    assert service.detect_wechat_data_root() == detected
+
+
+def test_detect_wechat_data_root_returns_none_when_missing() -> None:
+    service = WeChatSetupService(data_root_detector=lambda: None)
+
+    assert service.detect_wechat_data_root() is None
+
+
+def test_detect_wechat_data_root_swallows_detector_errors() -> None:
+    def _explode() -> Path:
+        raise OSError("cannot read home 0xdeadbeef")
+
+    service = WeChatSetupService(data_root_detector=_explode)
+
+    assert service.detect_wechat_data_root() is None
+
+
+def test_detect_wechat_data_root_uses_provider_default() -> None:
+    service = WeChatSetupService()
+
+    detected = service.detect_wechat_data_root()
+
+    assert detected is None or isinstance(detected, Path)
 
 
 # --------------------------------------------------------- save_environment

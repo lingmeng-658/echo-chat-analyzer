@@ -38,6 +38,13 @@ from .wechat_environment_config import (
 _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.wechat_setup_service")
 
 
+def _detect_wechat_data_root() -> Path | None:
+    """Reuse the provider's best-effort data directory discovery."""
+    from ..providers.wechat_database_provider import default_data_root
+
+    return default_data_root()
+
+
 MESSAGE_CONFIG_MISSING = (
     "\u5c1a\u672a\u914d\u7f6e\u5fae\u4fe1\u8fd0\u884c\u73af\u5883\u3002"
 )
@@ -98,12 +105,16 @@ class WeChatSetupService:
         provider_factory: Any = None,
         connection_service: Any = None,
         key_service: Any = None,
+        data_root_detector: Callable[[], Path | None] | None = None,
     ) -> None:
         self._config_loader = config_loader or WeChatEnvironmentConfigLoader()
         self._config_writer = config_writer or WeChatEnvironmentConfigWriter()
         self._provider_factory = provider_factory
         self._connection_service = connection_service
         self._key_service = key_service
+        self._data_root_detector = (
+            data_root_detector or _detect_wechat_data_root
+        )
 
     def check_setup(self) -> WeChatSetupStatus:
         """Report whether a usable configuration is stored, never raising."""
@@ -134,6 +145,16 @@ class WeChatSetupService:
             action_hint=ACTION_HINT_CONFIG_READY,
             config_path=config_path,
         )
+
+    def detect_wechat_data_root(self) -> Path | None:
+        """Return a detected local WeChat data directory, or ``None``."""
+        try:
+            detected = self._data_root_detector()
+        except Exception:
+            return None
+        if detected is None:
+            return None
+        return Path(detected)
 
     def save_environment(self, config: WeChatEnvironmentConfig) -> Any:
         """Persist a config, refresh the provider, and re-check connection.

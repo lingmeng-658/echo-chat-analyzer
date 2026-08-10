@@ -15,12 +15,20 @@ _REPLY_MARKER_RE = re.compile(
 )
 _MENTION_ALL_RE = re.compile(r"(?<!\w)@全体成员")
 _MENTION_RE = re.compile(r"(?<!\w)@[^\s@，。！？、,:;；]+")
+_WECHAT_INTERNAL_ID_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:wxid_[A-Za-z0-9_]+|wx_[A-Za-z0-9_]+)"
+    r"(?![A-Za-z0-9])",
+    flags=re.IGNORECASE,
+)
+_WECHAT_BARE_ID_RE = re.compile(
+    r"(?<![A-Za-z0-9])[a-z0-9]{12,}(?![A-Za-z0-9])"
+)
 _ZERO_WIDTH_RE = re.compile(r"[\u200b-\u200d\u2060\ufeff]")
 _WHITESPACE_CONTROL_RE = re.compile(r"[\t\n\r\f\v]+")
 _REPEATED_WHITESPACE_RE = re.compile(r"\s+")
 
 
-def clean_text(text: str) -> str:
+def clean_text(text: str, platform: str | None = None) -> str:
     """Remove chat structure while preserving the user's actual wording."""
     if not isinstance(text, str):
         return ""
@@ -29,6 +37,9 @@ def clean_text(text: str) -> str:
     cleaned = _REPLY_MARKER_RE.sub("", cleaned)
     cleaned = _MENTION_ALL_RE.sub("", cleaned)
     cleaned = _MENTION_RE.sub("", cleaned)
+    if platform == "wechat":
+        cleaned = _WECHAT_INTERNAL_ID_RE.sub(" ", cleaned)
+        cleaned = _WECHAT_BARE_ID_RE.sub(" ", cleaned)
     cleaned = _ZERO_WIDTH_RE.sub("", cleaned)
 
     # Newlines and tabs separate words, so normalize them before removing

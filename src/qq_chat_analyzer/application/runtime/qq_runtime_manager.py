@@ -18,21 +18,16 @@ from typing import Any
 from qq_chat_analyzer.runtime import ChatRuntime, RuntimeInfo
 
 
-MESSAGE_UNAVAILABLE = (
-    "\u672a\u627e\u5230 QQ \u8fd0\u884c\u73af\u5883\uff0c\u65e0\u6cd5\u542f\u52a8\u3002"
-)
-MESSAGE_STOPPED = "QQ \u8fd0\u884c\u73af\u5883\u5df2\u505c\u6b62\u3002"
-MESSAGE_STARTING = "\u6b63\u5728\u542f\u52a8 QQ \u8fd0\u884c\u73af\u5883..."
-MESSAGE_RUNNING = "QQ \u8fd0\u884c\u73af\u5883\u5df2\u542f\u52a8\u3002"
-MESSAGE_STOPPING = "\u6b63\u5728\u505c\u6b62 QQ \u8fd0\u884c\u73af\u5883..."
-MESSAGE_ERROR = "\u64cd\u4f5c\u5931\u8d25\uff0c\u65e0\u6cd5\u5b8c\u6210\u6240\u9700\u52a8\u4f5c\u3002"
-MESSAGE_NOT_READY = (
-    "\u8fd0\u884c\u73af\u5883\u5df2\u542f\u52a8\uff0c"
-    "\u4f46\u670d\u52a1\u5c1a\u672a\u5c31\u7eea\u3002"
-)
+MESSAGE_UNAVAILABLE = "未检测到 QQ 数据源，暂时无法连接。"
+MESSAGE_STOPPED = "QQ 已断开。"
+MESSAGE_STARTING = "正在连接 QQ..."
+MESSAGE_RUNNING = "QQ 已连接。"
+MESSAGE_STOPPING = "正在断开 QQ..."
+MESSAGE_ERROR = "操作失败，请稍后重试。"
+MESSAGE_NOT_READY = "QQ 正在准备中，请稍候。"
 
-ACTION_HINT_INSTALL = "\u8bf7\u5148\u5b89\u88c5\u5305\u542b QQ \u8fd0\u884c\u73af\u5883\u7684\u7248\u672c\u3002"
-ACTION_HINT_RETRY = "\u8bf7\u786e\u8ba4\u8fd0\u884c\u73af\u5883\u540e\u91cd\u8bd5\u3002"
+ACTION_HINT_INSTALL = "QQ 数据源暂不可用，请稍后再试。"
+ACTION_HINT_RETRY = "请稍后重试。"
 
 
 class QQRuntimeState(str, Enum):

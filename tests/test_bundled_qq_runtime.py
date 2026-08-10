@@ -69,6 +69,8 @@ def _config(
     working_directory: Path,
     base_url: str = "http://127.0.0.1:40653",
     config_directory: Path | None = None,
+    static_directory: Path | None = None,
+    bridge_url: str | None = None,
 ) -> object:
     module = _runtime_module()
     return module.QQRuntimeConfig(
@@ -76,8 +78,25 @@ def _config(
         working_directory=working_directory,
         base_url=base_url,
         config_directory=config_directory or working_directory / "config",
+        static_directory=static_directory,
+        bridge_url=bridge_url,
         version="9.9.9",
     )
+
+
+def test_config_accepts_static_directory_and_bridge_url(tmp_path: Path) -> None:
+    module = _runtime_module()
+    static = tmp_path / "static" / "qce"
+
+    config = _config(
+        executable=tmp_path / "qce-server.exe",
+        working_directory=tmp_path,
+        static_directory=static,
+        bridge_url="http://127.0.0.1:40654",
+    )
+
+    assert config.static_directory == static
+    assert config.bridge_url == "http://127.0.0.1:40654"
 
 
 def _make_runtime(
@@ -317,3 +336,26 @@ def test_health_checker_exception_is_not_leaked(tmp_path: Path) -> None:
 
     assert "health probe exploded with secret" not in excinfo.value.public_message
     assert "Traceback" not in excinfo.value.public_message
+
+
+def test_default_health_checker_uses_qce_v6_health_path(monkeypatch) -> None:
+    module = _runtime_module()
+    calls: list[str] = []
+
+    class _Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+    def _urlopen(url, timeout=1):
+        calls.append(url)
+        return _Response()
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", _urlopen)
+
+    assert module.default_health_checker("http://127.0.0.1:40653") is True
+    assert calls == ["http://127.0.0.1:40653/health"]

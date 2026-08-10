@@ -8,9 +8,10 @@ with stubs.
 from __future__ import annotations
 
 import sys
+from types import SimpleNamespace
 from typing import Any
 
-from ..application.facade import ChatAnalyzerFacade
+from ..application.facade import ChatAnalyzerFacade, ChatSource
 from ..resources import resources_dir, user_data_dir
 from .desktop_runtime import (
     STARTUP_FAILED_MESSAGE,
@@ -32,50 +33,73 @@ def build_facade() -> ChatAnalyzerFacade:
     """
     from ..application.analysis_service import AnalysisApplicationService
 
-    wechat_provider_factory = _wechat_provider_factory()
-    wechat_connection_service = _optional_wechat_connection_service(
-        wechat_provider_factory
-    )
-
     return ChatAnalyzerFacade(
-        qq_service=_optional_qq_service(),
-        qq_connection_service=_optional_qq_connection_service(),
-        wechat_service=_optional_wechat_service(wechat_provider_factory),
-        wechat_connection_service=wechat_connection_service,
-        wechat_setup_service=_optional_wechat_setup_service(
-            wechat_provider_factory,
-            wechat_connection_service,
-        ),
+        source_builders={
+            ChatSource.QQ: _qq_bundle_factory,
+            ChatSource.WECHAT: _wechat_bundle_factory,
+        },
         analysis_service=AnalysisApplicationService(),
         stopwords_directory=resources_dir(),
     )
 
 
-def _optional_qq_service() -> Any:
-    provider = _optional_qq_provider()
-    if provider is None:
-        return None
+def _qq_bundle_factory() -> Any:
+    """Build all QQ services together on first QQ access."""
+    provider_factory = _qq_provider_factory()
+    connection_service = _optional_qq_connection_service(provider_factory)
+    return SimpleNamespace(
+        service=_optional_qq_service(provider_factory),
+        connection=connection_service,
+        setup=_optional_qq_setup_service(
+            provider_factory,
+            connection_service,
+        ),
+    )
+
+
+def _wechat_bundle_factory() -> Any:
+    """Build all WeChat services together on first WeChat access."""
+    provider_factory = _wechat_provider_factory()
+    connection_service = _optional_wechat_connection_service(provider_factory)
+    return SimpleNamespace(
+        service=_optional_wechat_service(provider_factory),
+        connection=connection_service,
+        setup=_optional_wechat_setup_service(
+            provider_factory,
+            connection_service,
+        ),
+    )
+
+
+def _qq_provider_factory() -> Any:
+    """Build the one factory all QQ services share."""
+    from ..application.qq_provider_factory import QQProviderFactory
+
+    return QQProviderFactory()
+
+
+def _optional_qq_service(provider_factory: Any) -> Any:
     from ..application.qq_export_import_service import QQExportImportService
 
-    return QQExportImportService(provider)
+    return QQExportImportService(provider_factory=provider_factory)
 
 
-def _optional_qq_connection_service() -> Any:
-    provider = _optional_qq_provider()
-    if provider is None:
-        return None
+def _optional_qq_connection_service(provider_factory: Any) -> Any:
     from ..application.qq_connection_service import QQConnectionService
 
-    return QQConnectionService(provider)
+    return QQConnectionService(provider_factory=provider_factory)
 
 
-def _optional_qq_provider() -> Any:
-    try:
-        from ..providers import QQChatExporterProvider
+def _optional_qq_setup_service(
+    provider_factory: Any,
+    connection_service: Any,
+) -> Any:
+    from ..application.qq_setup_service import QQSetupService
 
-        return QQChatExporterProvider()
-    except Exception:
-        return None
+    return QQSetupService(
+        provider_factory=provider_factory,
+        connection_service=connection_service,
+    )
 
 
 def _wechat_provider_factory() -> Any:
@@ -109,11 +133,13 @@ def _optional_wechat_setup_service(
     provider_factory: Any,
     connection_service: Any,
 ) -> Any:
+    from ..application.wechat_key_service import WeChatKeyService
     from ..application.wechat_setup_service import WeChatSetupService
 
     return WeChatSetupService(
         provider_factory=provider_factory,
         connection_service=connection_service,
+        key_service=WeChatKeyService(),
     )
 
 

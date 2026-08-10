@@ -43,6 +43,13 @@ class _FakeQQGroup:
         self.member_count = member_count
 
 
+class _FakeExportTask:
+    """Mirror the minimum surface of a QCE export task snapshot."""
+
+    def __init__(self, task_id: str) -> None:
+        self.task_id = task_id
+
+
 class _FakeWeChatSession:
     """Mirror the fields of a real WeChat session listing."""
 
@@ -60,18 +67,32 @@ class _FakeWeChatSession:
 
 
 class _StubQQService:
-    def __init__(self, groups=(), export_path: Path | None = None, error=None):
+    def __init__(
+        self,
+        groups=(),
+        export_path: Path | None = None,
+        error=None,
+        tasks=(),
+    ):
         self._groups = list(groups)
         self._export_path = export_path
         self._error = error
+        self._tasks = None if tasks is None else list(tasks)
         self.export_requests: list[object] = []
         self.list_calls = 0
+        self.list_tasks_calls = 0
 
     def list_groups(self):
         self.list_calls += 1
         if self._error is not None:
             raise self._error
         return self._groups
+
+    def list_tasks(self):
+        self.list_tasks_calls += 1
+        if self._error is not None:
+            raise self._error
+        return self._tasks
 
     def export_only(self, request):
         self.export_requests.append(request)
@@ -114,6 +135,27 @@ class _StubQQConnectionService:
         return self._status
 
 
+class _StubQQSetupService:
+    def __init__(self, config=None, error=None, connect_status=None):
+        self._config = config
+        self._error = error
+        self._connect_status = connect_status
+        self.config_calls = 0
+        self.connect_calls = 0
+
+    def get_environment_config(self):
+        self.config_calls += 1
+        if self._error is not None:
+            raise self._error
+        return self._config
+
+    def connect(self):
+        self.connect_calls += 1
+        if self._error is not None:
+            raise self._error
+        return self._connect_status
+
+
 class _StubWeChatConnectionService:
     def __init__(self, status=None, error=None):
         self._status = status
@@ -125,6 +167,20 @@ class _StubWeChatConnectionService:
         if self._error is not None:
             raise self._error
         return self._status
+
+
+class _LazySourceBundle:
+    """One lazily built source with service/connection/setup slots."""
+
+    def __init__(
+        self,
+        service: object | None = None,
+        connection: object | None = None,
+        setup: object | None = None,
+    ) -> None:
+        self.service = service
+        self.connection = connection
+        self.setup = setup
 
 
 def _reports(message_count: int = 2):
@@ -312,6 +368,77 @@ def test_list_sessions_converts_qq_groups_into_session_info() -> None:
     assert sessions[0].session_type == "group"
     assert sessions[0].message_count == 12
     assert sessions[1].message_count is None
+
+
+def test_get_qq_export_tasks_delegates_to_the_qq_service() -> None:
+    tasks = [_FakeExportTask("task-1"), _FakeExportTask("task-2")]
+    service = _StubQQService(tasks=tasks)
+    facade = _facade(qq_service=service)
+
+    result = facade.get_qq_export_tasks()
+
+    assert result == tasks
+    assert service.list_tasks_calls == 1
+
+
+def test_get_qq_export_tasks_turns_none_into_empty_list() -> None:
+    service = _StubQQService(tasks=None)
+    facade = _facade(qq_service=service)
+
+    assert facade.get_qq_export_tasks() == []
+    assert service.list_tasks_calls == 1
+
+
+def test_list_sessions_hides_unnamed_qq_group_id() -> None:
+    module = _facade_module()
+    facade = _facade(
+        qq_service=_StubQQService(
+            groups=[_FakeQQGroup("10099", "", member_count=3)]
+        )
+    )
+
+    session = facade.list_sessions(module.ChatSource.QQ)[0]
+
+    assert session.session_id == "10099"
+    assert session.display_name == "\u672a\u77e5\u7fa4\u804a"
+
+
+def test_facade_returns_qq_environment_config_for_prefill() -> None:
+    module = _facade_module()
+    config = module.QQEnvironmentConfig(
+        runtime_directory=Path("D:/fake_runtime"),
+    )
+    setup = _StubQQSetupService(config=config)
+    facade = _facade(qq_setup_service=setup)
+
+    assert facade.get_qq_environment_config() is config
+    assert setup.config_calls == 1
+
+
+def test_connect_qq_delegates_to_the_setup_service() -> None:
+    module = _facade_module()
+    status = module.QQConnectionStatus(
+        available=True,
+        qce_running=True,
+        authenticated=True,
+        version="4.1.0",
+        message="QQ \u5df2\u8fde\u63a5\u3002",
+        action_hint="",
+    )
+    setup = _StubQQSetupService(connect_status=status)
+    facade = _facade(qq_setup_service=setup)
+
+    result = facade.connect_qq()
+
+    assert setup.connect_calls == 1
+    connection = importlib.import_module(
+        "qq_chat_analyzer.application.connection"
+    )
+    assert isinstance(result, connection.ConnectionSnapshot)
+    assert result.state is connection.ConnectionState.CONNECTED
+    assert result.connected is True
+    assert result.version == "4.1.0"
+    assert result.message == "QQ \u5df2\u8fde\u63a5\u3002"
 
 
 def test_list_sessions_converts_wechat_sessions_into_session_info() -> None:
@@ -510,6 +637,87 @@ def test_get_connection_status_rejects_local_file_source() -> None:
         assert error.code == "unknown_source"
     else:  # pragma: no cover
         raise AssertionError("expected a FacadeError")
+
+
+def test_qq_source_usable_when_wechat_builder_raises() -> None:
+    module = _facade_module()
+    qq_status = module.QQConnectionStatus(
+        available=True,
+        qce_running=True,
+        authenticated=True,
+        version="4.1.0",
+        message="QQ \u5df2\u8fde\u63a5",
+        action_hint="",
+    )
+    qq_service = _StubQQService(groups=[_FakeQQGroup("10001", "Fictional")])
+    qq_connection = _StubQQConnectionService(status=qq_status)
+    qq_built: list[int] = []
+    wechat_built: list[int] = []
+
+    def build_qq():
+        qq_built.append(1)
+        return _LazySourceBundle(
+            service=qq_service,
+            connection=qq_connection,
+        )
+
+    def build_wechat():
+        wechat_built.append(1)
+        raise RuntimeError("wechat runtime missing")
+
+    facade = module.ChatAnalyzerFacade(
+        source_builders={
+            module.ChatSource.QQ: build_qq,
+            module.ChatSource.WECHAT: build_wechat,
+        },
+        analysis_service=_StubAnalysisService(result=_result()),
+    )
+
+    sessions = facade.list_sessions(module.ChatSource.QQ)
+    status = facade.get_connection_status(module.ChatSource.QQ)
+
+    assert wechat_built == []
+    assert [session.session_id for session in sessions] == ["10001"]
+    assert status.available is True
+    assert qq_built == [1]
+
+
+def test_wechat_status_usable_when_qq_builder_raises() -> None:
+    module = _facade_module()
+    wechat_status = module.WeChatConnectionStatus(
+        available=False,
+        data_found=False,
+        db_key_available=False,
+        runtime_available=False,
+        message="\u672a\u627e\u5230\u5fae\u4fe1\u6570\u636e\u76ee\u5f55",
+        action_hint="\u8bf7\u5148\u767b\u5f55\u5fae\u4fe1",
+    )
+    wechat_connection = _StubWeChatConnectionService(status=wechat_status)
+    qq_built: list[int] = []
+    wechat_built: list[int] = []
+
+    def build_qq():
+        qq_built.append(1)
+        raise RuntimeError("qq runtime missing")
+
+    def build_wechat():
+        wechat_built.append(1)
+        return _LazySourceBundle(connection=wechat_connection)
+
+    facade = module.ChatAnalyzerFacade(
+        source_builders={
+            module.ChatSource.QQ: build_qq,
+            module.ChatSource.WECHAT: build_wechat,
+        },
+        analysis_service=_StubAnalysisService(result=_result()),
+    )
+
+    status = facade.get_connection_status(module.ChatSource.WECHAT)
+
+    assert qq_built == []
+    assert status.available is False
+    assert "\u5fae\u4fe1\u6570\u636e\u76ee\u5f55" in status.message
+    assert wechat_built == [1]
 
 
 def test_wechat_connection_service_errors_become_facade_errors() -> None:
@@ -730,6 +938,38 @@ def test_analyze_session_dispatches_to_the_wechat_service(
     assert request.session_id == "wxid_fictional_a"
     assert request.output_path.name.endswith(".json")
     assert outcome.source is module.ChatSource.WECHAT
+
+
+def test_analyze_session_resolves_wechat_conversation_name(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    export_path = _export_file(tmp_path, "wechat_export.json")
+    analysis_service = _StubAnalysisService(result=_result())
+    session_id = "wxid_fictional_a"
+    wechat_service = _StubWeChatService(
+        export_path=export_path,
+        sessions=[
+            _FakeWeChatSession(
+                session_id,
+                "Fictional Alice",
+            )
+        ],
+    )
+    facade = module.ChatAnalyzerFacade(
+        wechat_service=wechat_service,
+        analysis_service=analysis_service,
+    )
+
+    outcome = facade.analyze_session(
+        module.ChatSource.WECHAT,
+        session_id,
+    )
+
+    assert outcome.session.display_name == "Fictional Alice"
+    assert analysis_service.requests[0].conversation_names == {
+        session_id: "Fictional Alice"
+    }
 
 
 def test_analyze_session_hides_the_intermediate_export_file(

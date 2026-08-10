@@ -508,3 +508,39 @@ GUI 只装配控件、转发事件、展示状态。
 | 历史设计记录 | `docs/design/`、`docs/superpowers/specs/` |
 
 当架构描述与其他文档冲突时，**以本文档为准**。
+
+---
+
+## 10. Connection Layer
+
+记录 Phase 10 新增的连接层。它回答一个问题：
+“这个来源现在能不能用”。
+
+- **GUI 不管理 runtime 生命周期。**
+  界面不再启动运行环境、不做健康检查、不检查 token，
+  只负责展示状态、触发连接动作、展示错误。
+- **Facade 提供连接状态。**
+  GUI 仍然只认识 `ChatAnalyzerFacade` 一个入口，
+  通过 `get_qq_connection_snapshot()` 和 `connect_qq()` 获取结果。
+- **Connection Manager 管理连接流程。**
+  位于 `application/connection/`，负责编排准备、启动与授权检查，
+  并把底层结果解释成用户可理解的状态。
+- **ConnectionSnapshot 是只读状态模型。**
+  不可变，跨层传递，GUI 只读取不重新推导。
+  状态取值：`DISCONNECTED`、`INITIALIZING`、`STARTING`、
+  `WAITING_AUTH`、`CONNECTED`、`ERROR`。
+- **当前仅 QQ 使用该结构。**
+  未来微信可以复用同一套抽象，但**不提前实现**；
+  微信仍走原有连接状态路径。
+
+调用链：
+
+```text
+GUI
+ ↓
+Facade
+ ↓
+Connection Manager
+ ↓
+QQ Connection Service / Runtime
+```

@@ -7,7 +7,7 @@ not convert chat payloads; turning an exported JSON file into
 
 Surface used (confirmed by reading the QCE Rust server sources):
 
-* ``GET  /api/health``            - unauthenticated liveness probe
+* ``GET  /health``                - public liveness probe
 * ``GET  /api/groups``            - paginated group list
 * ``POST /api/messages/export``   - register an export task, returns immediately
 * ``GET  /api/tasks/{taskId}``    - poll task state
@@ -55,7 +55,7 @@ class QQChatExporterError(Exception):
     """Base error for QCE service integration failures."""
 
     code = "qce_error"
-    public_message = "QQ \u5bfc\u51fa\u5de5\u5177\u64cd\u4f5c\u5931\u8d25\u3002"
+    public_message = "QQ 数据源操作失败，请稍后重试。"
 
     def __init__(self, public_message: str | None = None) -> None:
         self.public_message = public_message or type(self).public_message
@@ -67,8 +67,8 @@ class ServiceUnavailable(QQChatExporterError):
 
     code = "service_unavailable"
     public_message = (
-        "\u672a\u68c0\u6d4b\u5230\u6b63\u5728\u8fd0\u884c\u7684 QQChatExporter \u670d\u52a1\u3002"
-        "\u8bf7\u5148\u542f\u52a8 QQChatExporter\uff0c\u7136\u540e\u91cd\u8bd5\u3002"
+        "未检测到可用的 QQ 数据源，"
+        "请确认 QQ 已登录后重试。"
     )
 
 
@@ -77,8 +77,8 @@ class TokenUnavailable(QQChatExporterError):
 
     code = "token_unavailable"
     public_message = (
-        "\u672a\u627e\u5230 QQChatExporter \u8bbf\u95ee\u51ed\u636e\u3002"
-        "\u8bf7\u786e\u8ba4 QQChatExporter \u5df2\u6b63\u5e38\u542f\u52a8\u8fc7\u4e00\u6b21\u3002"
+        "QQ 需要先完成登录授权，"
+        "请确认 QQ 已登录后重试。"
     )
 
 
@@ -86,7 +86,7 @@ class RequestFailed(QQChatExporterError):
     """Raised when the service answers with an error envelope or bad status."""
 
     code = "request_failed"
-    public_message = "QQChatExporter \u8bf7\u6c42\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5\u3002"
+    public_message = "QQ 数据源请求失败，请稍后重试。"
 
 
 class TaskNotFound(QQChatExporterError):
@@ -102,10 +102,7 @@ class ExportTaskLimitReached(QQChatExporterError):
     """Raised when the service refuses a new task because too many are running."""
 
     code = "export_task_limit_reached"
-    public_message = (
-        "QQChatExporter \u6b63\u5728\u8fd0\u884c\u7684\u5bfc\u51fa\u4efb\u52a1\u5df2\u8fbe\u4e0a\u9650\uff0c"
-        "\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002"
-    )
+    public_message = "QQ 导出任务已达上限，请稍后重试。"
 
 
 class ExportTaskFailed(QQChatExporterError):
@@ -141,7 +138,7 @@ class ExportTimeout(QQChatExporterError):
 
 @dataclass(frozen=True, slots=True)
 class ServiceHealth:
-    """Privacy-safe snapshot of ``GET /api/health``."""
+    """Privacy-safe snapshot of ``GET /health``."""
 
     available: bool
     status: str = ""
@@ -165,6 +162,13 @@ class ExportTask:
     status: str
     progress: int = 0
     message_count: int | None = None
+    session_name: str = ""
+    chat_type: int | None = None
+    peer_uid: str = ""
+    progress_message: str = ""
+    created_at: str = ""
+    completed_at: str = ""
+    download_url: str = ""
     file_path: str = ""
     file_name: str = ""
     error: str = ""
@@ -178,16 +182,17 @@ class ExportTask:
 def resolve_security_candidates() -> tuple[Path, ...]:
     """Return ``security.json`` candidate paths in lookup order.
 
-    ``QCE_CONFIG_DIR`` always wins. On Windows the official desktop
-    installer pins the config next to its install directory under
-    ``%LOCALAPPDATA%\\QQChatExporter\\.qce-config``, so that path comes
-    before the legacy user-home fallback.
+    ``QCE_CONFIG_DIR`` always wins when set. The v6.x runtime stores its
+    token at ``%USERPROFILE%\\.qq-chat-exporter\\security.json``, so that
+    user-home path comes first; the older desktop install location under
+    ``%LOCALAPPDATA%\\QQChatExporter\\.qce-config`` remains a fallback.
     """
     override = os.environ.get("QCE_CONFIG_DIR", "").strip()
     if override:
         return (Path(override) / SECURITY_FILE_NAME,)
 
     candidates: list[Path] = []
+    candidates.append(Path.home() / QCE_DIR_NAME / SECURITY_FILE_NAME)
     if os.name == "nt":
         local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
         if local_app_data:
@@ -197,7 +202,6 @@ def resolve_security_candidates() -> tuple[Path, ...]:
                 / ".qce-config"
                 / SECURITY_FILE_NAME
             )
-    candidates.append(Path.home() / QCE_DIR_NAME / SECURITY_FILE_NAME)
     return tuple(candidates)
 
 
@@ -207,8 +211,16 @@ def resolve_security_path() -> Path:
 
 
 def read_token(path: Path | None = None) -> str | None:
-    """Read the access token from the first usable ``security.json``."""
-    targets = (path,) if path is not None else resolve_security_candidates()
+    """Read the access token from the first usable ``security.json``.
+
+    An explicit ``path`` is checked first, then the standard candidate
+    locations. The bundled runtime points at its own config directory which
+    may be empty on first use, so falling back to the user-profile token file
+    keeps ``%USERPROFILE%\\.qq-chat-exporter\\security.json`` working.
+    """
+    targets = list(resolve_security_candidates())
+    if path is not None:
+        targets.insert(0, Path(path))
     for target in targets:
         token = _read_token_file(target)
         if token:
@@ -262,9 +274,9 @@ class QQChatExporterProvider:
     # ------------------------------------------------------------------ probing
 
     def health_check(self) -> ServiceHealth:
-        """Probe ``/api/health``. Never raises for an unreachable service."""
+        """Probe ``/health``. Never raises for an unreachable service."""
         try:
-            data = self._request("GET", "/api/health", authenticated=False)
+            data = self._request("GET", "/health", authenticated=False)
         except QQChatExporterError:
             return ServiceHealth(available=False)
 
@@ -288,6 +300,26 @@ class QQChatExporterProvider:
             raise TokenUnavailable()
         self._token = token
         return token
+
+    # ------------------------------------------------------------------ tasks
+
+    def list_tasks(self) -> list[ExportTask]:
+        """Return the QCE export task list as :class:`ExportTask` snapshots."""
+        data = self._request("GET", "/api/tasks")
+        rows: Any = []
+        if isinstance(data, Mapping):
+            rows = data.get("tasks")
+        if not isinstance(rows, list):
+            return []
+
+        tasks: list[ExportTask] = []
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            task = _build_task(row)
+            if task.task_id:
+                tasks.append(task)
+        return tasks
 
     # ------------------------------------------------------------------ listing
 
@@ -465,7 +497,7 @@ def _urllib_transport(
     """Perform one HTTP call against the local QCE service."""
     if not url.startswith(("http://127.0.0.1", "http://localhost", "http://[::1]")):
         raise ServiceUnavailable(
-            "\u4ec5\u652f\u6301\u8fde\u63a5\u672c\u673a\u7684 QQChatExporter \u670d\u52a1\u3002"
+            "仅支持连接本机 QQ 数据源。"
         )
 
     request = urllib.request.Request(url, data=payload, method=method)
@@ -536,11 +568,26 @@ def _extract_error_message(envelope: Mapping[str, Any]) -> str:
 
 def _build_task(data: Mapping[str, Any]) -> ExportTask:
     task_id = _clean_str(data.get("taskId")) or _clean_str(data.get("id"))
+    peer = data.get("peer")
+    peer_fields = peer if isinstance(peer, Mapping) else {}
     return ExportTask(
         task_id=task_id,
         status=_clean_str(data.get("status")),
         progress=_optional_int(data.get("progress")) or 0,
         message_count=_optional_int(data.get("messageCount")),
+        session_name=(
+            _clean_str(data.get("sessionName"))
+            or _clean_str(data.get("chatName"))
+        ),
+        chat_type=_optional_int(peer_fields.get("chatType")),
+        peer_uid=_clean_str(peer_fields.get("peerUid")),
+        progress_message=(
+            _clean_str(data.get("progressMessage"))
+            or _clean_str(data.get("message"))
+        ),
+        created_at=_clean_str(data.get("createdAt")),
+        completed_at=_clean_str(data.get("completedAt")),
+        download_url=_clean_str(data.get("downloadUrl")),
         file_path=_clean_str(data.get("filePath")),
         file_name=_clean_str(data.get("fileName")),
         error=_extract_task_error(data),

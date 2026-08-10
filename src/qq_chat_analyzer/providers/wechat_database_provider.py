@@ -36,7 +36,11 @@ DB_KEY_ENVIRONMENT_VARIABLE = "WX_DB_KEY"
 
 SESSION_DB_NAME = "session.db"
 MESSAGE_DB_GLOB = "message_*.db"
+CONTACT_DB_NAME = "contact.db"
 WCDB_DLL_NAME = "WCDB.dll"
+MESSAGE_AVAILABILITY_REASON = (
+    "\u8be5\u4f1a\u8bdd\u6ca1\u6709\u53ef\u5206\u6790\u6d88\u606f"
+)
 
 _DB_STORAGE_DIR_NAMES = ("db_storage",)
 _SESSION_TABLE = "SessionTable"
@@ -122,6 +126,8 @@ class WeChatSession:
     display_name: str
     session_type: str = "other"
     message_count: int | None = None
+    message_available: bool = True
+    unavailable_reason: str | None = None
 
 
 def message_table_name(username: str) -> str:
@@ -175,6 +181,8 @@ class WeChatDatabaseProvider:
             f"FROM {_SESSION_TABLE} ORDER BY last_timestamp DESC"
         )
         rows = self._query(session_db, sql, limit=limit)
+        available_tables = self._message_table_names()
+        contact_names = self._contact_display_names()
 
         sessions: list[WeChatSession] = []
         for row in rows:
@@ -183,11 +191,20 @@ class WeChatDatabaseProvider:
             username = row.get("username")
             if not isinstance(username, str) or not username.strip():
                 continue
+            if not _is_conversation_username(username):
+                continue
+            message_available = message_table_name(username) in available_tables
             sessions.append(
                 WeChatSession(
                     session_id=username,
-                    display_name=username,
+                    display_name=contact_names.get(username) or username,
                     session_type=_session_type(username),
+                    message_available=message_available,
+                    unavailable_reason=(
+                        None
+                        if message_available
+                        else MESSAGE_AVAILABILITY_REASON
+                    ),
                 )
             )
         return sessions
@@ -211,10 +228,29 @@ class WeChatDatabaseProvider:
         )
         destination = Path(output_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
+        contact_names = self._contact_display_names()
+        resolved_rows: list[Any] = []
+        for row in rows:
+            if isinstance(row, Mapping):
+                merged = dict(row)
+                sender_id = row.get("user_name")
+                if isinstance(sender_id, str) and sender_id.strip():
+                    merged["sender_name"] = (
+                        contact_names.get(sender_id.strip())
+                        or sender_id.strip()
+                    )
+                resolved_rows.append(merged)
+            else:
+                resolved_rows.append(row)
         document = {
             "source": "wechat-db",
-            "conversation": {"username": session_id},
-            "messages": rows,
+            "conversation": {
+                "username": session_id,
+                "display_name": (
+                    contact_names.get(session_id) or session_id
+                ),
+            },
+            "messages": resolved_rows,
         }
         destination.write_text(
             json.dumps(document, ensure_ascii=False),
@@ -354,6 +390,68 @@ class WeChatDatabaseProvider:
             return False
         return bool(rows)
 
+    def _message_table_names(self) -> set[str]:
+        """Return every ``Msg_<md5>`` table name found in message shards."""
+        root = self._resolve_data_root()
+        shards = [
+            shard
+            for directory in _iter_db_directories(root)
+            for shard in sorted(directory.glob(MESSAGE_DB_GLOB))
+        ]
+        names: set[str] = set()
+        for shard in shards:
+            try:
+                rows = self._query(
+                    shard,
+                    (
+                        "SELECT name FROM sqlite_master "
+                        "WHERE type = 'table' AND name LIKE 'Msg_%'"
+                    ),
+                    limit=DEFAULT_MESSAGE_LIMIT,
+                )
+            except WeChatDatabaseError:
+                continue
+            for row in rows:
+                if (
+                    isinstance(row, Mapping)
+                    and isinstance(row.get("name"), str)
+                ):
+                    names.add(row["name"])
+        return names
+
+    def _contact_display_names(self) -> dict[str, str]:
+        """Return username -> resolved display name from contact.db."""
+        root = self._resolve_data_root()
+        names: dict[str, str] = {}
+        for directory in _iter_db_directories(root):
+            contact_db = directory / CONTACT_DB_NAME
+            if not contact_db.is_file():
+                continue
+            try:
+                rows = self._query(
+                    contact_db,
+                    (
+                        "SELECT username, remark, nick_name "
+                        "FROM contact"
+                    ),
+                    limit=DEFAULT_MESSAGE_LIMIT,
+                )
+            except WeChatDatabaseError:
+                continue
+            for row in rows:
+                if not isinstance(row, Mapping):
+                    continue
+                username = row.get("username")
+                if not isinstance(username, str) or not username.strip():
+                    continue
+                display_name = _first_display_name(
+                    row.get("remark"),
+                    row.get("nick_name"),
+                )
+                if display_name:
+                    names[username] = display_name
+        return names
+
 
 def _helper_candidates() -> list[Path]:
     package_root = Path(__file__).resolve().parents[1]
@@ -386,6 +484,20 @@ def _session_type(username: str) -> str:
     if username.startswith("gh_"):
         return "official"
     return "private"
+
+
+def _is_conversation_username(username: str) -> bool:
+    """Return whether a session is a real private or group conversation."""
+    return username.endswith("@chatroom") or username.startswith(
+        ("wxid_", "wx_")
+    )
+
+
+def _first_display_name(*values: Any) -> str | None:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 def _parse_result(stdout: str) -> Mapping[str, Any] | None:

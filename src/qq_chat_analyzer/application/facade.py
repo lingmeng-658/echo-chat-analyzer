@@ -22,26 +22,35 @@ Everything that escapes this layer is either a plain view model or a
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Iterator, Protocol, runtime_checkable
+from typing import Any, Callable, Iterator, Protocol, runtime_checkable
 
 from ..resources import resources_dir
+from ..analysis.timestamps import to_epoch_seconds
 from ..presentation import DashboardView, build_dashboard_view
 from .dto import AnalysisRequestDTO, AnalysisResultDTO
 from .errors import ApplicationServiceError
+from .connection import ConnectionSnapshot, QQConnectionManager
 from .qq_connection_service import (
     QQConnectionService,
     QQConnectionStatus,
 )
+from .qq_environment_config import QQEnvironmentConfig
 from .qq_export_import_service import QQExportImportRequest
+from .qq_setup_service import QQSetupStatus
 from .wechat_connection_service import WeChatConnectionStatus
 from .wechat_environment_config import WeChatEnvironmentConfig
 from .wechat_export_import_service import WeChatExportImportRequest
 from .wechat_setup_service import WeChatSetupStatus
+
+
+_LOGGER = logging.getLogger("qq_chat_analyzer.desktop.facade")
 
 
 DEFAULT_TOP = 50
@@ -70,6 +79,8 @@ class SessionInfo:
     display_name: str
     session_type: str = "other"
     message_count: int | None = None
+    message_available: bool = True
+    unavailable_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,7 +156,7 @@ class SourceUnavailable(FacadeError):
 
 _SOURCE_UNAVAILABLE_MESSAGES = {
     ChatSource.QQ: (
-        "QQ \u6570\u636e\u6e90\u5c1a\u672a\u914d\u7f6e\u3002"
+        "QQ \u6570\u636e\u6e90\u6682\u4e0d\u53ef\u7528\u3002"
     ),
     ChatSource.WECHAT: (
         "\u5fae\u4fe1\u6570\u636e\u6e90\u5c1a\u672a\u914d\u7f6e\u3002"
@@ -194,9 +205,14 @@ class ChatAnalyzerFacade:
         *,
         qq_service: Any = None,
         qq_connection_service: Any = None,
+        qq_setup_service: Any = None,
+        qq_connection_manager: Any = None,
         wechat_service: Any = None,
         wechat_connection_service: Any = None,
         wechat_setup_service: Any = None,
+        source_builders: (
+            dict[ChatSource, Callable[[], Any]] | None
+        ) = None,
         analysis_service: Any = None,
         presentation_builder: Any = None,
         stopwords_directory: Path | None = None,
@@ -206,11 +222,33 @@ class ChatAnalyzerFacade:
             ChatSource.WECHAT: wechat_service,
         }
         self._qq_connection_service = qq_connection_service
-        self._wechat_connection_service = wechat_connection_service
-        self._wechat_setup_service = wechat_setup_service
+        self._qq_setup_service = qq_setup_service
+        self._qq_connection_manager = qq_connection_manager
+        self._wechat_connection_service_value = wechat_connection_service
+        self._wechat_setup_service_value = wechat_setup_service
+        self._source_builders = dict(source_builders or {})
+        self._built_sources: dict[ChatSource, Any] = {}
         self._analysis_service = analysis_service
         self._presentation_builder = presentation_builder
         self._stopwords_directory = stopwords_directory or resources_dir()
+
+    @property
+    def _wechat_connection_service(self) -> Any:
+        if self._wechat_connection_service_value is None:
+            bundle = self._source_bundle(ChatSource.WECHAT)
+            self._wechat_connection_service_value = getattr(
+                bundle,
+                "connection",
+                None,
+            )
+        return self._wechat_connection_service_value
+
+    @property
+    def _wechat_setup_service(self) -> Any:
+        if self._wechat_setup_service_value is None:
+            bundle = self._source_bundle(ChatSource.WECHAT)
+            self._wechat_setup_service_value = getattr(bundle, "setup", None)
+        return self._wechat_setup_service_value
 
     # ------------------------------------------------------------- discovery
 
@@ -248,6 +286,12 @@ class ChatAnalyzerFacade:
             for raw_session in raw_sessions or ()
         ]
 
+    def get_qq_export_tasks(self) -> list[Any]:
+        """Return the current QCE export task list through the QQ service."""
+        service = self._require_service(ChatSource.QQ)
+        with _translated_errors(ChatSource.QQ):
+            return service.list_tasks() or []
+
     def get_connection_status(
         self,
         source: ChatSource,
@@ -258,11 +302,74 @@ class ChatAnalyzerFacade:
         with _translated_errors(chat_source):
             return service.check_status()
 
+    def get_qq_setup_status(self) -> QQSetupStatus:
+        """Report whether the QQ environment config is usable."""
+        service = self._require_qq_setup_service()
+        with _translated_errors(ChatSource.QQ):
+            return service.check_setup()
+
+    def get_qq_environment_config(self) -> QQEnvironmentConfig:
+        """Return the effective QQ environment config for prefill.
+
+        The GUI uses this only to prefill the setup dialog, never to read or
+        write the configuration itself.
+        """
+        service = self._require_qq_setup_service()
+        with _translated_errors(ChatSource.QQ):
+            return service.get_environment_config()
+
+    def setup_qq_environment(self, config: QQEnvironmentConfig) -> Any:
+        """Save a QQ environment config and re-check the connection."""
+        service = self._require_qq_setup_service()
+        with _translated_errors(ChatSource.QQ):
+            return service.save_environment(config)
+
+    def get_qq_runtime_status(self) -> Any:
+        """Return the current QQ runtime lifecycle status."""
+        service = self._require_qq_setup_service()
+        with _translated_errors(ChatSource.QQ):
+            return service.get_runtime_status()
+
+    def start_qq_runtime(self) -> Any:
+        """Start the configured QQ runtime and wait until ready."""
+        service = self._require_qq_setup_service()
+        with _translated_errors(ChatSource.QQ):
+            return service.start_runtime()
+
+    def get_qq_connection_snapshot(self) -> ConnectionSnapshot:
+        """Report the QQ connection lifecycle without starting anything.
+
+        This is what the GUI shows when a user selects QQ. The manager never
+        raises, so an unreachable service becomes a snapshot rather than an
+        error the page has to interpret.
+        """
+        return self._require_qq_connection_manager().get_snapshot()
+
+    def connect_qq(self) -> ConnectionSnapshot:
+        """Connect QQ without any technical input from the user.
+
+        Runtime detection, startup, and connection probing stay inside the
+        connection manager; the GUI only receives the resulting lifecycle
+        snapshot.
+        """
+        return self._require_qq_connection_manager().connect()
+
     def get_wechat_setup_status(self) -> WeChatSetupStatus:
         """Report whether the WeChat environment config is usable."""
         service = self._require_setup_service()
         with _translated_errors(ChatSource.WECHAT):
             return service.check_setup()
+
+    def detect_wechat_data_root(self) -> Path | None:
+        """Best-effort detect the local WeChat data directory.
+
+        The GUI uses this to prefill the setup dialog and to start the
+        one-click connect flow. The detected directory is handed back as a
+        config value; the GUI never probes the filesystem itself.
+        """
+        service = self._require_setup_service()
+        with _translated_errors(ChatSource.WECHAT):
+            return service.detect_wechat_data_root()
 
     def setup_wechat_environment(
         self,
@@ -277,6 +384,53 @@ class ChatAnalyzerFacade:
         service = self._require_setup_service()
         with _translated_errors(ChatSource.WECHAT):
             return service.save_environment(config)
+
+    def acquire_wechat_db_key(
+        self,
+        progress: Callable[[str], None] | None = None,
+    ) -> str | None:
+        """Acquire and persist the WeChat database key for the connect flow.
+
+        Saving the data root deliberately no longer does this, because the
+        key can only be captured while WeChat is at a login moment. The
+        connect flow calls this second step explicitly. ``progress`` is
+        relayed to the key acquisition so long waits can surface status.
+        """
+        service = self._require_setup_service()
+        _LOGGER.info(
+            "[wechat facade] acquire_wechat_db_key progress=%s",
+            progress is not None,
+        )
+        with _translated_errors(ChatSource.WECHAT):
+            return service.acquire_db_key(progress=progress)
+
+    def get_session_message_range(
+        self,
+        source: ChatSource,
+        session_id: str,
+    ) -> tuple[int, int] | None:
+        """Return earliest and latest message timestamps for one session."""
+        chat_source = _coerce_source(source)
+        if chat_source is not ChatSource.WECHAT:
+            return None
+        service = self._require_service(chat_source)
+        provider_factory = getattr(service, "provider", None)
+        if provider_factory is None:
+            return None
+        try:
+            rows = provider_factory().read_session_rows(session_id)
+        except Exception:
+            return None
+        epochs = [
+            value
+            for row in rows
+            if isinstance(row, Mapping)
+            for value in (to_epoch_seconds(row.get("create_time")),)
+            if value is not None
+        ]
+        if not epochs:
+            return None
+        return min(epochs), max(epochs)
 
     # -------------------------------------------------------------- analysis
 
@@ -322,11 +476,32 @@ class ChatAnalyzerFacade:
 
         resolved_config = config or AnalysisConfig()
         service = self._require_service(chat_source)
-        session = SessionInfo(
-            source=chat_source,
-            session_id=session_id,
-            display_name=session_id,
-        )
+        if chat_source is ChatSource.WECHAT:
+            raw_session = next(
+                (
+                    candidate
+                    for candidate in (service.list_sessions() or ())
+                    if getattr(candidate, "session_id", None) == session_id
+                ),
+                None,
+            )
+            session = (
+                _to_session_info(chat_source, raw_session)
+                if raw_session is not None
+                else SessionInfo(
+                    source=chat_source,
+                    session_id=session_id,
+                    display_name=session_id,
+                )
+            )
+            conversation_names = {session_id: session.display_name}
+        else:
+            session = SessionInfo(
+                source=chat_source,
+                session_id=session_id,
+                display_name=session_id,
+            )
+            conversation_names = None
 
         with TemporaryDirectory(prefix="chat-analyzer-export-") as scratch:
             scratch_directory = Path(scratch)
@@ -344,6 +519,7 @@ class ChatAnalyzerFacade:
                 resolved_config,
                 source=chat_source,
                 session=session,
+                conversation_names=conversation_names,
             )
 
     # ------------------------------------------------------------- internals
@@ -355,6 +531,8 @@ class ChatAnalyzerFacade:
         *,
         source: ChatSource,
         session: SessionInfo | None,
+        speaker_names: Mapping[str, str] | None = None,
+        conversation_names: Mapping[str, str] | None = None,
     ) -> AnalysisOutcome:
         """Run analysis then presentation for one local path."""
         analysis_service = self._require_analysis_service()
@@ -366,6 +544,8 @@ class ChatAnalyzerFacade:
                 stopwords_path=self._stopwords_path(config.profile),
                 font_path=config.font_path,
                 top=config.top,
+                speaker_names=speaker_names or {},
+                conversation_names=conversation_names or {},
             )
             with _translated_errors(source):
                 result = analysis_service.execute(request)
@@ -429,10 +609,16 @@ class ChatAnalyzerFacade:
     def _is_available(self, source: ChatSource) -> bool:
         if source is ChatSource.LOCAL_FILE:
             return self._analysis_service is not None
-        return self._services.get(source) is not None
+        return (
+            self._services.get(source) is not None
+            or source in self._source_builders
+        )
 
     def _require_service(self, source: ChatSource) -> Any:
         service = self._services.get(source)
+        if service is None:
+            bundle = self._source_bundle(source)
+            service = getattr(bundle, "service", None)
         if service is None:
             raise SourceUnavailable(source)
         return service
@@ -445,13 +631,63 @@ class ChatAnalyzerFacade:
         else:
             raise UnknownChatSource(source)
         if service is None:
+            bundle = self._source_bundle(source)
+            service = getattr(bundle, "connection", None)
+        if service is None:
             raise SourceUnavailable(source)
         return service
 
+    def _require_qq_connection_manager(self) -> Any:
+        """Return the QQ connection manager, building it on first use.
+
+        The manager is composed from the services this facade already holds,
+        so a caller that injected stubs keeps getting those stubs.
+        """
+        if self._qq_connection_manager is None:
+            self._qq_connection_manager = QQConnectionManager(
+                setup_service=self._optional_qq_setup_service(),
+                connection_service=self._optional_qq_connection_service(),
+            )
+        return self._qq_connection_manager
+
+    def _optional_qq_setup_service(self) -> Any:
+        try:
+            return self._require_qq_setup_service()
+        except SourceUnavailable:
+            return None
+
+    def _optional_qq_connection_service(self) -> Any:
+        try:
+            return self._require_connection_service(ChatSource.QQ)
+        except (SourceUnavailable, UnknownChatSource):
+            return None
+
+    def _require_qq_setup_service(self) -> Any:
+        service = self._qq_setup_service
+        if service is None:
+            bundle = self._source_bundle(ChatSource.QQ)
+            service = getattr(bundle, "setup", None)
+        if service is None:
+            raise SourceUnavailable(ChatSource.QQ)
+        return service
+
     def _require_setup_service(self) -> Any:
-        if self._wechat_setup_service is None:
+        service = self._wechat_setup_service
+        if service is None:
+            bundle = self._source_bundle(ChatSource.WECHAT)
+            service = getattr(bundle, "setup", None)
+        if service is None:
             raise SourceUnavailable(ChatSource.WECHAT)
-        return self._wechat_setup_service
+        return service
+
+    def _source_bundle(self, source: ChatSource) -> Any:
+        """Build and cache one source's services on first access."""
+        if source not in self._built_sources:
+            builder = self._source_builders.get(source)
+            if builder is None:
+                raise SourceUnavailable(source)
+            self._built_sources[source] = builder()
+        return self._built_sources[source]
 
     def _require_analysis_service(self) -> Any:
         if self._analysis_service is None:
@@ -566,9 +802,16 @@ def _to_session_info(source: ChatSource, raw_session: Any) -> SessionInfo:
     return SessionInfo(
         source=source,
         session_id=session_id,
-        display_name=display_name or session_id,
+        display_name=(
+            display_name
+            or ("\u672a\u77e5\u7fa4\u804a" if source is ChatSource.QQ else session_id)
+        ),
         session_type=session_type,
         message_count=_first_int(raw_session, "message_count", "member_count"),
+        message_available=bool(
+            getattr(raw_session, "message_available", True)
+        ),
+        unavailable_reason=getattr(raw_session, "unavailable_reason", None),
     )
 
 

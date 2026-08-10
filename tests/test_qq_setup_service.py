@@ -1,0 +1,494 @@
+"""Behavior tests for the QQ setup service one-click connect flow.
+
+Everything here uses fictional temp paths and stub runtime/connection
+collaborators. No real QCE process, token, or chat data is ever touched.
+"""
+
+from __future__ import annotations
+
+import importlib
+import sys
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = PROJECT_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
+
+
+def _module():
+    return importlib.import_module(
+        "qq_chat_analyzer.application.qq_setup_service"
+    )
+
+
+def _connection_module():
+    return importlib.import_module(
+        "qq_chat_analyzer.application.qq_connection_service"
+    )
+
+
+def _runtime_module():
+    return importlib.import_module(
+        "qq_chat_analyzer.application.runtime.qq_runtime_manager"
+    )
+
+
+class _FakeRuntimeManager:
+    """Stand in for QQRuntimeManager with configurable lifecycle state."""
+
+    def __init__(
+        self,
+        *,
+        running: bool = False,
+        available: bool = True,
+        start_error: bool = False,
+    ) -> None:
+        self._running = running
+        self._available = available
+        self._start_error = start_error
+        self.start_calls = 0
+
+    def get_status(self):
+        module = _runtime_module()
+        if not self._available:
+            return module.QQRuntimeStatus(
+                state=module.QQRuntimeState.UNAVAILABLE,
+                available=False,
+                message="\u672a\u68c0\u6d4b\u5230 QQ \u6570\u636e\u6e90\u3002",
+                action_hint="",
+            )
+        if self._start_error:
+            return module.QQRuntimeStatus(
+                state=module.QQRuntimeState.ERROR,
+                available=True,
+                message="\u64cd\u4f5c\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
+                action_hint="\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
+            )
+        return module.QQRuntimeStatus(
+            state=(
+                module.QQRuntimeState.RUNNING
+                if self._running
+                else module.QQRuntimeState.STOPPED
+            ),
+            available=self._running,
+            message="",
+            action_hint="",
+        )
+
+    def start(self):
+        self.start_calls += 1
+        if self._start_error:
+            return self.get_status()
+        self._running = True
+        return self.get_status()
+
+
+class _FakeConnectionService:
+    def __init__(self, status, after_start_status=None):
+        self._status = status
+        self._after_start_status = after_start_status
+        self.check_calls = 0
+
+    def check_status(self):
+        self.check_calls += 1
+        if self._after_start_status is not None and self.check_calls > 1:
+            return self._after_start_status
+        return self._status
+
+
+class _FakeProviderFactory:
+    def __init__(self):
+        self.invalidate_calls = 0
+
+    def invalidate(self):
+        self.invalidate_calls += 1
+
+
+def _config(tmp_path: Path, *, complete: bool = True):
+    module = _module()
+    runtime = tmp_path / "runtime"
+    qce = runtime / "qce-server.exe"
+    if complete:
+        runtime.mkdir(exist_ok=True)
+        qce.write_text("fake", encoding="utf-8")
+    return module.QQEnvironmentConfig(
+        runtime_directory=runtime,
+        qce_path=qce,
+        base_url="http://127.0.0.1:40653",
+    )
+
+
+def _connection_status(*, available: bool = True):
+    module = _connection_module()
+    return module.QQConnectionStatus(
+        available=available,
+        qce_running=available,
+        authenticated=available,
+        version="4.1.0",
+        message=(
+            "QQ \u5df2\u8fde\u63a5\u3002"
+            if available
+            else "QQ \u672a\u8fde\u63a5\u3002"
+        ),
+        action_hint="",
+    )
+
+
+def _service(
+    tmp_path: Path,
+    *,
+    config,
+    runtime_manager,
+    connection_status=None,
+    connection_after_status=None,
+    provider_factory=None,
+    with_connection: bool = True,
+):
+    module = _module()
+    return module.QQSetupService(
+        config_loader=module.QQEnvironmentConfigLoader(
+            config_path=tmp_path / "qq.json"
+        ),
+        config_writer=module.QQEnvironmentConfigWriter(
+            config_path=tmp_path / "qq.json"
+        ),
+        provider_factory=provider_factory,
+        connection_service=(
+            _FakeConnectionService(
+                connection_status,
+                after_start_status=connection_after_status,
+            )
+            if with_connection
+            else None
+        ),
+        runtime_manager=runtime_manager,
+    )
+
+
+def _stored_config(tmp_path: Path):
+    module = _module()
+    return module.QQEnvironmentConfigLoader(
+        config_path=tmp_path / "qq.json"
+    ).load()
+
+
+def _store_config(tmp_path: Path, config) -> None:
+    module = _module()
+    module.QQEnvironmentConfigWriter(
+        config_path=tmp_path / "qq.json"
+    ).save(config)
+
+
+# ------------------------------------------------------------------ connect
+
+
+def test_connect_persists_detected_default_when_no_config_exists(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _config(tmp_path)
+    env_module = importlib.import_module(
+        "qq_chat_analyzer.application.qq_environment_config"
+    )
+    monkeypatch.setattr(
+        env_module,
+        "bundled_qq_runtime_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        env_module,
+        "default_qq_environment_config",
+        lambda: config,
+    )
+    manager = _FakeRuntimeManager()
+    factory = _FakeProviderFactory()
+    status = _connection_status()
+    service = _service(
+        tmp_path,
+        config=config,
+        runtime_manager=manager,
+        connection_status=_connection_status(available=False),
+        connection_after_status=status,
+        provider_factory=factory,
+    )
+
+    result = service.connect()
+
+    assert manager.start_calls == 1
+    assert factory.invalidate_calls == 1
+    assert result.available is True
+    stored = _stored_config(tmp_path)
+    assert stored.qce_path == config.qce_path
+
+
+def test_connect_starts_a_stopped_runtime_and_returns_connection_status(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _store_config(tmp_path, config)
+    manager = _FakeRuntimeManager()
+    status = _connection_status()
+    service = _service(
+        tmp_path,
+        config=config,
+        runtime_manager=manager,
+        connection_status=_connection_status(available=False),
+        connection_after_status=status,
+    )
+
+    result = service.connect()
+
+    assert manager.start_calls == 1
+    assert result.available is True
+
+
+def test_connect_keeps_an_existing_user_config(tmp_path: Path) -> None:
+    module = _module()
+    writer = module.QQEnvironmentConfigWriter(
+        config_path=tmp_path / "qq.json"
+    )
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(exist_ok=True)
+    custom_qce = runtime / "custom.exe"
+    custom_qce.write_text("fake", encoding="utf-8")
+    custom = module.QQEnvironmentConfig(
+        runtime_directory=runtime,
+        qce_path=custom_qce,
+        base_url="http://127.0.0.1:40999",
+    )
+    writer.save(custom)
+
+    manager = _FakeRuntimeManager()
+    factory = _FakeProviderFactory()
+    service = _service(
+        tmp_path,
+        config=custom,
+        runtime_manager=manager,
+        connection_status=_connection_status(),
+        provider_factory=factory,
+    )
+
+    service.connect()
+
+    assert factory.invalidate_calls == 0
+    stored = _stored_config(tmp_path)
+    assert stored.base_url == "http://127.0.0.1:40999"
+
+
+def test_connect_does_not_start_an_already_running_runtime(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _store_config(tmp_path, config)
+    manager = _FakeRuntimeManager(running=True)
+    service = _service(
+        tmp_path,
+        config=config,
+        runtime_manager=manager,
+        connection_status=_connection_status(),
+    )
+
+    result = service.connect()
+
+    assert manager.start_calls == 0
+    assert result.available is True
+
+
+def test_connect_without_runtime_returns_unavailable_status(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _config(tmp_path, complete=False)
+    env_module = importlib.import_module(
+        "qq_chat_analyzer.application.qq_environment_config"
+    )
+    monkeypatch.setattr(
+        env_module,
+        "bundled_qq_runtime_available",
+        lambda: False,
+    )
+    manager = _FakeRuntimeManager(available=False)
+    unavailable = _connection_status(available=False)
+    service = _service(
+        tmp_path,
+        config=config,
+        runtime_manager=manager,
+        connection_status=unavailable,
+    )
+
+    result = service.connect()
+
+    assert manager.start_calls == 0
+    assert result.available is False
+    assert "\u65e0\u6cd5\u8fde\u63a5 QQ" in result.message
+    assert "\u8bf7\u70b9\u51fb" not in result.message
+
+
+def test_connect_detects_running_service_without_bundled_runtime(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _config(tmp_path, complete=False)
+    env_module = importlib.import_module(
+        "qq_chat_analyzer.application.qq_environment_config"
+    )
+    monkeypatch.setattr(
+        env_module,
+        "bundled_qq_runtime_available",
+        lambda: False,
+    )
+    manager = _FakeRuntimeManager(available=False)
+    service = _service(
+        tmp_path,
+        config=config,
+        runtime_manager=manager,
+        connection_status=_connection_status(available=True),
+    )
+
+    result = service.connect()
+
+    assert manager.start_calls == 0
+    assert result.available is True
+
+
+def test_connect_reuses_running_service_before_starting_runtime(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _store_config(tmp_path, config)
+    manager = _FakeRuntimeManager()
+    service = _service(
+        tmp_path,
+        config=config,
+        runtime_manager=manager,
+        connection_status=_connection_status(available=True),
+    )
+
+    result = service.connect()
+
+    assert manager.start_calls == 0
+    assert result.available is True
+
+
+def test_connect_without_connection_service_uses_runtime_status(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _store_config(tmp_path, config)
+    manager = _FakeRuntimeManager()
+    service = _service(
+        tmp_path,
+        config=config,
+        runtime_manager=manager,
+        with_connection=False,
+    )
+
+    result = service.connect()
+
+    assert manager.start_calls == 1
+    assert result.available is True
+
+
+def test_connect_start_failure_returns_runtime_error_status(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _store_config(tmp_path, config)
+    manager = _FakeRuntimeManager(start_error=True)
+    status = _connection_status(available=False)
+    service = _service(
+        tmp_path,
+        config=config,
+        runtime_manager=manager,
+        connection_status=status,
+    )
+
+    result = service.connect()
+
+    assert manager.start_calls == 1
+    assert result.available is False
+    assert result.message != ""
+    assert result.action_hint != ""
+
+
+def test_default_runtime_factory_builds_bundled_manager(
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    runtime_dir = tmp_path / "runtime"
+    (runtime_dir / "static" / "qce").mkdir(parents=True)
+    (runtime_dir / "napcat").mkdir(parents=True)
+    qce = runtime_dir / "qce-server.exe"
+    qce.write_text("fake", encoding="utf-8")
+    config = module.QQEnvironmentConfig(
+        runtime_directory=runtime_dir,
+        qce_path=qce,
+        qce_config_directory=tmp_path / "config",
+        base_url="http://127.0.0.1:40653",
+        security_path=tmp_path / "config" / "security.json",
+        napcat_bridge_url="http://127.0.0.1:40654",
+    )
+
+    manager = module.default_runtime_factory(config)
+
+    assert manager.is_available() is True
+    runtime = manager._runtime
+    assert runtime._config.static_directory == runtime_dir / "static" / "qce"
+    assert runtime._config.bridge_url == "http://127.0.0.1:40654"
+
+
+def test_connect_failure_never_leaks_runtime_config_type_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _module()
+    config = _config(tmp_path)
+    _store_config(tmp_path, config)
+    runtime_module = importlib.import_module("qq_chat_analyzer.runtime")
+
+    def _failed_start(self):
+        raise runtime_module.QQChatRuntimeError("\u8fde\u63a5 QQ \u670d\u52a1\u5931\u8d25\u3002")
+
+    monkeypatch.setattr(runtime_module.BundledQQRuntime, "start", _failed_start)
+    service = module.QQSetupService(
+        config_loader=module.QQEnvironmentConfigLoader(
+            config_path=tmp_path / "qq.json"
+        ),
+        config_writer=module.QQEnvironmentConfigWriter(
+            config_path=tmp_path / "qq.json"
+        ),
+        connection_service=_FakeConnectionService(
+            _connection_status(available=False)
+        ),
+        runtime_factory=module.default_runtime_factory,
+    )
+
+    result = service.connect()
+
+    assert result.available is False
+    assert "TypeError" not in result.message
+    assert "QQRuntimeConfig" not in result.message
+    assert "Traceback" not in result.message
+
+
+def test_bundled_runtime_available_accepts_flat_napcat_layout(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = importlib.import_module(
+        "qq_chat_analyzer.application.qq_environment_config"
+    )
+    runtime = tmp_path / "runtime"
+    qce = runtime / "qce-server.exe"
+    static = runtime / "static" / "qce"
+    marker = runtime / "napcat.mjs"
+    qce.parent.mkdir(parents=True)
+    static.mkdir(parents=True)
+    qce.write_text("fake", encoding="utf-8")
+    marker.write_text("fake", encoding="utf-8")
+    monkeypatch.setattr(module, "default_qq_qce_path", lambda: qce)
+    monkeypatch.setattr(module, "default_qq_static_directory", lambda: static)
+    monkeypatch.setattr(module, "default_qq_runtime_directory", lambda: runtime)
+
+    assert module.bundled_qq_runtime_available() is True
