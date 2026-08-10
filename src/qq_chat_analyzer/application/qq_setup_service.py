@@ -157,16 +157,14 @@ class QQSetupService:
         return self._connection_service.check_status()
 
     def connect(self) -> Any:
-        """Auto-detect the bundled runtime, start it, and check the connection.
+        """Auto-detect the bundled runtime, start it, and report the state.
 
-        This is the one-click user path. The effective config already falls
-        back to bundled defaults, so connecting only persists that default
-        when no user config exists, starts the runtime when needed, and
-        reports the resulting connection state. Nothing about QCE, runtime
-        directories, or config files is exposed to the caller. A connect
-        attempt never silently returns the idle "not connected" prompt: when
-        no runtime can be started and the service is still unavailable, the
-        caller gets an explicit failure status instead.
+        The effective config already falls back to bundled defaults, so
+        connecting only persists that default when no user config exists,
+        starts the runtime when needed, and returns immediately with the
+        current state. Once the runtime process has launched, the caller
+        receives a waiting-for-login status instead of blocking until QQ
+        authorization completes; later status probes report CONNECTED.
         """
         config = self._load_runtime_config()
         _LOGGER.info(
@@ -178,7 +176,7 @@ class QQSetupService:
             self._persist_bundled_config_if_missing(config)
             if self._connection_service is not None:
                 status = self._connection_service.check_status()
-                if status.available:
+                if status.available or status.qce_running:
                     _LOGGER.info("[qq setup] connect reused running QCE service")
                     return status
             runtime_status = self._runtime_manager_for(config).get_status()
@@ -188,12 +186,9 @@ class QQSetupService:
                     runtime_status.state.value,
                 )
                 runtime_status = self._runtime_manager_for(config).start()
-            if runtime_status.state is not QQRuntimeState.RUNNING:
-                _LOGGER.info(
-                    "[qq setup] connect runtime not ready state=%s",
-                    runtime_status.state.value,
-                )
-                return self._connection_status_from_runtime(runtime_status)
+            if runtime_status.state is QQRuntimeState.RUNNING:
+                return self._waiting_auth_status(runtime_status)
+            return self._connection_status_from_runtime(runtime_status)
 
         if self._connection_service is None:
             if runtime_status is not None:
@@ -201,7 +196,7 @@ class QQSetupService:
             return self._connection_unavailable_status(self.check_setup())
 
         status = self._connection_service.check_status()
-        if status.available or runtime_status is not None:
+        if status.available or status.qce_running:
             return status
 
         from .qq_connection_service import QQConnectionStatus
@@ -218,6 +213,23 @@ class QQSetupService:
             ),
         )
 
+    def _waiting_auth_status(self, runtime_status: Any) -> Any:
+        """Report a launched runtime that still needs QQ login authorization."""
+        from .qq_connection_service import (
+            ACTION_HINT_AUTHORIZE,
+            MESSAGE_TOKEN_MISSING,
+            QQConnectionStatus,
+        )
+
+        return QQConnectionStatus(
+            available=False,
+            qce_running=True,
+            authenticated=False,
+            version=getattr(runtime_status, "version", None),
+            message=MESSAGE_TOKEN_MISSING,
+            action_hint=ACTION_HINT_AUTHORIZE,
+        )
+
     def get_runtime_status(self) -> QQRuntimeStatus:
         """Return the current QQ runtime lifecycle status."""
         config = self._load_runtime_config()
@@ -226,7 +238,7 @@ class QQSetupService:
         return self._runtime_manager_for(config).get_status()
 
     def start_runtime(self) -> QQRuntimeStatus:
-        """Start the configured runtime and wait until it is ready."""
+        """Start the configured runtime and return its lifecycle status."""
         config = self._load_runtime_config()
         if config is None or not self._runtime_complete(config):
             return self._runtime_unavailable_status(self.check_setup())
@@ -347,7 +359,7 @@ class QQSetupService:
 
         running = runtime_status.state is QQRuntimeState.RUNNING
         return QQConnectionStatus(
-            available=running,
+            available=False,
             qce_running=running,
             authenticated=False,
             version=runtime_status.version,

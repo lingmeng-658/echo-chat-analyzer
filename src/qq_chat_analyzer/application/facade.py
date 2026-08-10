@@ -207,6 +207,7 @@ class ChatAnalyzerFacade:
         qq_connection_service: Any = None,
         qq_setup_service: Any = None,
         qq_connection_manager: Any = None,
+        qq_auth_bridge: Any = None,
         wechat_service: Any = None,
         wechat_connection_service: Any = None,
         wechat_setup_service: Any = None,
@@ -224,6 +225,7 @@ class ChatAnalyzerFacade:
         self._qq_connection_service = qq_connection_service
         self._qq_setup_service = qq_setup_service
         self._qq_connection_manager = qq_connection_manager
+        self._qq_auth_bridge = qq_auth_bridge
         self._wechat_connection_service_value = wechat_connection_service
         self._wechat_setup_service_value = wechat_setup_service
         self._source_builders = dict(source_builders or {})
@@ -353,6 +355,15 @@ class ChatAnalyzerFacade:
         snapshot.
         """
         return self._require_qq_connection_manager().connect()
+
+    def start_qq_auth_flow(self) -> ConnectionSnapshot:
+        """Start QQ authorization and return the resulting lifecycle state.
+
+        The GUI calls this instead of a raw connect: the auth bridge starts
+        the runtime's own login flow and the caller keeps polling
+        :meth:`get_qq_connection_snapshot` until it reports ``CONNECTED``.
+        """
+        return self._require_qq_auth_bridge().start_auth_flow()
 
     def get_wechat_setup_status(self) -> WeChatSetupStatus:
         """Report whether the WeChat environment config is usable."""
@@ -649,6 +660,18 @@ class ChatAnalyzerFacade:
                 connection_service=self._optional_qq_connection_service(),
             )
         return self._qq_connection_manager
+
+    def _require_qq_auth_bridge(self) -> Any:
+        """Return the QQ auth bridge, composing it from injected services."""
+        if self._qq_auth_bridge is None:
+            from .connection import QQAuthBridge
+
+            self._qq_auth_bridge = QQAuthBridge(
+                setup_service=self._optional_qq_setup_service(),
+                connection_service=self._optional_qq_connection_service(),
+                manager=self._require_qq_connection_manager(),
+            )
+        return self._qq_auth_bridge
 
     def _optional_qq_setup_service(self) -> Any:
         try:

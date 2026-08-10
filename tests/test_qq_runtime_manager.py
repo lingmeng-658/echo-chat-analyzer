@@ -49,6 +49,7 @@ class _FakeRuntime:
         self._ready_error = ready_error
         self.start_calls = 0
         self.stop_calls = 0
+        self.wait_ready_calls = 0
 
     def is_installed(self) -> bool:
         return self._installed
@@ -70,6 +71,7 @@ class _FakeRuntime:
         self._running = False
 
     def wait_ready(self, timeout: float = 30.0) -> None:
+        self.wait_ready_calls += 1
         if self._ready_error is not None:
             raise self._ready_error
         if not self._ready:
@@ -80,7 +82,28 @@ class _FakeRuntime:
 
 
 def _manager(runtime: _FakeRuntime):
-    return _manager_module().QQRuntimeManager(runtime)
+    return _manager_module().QQRuntimeManager(
+        runtime,
+        config_preparer=_RecordingConfigPreparer(),
+    )
+
+
+def _manager_with_preparer(runtime: _FakeRuntime, preparer):
+    return _manager_module().QQRuntimeManager(
+        runtime,
+        config_preparer=preparer,
+    )
+
+
+class _RecordingConfigPreparer:
+    """Record QCE config preparation without touching real files."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self) -> bool:
+        self.calls += 1
+        return True
 
 
 # --------------------------------------------------------------- availability
@@ -132,28 +155,17 @@ def test_start_success_returns_running_status() -> None:
     assert manager.get_status().state == module.QQRuntimeState.RUNNING
 
 
-def test_start_waits_until_runtime_is_ready() -> None:
-    module = _manager_module()
-    runtime = _FakeRuntime(installed=True, running=False, ready=True)
-    manager = _manager(runtime)
-
-    status = manager.start()
-
-    assert status.state == module.QQRuntimeState.RUNNING
-    assert manager.get_status().state == module.QQRuntimeState.RUNNING
-
-
-def test_start_stops_runtime_when_ready_check_fails() -> None:
+def test_start_returns_running_without_waiting_for_readiness() -> None:
     module = _manager_module()
     runtime = _FakeRuntime(installed=True, running=False, ready=False)
     manager = _manager(runtime)
 
     status = manager.start()
 
-    assert status.state == module.QQRuntimeState.ERROR
-    assert status.message != ""
-    assert runtime.stop_calls == 1
-    assert manager.get_status().state == module.QQRuntimeState.ERROR
+    assert runtime.wait_ready_calls == 0
+    assert runtime.stop_calls == 0
+    assert status.state == module.QQRuntimeState.RUNNING
+    assert manager.get_status().state == module.QQRuntimeState.RUNNING
 
 
 def test_start_failure_returns_error_without_leaking_exception() -> None:
@@ -185,6 +197,30 @@ def test_start_requires_an_installed_runtime() -> None:
     assert runtime.start_calls == 0
     assert status.state == module.QQRuntimeState.UNAVAILABLE
     assert status.action_hint != ""
+
+
+def test_start_prepares_qce_webui_config_before_launch() -> None:
+    module = _manager_module()
+    runtime = _FakeRuntime(installed=True, running=False)
+    preparer = _RecordingConfigPreparer()
+    manager = _manager_with_preparer(runtime, preparer)
+
+    status = manager.start()
+
+    assert preparer.calls == 1
+    assert runtime.start_calls == 1
+    assert status.state == module.QQRuntimeState.RUNNING
+
+
+def test_start_skips_qce_config_when_runtime_unavailable() -> None:
+    runtime = _FakeRuntime(installed=False)
+    preparer = _RecordingConfigPreparer()
+    manager = _manager_with_preparer(runtime, preparer)
+
+    manager.start()
+
+    assert preparer.calls == 0
+    assert runtime.start_calls == 0
 
 
 # ------------------------------------------------------------------- stopping

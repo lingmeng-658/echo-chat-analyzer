@@ -51,11 +51,13 @@ class _StubConnectionService:
 
 
 class _StubSetupService:
-    def __init__(self, connect_status=None, error=None):
+    def __init__(self, connect_status=None, error=None, runtime_status=None):
         self._connect_status = connect_status
         self._error = error
+        self._runtime_status = runtime_status
         self.connect_calls = 0
         self.start_runtime_calls = 0
+        self.get_runtime_status_calls = 0
 
     def connect(self):
         self.connect_calls += 1
@@ -66,6 +68,10 @@ class _StubSetupService:
     def start_runtime(self):
         self.start_runtime_calls += 1
         raise AssertionError("status checks must not start the runtime")
+
+    def get_runtime_status(self):
+        self.get_runtime_status_calls += 1
+        return self._runtime_status
 
 
 def _manager(setup_service=None, connection_service=None):
@@ -95,10 +101,10 @@ def test_available_service_maps_to_connected() -> None:
     assert snapshot.version == "9.9.9"
 
 
-def test_running_but_unauthenticated_maps_to_waiting_auth() -> None:
+def test_running_without_qq_data_maps_to_waiting_auth() -> None:
     module = _connection_module()
     service = _StubConnectionService(
-        _status(available=False, qce_running=True, authenticated=False)
+        _status(available=False, qce_running=True, authenticated=True)
     )
 
     snapshot = _manager(connection_service=service).get_snapshot()
@@ -141,6 +147,30 @@ def test_get_snapshot_never_starts_the_runtime() -> None:
     assert setup.start_runtime_calls == 0
 
 
+def test_runtime_started_without_qq_login_maps_to_waiting_auth() -> None:
+    module = _connection_module()
+    runtime = importlib.import_module(
+        "qq_chat_analyzer.application.runtime"
+    )
+    setup = _StubSetupService(
+        runtime_status=runtime.QQRuntimeStatus(
+            state=runtime.QQRuntimeState.RUNNING,
+            available=True,
+        )
+    )
+    service = _StubConnectionService(
+        _status(available=False, qce_running=False, authenticated=False)
+    )
+
+    snapshot = _manager(
+        setup_service=setup,
+        connection_service=service,
+    ).get_snapshot()
+
+    assert setup.get_runtime_status_calls == 1
+    assert snapshot.state is module.ConnectionState.WAITING_AUTH
+
+
 def test_missing_services_report_an_error_snapshot() -> None:
     module = _connection_module()
 
@@ -164,6 +194,58 @@ def test_connect_delegates_to_the_setup_service_once() -> None:
 
     assert setup.connect_calls == 1
     assert snapshot.state is module.ConnectionState.CONNECTED
+
+
+def test_connect_returns_waiting_auth_without_waiting_for_login() -> None:
+    module = _connection_module()
+    setup = _StubSetupService(
+        connect_status=_status(
+            available=True,
+            qce_running=True,
+            authenticated=True,
+        )
+    )
+    service = _StubConnectionService(
+        _status(
+            available=False,
+            qce_running=True,
+            authenticated=False,
+        )
+    )
+
+    snapshot = _manager(
+        setup_service=setup,
+        connection_service=service,
+    ).connect()
+
+    assert setup.connect_calls == 0
+    assert snapshot.state is module.ConnectionState.WAITING_AUTH
+
+
+def test_connect_starts_an_idle_runtime_and_reports_its_state() -> None:
+    module = _connection_module()
+    setup = _StubSetupService(
+        connect_status=_status(
+            available=False,
+            qce_running=True,
+            authenticated=False,
+        )
+    )
+    service = _StubConnectionService(
+        _status(
+            available=False,
+            qce_running=False,
+            authenticated=False,
+        )
+    )
+
+    snapshot = _manager(
+        setup_service=setup,
+        connection_service=service,
+    ).connect()
+
+    assert setup.connect_calls == 1
+    assert snapshot.state is module.ConnectionState.WAITING_AUTH
 
 
 def test_connect_failure_is_reported_as_an_error_snapshot() -> None:

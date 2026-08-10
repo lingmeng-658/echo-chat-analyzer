@@ -11,11 +11,14 @@ responsibilities.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Callable
 
 from qq_chat_analyzer.runtime import ChatRuntime, RuntimeInfo
+
+from ..qq_webui_config import disable_qce_auto_open_browser
 
 
 MESSAGE_UNAVAILABLE = "未检测到 QQ 数据源，暂时无法连接。"
@@ -28,6 +31,8 @@ MESSAGE_NOT_READY = "QQ 正在准备中，请稍候。"
 
 ACTION_HINT_INSTALL = "QQ 数据源暂不可用，请稍后再试。"
 ACTION_HINT_RETRY = "请稍后重试。"
+
+_LOGGER = logging.getLogger("qq_chat_analyzer.desktop.qq_runtime_manager")
 
 
 class QQRuntimeState(str, Enum):
@@ -60,9 +65,11 @@ class QQRuntimeManager:
         self,
         runtime: ChatRuntime,
         ready_timeout: float = 30.0,
+        config_preparer: Callable[[], bool] | None = None,
     ) -> None:
         self._runtime = runtime
         self._ready_timeout = ready_timeout
+        self._config_preparer = config_preparer or disable_qce_auto_open_browser
         self._state = (
             QQRuntimeState.STOPPED
             if runtime.is_installed()
@@ -76,12 +83,21 @@ class QQRuntimeManager:
         return self._runtime.is_installed()
 
     def start(self) -> QQRuntimeStatus:
-        """Start the runtime and return the resulting status."""
+        """Start the runtime and return immediately.
+
+        Readiness and login authorization are reported by later probes; this
+        call never blocks waiting for the external service to come up.
+        """
         if not self.is_available():
             return self._status(
                 QQRuntimeState.UNAVAILABLE,
                 message=MESSAGE_UNAVAILABLE,
                 action_hint=ACTION_HINT_INSTALL,
+            )
+
+        if not self._config_preparer():
+            _LOGGER.warning(
+                "[qq runtime] QCE auto-open config could not be prepared"
             )
 
         self._state = QQRuntimeState.STARTING
@@ -92,17 +108,6 @@ class QQRuntimeManager:
             return self._status(
                 QQRuntimeState.ERROR,
                 message=_runtime_error_message(error, MESSAGE_ERROR),
-                action_hint=ACTION_HINT_RETRY,
-            )
-
-        try:
-            self._runtime.wait_ready(timeout=self._ready_timeout)
-        except Exception as error:
-            self._stop_after_failed_start()
-            self._state = QQRuntimeState.ERROR
-            return self._status(
-                QQRuntimeState.ERROR,
-                message=_runtime_error_message(error, MESSAGE_NOT_READY),
                 action_hint=ACTION_HINT_RETRY,
             )
 
@@ -190,12 +195,6 @@ class QQRuntimeManager:
             message=message,
             action_hint=action_hint,
         )
-
-    def _stop_after_failed_start(self) -> None:
-        try:
-            self._runtime.stop()
-        except Exception:
-            pass
 
 
 def _runtime_error_message(error: Exception, fallback: str) -> str:

@@ -46,9 +46,11 @@ ACTION_HINT_CONFIG_INVALID = "请稍后重试。"
 class QQConnectionStatus:
     """User-facing snapshot of the QQ connection state.
 
-    ``available`` is the only flag a caller should gate on. ``qce_running``
-    and ``authenticated`` explain *why*, while ``message`` and ``action_hint``
-    tell the user what is wrong and what to do next.
+    ``available`` is the only flag a caller should gate on; it means the QQ
+    account data is usable right now. ``qce_running`` says the QCE service is
+    up, and ``authenticated`` only records QCE's own API token, never the QQ
+    login itself. ``message`` and ``action_hint`` tell the user what is wrong
+    and what to do next.
     """
 
     available: bool
@@ -69,6 +71,10 @@ class QQConnectionProvider(Protocol):
 
     def resolve_token(self) -> str:  # pragma: no cover - contract only
         """Return the access token, raising TokenUnavailable when absent."""
+        ...
+
+    def list_groups(self, limit: int = 1) -> Any:  # pragma: no cover - contract only
+        """Return QQ groups, raising until the QQ account data is usable."""
         ...
 
 
@@ -126,21 +132,22 @@ class QQConnectionService:
         except Exception:
             return self._unknown_status()
 
-        authenticated = self._resolve_authenticated()
         if not running:
             return QQConnectionStatus(
                 available=False,
                 qce_running=False,
-                authenticated=authenticated,
+                authenticated=False,
                 version=None,
                 message=MESSAGE_NOT_RUNNING,
                 action_hint=ACTION_HINT_START_QCE,
             )
-        if not authenticated:
+
+        api_authenticated = self._resolve_api_authenticated()
+        if not self._resolve_qq_data_available():
             return QQConnectionStatus(
                 available=False,
                 qce_running=True,
-                authenticated=False,
+                authenticated=api_authenticated,
                 version=version,
                 message=MESSAGE_TOKEN_MISSING,
                 action_hint=ACTION_HINT_AUTHORIZE,
@@ -148,7 +155,7 @@ class QQConnectionService:
         return QQConnectionStatus(
             available=True,
             qce_running=True,
-            authenticated=True,
+            authenticated=api_authenticated,
             version=version,
             message=MESSAGE_AVAILABLE,
             action_hint=ACTION_HINT_AVAILABLE,
@@ -156,7 +163,8 @@ class QQConnectionService:
 
     # ---------------------------------------------------------------- internals
 
-    def _resolve_authenticated(self) -> bool:
+    def _resolve_api_authenticated(self) -> bool:
+        """Return whether QCE's own API authentication token is present."""
         try:
             token = self._provider.resolve_token()
         except TokenUnavailable:
@@ -164,6 +172,19 @@ class QQConnectionService:
         except Exception:
             return False
         return bool(token)
+
+    def _resolve_qq_data_available(self) -> bool:
+        """Return whether the QQ account data is actually reachable.
+
+        The security token only proves QCE API authentication. QCE serves
+        QQ-scoped data only after the QQ account has logged in, so a small
+        group probe is the real data availability check.
+        """
+        try:
+            self._provider.list_groups(limit=1)
+        except Exception:
+            return False
+        return True
 
     def _unknown_status(self) -> QQConnectionStatus:
         return QQConnectionStatus(

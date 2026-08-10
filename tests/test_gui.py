@@ -127,6 +127,7 @@ class StubFacade:
         self.setup_qq_environment_calls: list[object] = []
         self.start_qq_runtime_calls: list[object] = []
         self.connect_qq_calls: list[object] = []
+        self.start_qq_auth_flow_calls: list[object] = []
         self.get_qq_connection_snapshot_calls: list[object] = []
         self.get_session_message_range_calls: list[tuple] = []
         self.analyze_session_calls: list[tuple] = []
@@ -200,6 +201,12 @@ class StubFacade:
 
     def connect_qq(self):
         self.connect_qq_calls.append(1)
+        if self._connect_qq_error is not None:
+            raise self._connect_qq_error
+        return self._qq_snapshot()
+
+    def start_qq_auth_flow(self):
+        self.start_qq_auth_flow_calls.append(1)
         if self._connect_qq_error is not None:
             raise self._connect_qq_error
         return self._qq_snapshot()
@@ -367,11 +374,12 @@ class _StubOutcome:
         self.view = view
 
 
-def _analysis_page(qt_app, facade, executor=None):
+def _analysis_page(qt_app, facade, executor=None, qq_qrcode_path=None):
     module = importlib.import_module("qq_chat_analyzer.gui.analysis_page")
     return module.AnalysisPage(
         facade,
         executor=executor or _inline_executor(),
+        qq_qrcode_path=qq_qrcode_path,
     )
 
 
@@ -999,7 +1007,7 @@ def test_clicking_qq_connect_calls_the_facade(qt_app, sources) -> None:
     _drain(page)
     QTest.qWait(600)
 
-    assert facade.connect_qq_calls == [1]
+    assert facade.start_qq_auth_flow_calls == [1]
     assert page._session_list.count() == 1
 
 
@@ -1034,14 +1042,14 @@ def test_clicking_qq_connect_through_the_real_worker_updates_the_page(
     page._source_buttons[module.ChatSource.QQ].click()
     _settle_workers()
 
-    assert facade.connect_qq_calls == []
+    assert facade.start_qq_auth_flow_calls == []
     assert page._session_list.count() == 1
     assert "\u5df2\u8fde\u63a5" in page._status_label.text()
 
     page._qq_connect_button.click()
     _settle_workers()
 
-    assert facade.connect_qq_calls == [1]
+    assert facade.start_qq_auth_flow_calls == [1]
     assert page._session_list.count() == 1
     assert "\u5df2\u8fde\u63a5" in page._status_label.text()
     assert "\u91cd\u65b0\u8fde\u63a5QQ" in page._qq_connect_button.text()
@@ -1058,7 +1066,7 @@ def test_qq_connect_accepts_a_string_source_value(qt_app, sources) -> None:
     page._qq_connect_button.click()
     _drain(page)
 
-    assert facade.connect_qq_calls == [1]
+    assert facade.start_qq_auth_flow_calls == [1]
 
 
 def test_qq_configured_but_not_connected_shows_connect_button(
@@ -1187,7 +1195,7 @@ def test_qq_connect_failure_shows_user_safe_message(
     _drain(page)
     QTest.qWait(600)
 
-    assert facade.connect_qq_calls == [1]
+    assert facade.start_qq_auth_flow_calls == [1]
     assert "QQ \u8fde\u63a5\u5931\u8d25" in page._status_label.text()
     assert (
         "\u65e0\u6cd5\u8fde\u63a5 QQ \u6570\u636e\u6e90"
@@ -1227,7 +1235,7 @@ def test_qq_connect_unavailable_status_is_not_silent(qt_app, sources) -> None:
     _drain(page)
     QTest.qWait(600)
 
-    assert facade.connect_qq_calls == [1]
+    assert facade.start_qq_auth_flow_calls == [1]
     assert "\u65e0\u6cd5\u8fde\u63a5 QQ" in page._status_label.text()
     assert "QQ \u6570\u636e\u6e90\u6682\u4e0d\u53ef\u7528" in (
         page._hint_label.text()
@@ -1250,7 +1258,7 @@ def test_qq_connect_remains_clickable_when_no_runtime_detected(
     page._qq_connect_button.click()
     _drain(page)
 
-    assert facade.connect_qq_calls == [1]
+    assert facade.start_qq_auth_flow_calls == [1]
 
 
 def test_qq_connect_disables_button_while_connecting(qt_app, sources) -> None:
@@ -2045,3 +2053,385 @@ def test_report_widgets_still_allow_selection(qt_app) -> None:
             widget.selectionMode()
             != QAbstractItemView.SelectionMode.NoSelection
         )
+
+
+def _page_module():
+    return importlib.import_module("qq_chat_analyzer.gui.analysis_page")
+
+
+def _connected_prefix():
+    return _page_module()._CONNECTED_PREFIX
+
+
+def _disconnected_prefix():
+    return _page_module()._DISCONNECTED_PREFIX
+
+
+def _qq_snapshot(state, message="", action_hint="", version=None):
+    """Build one QQ ConnectionSnapshot in a given lifecycle state."""
+    connection = importlib.import_module(
+        "qq_chat_analyzer.application.connection"
+    )
+    return connection.ConnectionSnapshot(
+        state=connection.ConnectionState(state),
+        source="qq",
+        message=message,
+        action_hint=action_hint,
+        version=version,
+    )
+
+
+class _SnapshotFacade(StubFacade):
+    """Return one fixed QQ snapshot regardless of the underlying status."""
+
+    def __init__(self, snapshot, **kwargs):
+        super().__init__(**kwargs)
+        self._snapshot = snapshot
+
+    def set_snapshot(self, snapshot):
+        self._snapshot = snapshot
+
+    def _qq_snapshot(self):
+        return self._snapshot
+
+
+class _ConnectWaitingAuthFacade(_SnapshotFacade):
+    """Return a fixed status snapshot but a WAITING_AUTH connect result."""
+
+    def __init__(self, status_snapshot, connect_snapshot, **kwargs):
+        super().__init__(status_snapshot, **kwargs)
+        self._connect_snapshot = connect_snapshot
+
+    def start_qq_auth_flow(self):
+        self.start_qq_auth_flow_calls.append(1)
+        return self._connect_snapshot
+
+
+def _qq_page_in_state(qt_app, sources, snapshot):
+    module = _facade_module()
+    facade = _SnapshotFacade(snapshot, sources=sources)
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+    page._source_buttons[module.ChatSource.QQ].click()
+    _drain(page)
+    return page
+
+
+def test_disconnected_state_invites_the_user_to_connect(
+    qt_app,
+    sources,
+) -> None:
+    page = _qq_page_in_state(
+        qt_app,
+        sources,
+        _qq_snapshot("disconnected", message="QQ \u5c1a\u672a\u8fde\u63a5\u3002"),
+    )
+
+    assert page._qq_connect_button.isVisibleTo(page) is True
+    assert page._qq_connect_button.isEnabled() is True
+    assert "\u8fde\u63a5QQ" == page._qq_connect_button.text()
+    assert page._session_list.count() == 0
+
+
+def test_starting_state_reports_progress_and_disables_the_button(
+    qt_app,
+    sources,
+) -> None:
+    page = _qq_page_in_state(
+        qt_app,
+        sources,
+        _qq_snapshot("starting"),
+    )
+
+    assert page._qq_connect_button.isEnabled() is False
+    assert "\u542f\u52a8" in page._status_label.text()
+
+
+def test_initializing_state_reports_progress_and_disables_the_button(
+    qt_app,
+    sources,
+) -> None:
+    page = _qq_page_in_state(
+        qt_app,
+        sources,
+        _qq_snapshot("initializing"),
+    )
+
+    assert page._qq_connect_button.isEnabled() is False
+    assert "\u521d\u59cb\u5316" in page._status_label.text()
+
+
+def test_waiting_auth_state_asks_the_user_to_log_in(
+    qt_app,
+    sources,
+) -> None:
+    page = _qq_page_in_state(
+        qt_app,
+        sources,
+        _qq_snapshot("waiting_auth"),
+    )
+
+    text = page._status_label.text()
+    assert "\u767b\u5f55" in text
+    assert _disconnected_prefix() not in text
+    assert page._qq_connect_button.isEnabled() is True
+
+
+def test_waiting_auth_is_visually_distinct_from_disconnected(
+    qt_app,
+    sources,
+) -> None:
+    waiting = _qq_page_in_state(
+        qt_app,
+        sources,
+        _qq_snapshot("waiting_auth"),
+    )._status_label.text()
+    disconnected = _qq_page_in_state(
+        qt_app,
+        sources,
+        _qq_snapshot("disconnected"),
+    )._status_label.text()
+
+    assert waiting != disconnected
+
+
+def test_error_state_shows_a_user_safe_message(qt_app, sources) -> None:
+    page = _qq_page_in_state(
+        qt_app,
+        sources,
+        _qq_snapshot("error", message="\u65e0\u6cd5\u8fde\u63a5 QQ\u3002"),
+    )
+
+    assert _disconnected_prefix() in page._status_label.text()
+    assert "\u65e0\u6cd5\u8fde\u63a5 QQ\u3002" in page._status_label.text()
+    assert page._qq_connect_button.isEnabled() is True
+
+
+def test_connected_state_loads_sessions(qt_app, sources) -> None:
+    module = _facade_module()
+    facade = _SnapshotFacade(
+        _qq_snapshot("connected", message="QQ \u5df2\u8fde\u63a5\u3002"),
+        sources=sources,
+        sessions=[
+            _session(module.ChatSource.QQ, "10001", "\u865a\u6784\u7fa4 A", 12)
+        ],
+    )
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+    page._source_buttons[module.ChatSource.QQ].click()
+    _drain(page)
+
+    assert _connected_prefix() in page._status_label.text()
+    assert page._qq_connect_button.text() == "\u91cd\u65b0\u8fde\u63a5QQ"
+    assert page._session_list.count() == 1
+
+
+def test_every_lifecycle_state_renders_a_message(qt_app, sources) -> None:
+    """No state may leave the user staring at an empty status label."""
+    for state in (
+        "disconnected",
+        "initializing",
+        "starting",
+        "waiting_auth",
+        "connected",
+        "error",
+    ):
+        page = _qq_page_in_state(qt_app, sources, _qq_snapshot(state))
+        assert page._status_label.text().strip(), state
+
+
+def test_waiting_auth_state_starts_automatic_refresh(qt_app, sources) -> None:
+    page = _qq_page_in_state(
+        qt_app,
+        sources,
+        _qq_snapshot("waiting_auth"),
+    )
+
+    assert page._qq_status_timer.isActive() is True
+
+
+def _write_qrcode_png(path: Path) -> None:
+    from PySide6.QtGui import QPixmap
+
+    pixmap = QPixmap(8, 8)
+    pixmap.fill(Qt.GlobalColor.black)
+    assert pixmap.save(str(path)) is True
+
+
+def test_waiting_auth_state_shows_the_qrcode_png(
+    qt_app,
+    sources,
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    qr_path = tmp_path / "qrcode.png"
+    _write_qrcode_png(qr_path)
+    facade = _SnapshotFacade(_qq_snapshot("waiting_auth"), sources=sources)
+    page = _analysis_page(qt_app, facade, qq_qrcode_path=qr_path)
+    _drain(page)
+
+    page._source_buttons[module.ChatSource.QQ].click()
+    _drain(page)
+
+    assert page._qq_qrcode_label.isVisibleTo(page) is True
+    assert page._qq_qrcode_label.pixmap() is not None
+    assert page._qq_qrcode_label.pixmap().isNull() is False
+
+
+def test_waiting_auth_without_qrcode_keeps_it_hidden(
+    qt_app,
+    sources,
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    facade = _SnapshotFacade(_qq_snapshot("waiting_auth"), sources=sources)
+    page = _analysis_page(
+        qt_app,
+        facade,
+        qq_qrcode_path=tmp_path / "missing.png",
+    )
+    _drain(page)
+
+    page._source_buttons[module.ChatSource.QQ].click()
+    _drain(page)
+
+    assert page._qq_qrcode_label.isVisibleTo(page) is False
+
+
+def test_connected_state_hides_the_qrcode(
+    qt_app,
+    sources,
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    qr_path = tmp_path / "qrcode.png"
+    _write_qrcode_png(qr_path)
+    facade = _SnapshotFacade(_qq_snapshot("connected"), sources=sources)
+    page = _analysis_page(qt_app, facade, qq_qrcode_path=qr_path)
+    _drain(page)
+
+    page._source_buttons[module.ChatSource.QQ].click()
+    _drain(page)
+
+    assert page._qq_qrcode_label.isVisibleTo(page) is False
+
+
+def test_login_refresh_hides_qrcode_after_connected(
+    qt_app,
+    sources,
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    qr_path = tmp_path / "qrcode.png"
+    _write_qrcode_png(qr_path)
+    facade = _SnapshotFacade(_qq_snapshot("waiting_auth"), sources=sources)
+    page = _analysis_page(qt_app, facade, qq_qrcode_path=qr_path)
+    _drain(page)
+
+    page._source_buttons[module.ChatSource.QQ].click()
+    _drain(page)
+
+    assert page._qq_qrcode_label.isVisibleTo(page) is True
+
+    facade.set_snapshot(
+        _qq_snapshot("connected", message="QQ \u5df2\u8fde\u63a5\u3002")
+    )
+    page._poll_qq_status()
+
+    assert page._qq_qrcode_label.isVisibleTo(page) is False
+
+
+def test_connected_state_stops_automatic_refresh(qt_app, sources) -> None:
+    page = _qq_page_in_state(
+        qt_app,
+        sources,
+        _qq_snapshot("connected"),
+    )
+
+    assert page._qq_status_timer.isActive() is False
+
+
+def test_disconnected_state_does_not_start_automatic_refresh(
+    qt_app,
+    sources,
+) -> None:
+    page = _qq_page_in_state(
+        qt_app,
+        sources,
+        _qq_snapshot("disconnected"),
+    )
+
+    assert page._qq_status_timer.isActive() is False
+
+
+def test_switching_away_from_qq_stops_automatic_refresh(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    page = _qq_page_in_state(
+        qt_app,
+        sources,
+        _qq_snapshot("waiting_auth"),
+    )
+
+    assert page._qq_status_timer.isActive() is True
+
+    page.select_source(module.ChatSource.LOCAL_FILE)
+
+    assert page._qq_status_timer.isActive() is False
+
+
+def test_automatic_refresh_detects_login_and_loads_sessions(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    facade = _SnapshotFacade(
+        _qq_snapshot("waiting_auth"),
+        sources=sources,
+        sessions=[
+            _session(module.ChatSource.QQ, "10001", "\u865a\u6784\u7fa4 A", 12)
+        ],
+    )
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+    page._source_buttons[module.ChatSource.QQ].click()
+    _drain(page)
+
+    assert page._qq_status_timer.isActive() is True
+    assert page._session_list.count() == 0
+
+    facade.set_snapshot(
+        _qq_snapshot("connected", message="QQ \u5df2\u8fde\u63a5\u3002")
+    )
+    page._poll_qq_status()
+
+    assert page._qq_status_timer.isActive() is False
+    assert _connected_prefix() in page._status_label.text()
+    assert page._session_list.count() == 1
+
+
+def test_connect_result_waiting_auth_starts_automatic_refresh(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    facade = _ConnectWaitingAuthFacade(
+        _qq_snapshot("disconnected"),
+        _qq_snapshot("waiting_auth"),
+        sources=sources,
+    )
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+    page._source_buttons[module.ChatSource.QQ].click()
+    _drain(page)
+
+    assert page._qq_status_timer.isActive() is False
+
+    page._qq_connect_button.click()
+    QTest.qWait(600)
+
+    assert facade.start_qq_auth_flow_calls == [1]
+    assert page._qq_status_timer.isActive() is True
+    assert "\u767b\u5f55" in page._status_label.text()

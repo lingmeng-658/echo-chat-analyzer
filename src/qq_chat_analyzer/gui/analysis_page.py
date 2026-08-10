@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QDate, Qt, QTimer, Signal
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -36,6 +37,7 @@ from ..application.facade import (
     ChatSource,
     WeChatEnvironmentConfig,
 )
+from ..resources import default_qq_runtime_directory
 from .workers import submit
 from .wechat_setup_dialog import WeChatSetupDialog
 
@@ -73,6 +75,36 @@ _QQ_CONNECTING = "\u6b63\u5728\u8fde\u63a5QQ..."
 _QQ_CONNECT_PREPARE = "\u6b63\u5728\u81ea\u52a8\u8fde\u63a5 QQ\uff0c\u8bf7\u7a0d\u5019\u3002"
 _QQ_CONNECT_FAILED = "QQ \u8fde\u63a5\u5931\u8d25"
 _QQ_CONNECT_MIN_DISPLAY_MS = 500
+_QQ_STATUS_POLL_INTERVAL_MS = 2000
+_QQ_QRCODE_SIZE = 240
+_QQ_QRCODE_RELATIVE_PATH = Path("cache") / "qrcode.png"
+_QQ_STATE_DISCONNECTED = "disconnected"
+_QQ_STATE_INITIALIZING = "initializing"
+_QQ_STATE_STARTING = "starting"
+_QQ_STATE_WAITING_AUTH = "waiting_auth"
+_QQ_STATE_CONNECTED = "connected"
+_QQ_STATE_ERROR = "error"
+_QQ_PENDING_PREFIX = "\U0001F7E1 "
+_QQ_PROGRESS_STATES = (
+    _QQ_STATE_INITIALIZING,
+    _QQ_STATE_STARTING,
+)
+_QQ_STATE_MESSAGES = {
+    _QQ_STATE_DISCONNECTED: "QQ \u5c1a\u672a\u8fde\u63a5\u3002",
+    _QQ_STATE_INITIALIZING: (
+        "\u6b63\u5728\u521d\u59cb\u5316 QQ \u8fde\u63a5\uff0c\u8bf7\u7a0d\u5019..."
+    ),
+    _QQ_STATE_STARTING: (
+        "\u6b63\u5728\u542f\u52a8 QQ\uff0c\u8bf7\u7a0d\u5019..."
+    ),
+    _QQ_STATE_WAITING_AUTH: (
+        "\u7b49\u5f85 QQ \u767b\u5f55\uff1a\u8bf7\u5728 QQ \u4e2d\u5b8c\u6210\u767b\u5f55\u6388\u6743\u3002"
+    ),
+    _QQ_STATE_CONNECTED: "QQ \u5df2\u8fde\u63a5\u3002",
+    _QQ_STATE_ERROR: (
+        "\u65e0\u6cd5\u8fde\u63a5 QQ\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002"
+    ),
+}
 _WECHAT_CONNECT_LABEL = "\u8fde\u63a5\u5fae\u4fe1"
 _WECHAT_RECONNECT_LABEL = "\u91cd\u65b0\u8fde\u63a5\u5fae\u4fe1"
 _WECHAT_STATUS_DISCONNECTED = "\u5fae\u4fe1\u672a\u8fde\u63a5"
@@ -114,6 +146,7 @@ class AnalysisPage(QWidget):
         facade: Any,
         parent: QWidget | None = None,
         executor: Any = None,
+        qq_qrcode_path: str | Path | None = None,
     ) -> None:
         super().__init__(parent)
         self._facade = facade
@@ -124,6 +157,14 @@ class AnalysisPage(QWidget):
         self._wechat_connect_pending = False
         self._qq_connect_in_flight = False
         self._message_range: tuple[int, int] | None = None
+        self._qq_qrcode_path = (
+            Path(qq_qrcode_path)
+            if qq_qrcode_path is not None
+            else _default_qq_qrcode_path()
+        )
+        self._qq_status_timer = QTimer(self)
+        self._qq_status_timer.setInterval(_QQ_STATUS_POLL_INTERVAL_MS)
+        self._qq_status_timer.timeout.connect(self._poll_qq_status)
 
         self._build_ui()
         self.refresh_sources()
@@ -158,6 +199,12 @@ class AnalysisPage(QWidget):
         self._qq_connect_button.setVisible(False)
         self._qq_connect_button.clicked.connect(self.connect_qq)
         layout.addWidget(self._qq_connect_button)
+
+        self._qq_qrcode_label = QLabel("")
+        self._qq_qrcode_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._qq_qrcode_label.setFixedSize(_QQ_QRCODE_SIZE, _QQ_QRCODE_SIZE)
+        self._qq_qrcode_label.setVisible(False)
+        layout.addWidget(self._qq_qrcode_label)
 
         self._file_button = QPushButton("\u9009\u62e9\u6587\u4ef6...")
         self._file_button.setVisible(False)
@@ -241,6 +288,9 @@ class AnalysisPage(QWidget):
         self._selected_source = source
         self._selected_file = None
         self._file_label.setText("")
+        if source != ChatSource.QQ:
+            self._stop_qq_status_polling()
+            self._hide_qq_qrcode()
 
         for candidate, button in self._source_buttons.items():
             button.setChecked(candidate == source)
@@ -392,18 +442,21 @@ class AnalysisPage(QWidget):
         """
         if self._qq_connect_in_flight:
             return
-        connected = _snapshot_connected(snapshot)
+        state = _snapshot_state(snapshot)
         message = _snapshot_message(snapshot)
         action_hint = _snapshot_hint(snapshot)
 
-        prefix = _CONNECTED_PREFIX if connected else _DISCONNECTED_PREFIX
-        self._status_label.setText(f"{prefix}{message}")
+        self._status_label.setText(f"{_snapshot_prefix(snapshot)}{message}")
         self._status_label.setToolTip(action_hint)
         self._status_label.setVisible(True)
         self._qq_connect_button.setText(
-            _QQ_RECONNECT_LABEL if connected else _QQ_CONNECT_LABEL
+            (
+                _QQ_RECONNECT_LABEL
+                if state == _QQ_STATE_CONNECTED
+                else _QQ_CONNECT_LABEL
+            )
         )
-        self._qq_connect_button.setEnabled(True)
+        self._qq_connect_button.setEnabled(not _snapshot_in_progress(snapshot))
         self._qq_connect_button.setToolTip("")
         self._session_list.clear()
         self._update_analyze_enabled()
@@ -412,13 +465,74 @@ class AnalysisPage(QWidget):
             self._hint_label.setText(action_hint)
             self.status_changed.emit(action_hint or message)
 
-        if connected and load_sessions_on_ready:
+        if state == _QQ_STATE_CONNECTED and load_sessions_on_ready:
             self._hint_label.setText(_LOADING_SESSIONS)
             self.status_changed.emit(_LOADING_SESSIONS)
             self._load_sessions(ChatSource.QQ)
 
+        if state == _QQ_STATE_WAITING_AUTH:
+            self._start_qq_status_polling()
+            self._refresh_qq_qrcode()
+        else:
+            self._stop_qq_status_polling()
+            self._hide_qq_qrcode()
+
+    def _poll_qq_status(self) -> None:
+        """Refresh the QQ snapshot while the user is waiting to log in."""
+        if self._selected_source != ChatSource.QQ:
+            self._stop_qq_status_polling()
+            return
+        self._executor(
+            lambda: self._facade.get_qq_connection_snapshot(),
+            on_success=lambda snapshot: self._show_qq_status(
+                snapshot,
+                load_sessions_on_ready=True,
+            ),
+            on_error=self._handle_connection_status_error,
+        )
+
+    def _start_qq_status_polling(self) -> None:
+        if (
+            self._selected_source == ChatSource.QQ
+            and not self._qq_status_timer.isActive()
+        ):
+            self._qq_status_timer.start()
+
+    def _stop_qq_status_polling(self) -> None:
+        self._qq_status_timer.stop()
+
+    def _refresh_qq_qrcode(self) -> None:
+        """Show the runtime's current login QR image when it exists."""
+        if not self._qq_qrcode_path.is_file():
+            self._hide_qq_qrcode()
+            return
+        try:
+            pixmap = QPixmap(str(self._qq_qrcode_path))
+        except Exception:
+            pixmap = QPixmap()
+        if pixmap.isNull():
+            self._hide_qq_qrcode()
+            return
+        scaled = pixmap.scaled(
+            self._qq_qrcode_label.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self._qq_qrcode_label.setPixmap(scaled)
+        self._qq_qrcode_label.setVisible(True)
+
+    def _hide_qq_qrcode(self) -> None:
+        """Clear and hide the QR image once it is no longer needed."""
+        self._qq_qrcode_label.clear()
+        self._qq_qrcode_label.setVisible(False)
+
     def connect_qq(self) -> None:
-        """Connect QQ in one click without exposing runtime configuration."""
+        """Start the QQ authorization flow in one click.
+
+        The facade's auth bridge owns runtime startup and the login window;
+        this page only renders the resulting lifecycle snapshot and keeps
+        polling until the QQ data source reports connected.
+        """
         if self._selected_source != ChatSource.QQ:
             _LOGGER.info(
                 "[qq gui] connect_qq ignored selected_source=%r",
@@ -439,7 +553,7 @@ class AnalysisPage(QWidget):
         self.status_changed.emit(_QQ_CONNECTING)
         _LOGGER.info("[qq gui] connect_qq worker submitted")
         self._executor(
-            lambda: self._facade.connect_qq(),
+            lambda: self._facade.start_qq_auth_flow(),
             on_success=lambda status: self._finish_qq_connect(
                 status,
                 started_at,
@@ -458,8 +572,8 @@ class AnalysisPage(QWidget):
         def _apply() -> None:
             self._qq_connect_in_flight = False
             _LOGGER.info(
-                "[qq gui] connect_qq succeeded connected=%s",
-                _snapshot_connected(status),
+                "[qq gui] connect_qq succeeded state=%s",
+                _snapshot_state(status),
             )
             self._after_qq_connect(status)
             self._qq_connect_button.setEnabled(True)
@@ -856,14 +970,45 @@ class AnalysisPage(QWidget):
             and bool(item.flags() & Qt.ItemFlag.ItemIsEnabled)
         )
 
-def _snapshot_connected(snapshot: Any) -> bool:
-    """Read the connected flag from a connection snapshot."""
-    return bool(getattr(snapshot, "connected", False))
+def _snapshot_state(snapshot: Any) -> str:
+    """Read the lifecycle state a connection snapshot resolved."""
+    state = getattr(snapshot, "state", None)
+    value = getattr(state, "value", state)
+    return (
+        value
+        if value in _QQ_STATE_MESSAGES
+        else _QQ_STATE_DISCONNECTED
+    )
+
+
+def _snapshot_prefix(snapshot: Any) -> str:
+    """Pick the status dot that matches one lifecycle state."""
+    state = _snapshot_state(snapshot)
+    if state == _QQ_STATE_CONNECTED:
+        return _CONNECTED_PREFIX
+    if state in _QQ_PROGRESS_STATES or state == _QQ_STATE_WAITING_AUTH:
+        return _QQ_PENDING_PREFIX
+    return _DISCONNECTED_PREFIX
 
 
 def _snapshot_message(snapshot: Any) -> str:
-    return getattr(snapshot, "message", "") or _CONNECTION_STATUS_UNKNOWN
+    message = getattr(snapshot, "message", "") or ""
+    if message:
+        return message
+    return _QQ_STATE_MESSAGES.get(
+        _snapshot_state(snapshot),
+        _CONNECTION_STATUS_UNKNOWN,
+    )
 
 
 def _snapshot_hint(snapshot: Any) -> str:
     return getattr(snapshot, "action_hint", "") or ""
+
+
+def _snapshot_in_progress(snapshot: Any) -> bool:
+    return _snapshot_state(snapshot) in _QQ_PROGRESS_STATES
+
+
+def _default_qq_qrcode_path() -> Path:
+    """Return where the bundled QQ runtime writes its login QR image."""
+    return default_qq_runtime_directory() / _QQ_QRCODE_RELATIVE_PATH

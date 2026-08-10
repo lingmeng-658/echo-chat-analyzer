@@ -11,6 +11,7 @@ from .analysis_service import AnalysisApplicationService
 from .connection import (
     ConnectionSnapshot,
     ConnectionState,
+    QQAuthBridge,
     QQConnectionManager,
 )
 from .dto import (
@@ -135,6 +136,7 @@ __all__ = [
     "QQRuntimeState",
     "QQRuntimeStatus",
     "QQConnectionManager",
+    "QQAuthBridge",
     "QQConnectionService",
     "QQConnectionStatus",
     "SessionInfo",

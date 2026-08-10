@@ -32,14 +32,17 @@ class _FakeProvider:
         running: bool = True,
         version: str | None = "4.1.0",
         token: str | None = "fictional-token",
+        qq_data_available: bool = True,
         unexpected_error: Exception | None = None,
     ) -> None:
         self._running = running
         self._version = version
         self._token = token
+        self._qq_data_available = qq_data_available
         self._unexpected_error = unexpected_error
         self.health_calls = 0
         self.token_calls = 0
+        self.groups_calls = 0
 
     def health_check(self):
         self.health_calls += 1
@@ -64,6 +67,15 @@ class _FakeProvider:
             )
             raise provider.TokenUnavailable()
         return self._token
+
+    def list_groups(self, limit: int = 1):
+        self.groups_calls += 1
+        provider = importlib.import_module(
+            "qq_chat_analyzer.providers.qq_chat_exporter_provider"
+        )
+        if self._token is None or not self._qq_data_available:
+            raise provider.TokenUnavailable()
+        return []
 
 
 def _status(**provider_kwargs):
@@ -93,8 +105,23 @@ def test_qce_not_running_returns_user_facing_message() -> None:
 
     assert status.available is False
     assert status.qce_running is False
-    assert status.authenticated is True
+    assert status.authenticated is False
     assert status.version is None
+    assert "QQChatExporter" not in status.message
+    assert status.message != ""
+    assert status.action_hint != ""
+
+
+def test_qce_api_token_without_qq_login_stays_waiting_auth() -> None:
+    status = _status(
+        running=True,
+        token="fictional-token",
+        qq_data_available=False,
+    )
+
+    assert status.available is False
+    assert status.qce_running is True
+    assert status.authenticated is True
     assert "QQChatExporter" not in status.message
     assert status.message != ""
     assert status.action_hint != ""
@@ -159,7 +186,7 @@ def test_status_is_a_frozen_dataclass() -> None:
         raise AssertionError("QQConnectionStatus should be immutable")
 
 
-def test_service_calls_health_check_and_token_resolution() -> None:
+def test_service_calls_health_check_token_and_qq_probe() -> None:
     provider = _FakeProvider(running=True, token="fictional-token")
     service = _module().QQConnectionService(provider)
 
@@ -167,3 +194,4 @@ def test_service_calls_health_check_and_token_resolution() -> None:
 
     assert provider.health_calls == 1
     assert provider.token_calls == 1
+    assert provider.groups_calls == 1

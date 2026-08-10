@@ -156,6 +156,25 @@ class _StubQQSetupService:
         return self._connect_status
 
 
+class _StubQQAuthBridge:
+    def __init__(self, snapshot=None):
+        self._snapshot = snapshot
+        self.calls: list[int] = []
+
+    def start_auth_flow(self):
+        self.calls.append(1)
+        if self._snapshot is not None:
+            return self._snapshot
+        connection = importlib.import_module(
+            "qq_chat_analyzer.application.connection"
+        )
+        return connection.ConnectionSnapshot(
+            state=connection.ConnectionState.WAITING_AUTH,
+            source="qq",
+            message="\u7b49\u5f85\u6388\u6743",
+        )
+
+
 class _StubWeChatConnectionService:
     def __init__(self, status=None, error=None):
         self._status = status
@@ -439,6 +458,21 @@ def test_connect_qq_delegates_to_the_setup_service() -> None:
     assert result.connected is True
     assert result.version == "4.1.0"
     assert result.message == "QQ \u5df2\u8fde\u63a5\u3002"
+
+
+def test_start_qq_auth_flow_delegates_to_the_auth_bridge() -> None:
+    module = _facade_module()
+    bridge = _StubQQAuthBridge()
+    facade = _facade(qq_auth_bridge=bridge)
+
+    result = facade.start_qq_auth_flow()
+
+    assert bridge.calls == [1]
+    connection = importlib.import_module(
+        "qq_chat_analyzer.application.connection"
+    )
+    assert isinstance(result, connection.ConnectionSnapshot)
+    assert result.state is connection.ConnectionState.WAITING_AUTH
 
 
 def test_list_sessions_converts_wechat_sessions_into_session_info() -> None:

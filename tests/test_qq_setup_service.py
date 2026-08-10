@@ -217,7 +217,9 @@ def test_connect_persists_detected_default_when_no_config_exists(
 
     assert manager.start_calls == 1
     assert factory.invalidate_calls == 1
-    assert result.available is True
+    assert result.available is False
+    assert result.qce_running is True
+    assert result.authenticated is False
     stored = _stored_config(tmp_path)
     assert stored.qce_path == config.qce_path
 
@@ -240,7 +242,9 @@ def test_connect_starts_a_stopped_runtime_and_returns_connection_status(
     result = service.connect()
 
     assert manager.start_calls == 1
-    assert result.available is True
+    assert result.available is False
+    assert result.qce_running is True
+    assert result.authenticated is False
 
 
 def test_connect_keeps_an_existing_user_config(tmp_path: Path) -> None:
@@ -387,7 +391,53 @@ def test_connect_without_connection_service_uses_runtime_status(
     result = service.connect()
 
     assert manager.start_calls == 1
-    assert result.available is True
+    assert result.available is False
+    assert result.qce_running is True
+    assert result.authenticated is False
+
+
+def test_connect_returns_waiting_auth_without_waiting_for_login(
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    config = _config(tmp_path)
+    _store_config(tmp_path, config)
+    manager = _FakeRuntimeManager()
+
+    class _OneShotConnectionService:
+        def __init__(self, status):
+            self._status = status
+            self.check_calls = 0
+
+        def check_status(self):
+            self.check_calls += 1
+            if self.check_calls > 1:
+                raise AssertionError(
+                    "connect must not probe again after the runtime starts"
+                )
+            return self._status
+
+    connection = _OneShotConnectionService(
+        _connection_status(available=False)
+    )
+    service = module.QQSetupService(
+        config_loader=module.QQEnvironmentConfigLoader(
+            config_path=tmp_path / "qq.json"
+        ),
+        config_writer=module.QQEnvironmentConfigWriter(
+            config_path=tmp_path / "qq.json"
+        ),
+        connection_service=connection,
+        runtime_manager=manager,
+    )
+
+    result = service.connect()
+
+    assert manager.start_calls == 1
+    assert connection.check_calls == 1
+    assert result.available is False
+    assert result.qce_running is True
+    assert result.authenticated is False
 
 
 def test_connect_start_failure_returns_runtime_error_status(

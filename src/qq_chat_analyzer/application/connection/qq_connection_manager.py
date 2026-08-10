@@ -24,6 +24,7 @@ import logging
 from typing import Any
 
 from .models import ConnectionSnapshot, ConnectionState
+from ..runtime import QQRuntimeState
 
 
 SOURCE_QQ = "qq"
@@ -82,19 +83,47 @@ class QQConnectionManager:
                 MESSAGE_DISCONNECTED,
                 HINT_CONNECT,
             )
-        return self._from_connection_status(status)
+        snapshot = self._from_connection_status(status)
+        if (
+            snapshot.state is ConnectionState.DISCONNECTED
+            and self._runtime_started()
+        ):
+            _LOGGER.info(
+                "[qq connection] runtime started, waiting for QQ login"
+            )
+            return self._snapshot(
+                ConnectionState.WAITING_AUTH,
+                MESSAGE_WAITING_AUTH,
+                HINT_WAITING_AUTH,
+            )
+        return snapshot
 
     # --------------------------------------------------------------- actions
 
     def connect(self) -> ConnectionSnapshot:
         """Run the one-click connect flow and report the result.
 
-        The heavy lifting stays in the setup service, which already knows how
-        to reuse a running service, persist bundled defaults, and start the
-        runtime. This method turns its answer into lifecycle vocabulary.
+        When the service is already running, this returns the current
+        lifecycle snapshot immediately and never waits for a login that has
+        not happened yet. An idle runtime still goes through the setup
+        service, which reports the resulting state without waiting for
+        authorization.
         """
         if self._setup_service is None:
             return self._unavailable()
+
+        status = self._safe_connection_status()
+        if status is not None:
+            snapshot = self._from_connection_status(status)
+            if snapshot.state in (
+                ConnectionState.CONNECTED,
+                ConnectionState.WAITING_AUTH,
+            ):
+                _LOGGER.info(
+                    "[qq connection] connect reused state=%s",
+                    snapshot.state.value,
+                )
+                return snapshot
 
         try:
             status = self._setup_service.connect()
@@ -136,17 +165,30 @@ class QQConnectionManager:
             )
             return None
 
+    def _runtime_started(self) -> bool:
+        """Return whether the setup service has already launched the runtime."""
+        service = self._setup_service
+        if service is None:
+            return False
+        get_status = getattr(service, "get_runtime_status", None)
+        if get_status is None:
+            return False
+        try:
+            runtime_status = get_status()
+        except Exception:
+            return False
+        return getattr(runtime_status, "state", None) is QQRuntimeState.RUNNING
+
     def _from_connection_status(self, status: Any) -> ConnectionSnapshot:
         """Map one QQConnectionStatus onto the lifecycle vocabulary.
 
-        The three flags the connection service exposes map cleanly:
-        available means connected, a running service without authorization
-        means the user still has to log in, and anything else is a plain
-        disconnected state the user can act on.
+        The flags the connection service exposes map cleanly: available means
+        the QQ data is usable (connected), a running service whose QQ data is
+        not usable means the user still has to log in, and anything else is a
+        plain disconnected state the user can act on.
         """
         available = bool(getattr(status, "available", False))
         running = bool(getattr(status, "qce_running", False))
-        authenticated = bool(getattr(status, "authenticated", False))
         version = getattr(status, "version", None) or None
         message = _clean(getattr(status, "message", ""))
         action_hint = _clean(getattr(status, "action_hint", ""))
@@ -158,7 +200,7 @@ class QQConnectionManager:
                 action_hint or HINT_CONNECTED,
                 version=version,
             )
-        if running and not authenticated:
+        if running and not available:
             return self._snapshot(
                 ConnectionState.WAITING_AUTH,
                 message or MESSAGE_WAITING_AUTH,
