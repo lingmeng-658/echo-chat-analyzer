@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import dataclasses
 import importlib
+import json
 import sys
+from datetime import date, datetime, timezone
 from pathlib import Path
+
+import pytest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -123,6 +127,16 @@ class _StubQQService:
         if self._error is not None:
             raise self._error
         return self._message_range
+
+
+class _SnapshotQQService(_StubQQService):
+    def __init__(self, *, acquisition, groups=()) -> None:
+        super().__init__(groups=groups, export_path=acquisition.payload_path)
+        self._acquisition = acquisition
+
+    def acquire_export(self, request):
+        self.export_requests.append(request)
+        return self._acquisition
 
 
 class _StubWeChatService:
@@ -417,6 +431,7 @@ def test_analysis_config_has_no_acquaintance_field() -> None:
 
     assert "start_time" in field_names
     assert "end_time" in field_names
+    assert "scope_mode" in field_names
     assert {"top", "profile", "output_directory"} <= field_names
     for forbidden in (
         "acquaintance_time",
@@ -1155,11 +1170,281 @@ def test_analyze_session_dispatches_to_the_qq_service(tmp_path: Path) -> None:
     assert wechat_service.export_requests == []
     request = qq_service.export_requests[0]
     assert request.group_code == "10001"
-    assert request.start_time == 1704067200000
-    assert request.end_time == 1706745600000
+    assert request.start_time is None
+    assert request.end_time is None
     assert analysis_service.requests[0].input_path == export_path
+    assert analysis_service.requests[0].scope == module.AnalysisScope.custom(
+        date(2024, 1, 1),
+        date(2024, 2, 1),
+    )
     assert outcome.source is module.ChatSource.QQ
     assert outcome.session.session_id == "10001"
+
+
+def test_qq_snapshot_metadata_and_force_refresh_flow_through_facade(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    snapshot_path = _export_file(tmp_path, "snapshot-export.json")
+    acquired_at = datetime(2026, 8, 11, 12, 30, tzinfo=timezone.utc)
+    acquisition = type(
+        "Acquisition",
+        (),
+        {
+            "payload_path": snapshot_path,
+            "snapshot_id": "11111111-1111-1111-1111-111111111111",
+            "acquired_at": acquired_at,
+            "reused_snapshot": True,
+        },
+    )()
+    qq_service = _SnapshotQQService(acquisition=acquisition)
+    analysis_service = _StubAnalysisService(result=_result())
+    facade = _facade(
+        qq_service=qq_service,
+        analysis_service=analysis_service,
+    )
+
+    outcome = facade.analyze_session(
+        module.ChatSource.QQ,
+        "fictional-session",
+        module.AnalysisConfig(force_refresh=True),
+    )
+
+    assert qq_service.export_requests[0].force_refresh is True
+    assert analysis_service.requests[0].input_path == snapshot_path
+    assert outcome.snapshot_id == "11111111-1111-1111-1111-111111111111"
+    assert outcome.data_acquired_at == acquired_at
+    assert outcome.snapshot_reused is True
+
+
+def test_wechat_analysis_ignores_qq_force_refresh_flag(tmp_path: Path) -> None:
+    module = _facade_module()
+    export_path = _export_file(tmp_path, "wechat-force-refresh.json")
+    wechat_service = _StubWeChatService(export_path=export_path)
+    facade = _facade(wechat_service=wechat_service)
+
+    outcome = facade.analyze_session(
+        module.ChatSource.WECHAT,
+        "wxid_fictional_force_refresh",
+        module.AnalysisConfig(force_refresh=True),
+    )
+
+    request = wechat_service.export_requests[0]
+    assert not hasattr(request, "force_refresh")
+    assert request.session_id == "wxid_fictional_force_refresh"
+    assert outcome.snapshot_id is None
+    assert outcome.data_acquired_at is None
+    assert outcome.snapshot_reused is False
+
+
+def test_successful_qq_analysis_saves_scoped_history_metadata(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    history_module = importlib.import_module(
+        "qq_chat_analyzer.application.report_history"
+    )
+    history_manager = history_module.ReportHistoryManager(
+        tmp_path / "qq-history.jsonl"
+    )
+    result = _result(message_count=5)
+    expected_view = object()
+    session_id = "fictional-qq-session"
+    facade = _facade(
+        qq_service=_StubQQService(
+            groups=[_FakeQQGroup(session_id, "Fictional QQ Group")],
+            export_path=_export_file(tmp_path, "qq-history-export.json"),
+        ),
+        analysis_service=_StubAnalysisService(result=result),
+        presentation_builder=_RecordingBuilder(view=expected_view),
+        report_history_manager=history_manager,
+    )
+
+    outcome = facade.analyze_session(
+        module.ChatSource.QQ,
+        session_id,
+        module.AnalysisConfig(
+            scope_mode=module.AnalysisScopeMode.CUSTOM,
+            start_time="2026-02-01",
+            end_time="2026-08-11",
+        ),
+    )
+
+    records = history_manager.list_records()
+    assert len(records) == 1
+    record = records[0]
+    assert record.source == "qq"
+    assert record.session_name == "Fictional QQ Group"
+    assert record.session_id == session_id
+    assert record.message_count == 5
+    assert record.analysis_scope == "custom"
+    assert record.scope_start == date(2026, 2, 1)
+    assert record.scope_end == date(2026, 8, 11)
+    assert record.report_generated_at.tzinfo is not None
+    assert outcome.result is result
+    assert outcome.view is expected_view
+    assert outcome.history_saved is True
+    assert outcome.history_record_id == record.analysis_id
+
+
+def test_successful_qq_analysis_links_history_to_snapshot(tmp_path: Path) -> None:
+    module = _facade_module()
+    history_module = importlib.import_module(
+        "qq_chat_analyzer.application.report_history"
+    )
+    snapshot_path = _export_file(tmp_path, "history-snapshot.json")
+    snapshot_id = "22222222-2222-2222-2222-222222222222"
+    acquisition = type(
+        "Acquisition",
+        (),
+        {
+            "payload_path": snapshot_path,
+            "snapshot_id": snapshot_id,
+            "acquired_at": datetime(
+                2026,
+                8,
+                11,
+                13,
+                0,
+                tzinfo=timezone.utc,
+            ),
+            "reused_snapshot": False,
+        },
+    )()
+    history_manager = history_module.ReportHistoryManager(
+        tmp_path / "snapshot-history.jsonl"
+    )
+    facade = _facade(
+        qq_service=_SnapshotQQService(acquisition=acquisition),
+        report_history_manager=history_manager,
+    )
+
+    facade.analyze_session(module.ChatSource.QQ, "fictional-session")
+
+    assert history_manager.list_records()[0].snapshot_id == snapshot_id
+
+
+def test_successful_wechat_analysis_saves_history_metadata(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    history_module = importlib.import_module(
+        "qq_chat_analyzer.application.report_history"
+    )
+    history_manager = history_module.ReportHistoryManager(
+        tmp_path / "wechat-history.jsonl"
+    )
+    session_id = "wxid_fictional_history"
+    result = _result(message_count=8)
+    facade = _facade(
+        wechat_service=_StubWeChatService(
+            sessions=[_FakeWeChatSession(session_id, "Fictional WeChat")],
+            export_path=_export_file(tmp_path, "wechat-history-export.json"),
+        ),
+        analysis_service=_StubAnalysisService(result=result),
+        report_history_manager=history_manager,
+    )
+
+    outcome = facade.analyze_session(module.ChatSource.WECHAT, session_id)
+
+    record = history_manager.list_records()[0]
+    assert record.source == "wechat"
+    assert record.session_name == "Fictional WeChat"
+    assert record.session_id == session_id
+    assert record.message_count == 8
+    assert record.analysis_scope == "all"
+    assert record.scope_start is None
+    assert record.scope_end is None
+    assert record.snapshot_id is None
+    assert outcome.result is result
+    assert outcome.history_saved is True
+
+
+def test_history_save_failure_does_not_replace_successful_analysis(
+    tmp_path: Path,
+    caplog,
+) -> None:
+    history_module = importlib.import_module(
+        "qq_chat_analyzer.application.report_history"
+    )
+    invalid_history_path = tmp_path / "history-is-a-directory"
+    invalid_history_path.mkdir()
+    result = _result(message_count=3)
+    expected_view = object()
+    facade = _facade(
+        analysis_service=_StubAnalysisService(result=result),
+        presentation_builder=_RecordingBuilder(view=expected_view),
+        report_history_manager=history_module.ReportHistoryManager(
+            invalid_history_path
+        ),
+    )
+
+    with caplog.at_level(
+        "ERROR",
+        logger="qq_chat_analyzer.desktop.facade",
+    ):
+        outcome = facade.analyze_file(_export_file(tmp_path))
+
+    assert outcome.result is result
+    assert outcome.view is expected_view
+    assert outcome.history_saved is False
+    assert outcome.history_record_id is None
+    assert any(
+        record.name == "qq_chat_analyzer.desktop.facade"
+        and record.levelname == "ERROR"
+        for record in caplog.records
+    )
+
+
+def test_facade_reads_history_through_the_application_boundary(
+    tmp_path: Path,
+) -> None:
+    history_module = importlib.import_module(
+        "qq_chat_analyzer.application.report_history"
+    )
+    history_manager = history_module.ReportHistoryManager(
+        tmp_path / "history.jsonl"
+    )
+    facade = _facade(report_history_manager=history_manager)
+
+    outcome = facade.analyze_file(_export_file(tmp_path))
+
+    records = facade.list_analysis_history()
+    assert len(records) == 1
+    assert records[0].analysis_id == outcome.history_record_id
+    assert facade.get_analysis_history(records[0].analysis_id) == records[0]
+    assert facade.get_analysis_history("missing") is None
+
+
+def test_analysis_failure_does_not_create_history(tmp_path: Path) -> None:
+    module = _facade_module()
+    errors = _errors()
+    history_module = importlib.import_module(
+        "qq_chat_analyzer.application.report_history"
+    )
+    history_manager = history_module.ReportHistoryManager(
+        tmp_path / "history.jsonl"
+    )
+    facade = _facade(
+        analysis_service=_StubAnalysisService(error=errors.InputPathNotFound()),
+        report_history_manager=history_manager,
+    )
+
+    with pytest.raises(module.FacadeError):
+        facade.analyze_file(_export_file(tmp_path))
+
+    assert history_manager.list_records() == ()
+
+
+def test_facade_without_history_manager_preserves_old_outcome_behavior(
+    tmp_path: Path,
+) -> None:
+    outcome = _facade().analyze_file(_export_file(tmp_path))
+
+    assert outcome.history_saved is None
+    assert outcome.history_record_id is None
+    assert _facade().list_analysis_history() == ()
+    assert _facade().get_analysis_history("missing") is None
 
 
 def test_analyze_private_qq_session_preserves_private_export_identity(
@@ -1229,15 +1514,16 @@ def test_analyze_qq_private_uses_friend_name_in_conversation_summary(
     assert outcome.view.conversation_cards[0].conversation_id == display_name
 
 
-def test_analyze_session_converts_wechat_time_range_to_epoch_seconds(
+def test_analyze_session_applies_wechat_time_range_after_export(
     tmp_path: Path,
 ) -> None:
     module = _facade_module()
     export_path = _export_file(tmp_path, "wechat_export.json")
     wechat_service = _StubWeChatService(export_path=export_path)
+    analysis_service = _StubAnalysisService(result=_result())
     facade = _facade(
         wechat_service=wechat_service,
-        analysis_service=_StubAnalysisService(result=_result()),
+        analysis_service=analysis_service,
     )
 
     facade.analyze_session(
@@ -1250,8 +1536,115 @@ def test_analyze_session_converts_wechat_time_range_to_epoch_seconds(
     )
 
     request = wechat_service.export_requests[0]
-    assert request.start_time == 1704067200
-    assert request.end_time == 1706745600
+    assert request.start_time is None
+    assert request.end_time is None
+    assert analysis_service.requests[0].scope == module.AnalysisScope.custom(
+        date(2024, 1, 1),
+        date(2024, 2, 1),
+    )
+
+
+@pytest.mark.parametrize("source", ["QQ", "WECHAT"])
+def test_invalid_custom_scope_stops_before_source_export(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    module = _facade_module()
+    export_path = _export_file(tmp_path)
+    qq_service = _StubQQService(export_path=export_path)
+    wechat_service = _StubWeChatService(export_path=export_path)
+    analysis_service = _StubAnalysisService(result=_result())
+    facade = _facade(
+        qq_service=qq_service,
+        wechat_service=wechat_service,
+        analysis_service=analysis_service,
+    )
+
+    with pytest.raises(module.FacadeError) as captured:
+        facade.analyze_session(
+            getattr(module.ChatSource, source),
+            "fictional-session",
+            module.AnalysisConfig(
+                scope_mode=module.AnalysisScopeMode.CUSTOM,
+                start_time="2026-08-12",
+                end_time="2026-08-11",
+            ),
+        )
+
+    assert captured.value.code == "invalid_analysis_scope"
+    assert captured.value.public_message == (
+        "开始日期不能晚于结束日期，请重新选择。"
+    )
+    assert qq_service.export_requests == []
+    assert wechat_service.export_requests == []
+    assert analysis_service.requests == []
+
+
+@pytest.mark.parametrize("source_name", ["QQ", "WECHAT"])
+def test_source_analysis_uses_the_shared_application_scope_filter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_name: str,
+) -> None:
+    module = _facade_module()
+    service_module = importlib.import_module(
+        "qq_chat_analyzer.application.analysis_service"
+    )
+    export_path = tmp_path / "fictional-scoped-export.json"
+    export_path.write_text(
+        json.dumps(
+            {
+                "messages": [
+                    {
+                        "timestamp": "2026-01-31 23:59:59",
+                        "sender": {"nickname": "Fictional Alice"},
+                        "type": "text",
+                        "content": {"text": "OutsideMarker"},
+                    },
+                    {
+                        "timestamp": "2026-02-01 12:00:00",
+                        "sender": {"nickname": "Fictional Alice"},
+                        "type": "text",
+                        "content": {"text": "InsideMarker"},
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    for exporter_name in (
+        "export_word_frequency_csv",
+        "export_word_speaker_summary_csv",
+        "export_word_speaker_frequency_csv",
+        "generate_word_top_speakers_chart",
+        "generate_wordcloud",
+    ):
+        monkeypatch.setattr(service_module, exporter_name, lambda *args: None)
+    source = getattr(module.ChatSource, source_name)
+    services = {
+        "qq_service": _StubQQService(export_path=export_path),
+        "wechat_service": _StubWeChatService(export_path=export_path),
+    }
+    facade = module.ChatAnalyzerFacade(
+        analysis_service=service_module.AnalysisApplicationService(),
+        **services,
+    )
+
+    outcome = facade.analyze_session(
+        source,
+        "fictional-session",
+        module.AnalysisConfig(
+            scope_mode=module.AnalysisScopeMode.CUSTOM,
+            start_time="2026-02-01",
+            end_time="2026-02-01",
+        ),
+    )
+
+    assert outcome.result.processed_message_count == 1
+    assert outcome.result.reports.activity.total_message_count == 1
+    assert {word.word for word in outcome.result.top_words} == {
+        "InsideMarker"
+    }
 
 
 def test_analyze_session_dispatches_to_the_wechat_service(

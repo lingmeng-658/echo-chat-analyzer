@@ -38,6 +38,17 @@ def test_application_package_exports_qq_connection_types() -> None:
     assert callable(application.QQConnectionService.check_status)
 
 
+def test_application_package_exports_qq_snapshot_acquisition() -> None:
+    application = importlib.import_module("qq_chat_analyzer.application")
+    service_module = importlib.import_module(
+        "qq_chat_analyzer.application.qq_export_import_service"
+    )
+
+    assert application.QQExportAcquisition is service_module.QQExportAcquisition
+    assert "QQExportAcquisition" in application.__all__
+    assert callable(application.QQExportImportService.acquire_export)
+
+
 def test_application_package_exports_wechat_connection_types() -> None:
     application = importlib.import_module("qq_chat_analyzer.application")
     service_module = importlib.import_module(
@@ -128,6 +139,36 @@ def test_application_package_exports_runtime_manager_types() -> None:
     assert callable(application.QQRuntimeManager.stop)
     assert callable(application.QQRuntimeManager.get_status)
     assert callable(application.QQRuntimeManager.is_available)
+
+
+def test_application_package_exports_chat_data_snapshot_types() -> None:
+    application = importlib.import_module("qq_chat_analyzer.application")
+    snapshot_module = importlib.import_module(
+        "qq_chat_analyzer.application.chat_data_snapshot"
+    )
+
+    assert (
+        application.ChatDataSnapshotManager
+        is snapshot_module.ChatDataSnapshotManager
+    )
+    assert application.ChatDataSnapshot is snapshot_module.ChatDataSnapshot
+    assert application.ChatDataSource is snapshot_module.ChatDataSource
+    assert application.SnapshotStatus is snapshot_module.SnapshotStatus
+    for name in (
+        "ChatDataSnapshot",
+        "ChatDataSnapshotManager",
+        "ChatDataSource",
+        "SnapshotCleanupError",
+        "SnapshotPayloadState",
+        "SnapshotSaveError",
+        "SnapshotStatus",
+        "SnapshotValidation",
+    ):
+        assert name in application.__all__
+    assert callable(application.ChatDataSnapshotManager.save_snapshot)
+    assert callable(application.ChatDataSnapshotManager.list_snapshots)
+    assert callable(application.ChatDataSnapshotManager.validate_snapshot)
+    assert callable(application.ChatDataSnapshotManager.remove_payload)
 
 
 def test_runtime_package_exports_bundled_runtime_surface() -> None:

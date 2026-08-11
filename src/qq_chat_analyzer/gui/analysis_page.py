@@ -18,7 +18,7 @@ from PySide6.QtCore import QDate, Qt, QTimer, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QCheckBox,
+    QButtonGroup,
     QComboBox,
     QDateEdit,
     QFileDialog,
@@ -30,12 +30,14 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QRadioButton,
     QVBoxLayout,
     QWidget,
 )
 
 from ..application.facade import (
     AnalysisConfig,
+    AnalysisScopeMode,
     ChatSource,
     WeChatEnvironmentConfig,
 )
@@ -52,6 +54,9 @@ _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.analysis_page")
 _SELECT_SOURCE_HINT = "\u8bf7\u5148\u9009\u62e9\u6570\u636e\u6765\u6e90\u3002"
 _LOADING_SESSIONS = "\u6b63\u5728\u52a0\u8f7d\u4f1a\u8bdd\u5217\u8868..."
 _NO_SESSIONS = "\u8be5\u6765\u6e90\u6ca1\u6709\u53ef\u5206\u6790\u7684\u4f1a\u8bdd\u3002"
+_SESSION_EMPTY_TITLE = "暂无会话"
+_SESSION_LOADING_TITLE = "正在加载聊天列表..."
+_SESSION_NO_DATA_TITLE = "没有找到可分析的聊天记录"
 _NO_MESSAGES_AVAILABLE = "\u8be5\u4f1a\u8bdd\u6ca1\u6709\u53ef\u5206\u6790\u6d88\u606f"
 _NO_MATCHING_SESSIONS = "没有匹配的会话。"
 _SESSION_SEARCH_PLACEHOLDER = "搜索群名、好友名或显示名称"
@@ -315,26 +320,40 @@ class AnalysisPage(QWidget):
         session_layout.addWidget(self._session_list)
         layout.addWidget(session_box, stretch=1)
 
-        range_box = QGroupBox("\u65f6\u95f4\u8303\u56f4")
-        range_layout = QFormLayout(range_box)
-        self._start_enabled = QCheckBox("\u542f\u7528\u5f00\u59cb\u65f6\u95f4")
+        range_box = QGroupBox("分析范围")
+        range_layout = QVBoxLayout(range_box)
+        range_options = QHBoxLayout()
+        self._scope_group = QButtonGroup(self)
+        self._scope_all = QRadioButton("全部聊天记录")
+        self._scope_last_year = QRadioButton("最近一年")
+        self._scope_last_six_months = QRadioButton("最近半年")
+        self._scope_custom = QRadioButton("自定义")
+        for button in (
+            self._scope_all,
+            self._scope_last_year,
+            self._scope_last_six_months,
+            self._scope_custom,
+        ):
+            self._scope_group.addButton(button)
+            range_options.addWidget(button)
+        self._scope_all.setChecked(True)
+        range_layout.addLayout(range_options)
+
+        self._custom_range_widget = QWidget(range_box)
+        custom_range_layout = QFormLayout(self._custom_range_widget)
         self._start_date = QDateEdit()
         self._start_date.setMinimumDate(QDate(1, 1, 1))
-        self._start_date.setDate(QDate(1, 1, 1))
-        self._start_date.setSpecialValueText("\u672a\u9009\u62e9")
+        self._start_date.setDate(QDate.currentDate())
         self._start_date.setCalendarPopup(True)
-        self._start_date.setEnabled(False)
-        self._start_enabled.toggled.connect(self._on_start_time_toggled)
-        self._end_enabled = QCheckBox("\u542f\u7528\u7ed3\u675f\u65f6\u95f4")
         self._end_date = QDateEdit()
         self._end_date.setMinimumDate(QDate(1, 1, 1))
-        self._end_date.setDate(QDate(1, 1, 1))
-        self._end_date.setSpecialValueText("\u672a\u9009\u62e9")
+        self._end_date.setDate(QDate.currentDate())
         self._end_date.setCalendarPopup(True)
-        self._end_date.setEnabled(False)
-        self._end_enabled.toggled.connect(self._on_end_time_toggled)
-        range_layout.addRow(self._start_enabled, self._start_date)
-        range_layout.addRow(self._end_enabled, self._end_date)
+        custom_range_layout.addRow("开始日期", self._start_date)
+        custom_range_layout.addRow("结束日期", self._end_date)
+        self._custom_range_widget.setVisible(False)
+        self._scope_custom.toggled.connect(self._on_custom_scope_toggled)
+        range_layout.addWidget(self._custom_range_widget)
         layout.addWidget(range_box)
 
         self._analyze_button = QPushButton("\u5f00\u59cb\u5206\u6790")
@@ -436,6 +455,7 @@ class AnalysisPage(QWidget):
             _CONNECTION_STATUS_LOADING.format(source=display_name)
         )
         self._status_label.setToolTip("")
+        self._show_session_placeholder(_SESSION_LOADING_TITLE)
         if load_sessions_on_ready:
             self._hint_label.setText("")
         self._executor(
@@ -511,6 +531,8 @@ class AnalysisPage(QWidget):
             if source != ChatSource.WECHAT:
                 self.status_changed.emit(_LOADING_SESSIONS)
             self._load_sessions(source)
+        elif not available:
+            self._show_disconnected_session_placeholder(source)
 
     def _show_wechat_guide(
         self,
@@ -532,6 +554,8 @@ class AnalysisPage(QWidget):
         self._status_label.setVisible(True)
         self._hint_label.setText(message)
         self._session_list.clear()
+        if self._selected_source in (ChatSource.QQ, ChatSource.WECHAT):
+            self._show_disconnected_session_placeholder(self._selected_source)
         self._update_analyze_enabled()
 
     def refresh_qq_status(self, *, load_sessions_on_ready: bool = False) -> None:
@@ -539,7 +563,7 @@ class AnalysisPage(QWidget):
         self._status_label.setVisible(True)
         self._status_label.setText(_QQ_STATUS_CHECKING)
         self._status_label.setToolTip("")
-        self._session_list.clear()
+        self._show_session_placeholder(_SESSION_LOADING_TITLE)
         self._update_analyze_enabled()
         self._executor(
             lambda: self._facade.get_qq_connection_snapshot(),
@@ -590,6 +614,10 @@ class AnalysisPage(QWidget):
             self._hint_label.setText(_LOADING_SESSIONS)
             self.status_changed.emit(_LOADING_SESSIONS)
             self._load_sessions(ChatSource.QQ)
+        elif state in _QQ_PROGRESS_STATES or state == _QQ_STATE_WAITING_AUTH:
+            self._show_session_placeholder(_SESSION_LOADING_TITLE)
+        elif state != _QQ_STATE_CONNECTED:
+            self._show_disconnected_session_placeholder(ChatSource.QQ)
 
         if state == _QQ_STATE_WAITING_AUTH:
             self._show_qq_login_guide()
@@ -688,6 +716,7 @@ class AnalysisPage(QWidget):
         self._status_label.setText(_QQ_CONNECTING)
         self._status_label.setToolTip("")
         self._hint_label.setText(_QQ_CONNECT_PREPARE)
+        self._show_session_placeholder(_SESSION_LOADING_TITLE)
         self.status_changed.emit(_QQ_CONNECTING)
         _LOGGER.info("[qq gui] connect_qq worker submitted")
         self._connection_task = self._executor(
@@ -761,6 +790,7 @@ class AnalysisPage(QWidget):
         self._status_label.setToolTip(message)
         self._status_label.setVisible(True)
         self._hint_label.setText(message)
+        self._show_disconnected_session_placeholder(ChatSource.QQ)
         self.status_changed.emit(title)
 
     def connect_wechat(
@@ -816,6 +846,7 @@ class AnalysisPage(QWidget):
         self._status_label.setText(_WECHAT_CONNECTING)
         self._status_label.setToolTip("")
         self._hint_label.setText(_WECHAT_LOGIN_PREPARE)
+        self._show_session_placeholder(_SESSION_LOADING_TITLE)
         self.status_changed.emit(_WECHAT_CONNECTING)
 
         self._connection_task = self._executor(
@@ -937,6 +968,7 @@ class AnalysisPage(QWidget):
         self._status_label.setToolTip(text)
         self._status_label.setVisible(True)
         self._hint_label.setText(text)
+        self._show_disconnected_session_placeholder(ChatSource.WECHAT)
         self.status_changed.emit(text)
 
     def open_wechat_setup(self, data_roots: Any = None) -> None:
@@ -1054,13 +1086,8 @@ class AnalysisPage(QWidget):
 
     def _reset_time_range(self) -> None:
         self._message_range = None
-        for enabled, edit in (
-            (self._start_enabled.isChecked(), self._start_date),
-            (self._end_enabled.isChecked(), self._end_date),
-        ):
-            edit.setDate(
-                QDate.currentDate() if enabled else QDate(1, 1, 1)
-            )
+        self._start_date.setDate(QDate.currentDate())
+        self._end_date.setDate(QDate.currentDate())
 
     def _request_session_time_range(self, session_id: str) -> None:
         facade_method = getattr(
@@ -1089,9 +1116,8 @@ class AnalysisPage(QWidget):
         self._apply_time_range_defaults()
 
     def _apply_time_range_defaults(self) -> None:
-        if self._start_enabled.isChecked():
+        if self._scope_custom.isChecked():
             self._apply_date_default(self._start_date, 0)
-        if self._end_enabled.isChecked():
             self._apply_date_default(self._end_date, 1)
 
     def _apply_date_default(
@@ -1114,14 +1140,10 @@ class AnalysisPage(QWidget):
         else:
             edit.setDate(QDate.currentDate())
 
-    def _on_start_time_toggled(self, checked: bool) -> None:
-        self._start_date.setEnabled(checked)
+    def _on_custom_scope_toggled(self, checked: bool) -> None:
+        self._custom_range_widget.setVisible(checked)
         if checked:
             self._apply_date_default(self._start_date, 0)
-
-    def _on_end_time_toggled(self, checked: bool) -> None:
-        self._end_date.setEnabled(checked)
-        if checked:
             self._apply_date_default(self._end_date, 1)
 
     def _populate_sessions(self, sessions: Any) -> None:
@@ -1162,8 +1184,10 @@ class AnalysisPage(QWidget):
         count = self._session_list.count()
         if count == 0 and self._sessions:
             self._hint_label.setText(_NO_MATCHING_SESSIONS)
+            self._show_session_placeholder(_NO_MATCHING_SESSIONS)
         elif count == 0:
             self._hint_label.setText(_NO_SESSIONS)
+            self._show_session_placeholder(_SESSION_NO_DATA_TITLE)
         else:
             self._hint_label.setText(f"\u5171 {count} \u4e2a\u4f1a\u8bdd\u3002")
         if self._selected_source == ChatSource.QQ:
@@ -1171,6 +1195,30 @@ class AnalysisPage(QWidget):
                 self._last_qq_status_message
                 or _QQ_STATE_MESSAGES[_QQ_STATE_CONNECTED]
             )
+        self._update_analyze_enabled()
+
+    def _show_disconnected_session_placeholder(self, source: ChatSource) -> None:
+        display_name = _SOURCE_DISPLAY_NAMES.get(source, "数据源")
+        self._show_session_placeholder(
+            _SESSION_EMPTY_TITLE,
+            f"连接{display_name}后，这里会显示你的聊天记录",
+        )
+
+    def _show_session_placeholder(
+        self,
+        title: str,
+        detail: str = "",
+    ) -> None:
+        """Render a non-interactive state inside the session list region."""
+        self._session_list.clear()
+        text = f"{title}\n{detail}" if detail else title
+        item = QListWidgetItem(text)
+        item.setFlags(
+            item.flags()
+            & ~Qt.ItemFlag.ItemIsEnabled
+            & ~Qt.ItemFlag.ItemIsSelectable
+        )
+        self._session_list.addItem(item)
         self._update_analyze_enabled()
 
     def _add_session_item(self, session: Any) -> None:
@@ -1219,15 +1267,24 @@ class AnalysisPage(QWidget):
 
     def build_config(self) -> AnalysisConfig:
         """Translate the widgets into a facade config."""
+        if self._scope_last_year.isChecked():
+            scope_mode = AnalysisScopeMode.LAST_YEAR
+        elif self._scope_last_six_months.isChecked():
+            scope_mode = AnalysisScopeMode.LAST_SIX_MONTHS
+        elif self._scope_custom.isChecked():
+            scope_mode = AnalysisScopeMode.CUSTOM
+        else:
+            scope_mode = AnalysisScopeMode.ALL
         return AnalysisConfig(
+            scope_mode=scope_mode,
             start_time=(
                 self._start_date.date().toString("yyyy-MM-dd")
-                if self._start_enabled.isChecked()
+                if scope_mode is AnalysisScopeMode.CUSTOM
                 else None
             ),
             end_time=(
                 self._end_date.date().toString("yyyy-MM-dd")
-                if self._end_enabled.isChecked()
+                if scope_mode is AnalysisScopeMode.CUSTOM
                 else None
             ),
         )

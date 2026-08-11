@@ -41,9 +41,11 @@ from .errors import (
     ArtifactGenerationFailed,
     InputPathNotFound,
     InvalidAnalysisRequest,
+    NoMessagesInScope,
 )
 from .import_request import ImportRequest
 from .import_service import ImportService
+from .scope_filter import AnalysisScopeMode, filter_messages
 
 
 _ARTIFACT_FILENAMES = {
@@ -73,7 +75,15 @@ class AnalysisApplicationService:
         )
         processed_message_count = outcome.processed_message_count
         parsed_messages = list(outcome.messages)
-        filtering_result = run_smart_profile(parsed_messages)
+        scoped_messages = filter_messages(parsed_messages, request.scope)
+        if (
+            request.scope.mode is not AnalysisScopeMode.ALL
+            and not scoped_messages
+        ):
+            raise NoMessagesInScope()
+        if request.scope.mode is not AnalysisScopeMode.ALL:
+            processed_message_count = len(scoped_messages)
+        filtering_result = run_smart_profile(scoped_messages)
         kept_messages = filtering_result.kept_messages
         analyzed = _analyze_kept_messages(
             kept_messages,

@@ -55,9 +55,11 @@ flowchart TD
 
     subgraph APP["Application 应用层"]
         IMPORT["ImportService"]
+        SCOPE["Analysis Scope Filter"]
         ORCH["QQExportImportService<br/>WeChatExportImportService"]
         SVC["AnalysisApplicationService"]
         FACADE["ChatAnalyzerFacade"]
+        HISTORY["ReportHistoryManager<br/>元数据 JSONL"]
     end
 
     subgraph CORE["Analysis Core 分析核心"]
@@ -86,7 +88,7 @@ flowchart TD
     ORCH --> PQQ
     ORCH --> PWXDB
     IMPORT --> PARSER
-    MSG --> IMPORT --> SVC
+    MSG --> IMPORT --> SCOPE --> SVC
     ORCH --> IMPORT
 
     SVC --> CLEAN --> LEGACY
@@ -97,6 +99,7 @@ flowchart TD
     FACADE --> ORCH
     FACADE --> SVC
     FACADE --> BUILD
+    FACADE --> HISTORY
     GUI --> FACADE
     CLI --> SVC
     VIEW --> GUI
@@ -203,8 +206,20 @@ Facade 在后续阶段接入。
 不复制 Provider 的业务解析。
 
 **AnalysisApplicationService** —— 业务流程编排：
-调用 ImportService 取得消息，driving 清洗、分词、分析，
+调用 ImportService 取得消息，按本次请求应用 Analysis Scope Filter，
+再 driving 清洗、分词、分析，
 组装 `AnalysisResultDTO` 与 `AnalysisReports`，触发导出。
+
+**Analysis Scope Filter** —— 应用层的单次分析时间范围过滤：
+只读取 `ChatMessage.timestamp`，支持全部、最近一年、最近半年和自定义日期范围。
+过滤发生在 ImportService 之后、现有智能过滤和 Analyzer 之前；Analyzer 不感知范围配置。
+“全部”模式直接保留原消息，指定范围过滤为空时在进入 Analyzer 前返回应用错误。
+
+**ReportHistoryManager** —— 结果层的分析历史元数据存储：
+只在分析结果与 Dashboard view 成功生成后由 Facade 调用，保存分析 ID、时间、
+来源、会话标识、消息数量与分析范围到用户数据目录中的 JSONL 文件。
+不保存聊天正文、原始消息、`AnalysisReports` 或 Dashboard 快照；读取损坏文件时
+返回空历史并记录日志，保存失败不改变本次分析成功结果。
 
 | | 内容 |
 | --- | --- |
@@ -260,6 +275,8 @@ Facade 在后续阶段接入。
 - `list_sources()` → `tuple[SourceInfo, ...]`，含可用性标记
 - `list_sessions(source)` → `list[SessionInfo]`，统一 QQ 与微信差异
 - `get_connection_status(source)` → `QQConnectionStatus`，返回来源连接状态
+- `list_analysis_history()` → `tuple[AnalysisHistoryRecord, ...]`，返回元数据历史
+- `get_analysis_history(analysis_id)` → `AnalysisHistoryRecord | None`
 - `analyze_file(path, config)` → `AnalysisOutcome`
 - `analyze_session(source, session_id, config)` → `AnalysisOutcome`
 
@@ -271,7 +288,7 @@ Facade 在后续阶段接入。
    但这属于实现细节，不出现在返回值与 API 语义里。
 
 依赖注入构造（`qq_service`、`wechat_service`、`analysis_service`、
-`presentation_builder`），测试可传入 stub。
+`presentation_builder`、`report_history_manager`），测试可传入 stub。
 
 ### 4.8 GUI
 
@@ -284,6 +301,8 @@ Facade 在后续阶段接入。
 
 GUI 层零业务逻辑。所有报告展示控件为只读
 （`setEditTriggers(NoEditTriggers)`），但保留选中与复制能力。
+分析成功后只在现有状态栏展示历史保存成功或失败；不直接读取历史文件，
+也不提供历史报告恢复页面。
 
 ### 4.9 CLI
 
@@ -414,6 +433,8 @@ GUI 只装配控件、转发事件、展示状态。
 | `application/runtime/qq_runtime_manager.py` | 外部运行时管理（QQ） |
 | `application/wechat_export_import_service.py` | 来源编排（微信） |
 | `application/analysis_service.py` | 应用服务 |
+| `application/scope_filter.py` | 单次分析时间范围过滤 |
+| `application/report_history.py` | 分析历史元数据 JSONL 存储 |
 | `application/dto.py` / `errors.py` / `task.py` / `export_config.py` | 应用契约 |
 | `application/facade.py` | Facade |
 | `runtime/` | 外部运行时契约（ChatRuntime）与捆绑运行时实现（BundledQQRuntime） |

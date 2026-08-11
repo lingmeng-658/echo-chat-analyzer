@@ -20,7 +20,7 @@ optional time window, hand back a path to a finished QCE JSON export.
 
 from __future__ import annotations
 
-import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,7 +29,11 @@ from typing import Any, Protocol, runtime_checkable
 
 from ..analysis.timestamps import to_epoch_seconds
 from ..qq_chat_exporter_adapter import load_qce_json
-from ..resources import user_data_dir
+from .chat_data_snapshot import (
+    ChatDataSnapshotManager,
+    ChatDataSource,
+    SnapshotSaveError,
+)
 from .errors import ApplicationServiceError
 from .import_outcome import ImportOutcome
 from .import_request import ImportRequest
@@ -37,11 +41,9 @@ from .import_service import ImportService
 
 
 QQ_PLATFORM = "qq"
-QQ_EXPORT_FORMAT = "json"
-QQ_RAW_EXPORT_CACHE_DIRECTORY = Path("cache") / "qq_raw_exports"
-QQ_RAW_EXPORT_CACHE_METADATA = "metadata.json"
 QQ_PRIVATE_CHAT_TYPE = 1
 QQ_GROUP_CHAT_TYPE = 2
+_LOGGER = logging.getLogger("qq_chat_analyzer.desktop.qq_export_import")
 
 
 class QQExportUnavailable(ApplicationServiceError):
@@ -93,6 +95,17 @@ class QQExportImportRequest:
     chat_type: int = QQ_GROUP_CHAT_TYPE
     peer_uin: str | None = None
     session_name: str | None = None
+    force_refresh: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class QQExportAcquisition:
+    """One QQ export payload plus optional persisted snapshot identity."""
+
+    payload_path: Path
+    snapshot_id: str | None = None
+    acquired_at: datetime | None = None
+    reused_snapshot: bool = False
 
 
 class QQExportImportService:
@@ -105,6 +118,7 @@ class QQExportImportService:
         *,
         provider_factory: Any = None,
         cache_directory: str | Path | None = None,
+        snapshot_manager: ChatDataSnapshotManager | None = None,
     ) -> None:
         if provider is None and provider_factory is None:
             raise TypeError(
@@ -113,14 +127,10 @@ class QQExportImportService:
         self._injected_provider = provider
         self._provider_factory = provider_factory
         self._import_service = import_service or ImportService()
-        self._cache_directory = Path(
-            cache_directory
-            if cache_directory is not None
-            else user_data_dir() / QQ_RAW_EXPORT_CACHE_DIRECTORY
-        )
-        self._cache_metadata_path = (
-            self._cache_directory / QQ_RAW_EXPORT_CACHE_METADATA
-        )
+        self._snapshot_manager = snapshot_manager or ChatDataSnapshotManager()
+        # Kept only so existing constructor calls remain valid. Phase 3B does
+        # not read, migrate, or delete the legacy metadata cache.
+        del cache_directory
 
     def provider(self) -> QQExportProvider:
         """Return the provider used for exports.
@@ -138,10 +148,13 @@ class QQExportImportService:
         return self.provider()
 
     def execute(self, request: QQExportImportRequest) -> ImportOutcome:
-        export_path = self.export_only(request)
+        acquisition = self.acquire_export(request)
 
         return self._import_service.execute(
-            ImportRequest(input_path=export_path, platform=QQ_PLATFORM)
+            ImportRequest(
+                input_path=acquisition.payload_path,
+                platform=QQ_PLATFORM,
+            )
         )
 
     def list_groups(self) -> list[Any]:
@@ -218,15 +231,76 @@ class QQExportImportService:
         becomes :class:`QQExportUnavailable`, and a path that is not present
         on disk becomes :class:`QQExportFileMissing`.
         """
-        cached_path = self._find_cached_export(request)
-        if cached_path is not None:
-            return cached_path
+        return self.acquire_export(request).payload_path
+
+    def acquire_export(
+        self,
+        request: QQExportImportRequest,
+    ) -> QQExportAcquisition:
+        """Reuse a valid snapshot or export and persist a new raw payload."""
+        session_type = _session_type(request)
+        cacheable = _is_full_session_request(request)
+        if cacheable and not request.force_refresh:
+            validation = self._snapshot_manager.find_latest_available(
+                source=ChatDataSource.QQ,
+                session_id=str(request.group_code),
+                session_type=session_type,
+            )
+            if (
+                validation is not None
+                and validation.snapshot is not None
+                and validation.payload_path is not None
+            ):
+                return QQExportAcquisition(
+                    payload_path=validation.payload_path,
+                    snapshot_id=validation.snapshot.id,
+                    acquired_at=validation.snapshot.acquired_at,
+                    reused_snapshot=True,
+                )
 
         export_path = self._export(request)
         if not export_path.exists():
             raise QQExportFileMissing()
-        self._record_cached_export(request, export_path)
-        return export_path
+
+        if not cacheable:
+            return QQExportAcquisition(payload_path=export_path)
+        metadata = _snapshot_metadata(export_path)
+        if metadata is None:
+            return QQExportAcquisition(payload_path=export_path)
+        message_count, coverage_start, coverage_end = metadata
+        try:
+            snapshot = self._snapshot_manager.save_snapshot(
+                export_path,
+                source=ChatDataSource.QQ,
+                session_id=str(request.group_code),
+                session_name=request.session_name,
+                session_type=session_type,
+                coverage_start=coverage_start,
+                coverage_end=coverage_end,
+                message_count=message_count,
+                storage_format="qce_json",
+            )
+        except SnapshotSaveError:
+            _LOGGER.warning(
+                "QQ export succeeded but its chat data snapshot could not "
+                "be saved.",
+            )
+            return QQExportAcquisition(payload_path=export_path)
+
+        snapshot_payload = self._snapshot_manager.resolve_payload_path(
+            snapshot.id
+        )
+        if snapshot_payload is None:
+            _LOGGER.warning(
+                "QQ chat data snapshot failed validation after save."
+            )
+            return QQExportAcquisition(payload_path=export_path)
+        return QQExportAcquisition(
+            payload_path=snapshot_payload,
+            snapshot_id=snapshot.id,
+            acquired_at=snapshot.acquired_at,
+            reused_snapshot=False,
+        )
 
     # ---------------------------------------------------------------- internals
 
@@ -264,103 +338,34 @@ class QQExportImportService:
             return Path(result)
         raise QQExportUnavailable()
 
-    def _find_cached_export(
-        self,
-        request: QQExportImportRequest,
-    ) -> Path | None:
-        expected = self._cache_identity(request)
-        for entry in reversed(self._read_cache_entries()):
-            if not isinstance(entry, Mapping):
-                continue
-            if any(entry.get(key) != value for key, value in expected.items()):
-                continue
-            raw_path = entry.get("export_file_path")
-            if not isinstance(raw_path, str) or not raw_path.strip():
-                continue
-            export_path = Path(raw_path)
-            if export_path.is_file():
-                return export_path
-        return None
-
-    def _record_cached_export(
-        self,
-        request: QQExportImportRequest,
-        export_path: Path,
-    ) -> None:
-        identity = self._cache_identity(request)
-        entries = [
-            entry
-            for entry in self._read_cache_entries()
-            if not (
-                isinstance(entry, Mapping)
-                and all(entry.get(key) == value for key, value in identity.items())
-            )
-        ]
-        resolved_path = export_path.resolve()
-        entries.append(
-            {
-                **identity,
-                "export_file_path": str(resolved_path),
-                "created_time": datetime.now(timezone.utc).isoformat(),
-                "message_count": _export_message_count(resolved_path),
-            }
-        )
-        try:
-            self._cache_directory.mkdir(parents=True, exist_ok=True)
-            temporary_path = self._cache_metadata_path.with_suffix(".tmp")
-            temporary_path.write_text(
-                json.dumps(
-                    {"version": 1, "entries": entries},
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
-            temporary_path.replace(self._cache_metadata_path)
-        except OSError:
-            return
-
-    def _read_cache_entries(self) -> list[Any]:
-        try:
-            payload = json.loads(
-                self._cache_metadata_path.read_text(encoding="utf-8")
-            )
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            return []
-        if not isinstance(payload, Mapping):
-            return []
-        entries = payload.get("entries")
-        return entries if isinstance(entries, list) else []
-
-    @staticmethod
-    def _cache_identity(request: QQExportImportRequest) -> dict[str, Any]:
-        return {
-            "source": QQ_PLATFORM,
-            "conversation_id": str(request.group_code),
-            "chat_type": int(request.chat_type),
-            "start_time": _metadata_value(request.start_time),
-            "end_time": _metadata_value(request.end_time),
-            "format": QQ_EXPORT_FORMAT,
-        }
+def _session_type(request: QQExportImportRequest) -> str:
+    return "private" if request.chat_type == QQ_PRIVATE_CHAT_TYPE else "group"
 
 
-def _metadata_value(value: Any) -> Any:
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return value
-    return str(value)
+def _is_full_session_request(request: QQExportImportRequest) -> bool:
+    return request.start_time is None and request.end_time is None
 
 
-def _export_message_count(export_path: Path) -> int | None:
-    try:
-        payload = load_qce_json(export_path)
-    except Exception:
-        return None
+def _snapshot_metadata(
+    export_path: Path,
+) -> tuple[int, datetime | None, datetime | None] | None:
+    payload = load_qce_json(export_path)
     if not isinstance(payload, Mapping):
         return None
-    statistics = payload.get("statistics")
-    if isinstance(statistics, Mapping):
-        total = statistics.get("totalMessages")
-        if isinstance(total, int) and not isinstance(total, bool):
-            return total
-    messages = payload.get("messages")
-    return len(messages) if isinstance(messages, list) else None
+    raw_messages = payload.get("messages")
+    if not isinstance(raw_messages, list):
+        return None
+    epochs = [
+        epoch
+        for row in raw_messages
+        if isinstance(row, Mapping)
+        for epoch in (to_epoch_seconds(row.get("timestamp")),)
+        if epoch is not None
+    ]
+    if not epochs:
+        return len(raw_messages), None, None
+    return (
+        len(raw_messages),
+        datetime.fromtimestamp(min(epochs), timezone.utc),
+        datetime.fromtimestamp(max(epochs), timezone.utc),
+    )

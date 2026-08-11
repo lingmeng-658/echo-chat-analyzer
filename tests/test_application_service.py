@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import builtins
+import dataclasses
 import importlib
 import json
 import sys
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -323,3 +325,94 @@ def test_importing_service_does_not_import_cli(
     imported = importlib.import_module(module_name)
 
     assert imported.AnalysisApplicationService is not None
+
+
+def test_execute_analyzes_only_messages_inside_the_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = _application_module()
+    service_module = _service_module()
+    input_path = tmp_path / "fictional-scoped-chat.json"
+    _write_fictional_chat(
+        input_path,
+        [
+            {
+                "timestamp": "2026-01-31 23:59:59",
+                "sender": {"nickname": "Fictional-Alice"},
+                "type": "text",
+                "content": {"text": "OutsideMarker"},
+            },
+            {
+                "timestamp": "2026-02-01 12:00:00",
+                "sender": {"nickname": "Fictional-Alice"},
+                "type": "text",
+                "content": {"text": "InsideMarker"},
+            },
+        ],
+    )
+    for exporter_name in (
+        "export_word_frequency_csv",
+        "export_word_speaker_summary_csv",
+        "export_word_speaker_frequency_csv",
+        "generate_word_top_speakers_chart",
+        "generate_wordcloud",
+    ):
+        monkeypatch.setattr(service_module, exporter_name, lambda *args: None)
+    request = dataclasses.replace(
+        _request(application, tmp_path, input_path),
+        scope=application.AnalysisScope.custom(
+            date(2026, 2, 1),
+            date(2026, 2, 1),
+        ),
+    )
+
+    result = service_module.AnalysisApplicationService().execute(request)
+
+    assert result.status is application.AnalysisStatus.COMPLETED
+    assert result.processed_message_count == 1
+    assert result.valid_text_count == 1
+    assert result.reports.activity.total_message_count == 1
+    assert {word.word for word in result.top_words} == {"InsideMarker"}
+
+
+def test_execute_stops_before_analysis_when_scope_has_no_messages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = _application_module()
+    service_module = _service_module()
+    input_path = tmp_path / "fictional-out-of-scope-chat.json"
+    _write_fictional_chat(
+        input_path,
+        [
+            {
+                "timestamp": "2025-01-01 12:00:00",
+                "sender": {"nickname": "Fictional-Alice"},
+                "type": "text",
+                "content": {"text": "OutsideMarker"},
+            }
+        ],
+    )
+
+    def fail_if_analysis_starts(*args, **kwargs):
+        raise AssertionError("analysis must not run for an empty scope")
+
+    monkeypatch.setattr(
+        service_module,
+        "run_smart_profile",
+        fail_if_analysis_starts,
+    )
+    request = dataclasses.replace(
+        _request(application, tmp_path, input_path),
+        scope=application.AnalysisScope.custom(
+            date(2026, 1, 1),
+            date(2026, 12, 31),
+        ),
+    )
+
+    with pytest.raises(application.NoMessagesInScope) as captured:
+        service_module.AnalysisApplicationService().execute(request)
+
+    assert captured.value.public_message == "当前时间范围内没有可分析的聊天记录。"
+    assert not request.output_directory.exists()

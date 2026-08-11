@@ -20,6 +20,32 @@ class InvalidAnalysisRequest(ApplicationServiceError):
     public_message = "The analysis request is invalid."
 
 
+class InvalidAnalysisScope(ApplicationServiceError):
+    """Raised when an analysis scope cannot be resolved safely."""
+
+    code = "invalid_analysis_scope"
+    public_message = "分析时间范围无效，请重新选择。"
+
+
+class MissingAnalysisScopeDate(InvalidAnalysisScope):
+    """Raised when a custom scope omits either boundary date."""
+
+    public_message = "请选择开始日期和结束日期。"
+
+
+class InvalidAnalysisScopeRange(InvalidAnalysisScope):
+    """Raised when a custom scope starts after it ends."""
+
+    public_message = "开始日期不能晚于结束日期，请重新选择。"
+
+
+class NoMessagesInScope(ApplicationServiceError):
+    """Raised when a selected time range contains no messages."""
+
+    code = "no_messages_in_scope"
+    public_message = "当前时间范围内没有可分析的聊天记录。"
+
+
 class InputPathNotFound(ApplicationServiceError):
     """Raised when the requested local input cannot be found."""
 

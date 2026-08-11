@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from datetime import datetime
 from typing import Any
 
 from PySide6.QtWidgets import (
@@ -125,9 +126,23 @@ class MainWindow(QMainWindow):
         self.dashboard_page.render_view(view)
         self.stack.setCurrentIndex(DASHBOARD_PAGE_INDEX)
         self._back_button.setVisible(True)
-        self.statusBar().showMessage(
-            "\u5206\u6790\u5b8c\u6210"
-        )
+        history_saved = getattr(outcome, "history_saved", None)
+        if history_saved is True:
+            status_message = "\u5206\u6790\u5df2\u4fdd\u5b58"
+        elif history_saved is False:
+            status_message = (
+                "\u5206\u6790\u5b8c\u6210\uff0c\u4f46\u5386\u53f2"
+                "\u8bb0\u5f55\u4fdd\u5b58\u5931\u8d25\u3002"
+            )
+        else:
+            status_message = "\u5206\u6790\u5b8c\u6210"
+        data_acquired_at = getattr(outcome, "data_acquired_at", None)
+        if isinstance(data_acquired_at, datetime):
+            status_message += (
+                " \u00b7 \u6570\u636e\u83b7\u53d6\u65f6\u95f4\uff1a"
+                f"{data_acquired_at.isoformat(sep=' ', timespec='minutes')}"
+            )
+        self.statusBar().showMessage(status_message)
 
     def show_error(self, code: str, message: str) -> None:
         """Show a user-safe message. Never a traceback."""

@@ -19,12 +19,16 @@ sys.path.insert(0, str(SRC_ROOT))
 
 from qq_chat_analyzer.application import (
     ApplicationServiceError,
+    ChatDataSnapshotManager,
+    ChatDataSource,
     ImportRequest,
     ImportService,
     QQExportFileMissing,
     QQExportImportRequest,
     QQExportImportService,
     QQExportUnavailable,
+    SnapshotSaveError,
+    SnapshotStatus,
 )
 from qq_chat_analyzer.qq_chat_exporter_adapter import (
     WARNING_QCE_NON_TEXT_MESSAGE_SKIPPED,
@@ -356,137 +360,191 @@ def test_orchestrator_reuses_injected_import_service(tmp_path: Path) -> None:
     )
     outcome = service.execute(QQExportImportRequest(group_code="700000001"))
 
-    assert calls == [export_path]
+    assert len(calls) == 1
+    assert calls[0] != export_path
+    assert calls[0].read_bytes() == export_path.read_bytes()
     assert outcome.result.message_count == 3
 
 
 # --------------------------------------------------- export_only (path only)
 
 
-def test_export_only_returns_provider_path(tmp_path: Path) -> None:
+def test_export_only_returns_persisted_snapshot_payload(tmp_path: Path) -> None:
     export_path = _write_fake_export(tmp_path / "fake_export.json")
     provider = _StubProvider(export_path)
     service = QQExportImportService(provider)
 
     returned = service.export_only(QQExportImportRequest(group_code="700000001"))
 
-    assert returned == export_path
+    assert returned != export_path
+    assert returned.read_bytes() == export_path.read_bytes()
     assert provider.calls == [("700000001", None, None)]
 
 
-def test_export_only_records_cache_after_provider_export(tmp_path: Path) -> None:
+def test_acquire_export_creates_snapshot_after_verified_provider_export(
+    tmp_path: Path,
+) -> None:
     export_path = _write_fake_export(tmp_path / "fake_export.json")
     provider = _StubProvider(export_path)
-    cache_directory = tmp_path / "cache"
+    snapshot_manager = ChatDataSnapshotManager(tmp_path / "user-data")
     service = QQExportImportService(
         provider,
-        cache_directory=cache_directory,
+        snapshot_manager=snapshot_manager,
     )
     request = QQExportImportRequest(
         group_code="700000001",
-        start_time=1700000000000,
-        end_time=1800000000000,
+        session_name="Fictional Test Group",
     )
 
-    returned = service.export_only(request)
+    acquisition = service.acquire_export(request)
 
-    assert returned == export_path
-    assert provider.calls == [
-        ("700000001", 1700000000000, 1800000000000)
-    ]
-    metadata = json.loads(
-        (cache_directory / "metadata.json").read_text(encoding="utf-8")
+    assert provider.calls == [("700000001", None, None)]
+    assert acquisition.payload_path != export_path
+    assert acquisition.payload_path.read_bytes() == export_path.read_bytes()
+    assert acquisition.snapshot_id is not None
+    assert acquisition.reused_snapshot is False
+    snapshot = snapshot_manager.get_snapshot(acquisition.snapshot_id)
+    assert snapshot is not None
+    assert snapshot.source is ChatDataSource.QQ
+    assert snapshot.session_id == "700000001"
+    assert snapshot.session_name == "Fictional Test Group"
+    assert snapshot.session_type == "group"
+    assert snapshot.message_count == 4
+    assert snapshot.coverage_start is not None
+    assert snapshot.coverage_start.timestamp() == 1750000000
+    assert snapshot.coverage_end == snapshot.coverage_start
+    assert acquisition.acquired_at == snapshot.acquired_at
+    assert snapshot_manager.validate_snapshot(snapshot.id).status is (
+        SnapshotStatus.AVAILABLE
     )
-    assert len(metadata["entries"]) == 1
-    entry = metadata["entries"][0]
-    assert entry["source"] == "qq"
-    assert entry["conversation_id"] == "700000001"
-    assert entry["export_file_path"] == str(export_path.resolve())
-    assert entry["start_time"] == 1700000000000
-    assert entry["end_time"] == 1800000000000
-    assert entry["format"] == "json"
-    assert isinstance(entry["created_time"], str) and entry["created_time"]
-    assert entry["message_count"] == 4
 
 
-def test_export_only_reuses_matching_existing_cache(tmp_path: Path) -> None:
+def test_acquire_export_reuses_latest_available_snapshot(tmp_path: Path) -> None:
     export_path = _write_fake_export(tmp_path / "fake_export.json")
-    cache_directory = tmp_path / "cache"
-    request = QQExportImportRequest(
-        group_code="700000001",
-        start_time=1700000000000,
-        end_time=1800000000000,
-    )
+    snapshot_manager = ChatDataSnapshotManager(tmp_path / "user-data")
+    request = QQExportImportRequest(group_code="700000001")
     first_provider = _StubProvider(export_path)
-    QQExportImportService(
+    first = QQExportImportService(
         first_provider,
-        cache_directory=cache_directory,
-    ).export_only(request)
+        snapshot_manager=snapshot_manager,
+    ).acquire_export(request)
     second_provider = _StubProvider(tmp_path / "must-not-be-used.json")
 
-    returned = QQExportImportService(
+    second = QQExportImportService(
         second_provider,
-        cache_directory=cache_directory,
-    ).export_only(request)
+        snapshot_manager=snapshot_manager,
+    ).acquire_export(request)
 
-    assert returned == export_path
+    assert second.payload_path == first.payload_path
+    assert second.snapshot_id == first.snapshot_id
+    assert second.acquired_at == first.acquired_at
+    assert second.reused_snapshot is True
     assert second_provider.calls == []
 
 
-def test_export_only_reexports_when_cached_file_is_missing(tmp_path: Path) -> None:
+def test_force_refresh_exports_and_creates_a_new_snapshot(tmp_path: Path) -> None:
     old_export = _write_fake_export(tmp_path / "old_export.json")
     new_export = _write_fake_export(tmp_path / "new_export.json")
-    cache_directory = tmp_path / "cache"
+    snapshot_manager = ChatDataSnapshotManager(tmp_path / "user-data")
     request = QQExportImportRequest(group_code="700000001")
-    QQExportImportService(
+    first = QQExportImportService(
         _StubProvider(old_export),
-        cache_directory=cache_directory,
-    ).export_only(request)
-    old_export.unlink()
+        snapshot_manager=snapshot_manager,
+    ).acquire_export(request)
     provider = _StubProvider(new_export)
 
-    returned = QQExportImportService(
+    refreshed = QQExportImportService(
         provider,
-        cache_directory=cache_directory,
-    ).export_only(request)
+        snapshot_manager=snapshot_manager,
+    ).acquire_export(
+        QQExportImportRequest(
+            group_code="700000001",
+            force_refresh=True,
+        )
+    )
 
-    assert returned == new_export
+    assert refreshed.snapshot_id != first.snapshot_id
+    assert refreshed.reused_snapshot is False
+    assert refreshed.payload_path.read_bytes() == new_export.read_bytes()
     assert provider.calls == [("700000001", None, None)]
 
 
-def test_export_only_reexports_when_cache_conditions_differ(
+def test_invalid_snapshot_payload_causes_a_fresh_export(
     tmp_path: Path,
 ) -> None:
     old_export = _write_fake_export(tmp_path / "old_export.json")
     new_export = _write_fake_export(tmp_path / "new_export.json")
-    cache_directory = tmp_path / "cache"
-    QQExportImportService(
+    snapshot_manager = ChatDataSnapshotManager(tmp_path / "user-data")
+    first = QQExportImportService(
         _StubProvider(old_export),
-        cache_directory=cache_directory,
-    ).export_only(
-        QQExportImportRequest(
-            group_code="700000001",
-            start_time=1700000000000,
-            end_time=1800000000000,
-        )
-    )
+        snapshot_manager=snapshot_manager,
+    ).acquire_export(QQExportImportRequest(group_code="700000001"))
+    first.payload_path.write_bytes(first.payload_path.read_bytes() + b"broken")
     provider = _StubProvider(new_export)
 
-    returned = QQExportImportService(
+    replacement = QQExportImportService(
         provider,
-        cache_directory=cache_directory,
-    ).export_only(
-        QQExportImportRequest(
-            group_code="700000001",
-            start_time=1700000000001,
-            end_time=1800000000000,
-        )
-    )
+        snapshot_manager=snapshot_manager,
+    ).acquire_export(QQExportImportRequest(group_code="700000001"))
 
-    assert returned == new_export
-    assert provider.calls == [
-        ("700000001", 1700000000001, 1800000000000)
-    ]
+    assert replacement.snapshot_id != first.snapshot_id
+    assert replacement.reused_snapshot is False
+    assert provider.calls == [("700000001", None, None)]
+
+
+def test_legacy_absolute_path_cache_is_ignored_and_left_untouched(
+    tmp_path: Path,
+) -> None:
+    legacy_directory = tmp_path / "legacy-cache"
+    legacy_directory.mkdir()
+    legacy_export = _write_fake_export(tmp_path / "legacy-export.json")
+    legacy_metadata = legacy_directory / "metadata.json"
+    original_metadata = json.dumps(
+        {
+            "entries": [
+                {
+                    "source": "qq",
+                    "conversation_id": "700000001",
+                    "export_file_path": str(legacy_export.resolve()),
+                }
+            ]
+        }
+    )
+    legacy_metadata.write_text(original_metadata, encoding="utf-8")
+    new_export = _write_fake_export(tmp_path / "new-export.json")
+    provider = _StubProvider(new_export)
+
+    acquisition = QQExportImportService(
+        provider,
+        cache_directory=legacy_directory,
+        snapshot_manager=ChatDataSnapshotManager(tmp_path / "user-data"),
+    ).acquire_export(QQExportImportRequest(group_code="700000001"))
+
+    assert acquisition.payload_path.read_bytes() == new_export.read_bytes()
+    assert provider.calls == [("700000001", None, None)]
+    assert legacy_metadata.read_text(encoding="utf-8") == original_metadata
+
+
+def test_snapshot_save_failure_returns_verified_provider_export(
+    tmp_path: Path,
+) -> None:
+    class _FailingSnapshotManager(ChatDataSnapshotManager):
+        def save_snapshot(self, *args, **kwargs):
+            raise SnapshotSaveError("fictional write failure")
+
+    export_path = _write_fake_export(tmp_path / "fallback-export.json")
+    provider = _StubProvider(export_path)
+
+    acquisition = QQExportImportService(
+        provider,
+        snapshot_manager=_FailingSnapshotManager(tmp_path / "user-data"),
+    ).acquire_export(QQExportImportRequest(group_code="700000001"))
+
+    assert acquisition.payload_path == export_path
+    assert acquisition.snapshot_id is None
+    assert acquisition.acquired_at is None
+    assert acquisition.reused_snapshot is False
+    assert provider.calls == [("700000001", None, None)]
 
 
 def test_export_only_accepts_string_path(tmp_path: Path) -> None:
@@ -495,7 +553,8 @@ def test_export_only_accepts_string_path(tmp_path: Path) -> None:
 
     returned = service.export_only(QQExportImportRequest(group_code="700000001"))
 
-    assert returned == export_path
+    assert returned != export_path
+    assert returned.read_bytes() == export_path.read_bytes()
 
 
 def test_export_only_does_not_import_messages(tmp_path: Path) -> None:
@@ -514,7 +573,8 @@ def test_export_only_does_not_import_messages(tmp_path: Path) -> None:
     )
     returned = service.export_only(QQExportImportRequest(group_code="700000001"))
 
-    assert returned == export_path
+    assert returned != export_path
+    assert returned.read_bytes() == export_path.read_bytes()
     assert calls == []
 
 

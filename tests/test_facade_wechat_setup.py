@@ -218,6 +218,29 @@ def test_composition_root_shares_factory_with_setup() -> None:
     assert setup._provider_factory is connection._shared_factory
 
 
+def test_composition_root_injects_lazy_report_history_manager(
+    monkeypatch,
+) -> None:
+    from qq_chat_analyzer.application import report_history
+    from qq_chat_analyzer.gui import app as gui_app
+
+    def fail_if_storage_is_resolved_during_startup():
+        raise AssertionError("history storage resolved during startup")
+
+    monkeypatch.setattr(
+        report_history,
+        "user_data_dir",
+        fail_if_storage_is_resolved_during_startup,
+    )
+
+    facade = gui_app.build_facade()
+
+    assert isinstance(
+        facade._report_history_manager,
+        report_history.ReportHistoryManager,
+    )
+
+
 def test_facade_passes_progress_to_acquire_db_key(tmp_path: Path) -> None:
     """The facade must relay the progress callback to the setup service."""
     service = _ProgressCapturingSetupService()

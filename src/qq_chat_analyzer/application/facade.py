@@ -26,6 +26,7 @@ import logging
 from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -48,6 +49,7 @@ from .wechat_connection_service import WeChatConnectionStatus
 from .wechat_environment_config import WeChatEnvironmentConfig
 from .wechat_export_import_service import WeChatExportImportRequest
 from .wechat_setup_service import WeChatSetupStatus
+from .scope_filter import AnalysisScope, AnalysisScopeMode, resolve_scope
 
 
 _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.facade")
@@ -107,13 +109,15 @@ class SourceInfo:
 class AnalysisConfig:
     """Everything a caller may tune for one analysis run.
 
-    ``start_time`` and ``end_time`` bound which messages are exported. They
-    describe the analysis window only; no relationship or acquaintance
-    duration is inferred from them.
+    ``scope_mode`` selects the analysis window. ``start_time`` and
+    ``end_time`` are used for a custom range. Explicit legacy bounds are also
+    treated as custom so existing callers retain their behavior.
     """
 
     start_time: Any = None
     end_time: Any = None
+    scope_mode: AnalysisScopeMode = AnalysisScopeMode.ALL
+    force_refresh: bool = False
     top: int = DEFAULT_TOP
     profile: str = DEFAULT_PROFILE
     output_directory: Path | None = None
@@ -205,6 +209,21 @@ class AnalysisOutcome:
     source: ChatSource
     session: SessionInfo | None = None
     artifact_directory: Path | None = field(default=None, repr=False)
+    history_saved: bool | None = None
+    history_record_id: str | None = None
+    snapshot_id: str | None = None
+    data_acquired_at: datetime | None = None
+    snapshot_reused: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _SessionExport:
+    """Internal export path plus optional snapshot acquisition metadata."""
+
+    payload_path: Path
+    snapshot_id: str | None = None
+    acquired_at: datetime | None = None
+    reused_snapshot: bool = False
 
 
 class ChatAnalyzerFacade:
@@ -227,6 +246,7 @@ class ChatAnalyzerFacade:
         ) = None,
         analysis_service: Any = None,
         presentation_builder: Any = None,
+        report_history_manager: Any = None,
         stopwords_directory: Path | None = None,
     ) -> None:
         self._services: dict[ChatSource, Any] = {
@@ -244,6 +264,7 @@ class ChatAnalyzerFacade:
         self._built_sources: dict[ChatSource, Any] = {}
         self._analysis_service = analysis_service
         self._presentation_builder = presentation_builder
+        self._report_history_manager = report_history_manager
         self._stopwords_directory = stopwords_directory or resources_dir()
 
     @property
@@ -505,6 +526,28 @@ class ChatAnalyzerFacade:
             return None
         return min(epochs), max(epochs)
 
+    # ------------------------------------------------------- report history
+
+    def list_analysis_history(self) -> tuple[Any, ...]:
+        """Return metadata-only analysis history through the app boundary."""
+        if self._report_history_manager is None:
+            return ()
+        try:
+            return tuple(self._report_history_manager.list_records())
+        except Exception:
+            _LOGGER.exception("Analysis history could not be read.")
+            return ()
+
+    def get_analysis_history(self, analysis_id: str) -> Any | None:
+        """Return one metadata-only history record by ID."""
+        if self._report_history_manager is None:
+            return None
+        try:
+            return self._report_history_manager.get_record(analysis_id)
+        except Exception:
+            _LOGGER.exception("Analysis history record could not be read.")
+            return None
+
     # -------------------------------------------------------------- analysis
 
     def analyze_file(
@@ -514,8 +557,12 @@ class ChatAnalyzerFacade:
         progress: Callable[[str], None] | None = None,
     ) -> AnalysisOutcome:
         """Analyze one already-exported local file or directory."""
-        _report_progress(progress, "正在准备分析...")
         resolved_config = config or AnalysisConfig()
+        resolved_scope = self._resolve_scope(
+            resolved_config,
+            ChatSource.LOCAL_FILE,
+        )
+        _report_progress(progress, "正在准备分析...")
         input_path = Path(path)
         _report_progress(progress, "正在读取聊天记录...")
 
@@ -524,6 +571,7 @@ class ChatAnalyzerFacade:
             resolved_config,
             source=ChatSource.LOCAL_FILE,
             session=None,
+            scope=resolved_scope,
             progress=progress,
         )
 
@@ -540,7 +588,6 @@ class ChatAnalyzerFacade:
         a scratch directory, consumed by the analysis service, and discarded
         before this method returns.
         """
-        _report_progress(progress, "正在准备分析...")
         chat_source = _coerce_source(source)
         if chat_source is ChatSource.LOCAL_FILE:
             raise FacadeError(
@@ -554,6 +601,8 @@ class ChatAnalyzerFacade:
             )
 
         resolved_config = config or AnalysisConfig()
+        resolved_scope = self._resolve_scope(resolved_config, chat_source)
+        _report_progress(progress, "正在准备分析...")
         _report_progress(progress, "正在读取聊天记录...")
         service = self._require_service(chat_source)
         if chat_source in (ChatSource.QQ, ChatSource.WECHAT):
@@ -586,7 +635,7 @@ class ChatAnalyzerFacade:
         with TemporaryDirectory(prefix="chat-analyzer-export-") as scratch:
             scratch_directory = Path(scratch)
             with _translated_errors(chat_source):
-                export_path = self._export_session(
+                session_export = self._export_session(
                     chat_source,
                     service,
                     session_id,
@@ -596,11 +645,15 @@ class ChatAnalyzerFacade:
                 )
 
             return self._analyze_path(
-                Path(export_path),
+                session_export.payload_path,
                 resolved_config,
                 source=chat_source,
                 session=session,
+                scope=resolved_scope,
                 conversation_names=conversation_names,
+                snapshot_id=session_export.snapshot_id,
+                data_acquired_at=session_export.acquired_at,
+                snapshot_reused=session_export.reused_snapshot,
                 progress=progress,
             )
 
@@ -613,8 +666,12 @@ class ChatAnalyzerFacade:
         *,
         source: ChatSource,
         session: SessionInfo | None,
+        scope: AnalysisScope,
         speaker_names: Mapping[str, str] | None = None,
         conversation_names: Mapping[str, str] | None = None,
+        snapshot_id: str | None = None,
+        data_acquired_at: datetime | None = None,
+        snapshot_reused: bool = False,
         progress: Callable[[str], None] | None = None,
     ) -> AnalysisOutcome:
         """Run analysis then presentation for one local path."""
@@ -627,6 +684,7 @@ class ChatAnalyzerFacade:
                 stopwords_path=self._stopwords_path(config.profile),
                 font_path=config.font_path,
                 top=config.top,
+                scope=scope,
                 speaker_names=speaker_names or {},
                 conversation_names=conversation_names or {},
             )
@@ -637,6 +695,35 @@ class ChatAnalyzerFacade:
 
             _report_progress(progress, "正在生成报告...")
             view = self._build_view(result)
+            report_generated_at = datetime.now(timezone.utc)
+
+        history_saved: bool | None = None
+        history_record_id: str | None = None
+        if self._report_history_manager is not None:
+            try:
+                history_record = self._report_history_manager.save_analysis(
+                    source=source.value,
+                    session_name=(
+                        session.display_name if session is not None else None
+                    ),
+                    session_id=(
+                        session.session_id if session is not None else None
+                    ),
+                    message_count=result.processed_message_count,
+                    analysis_scope=scope.mode.value,
+                    scope_start=scope.start_date,
+                    scope_end=scope.end_date,
+                    report_generated_at=report_generated_at,
+                    snapshot_id=snapshot_id,
+                )
+            except Exception:
+                _LOGGER.exception(
+                    "Analysis completed but history metadata could not be saved."
+                )
+                history_saved = False
+            else:
+                history_saved = True
+                history_record_id = history_record.analysis_id
 
         outcome = AnalysisOutcome(
             view=view,
@@ -644,6 +731,11 @@ class ChatAnalyzerFacade:
             source=source,
             session=session,
             artifact_directory=config.output_directory,
+            history_saved=history_saved,
+            history_record_id=history_record_id,
+            snapshot_id=snapshot_id,
+            data_acquired_at=data_acquired_at,
+            snapshot_reused=snapshot_reused,
         )
         _report_progress(progress, "分析完成")
         return outcome
@@ -669,35 +761,64 @@ class ChatAnalyzerFacade:
         scratch_directory: Path,
         *,
         raw_session: Any = None,
-    ) -> Path:
+    ) -> _SessionExport:
         """Ask the matching service for an export file."""
-        start_epoch = to_epoch_seconds(config.start_time)
-        end_epoch = to_epoch_seconds(config.end_time)
         if source is ChatSource.QQ:
             session_type = _first_string(raw_session, "session_type")
-            return service.export_only(
-                QQExportImportRequest(
-                    group_code=session_id,
-                    start_time=_epoch_millis(start_epoch),
-                    end_time=_epoch_millis(end_epoch),
-                    chat_type=1 if session_type == "private" else 2,
-                    peer_uin=_first_string(raw_session, "peer_uin") or None,
-                    session_name=_first_string(
-                        raw_session,
-                        "display_name",
-                        "group_name",
-                    ) or None,
+            request = QQExportImportRequest(
+                group_code=session_id,
+                start_time=None,
+                end_time=None,
+                chat_type=1 if session_type == "private" else 2,
+                peer_uin=_first_string(raw_session, "peer_uin") or None,
+                session_name=_first_string(
+                    raw_session,
+                    "display_name",
+                    "group_name",
+                ) or None,
+                force_refresh=config.force_refresh,
+            )
+            acquire_export = getattr(service, "acquire_export", None)
+            if callable(acquire_export):
+                acquisition = acquire_export(request)
+                return _SessionExport(
+                    payload_path=Path(acquisition.payload_path),
+                    snapshot_id=getattr(acquisition, "snapshot_id", None),
+                    acquired_at=getattr(acquisition, "acquired_at", None),
+                    reused_snapshot=bool(
+                        getattr(acquisition, "reused_snapshot", False)
+                    ),
                 )
+            return _SessionExport(
+                payload_path=Path(service.export_only(request))
             )
 
-        return service.export_only(
-            WeChatExportImportRequest(
-                session_id=session_id,
-                output_path=scratch_directory / "wechat_export.json",
-                start_time=start_epoch,
-                end_time=end_epoch,
+        return _SessionExport(
+            payload_path=Path(
+                service.export_only(
+                    WeChatExportImportRequest(
+                        session_id=session_id,
+                        output_path=(
+                            scratch_directory / "wechat_export.json"
+                        ),
+                        start_time=None,
+                        end_time=None,
+                    )
+                )
             )
         )
+
+    @staticmethod
+    def _resolve_scope(
+        config: AnalysisConfig,
+        source: ChatSource,
+    ) -> AnalysisScope:
+        with _translated_errors(source):
+            return resolve_scope(
+                config.scope_mode,
+                start_time=config.start_time,
+                end_time=config.end_time,
+            )
 
     def _stopwords_path(self, profile: str) -> Path:
         filename = _PROFILE_STOPWORD_FILES.get(

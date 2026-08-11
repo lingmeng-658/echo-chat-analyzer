@@ -9,6 +9,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from ..analysis.models import AnalysisReports
+from .scope_filter import AnalysisScope
 
 
 _EMPTY_NAMES: Mapping[str, str] = MappingProxyType({})
@@ -31,6 +32,10 @@ class AnalysisRequestDTO:
     stopwords_path: Path = field(repr=False)
     font_path: str | None = field(default=None, repr=False)
     top: int = 50
+    scope: AnalysisScope = field(
+        default_factory=AnalysisScope.all,
+        repr=False,
+    )
     speaker_names: Mapping[str, str] = field(
         default=_EMPTY_NAMES,
         repr=False,

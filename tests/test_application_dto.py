@@ -81,6 +81,18 @@ def test_analysis_request_is_immutable_and_hides_local_paths() -> None:
         request.top = 50
 
 
+def test_analysis_request_defaults_to_all_messages() -> None:
+    application = _application_module()
+
+    request = application.AnalysisRequestDTO(
+        input_path=Path("fictional-chat.json"),
+        output_directory=Path("fictional-output"),
+        stopwords_path=Path("fictional-stopwords.txt"),
+    )
+
+    assert request.scope == application.AnalysisScope.all()
+
+
 def test_analysis_result_has_required_fields_without_private_data() -> None:
     application = _application_module()
     result_fields = {

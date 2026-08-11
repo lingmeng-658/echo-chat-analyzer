@@ -17,6 +17,8 @@ EXPECTED_ERROR_CODES = {
     "ArtifactGenerationFailed": "artifact_generation_failed",
     "InputPathNotFound": "input_not_found",
     "InvalidAnalysisRequest": "invalid_request",
+    "InvalidAnalysisScope": "invalid_analysis_scope",
+    "NoMessagesInScope": "no_messages_in_scope",
     "NoSupportedInput": "no_supported_input",
 }
 FORBIDDEN_ERROR_ATTRIBUTES = {
@@ -46,6 +48,8 @@ def test_specific_application_errors_share_one_public_base() -> None:
         application.ArtifactGenerationFailed,
         application.InputPathNotFound,
         application.InvalidAnalysisRequest,
+        application.InvalidAnalysisScope,
+        application.NoMessagesInScope,
         application.NoSupportedInput,
     )
 
@@ -60,6 +64,8 @@ def test_application_errors_expose_only_safe_public_context() -> None:
         application.ArtifactGenerationFailed,
         application.InputPathNotFound,
         application.InvalidAnalysisRequest,
+        application.InvalidAnalysisScope,
+        application.NoMessagesInScope,
         application.NoSupportedInput,
     )
 

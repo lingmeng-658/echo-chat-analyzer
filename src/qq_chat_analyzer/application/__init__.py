@@ -14,6 +14,16 @@ from .connection import (
     QQAuthBridge,
     QQConnectionManager,
 )
+from .chat_data_snapshot import (
+    ChatDataSnapshot,
+    ChatDataSnapshotManager,
+    ChatDataSource,
+    SnapshotCleanupError,
+    SnapshotPayloadState,
+    SnapshotSaveError,
+    SnapshotStatus,
+    SnapshotValidation,
+)
 from .dto import (
     AnalysisRequestDTO,
     AnalysisResultDTO,
@@ -32,6 +42,8 @@ from .errors import (
     ArtifactGenerationFailed,
     InputPathNotFound,
     InvalidAnalysisRequest,
+    InvalidAnalysisScope,
+    NoMessagesInScope,
     NoSupportedInput,
 )
 from .facade import (
@@ -49,11 +61,17 @@ from .import_outcome import ImportOutcome
 from .import_request import ImportRequest
 from .import_result import ImportResult
 from .import_service import ImportService
+from .report_history import (
+    AnalysisHistoryRecord,
+    ReportHistoryManager,
+    ReportHistoryWriteError,
+)
 from .qq_connection_service import (
     QQConnectionService,
     QQConnectionStatus,
 )
 from .qq_export_import_service import (
+    QQExportAcquisition,
     QQExportFileMissing,
     QQExportImportRequest,
     QQExportImportService,
@@ -95,21 +113,28 @@ from .wechat_setup_service import (
     WeChatSetupStatus,
 )
 from .task import AnalysisTask
+from .scope_filter import AnalysisScope, AnalysisScopeMode
 
 __all__ = [
     "ActivityReport",
     "AnalysisApplicationService",
     "AnalysisConfig",
+    "AnalysisHistoryRecord",
     "AnalysisOutcome",
     "AnalysisReports",
     "AnalysisRequestDTO",
     "AnalysisResultDTO",
+    "AnalysisScope",
+    "AnalysisScopeMode",
     "AnalysisStatus",
     "AnalysisTask",
     "ApplicationServiceError",
     "ArtifactDTO",
     "ArtifactGenerationFailed",
     "ChatAnalyzerFacade",
+    "ChatDataSnapshot",
+    "ChatDataSnapshotManager",
+    "ChatDataSource",
     "ChatSource",
     "ConnectionSnapshot",
     "ConnectionState",
@@ -125,9 +150,12 @@ __all__ = [
     "ImportService",
     "InputPathNotFound",
     "InvalidAnalysisRequest",
+    "InvalidAnalysisScope",
     "MessageLengthReport",
     "NoSupportedInput",
+    "NoMessagesInScope",
     "QQExportFileMissing",
+    "QQExportAcquisition",
     "QQExportImportRequest",
     "QQExportImportService",
     "QQExportProvider",
@@ -139,9 +167,16 @@ __all__ = [
     "QQAuthBridge",
     "QQConnectionService",
     "QQConnectionStatus",
+    "ReportHistoryManager",
+    "ReportHistoryWriteError",
     "SessionInfo",
     "SourceInfo",
     "SourceUnavailable",
+    "SnapshotCleanupError",
+    "SnapshotPayloadState",
+    "SnapshotSaveError",
+    "SnapshotStatus",
+    "SnapshotValidation",
     "UnknownChatSource",
     "UserProfileReport",
     "WeChatExportFileMissing",

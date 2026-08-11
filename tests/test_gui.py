@@ -12,6 +12,7 @@ import os
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -25,7 +26,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PySide6", reason="PySide6 is required for the GUI layer")
 
-from PySide6.QtCore import QThreadPool, Qt  # noqa: E402
+from PySide6.QtCore import QDate, QThreadPool, Qt  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
@@ -406,8 +407,16 @@ def _dashboard_view(*, has_data: bool = True):
 
 
 class _StubOutcome:
-    def __init__(self, view):
+    def __init__(
+        self,
+        view,
+        *,
+        history_saved=None,
+        data_acquired_at=None,
+    ):
         self.view = view
+        self.history_saved = history_saved
+        self.data_acquired_at = data_acquired_at
 
 
 def _analysis_page(qt_app, facade, executor=None, qq_qrcode_path=None):
@@ -837,7 +846,8 @@ def test_selecting_wechat_without_ready_status_does_not_load_sessions(
     _drain(page)
 
     assert facade.list_sessions_calls == []
-    assert page._session_list.count() == 0
+    assert page._session_list.count() == 1
+    assert "暂无会话" in page._session_list.item(0).text()
     assert page._status_label.text() == (
         "\U0001F534 \u5fae\u4fe1\u8fde\u63a5\u73af\u5883\u4e0d\u5b58\u5728"
     )
@@ -1055,7 +1065,8 @@ def test_selecting_qq_without_ready_status_does_not_load_sessions(
     _drain(page)
 
     assert facade.list_sessions_calls == []
-    assert page._session_list.count() == 0
+    assert page._session_list.count() == 1
+    assert "暂无会话" in page._session_list.item(0).text()
     assert page._hint_label.text() == "\u8bf7\u5148\u8fde\u63a5 QQ\u3002"
 
 
@@ -1501,7 +1512,8 @@ def test_wechat_connection_error_blocks_session_loading_without_leaks(
     _drain(page)
 
     assert facade.list_sessions_calls == []
-    assert page._session_list.count() == 0
+    assert page._session_list.count() == 1
+    assert "暂无会话" in page._session_list.item(0).text()
     assert received == []
     assert page._status_label.text() == "\u65e0\u6cd5\u786e\u8ba4\u8fde\u63a5\u72b6\u6001\u3002"
     assert "raw provider failure" not in page._status_label.text()
@@ -1927,7 +1939,8 @@ def test_empty_session_list_is_reported(qt_app, sources) -> None:
     page.select_source(module.ChatSource.QQ)
     _drain(page)
 
-    assert page._session_list.count() == 0
+    assert page._session_list.count() == 1
+    assert "没有找到可分析的聊天记录" in page._session_list.item(0).text()
     assert page._hint_label.text() != ""
 
 
@@ -2136,36 +2149,60 @@ def test_start_analysis_does_nothing_without_a_selection(
     assert facade.analyze_file_calls == []
 
 
-def test_time_range_is_optional(qt_app, sources) -> None:
+def test_analysis_scope_defaults_to_all(qt_app, sources) -> None:
+    module = _facade_module()
     page = _analysis_page(qt_app, StubFacade(sources=sources))
 
     config = page.build_config()
 
+    assert page._scope_all.isChecked() is True
+    assert page._custom_range_widget.isHidden() is True
+    assert config.scope_mode is module.AnalysisScopeMode.ALL
     assert config.start_time is None
     assert config.end_time is None
 
 
-def test_time_range_shows_unset_when_disabled(qt_app, sources) -> None:
+@pytest.mark.parametrize(
+    ("control_name", "expected_mode"),
+    [
+        ("_scope_last_year", "LAST_YEAR"),
+        ("_scope_last_six_months", "LAST_SIX_MONTHS"),
+    ],
+)
+def test_relative_scope_selection_reaches_the_config(
+    qt_app,
+    sources,
+    control_name,
+    expected_mode,
+) -> None:
+    module = _facade_module()
     page = _analysis_page(qt_app, StubFacade(sources=sources))
 
-    assert "\u672a\u9009\u62e9" in page._start_date.text()
-    assert "\u672a\u9009\u62e9" in page._end_date.text()
-    assert page.build_config().start_time is None
-    assert page.build_config().end_time is None
-
-
-def test_enabled_time_range_reaches_the_config(qt_app, sources) -> None:
-    page = _analysis_page(qt_app, StubFacade(sources=sources))
-
-    page._start_enabled.setChecked(True)
-    page._end_enabled.setChecked(True)
+    getattr(page, control_name).setChecked(True)
     config = page.build_config()
 
-    assert config.start_time is not None
-    assert config.end_time is not None
+    assert config.scope_mode is getattr(module.AnalysisScopeMode, expected_mode)
+    assert config.start_time is None
+    assert config.end_time is None
+    assert page._custom_range_widget.isHidden() is True
 
 
-def test_enabled_time_range_uses_session_message_range(qt_app) -> None:
+def test_custom_scope_shows_dates_and_reaches_the_config(qt_app, sources) -> None:
+    module = _facade_module()
+    page = _analysis_page(qt_app, StubFacade(sources=sources))
+
+    page._scope_custom.setChecked(True)
+    page._start_date.setDate(QDate(2026, 2, 11))
+    page._end_date.setDate(QDate(2026, 8, 11))
+    config = page.build_config()
+
+    assert page._custom_range_widget.isHidden() is False
+    assert config.scope_mode is module.AnalysisScopeMode.CUSTOM
+    assert config.start_time == "2026-02-11"
+    assert config.end_time == "2026-08-11"
+
+
+def test_custom_scope_uses_session_message_range(qt_app) -> None:
     from datetime import datetime
 
     module = _facade_module()
@@ -2190,8 +2227,7 @@ def test_enabled_time_range_uses_session_message_range(qt_app) -> None:
     _drain(page)
     page._session_list.setCurrentRow(0)
     _drain(page)
-    page._start_enabled.setChecked(True)
-    page._end_enabled.setChecked(True)
+    page._scope_custom.setChecked(True)
 
     assert facade.get_session_message_range_calls == [
         (module.ChatSource.WECHAT, session_id)
@@ -2231,8 +2267,7 @@ def test_qq_selection_initializes_time_range_from_session_messages(
     _drain(page)
     page._session_list.setCurrentRow(0)
     _drain(page)
-    page._start_enabled.setChecked(True)
-    page._end_enabled.setChecked(True)
+    page._scope_custom.setChecked(True)
 
     assert facade.get_session_message_range_calls == [
         (module.ChatSource.QQ, session_id)
@@ -2243,6 +2278,52 @@ def test_qq_selection_initializes_time_range_from_session_messages(
     assert page._end_date.date().toPython() == datetime.fromtimestamp(
         end
     ).date()
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        (
+            "invalid_analysis_scope",
+            "开始日期不能晚于结束日期，请重新选择。",
+        ),
+        (
+            "no_messages_in_scope",
+            "当前时间范围内没有可分析的聊天记录。",
+        ),
+    ],
+)
+def test_scope_errors_show_the_reason_and_restore_analysis_controls(
+    qt_app,
+    sources,
+    code,
+    message,
+) -> None:
+    module = _facade_module()
+    sessions = [_session(module.ChatSource.QQ, "10001", "Fictional Group")]
+    facade = StubFacade(
+        sources=sources,
+        sessions=sessions,
+        error=module.FacadeError(code=code, public_message=message),
+    )
+    page = _analysis_page(qt_app, facade)
+    page._selected_source = module.ChatSource.QQ
+    page._populate_sessions(sessions)
+    page._session_list.setCurrentRow(0)
+    failures = []
+    page.analysis_failed.connect(lambda error_code, text: failures.append((error_code, text)))
+    if code == "invalid_analysis_scope":
+        page._scope_custom.setChecked(True)
+        page._start_date.setDate(QDate(2026, 8, 12))
+        page._end_date.setDate(QDate(2026, 8, 11))
+
+    page.start_analysis()
+    _drain(page)
+
+    assert failures == [(code, message)]
+    assert page._hint_label.text() == message
+    assert page._analysis_running is False
+    assert page._analyze_button.isEnabled() is True
 
 
 # ----------------------------------------------------------------- dashboard
@@ -2326,6 +2407,59 @@ def test_show_outcome_accepts_a_bare_view(qt_app, sources) -> None:
     window.show_outcome(_dashboard_view())
 
     assert window.stack.currentIndex() == 2
+
+
+@pytest.mark.parametrize(
+    ("history_saved", "expected_status"),
+    [
+        (True, "分析已保存"),
+        (False, "分析完成，但历史记录保存失败。"),
+        (None, "分析完成"),
+    ],
+)
+def test_show_outcome_reports_history_save_status_after_rendering(
+    qt_app,
+    sources,
+    history_saved,
+    expected_status,
+) -> None:
+    window = _main_window(qt_app, StubFacade(sources=sources))
+
+    window.show_outcome(
+        _StubOutcome(_dashboard_view(), history_saved=history_saved)
+    )
+
+    assert window.stack.currentIndex() == 2
+    assert window.dashboard_page._user_table.rowCount() == 1
+    assert window.statusBar().currentMessage() == expected_status
+
+
+def test_show_outcome_appends_snapshot_acquisition_time_to_existing_status(
+    qt_app,
+    sources,
+) -> None:
+    window = _main_window(qt_app, StubFacade(sources=sources))
+
+    window.show_outcome(
+        _StubOutcome(
+            _dashboard_view(),
+            history_saved=True,
+            data_acquired_at=datetime(
+                2026,
+                8,
+                11,
+                12,
+                30,
+                tzinfo=timezone.utc,
+            ),
+        )
+    )
+
+    assert window.statusBar().currentMessage() == (
+        "\u5206\u6790\u5df2\u4fdd\u5b58"
+        " \u00b7 \u6570\u636e\u83b7\u53d6\u65f6\u95f4\uff1a"
+        "2026-08-11 12:30+00:00"
+    )
 
 
 def test_analysis_enters_processing_page_and_rejects_second_start(
@@ -2745,6 +2879,63 @@ def _qq_page_in_state(qt_app, sources, snapshot):
     return page
 
 
+def test_disconnected_source_shows_session_placeholder(qt_app, sources) -> None:
+    page = _qq_page_in_state(
+        qt_app,
+        sources,
+        _qq_snapshot("disconnected"),
+    )
+
+    assert page._session_list.count() == 1
+    item = page._session_list.item(0)
+    assert "暂无会话" in item.text()
+    assert "连接QQ后" in item.text()
+    assert not (item.flags() & Qt.ItemFlag.ItemIsSelectable)
+
+
+def test_connecting_source_shows_loading_placeholder(qt_app, sources) -> None:
+    page = _qq_page_in_state(
+        qt_app,
+        sources,
+        _qq_snapshot("starting"),
+    )
+
+    assert page._session_list.count() == 1
+    assert "正在加载聊天列表" in page._session_list.item(0).text()
+
+
+def test_connected_source_replaces_placeholder_with_sessions(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    facade = _SnapshotFacade(
+        _qq_snapshot("connected"),
+        sources=sources,
+        sessions=[_session(module.ChatSource.QQ, "10001", "虚构群聊")],
+    )
+    page = _analysis_page(qt_app, facade)
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+
+    assert page._session_list.count() == 1
+    assert page._session_list.item(0).text() == "虚构群聊"
+
+
+def test_connected_empty_source_shows_real_empty_state(qt_app, sources) -> None:
+    facade = _SnapshotFacade(
+        _qq_snapshot("connected"),
+        sources=sources,
+        sessions=[],
+    )
+    page = _analysis_page(qt_app, facade)
+    page.select_source(_facade_module().ChatSource.QQ)
+    _drain(page)
+
+    assert page._session_list.count() == 1
+    assert "没有找到可分析的聊天记录" in page._session_list.item(0).text()
+
+
 def test_disconnected_state_invites_the_user_to_connect(
     qt_app,
     sources,
@@ -2758,7 +2949,8 @@ def test_disconnected_state_invites_the_user_to_connect(
     assert page._qq_connect_button.isVisibleTo(page) is True
     assert page._qq_connect_button.isEnabled() is True
     assert "\u8fde\u63a5QQ" == page._qq_connect_button.text()
-    assert page._session_list.count() == 0
+    assert page._session_list.count() == 1
+    assert "暂无会话" in page._session_list.item(0).text()
 
 
 def test_qq_status_text_is_not_duplicated_in_status_bar(
@@ -3120,7 +3312,8 @@ def test_automatic_refresh_detects_login_and_loads_sessions(
     _drain(page)
 
     assert page._qq_status_timer.isActive() is True
-    assert page._session_list.count() == 0
+    assert page._session_list.count() == 1
+    assert "正在加载聊天列表" in page._session_list.item(0).text()
 
     facade.set_snapshot(
         _qq_snapshot("connected", message="QQ \u5df2\u8fde\u63a5\u3002")
