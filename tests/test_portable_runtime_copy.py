@@ -19,7 +19,12 @@ def _write(path: Path, content: str = "fictional") -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def _fictional_runtime(project_root: Path, *, koffi_index: bool = True) -> Path:
+def _fictional_runtime(
+    project_root: Path,
+    *,
+    koffi_index: bool = True,
+    node_executable: bool = True,
+) -> Path:
     runtime = project_root / "runtime"
     for relative in (
         "qq/qce-server.exe",
@@ -31,6 +36,8 @@ def _fictional_runtime(project_root: Path, *, koffi_index: bool = True) -> Path:
         "wechat/wx_key_helper.cjs",
     ):
         _write(runtime / relative)
+    if node_executable:
+        _write(runtime / "wechat/node.exe")
     if koffi_index:
         _write(
             runtime / "wechat/node_modules/koffi/index.js",
@@ -94,6 +101,17 @@ def test_runtime_build_rejects_koffi_without_entrypoint(tmp_path: Path) -> None:
 
     assert completed.returncode != 0
     assert "runtime\\wechat\\node_modules\\koffi\\index.js" in (
+        completed.stderr + completed.stdout
+    )
+
+
+def test_runtime_build_rejects_missing_bundled_node(tmp_path: Path) -> None:
+    _fictional_runtime(tmp_path, node_executable=False)
+
+    completed = _copy_runtime(tmp_path)
+
+    assert completed.returncode != 0
+    assert "runtime\\wechat\\node.exe" in (
         completed.stderr + completed.stdout
     )
 

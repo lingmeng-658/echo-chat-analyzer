@@ -40,6 +40,8 @@ QQ_PLATFORM = "qq"
 QQ_EXPORT_FORMAT = "json"
 QQ_RAW_EXPORT_CACHE_DIRECTORY = Path("cache") / "qq_raw_exports"
 QQ_RAW_EXPORT_CACHE_METADATA = "metadata.json"
+QQ_PRIVATE_CHAT_TYPE = 1
+QQ_GROUP_CHAT_TYPE = 2
 
 
 class QQExportUnavailable(ApplicationServiceError):
@@ -64,6 +66,10 @@ class QQExportProvider(Protocol):
         """Return the groups that are available for export."""
         ...
 
+    def list_friends(self) -> list[Any]:  # pragma: no cover - contract only
+        """Return normal private conversations available for export."""
+        ...
+
     def list_tasks(self) -> list[Any]:  # pragma: no cover - contract only
         """Return the current QCE export task list."""
         ...
@@ -84,6 +90,9 @@ class QQExportImportRequest:
     group_code: str
     start_time: Any = None
     end_time: Any = None
+    chat_type: int = QQ_GROUP_CHAT_TYPE
+    peer_uin: str | None = None
+    session_name: str | None = None
 
 
 class QQExportImportService:
@@ -145,6 +154,13 @@ class QQExportImportService:
         """
         return self._provider.list_groups()
 
+    def list_sessions(self) -> list[Any]:
+        """Return exportable groups and normal QQ friend conversations."""
+        return [
+            *(self._provider.list_groups() or ()),
+            *(self._provider.list_friends() or ()),
+        ]
+
     def list_tasks(self) -> list[Any]:
         """Delegate QCE task listing to the injected provider.
 
@@ -157,15 +173,24 @@ class QQExportImportService:
     def get_session_message_range(
         self,
         group_code: str,
+        *,
+        chat_type: int = QQ_GROUP_CHAT_TYPE,
+        peer_uin: str | None = None,
+        session_name: str | None = None,
     ) -> tuple[int, int] | None:
-        """Return earliest and latest message timestamps for one group.
+        """Return earliest and latest message timestamps for one QQ session.
 
         The range comes from the actual exported QCE JSON so QQ defaults are
         based on real messages instead of a fixed window. Non-text messages are
         included because they still carry a real message time.
         """
         export_path = self.export_only(
-            QQExportImportRequest(group_code=group_code)
+            QQExportImportRequest(
+                group_code=group_code,
+                chat_type=chat_type,
+                peer_uin=peer_uin,
+                session_name=session_name,
+            )
         )
         payload = load_qce_json(export_path)
         if not isinstance(payload, Mapping):
@@ -213,11 +238,24 @@ class QQExportImportService:
         "export cancelled". Only a missing or unusable return value is
         translated here.
         """
-        result = self._provider.export_group_json(
-            request.group_code,
-            start_time=request.start_time,
-            end_time=request.end_time,
-        )
+        export_chat = getattr(self._provider, "export_chat_json", None)
+        if callable(export_chat):
+            result = export_chat(
+                request.group_code,
+                chat_type=request.chat_type,
+                peer_uin=request.peer_uin,
+                session_name=request.session_name,
+                start_time=request.start_time,
+                end_time=request.end_time,
+            )
+        elif request.chat_type == QQ_GROUP_CHAT_TYPE:
+            result = self._provider.export_group_json(
+                request.group_code,
+                start_time=request.start_time,
+                end_time=request.end_time,
+            )
+        else:
+            raise QQExportUnavailable()
         if result is None:
             raise QQExportUnavailable()
         if isinstance(result, Path):
@@ -299,6 +337,7 @@ class QQExportImportService:
         return {
             "source": QQ_PLATFORM,
             "conversation_id": str(request.group_code),
+            "chat_type": int(request.chat_type),
             "start_time": _metadata_value(request.start_time),
             "end_time": _metadata_value(request.end_time),
             "format": QQ_EXPORT_FORMAT,

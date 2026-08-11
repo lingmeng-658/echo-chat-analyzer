@@ -665,7 +665,7 @@ class AnalysisPage(QWidget):
         self.status_changed.emit(_QQ_CONNECTING)
         _LOGGER.info("[qq gui] connect_qq worker submitted")
         self._executor(
-            lambda: self._facade.start_qq_auth_flow(),
+            lambda report: self._facade.start_qq_auth_flow(progress=report),
             on_success=lambda status: self._finish_qq_connect(
                 status,
                 started_at,
@@ -675,7 +675,18 @@ class AnalysisPage(QWidget):
                 message,
                 started_at,
             ),
+            on_progress=self._handle_qq_connect_progress,
         )
+
+    def _handle_qq_connect_progress(self, message: str) -> None:
+        """Render a stage reported by the QQ backend flow verbatim."""
+        if not message:
+            return
+        self._status_label.setText(_QQ_PENDING_PREFIX + message)
+        self._status_label.setToolTip("")
+        self._status_label.setVisible(True)
+        self._hint_label.setText(message)
+        self.status_changed.emit(message)
 
     def _after_qq_connect(self, snapshot: Any) -> None:
         self._show_qq_status(snapshot, load_sessions_on_ready=True)

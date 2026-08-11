@@ -282,7 +282,7 @@ class ChatAnalyzerFacade:
         service = self._require_service(chat_source)
         with _translated_errors(chat_source):
             if chat_source is ChatSource.QQ:
-                raw_sessions = service.list_groups()
+                raw_sessions = service.list_sessions()
             else:
                 raw_sessions = service.list_sessions()
 
@@ -359,14 +359,17 @@ class ChatAnalyzerFacade:
         """
         return self._require_qq_connection_manager().connect()
 
-    def start_qq_auth_flow(self) -> ConnectionSnapshot:
+    def start_qq_auth_flow(
+        self,
+        progress: Callable[[str], None] | None = None,
+    ) -> ConnectionSnapshot:
         """Start QQ authorization and return the resulting lifecycle state.
 
         The GUI calls this instead of a raw connect: the auth bridge starts
         the runtime's own login flow and the caller keeps polling
         :meth:`get_qq_connection_snapshot` until it reports ``CONNECTED``.
         """
-        return self._require_qq_auth_bridge().start_auth_flow()
+        return self._require_qq_auth_bridge().start_auth_flow(progress=progress)
 
     def shutdown_qq_runtime(self) -> None:
         """Stop only QQ processes LCA started.
@@ -457,6 +460,24 @@ class ChatAnalyzerFacade:
                 range_method = getattr(service, "get_session_message_range", None)
                 if range_method is None:
                     return None
+                raw_session = next(
+                    (
+                        candidate for candidate in (service.list_sessions() or ())
+                        if getattr(candidate, "session_id", None) == session_id
+                        or getattr(candidate, "group_code", None) == session_id
+                    ),
+                    None,
+                )
+                if _first_string(raw_session, "session_type") == "private":
+                    return range_method(
+                        session_id,
+                        chat_type=1,
+                        peer_uin=_first_string(raw_session, "peer_uin") or None,
+                        session_name=_first_string(
+                            raw_session,
+                            "display_name",
+                        ) or None,
+                    )
                 return range_method(session_id)
             provider_factory = getattr(service, "provider", None)
             if provider_factory is None:
@@ -519,12 +540,12 @@ class ChatAnalyzerFacade:
 
         resolved_config = config or AnalysisConfig()
         service = self._require_service(chat_source)
-        if chat_source is ChatSource.WECHAT:
+        if chat_source in (ChatSource.QQ, ChatSource.WECHAT):
             raw_session = next(
                 (
-                    candidate
-                    for candidate in (service.list_sessions() or ())
+                    candidate for candidate in (service.list_sessions() or ())
                     if getattr(candidate, "session_id", None) == session_id
+                    or getattr(candidate, "group_code", None) == session_id
                 ),
                 None,
             )
@@ -537,7 +558,11 @@ class ChatAnalyzerFacade:
                     display_name=session_id,
                 )
             )
-            conversation_names = {session_id: session.display_name}
+            conversation_names = (
+                {session_id: session.display_name}
+                if chat_source is ChatSource.WECHAT
+                else None
+            )
         else:
             session = SessionInfo(
                 source=chat_source,
@@ -555,6 +580,7 @@ class ChatAnalyzerFacade:
                     session_id,
                     resolved_config,
                     scratch_directory,
+                    raw_session=raw_session if chat_source is ChatSource.QQ else None,
                 )
 
             return self._analyze_path(
@@ -622,16 +648,26 @@ class ChatAnalyzerFacade:
         session_id: str,
         config: AnalysisConfig,
         scratch_directory: Path,
+        *,
+        raw_session: Any = None,
     ) -> Path:
         """Ask the matching service for an export file."""
         start_epoch = to_epoch_seconds(config.start_time)
         end_epoch = to_epoch_seconds(config.end_time)
         if source is ChatSource.QQ:
+            session_type = _first_string(raw_session, "session_type")
             return service.export_only(
                 QQExportImportRequest(
                     group_code=session_id,
                     start_time=_epoch_millis(start_epoch),
                     end_time=_epoch_millis(end_epoch),
+                    chat_type=1 if session_type == "private" else 2,
+                    peer_uin=_first_string(raw_session, "peer_uin") or None,
+                    session_name=_first_string(
+                        raw_session,
+                        "display_name",
+                        "group_name",
+                    ) or None,
                 )
             )
 

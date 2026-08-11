@@ -205,6 +205,34 @@ def test_start_auth_flow_starts_runtime_and_opens_login_window() -> None:
     assert snapshot.state is module.ConnectionState.WAITING_AUTH
 
 
+def test_start_auth_flow_reports_existing_backend_stages() -> None:
+    service = _StubConnectionService(
+        _status(available=False, qce_running=False, authenticated=False)
+    )
+    setup = _StubSetupService(
+        connect_status=_status(
+            available=False,
+            qce_running=True,
+            authenticated=False,
+        ),
+        runtime_status=_runtime_status(),
+    )
+    progress: list[str] = []
+
+    _bridge(
+        setup_service=setup,
+        connection_service=service,
+        window_launcher=_RecordingLauncher(),
+    ).start_auth_flow(progress=progress.append)
+
+    assert progress == [
+        "正在检查 QQ 运行环境...",
+        "正在启动 QQ 环境...",
+        "正在加载 NapCat...",
+        "等待 QQ 登录...",
+    ]
+
+
 def test_start_auth_flow_reopens_window_when_already_waiting() -> None:
     module = _connection_module()
     service = _StubConnectionService(

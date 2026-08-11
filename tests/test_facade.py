@@ -45,6 +45,14 @@ class _FakeQQGroup:
         self.last_message_time = last_message_time
 
 
+class _FakeQQFriend:
+    def __init__(self, session_id: str, display_name: str, peer_uin: str) -> None:
+        self.session_id = session_id
+        self.display_name = display_name
+        self.peer_uin = peer_uin
+        self.session_type = "private"
+
+
 class _FakeExportTask:
     """Mirror the minimum surface of a QCE export task snapshot."""
 
@@ -87,12 +95,16 @@ class _StubQQService:
         self.export_requests: list[object] = []
         self.list_calls = 0
         self.list_tasks_calls = 0
+        self.range_requests: list[tuple[object, dict[str, object]]] = []
 
     def list_groups(self):
         self.list_calls += 1
         if self._error is not None:
             raise self._error
         return self._groups
+
+    def list_sessions(self):
+        return self.list_groups()
 
     def list_tasks(self):
         self.list_tasks_calls += 1
@@ -106,7 +118,8 @@ class _StubQQService:
             raise self._error
         return self._export_path
 
-    def get_session_message_range(self, group_code):
+    def get_session_message_range(self, group_code, **kwargs):
+        self.range_requests.append((group_code, kwargs))
         if self._error is not None:
             raise self._error
         return self._message_range
@@ -190,8 +203,10 @@ class _StubQQAuthBridge:
         self._snapshot = snapshot
         self.calls: list[int] = []
 
-    def start_auth_flow(self):
+    def start_auth_flow(self, progress=None):
         self.calls.append(1)
+        if progress is not None:
+            progress("backend stage")
         if self._snapshot is not None:
             return self._snapshot
         connection = importlib.import_module(
@@ -433,6 +448,19 @@ def test_list_sessions_converts_qq_groups_into_session_info() -> None:
     assert sessions[1].message_count is None
 
 
+def test_list_sessions_keeps_qq_private_sessions_visible() -> None:
+    module = _facade_module()
+    service = _StubQQService(
+        groups=[_FakeQQFriend("u_fictional_1", "Fictional Alice", "200001")]
+    )
+
+    sessions = _facade(qq_service=service).list_sessions(module.ChatSource.QQ)
+
+    assert [(item.session_id, item.display_name, item.session_type) for item in sessions] == [
+        ("u_fictional_1", "Fictional Alice", "private")
+    ]
+
+
 def test_get_qq_export_tasks_delegates_to_the_qq_service() -> None:
     tasks = [_FakeExportTask("task-1"), _FakeExportTask("task-2")]
     service = _StubQQService(tasks=tasks)
@@ -517,6 +545,15 @@ def test_start_qq_auth_flow_delegates_to_the_auth_bridge() -> None:
     )
     assert isinstance(result, connection.ConnectionSnapshot)
     assert result.state is connection.ConnectionState.WAITING_AUTH
+
+
+def test_start_qq_auth_flow_forwards_progress_callback() -> None:
+    bridge = _StubQQAuthBridge()
+    progress: list[str] = []
+
+    _facade(qq_auth_bridge=bridge).start_qq_auth_flow(progress=progress.append)
+
+    assert progress == ["backend stage"]
 
 
 def test_shutdown_qq_runtime_terminates_recorded_processes() -> None:
@@ -610,6 +647,31 @@ def test_get_session_message_range_uses_qq_service_range() -> None:
     )
 
     assert message_range == (1700000000, 1700007200)
+
+
+def test_get_session_message_range_uses_private_export_identity() -> None:
+    module = _facade_module()
+    service = _StubQQService(
+        groups=[_FakeQQFriend("u_fictional_1", "Fictional Alice", "200001")],
+        message_range=(1700000000, 1700007200),
+    )
+
+    message_range = _facade(qq_service=service).get_session_message_range(
+        module.ChatSource.QQ,
+        "u_fictional_1",
+    )
+
+    assert message_range == (1700000000, 1700007200)
+    assert service.range_requests == [
+        (
+            "u_fictional_1",
+            {
+                "chat_type": 1,
+                "peer_uin": "200001",
+                "session_name": "Fictional Alice",
+            },
+        )
+    ]
 
 
 def test_get_session_message_range_keeps_wechat_provider_behavior() -> None:
@@ -1050,6 +1112,29 @@ def test_analyze_session_dispatches_to_the_qq_service(tmp_path: Path) -> None:
     assert analysis_service.requests[0].input_path == export_path
     assert outcome.source is module.ChatSource.QQ
     assert outcome.session.session_id == "10001"
+
+
+def test_analyze_private_qq_session_preserves_private_export_identity(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    export_path = _export_file(tmp_path, "qq_private_export.json")
+    qq_service = _StubQQService(
+        groups=[_FakeQQFriend("u_fictional_1", "Fictional Alice", "200001")],
+        export_path=export_path,
+    )
+
+    outcome = _facade(qq_service=qq_service).analyze_session(
+        module.ChatSource.QQ,
+        "u_fictional_1",
+    )
+
+    request = qq_service.export_requests[0]
+    assert request.chat_type == 1
+    assert request.peer_uin == "200001"
+    assert request.session_name == "Fictional Alice"
+    assert outcome.session.display_name == "Fictional Alice"
+    assert outcome.session.session_type == "private"
 
 
 def test_analyze_session_converts_wechat_time_range_to_epoch_seconds(

@@ -135,6 +135,24 @@ class _TaskStubProvider:
         return self._tasks
 
 
+class _SessionStubProvider:
+    def __init__(self, groups=(), friends=(), export_path=None):
+        self.groups = list(groups)
+        self.friends = list(friends)
+        self.export_path = export_path
+        self.export_calls: list[dict[str, object]] = []
+
+    def list_groups(self):
+        return self.groups
+
+    def list_friends(self):
+        return self.friends
+
+    def export_chat_json(self, peer_uid, **kwargs):
+        self.export_calls.append({"peer_uid": peer_uid, **kwargs})
+        return self.export_path
+
+
 # ------------------------------------------------------ 1. provider -> adapter
 
 
@@ -239,6 +257,42 @@ def test_list_tasks_delegates_to_provider() -> None:
 
     assert result == tasks
     assert provider.calls == 1
+
+
+def test_list_sessions_keeps_groups_and_private_friends() -> None:
+    group = object()
+    friend = object()
+    service = QQExportImportService(
+        _SessionStubProvider(groups=[group], friends=[friend])
+    )
+
+    assert service.list_sessions() == [group, friend]
+
+
+def test_private_session_export_uses_private_chat_type(tmp_path: Path) -> None:
+    export_path = _write_fake_export(tmp_path / "private.json")
+    provider = _SessionStubProvider(export_path=export_path)
+    service = QQExportImportService(provider, cache_directory=tmp_path / "cache")
+
+    service.export_only(
+        QQExportImportRequest(
+            group_code="u_fictional_1",
+            chat_type=1,
+            peer_uin="200001",
+            session_name="Fictional Alice",
+        )
+    )
+
+    assert provider.export_calls == [
+        {
+            "peer_uid": "u_fictional_1",
+            "chat_type": 1,
+            "peer_uin": "200001",
+            "session_name": "Fictional Alice",
+            "start_time": None,
+            "end_time": None,
+        }
+    ]
 
 
 def test_list_tasks_propagates_provider_error() -> None:

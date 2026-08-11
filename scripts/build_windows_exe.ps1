@@ -26,6 +26,7 @@ $RequiredRuntimePaths = @(
     "wechat\WCDB.dll",
     "wechat\wx_key.dll",
     "wechat\wx_key_helper.cjs",
+    "wechat\node.exe",
     "wechat\node_modules\koffi\index.js"
 )
 

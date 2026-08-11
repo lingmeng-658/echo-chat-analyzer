@@ -52,6 +52,12 @@ MESSAGE_MAIN_MISSING = (
     "\u8bf7\u786e\u8ba4\u8fd0\u884c\u73af\u5883\u5b8c\u6574\u540e\u91cd\u8bd5\u3002"
 )
 
+PROGRESS_CHECKING = "正在检查 QQ 运行环境..."
+PROGRESS_STARTING = "正在启动 QQ 环境..."
+PROGRESS_LOADING_NAPCAT = "正在加载 NapCat..."
+PROGRESS_WAITING_LOGIN = "等待 QQ 登录..."
+PROGRESS_CONNECTED = "QQ 已连接"
+
 
 class QQAuthWindowUnavailable(Exception):
     """Raised when the runtime's login window cannot be opened."""
@@ -90,7 +96,10 @@ class QQAuthBridge:
             process_registry or default_qq_process_registry()
         )
 
-    def start_auth_flow(self) -> ConnectionSnapshot:
+    def start_auth_flow(
+        self,
+        progress: Callable[[str], None] | None = None,
+    ) -> ConnectionSnapshot:
         """Start QQ authorization and return the immediate lifecycle state.
 
         When QQ data is already usable this returns ``CONNECTED`` without
@@ -99,6 +108,7 @@ class QQAuthBridge:
         The call never blocks waiting for the user; later probes detect the
         authorization result.
         """
+        _report_progress(progress, PROGRESS_CHECKING)
         manager = self._manager_instance()
         snapshot = manager.get_snapshot()
         _LOGGER.info(
@@ -107,6 +117,7 @@ class QQAuthBridge:
             self._setup_service is not None,
         )
         if snapshot.state is ConnectionState.CONNECTED:
+            _report_progress(progress, PROGRESS_CONNECTED)
             return snapshot
         if snapshot.state is not ConnectionState.WAITING_AUTH:
             self._auth_launch_started = False
@@ -114,6 +125,7 @@ class QQAuthBridge:
             return self._error_snapshot(MESSAGE_ERROR, HINT_RETRY)
 
         try:
+            _report_progress(progress, PROGRESS_STARTING)
             snapshot = manager.connect()
         except Exception as error:
             _LOGGER.warning(
@@ -131,6 +143,7 @@ class QQAuthBridge:
 
         if snapshot.state is ConnectionState.WAITING_AUTH:
             try:
+                _report_progress(progress, PROGRESS_LOADING_NAPCAT)
                 _LOGGER.info("[qq auth] opening login window")
                 self._launch_window()
             except Exception as error:
@@ -143,9 +156,11 @@ class QQAuthBridge:
                     HINT_RETRY,
                 )
             _LOGGER.info("[qq auth] login window launched")
+            _report_progress(progress, PROGRESS_WAITING_LOGIN)
 
         latest = manager.get_snapshot()
         if latest.state is ConnectionState.CONNECTED:
+            _report_progress(progress, PROGRESS_CONNECTED)
             return latest
         if snapshot.state in (
             ConnectionState.CONNECTED,
@@ -434,6 +449,19 @@ def _public_message(error: Exception, fallback: str) -> str:
     if isinstance(message, str) and message.strip():
         return message.strip()
     return fallback
+
+
+def _report_progress(
+    progress: Callable[[str], None] | None,
+    message: str,
+) -> None:
+    """Publish an observed backend stage without affecting the auth flow."""
+    if progress is None:
+        return
+    try:
+        progress(message)
+    except Exception:
+        _LOGGER.debug("[qq auth] progress callback failed", exc_info=True)
 
 
 def _state_value(state: Any) -> Any:

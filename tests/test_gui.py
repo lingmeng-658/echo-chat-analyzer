@@ -210,8 +210,10 @@ class StubFacade:
             raise self._connect_qq_error
         return self._qq_snapshot()
 
-    def start_qq_auth_flow(self):
+    def start_qq_auth_flow(self, progress=None):
         self.start_qq_auth_flow_calls.append(1)
+        if progress is not None:
+            progress("正在加载 NapCat...")
         if self._connect_qq_error is not None:
             raise self._connect_qq_error
         return self._qq_snapshot()
@@ -441,6 +443,7 @@ class _DeferredExecutor:
         self.on_success = None
         self.on_error = None
         self.on_finished = None
+        self.on_progress = None
         self.submission_count = 0
 
     def __call__(
@@ -457,6 +460,11 @@ class _DeferredExecutor:
         self.on_success = on_success
         self.on_error = on_error
         self.on_finished = on_finished
+        self.on_progress = on_progress
+
+    def progress(self, message):
+        if self.on_progress is not None:
+            self.on_progress(message)
 
     def succeed(self, result):
         if self.on_success is not None:
@@ -1075,6 +1083,21 @@ def test_clicking_qq_connect_calls_the_facade(qt_app, sources) -> None:
 
     assert facade.start_qq_auth_flow_calls == [1]
     assert page._session_list.count() == 1
+
+
+def test_qq_connect_displays_backend_progress_without_guessing(qt_app, sources) -> None:
+    module = _facade_module()
+    executor = _DeferredExecutor()
+    facade = StubFacade(sources=sources)
+    page = _analysis_page(qt_app, facade, executor=executor)
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+
+    page._qq_connect_button.click()
+    executor.progress("正在加载 NapCat...")
+
+    assert "正在加载 NapCat..." in page._status_label.text()
+    assert page._hint_label.text() == "正在加载 NapCat..."
 
 
 def test_clicking_qq_connect_through_the_real_worker_updates_the_page(
@@ -2465,7 +2488,7 @@ class _ConnectWaitingAuthFacade(_SnapshotFacade):
         super().__init__(status_snapshot, **kwargs)
         self._connect_snapshot = connect_snapshot
 
-    def start_qq_auth_flow(self):
+    def start_qq_auth_flow(self, progress=None):
         self.start_qq_auth_flow_calls.append(1)
         return self._connect_snapshot
 

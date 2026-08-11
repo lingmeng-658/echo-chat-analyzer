@@ -55,6 +55,30 @@ def test_default_documents_location_detected(tmp_path: Path) -> None:
     ) == root
 
 
+def test_default_location_uses_windows_userprofile(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _module()
+    userprofile = tmp_path / "fictional_windows_user"
+    appdata = tmp_path / "appdata"
+    root = _xwechat_account(
+        userprofile / "Documents",
+        "wxid_fake_portable",
+    )
+    monkeypatch.setenv("USERPROFILE", str(userprofile))
+    monkeypatch.setattr(
+        module.Path,
+        "home",
+        classmethod(lambda cls: tmp_path / "portable_runtime_home"),
+    )
+    monkeypatch.setattr(module, "registered_wechat_data_dirs", lambda: [])
+
+    detected = module.detect_wechat_data_roots(appdata=appdata)
+
+    assert detected == [root]
+
+
 def test_custom_config_location_detected(tmp_path: Path) -> None:
     module = _module()
     home = tmp_path / "home"

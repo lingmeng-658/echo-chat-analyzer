@@ -9,6 +9,7 @@ Surface used (confirmed by reading the QCE Rust server sources):
 
 * ``GET  /health``                - public liveness probe
 * ``GET  /api/groups``            - paginated group list
+* ``GET  /api/friends``           - paginated normal friend list
 * ``POST /api/messages/export``   - register an export task, returns immediately
 * ``GET  /api/tasks/{taskId}``    - poll task state
 
@@ -40,6 +41,8 @@ DEFAULT_TIMEOUT_SECONDS = 30
 DEFAULT_EXPORT_TIMEOUT_SECONDS = 900
 DEFAULT_POLL_INTERVAL_SECONDS = 2.0
 DEFAULT_GROUP_LIMIT = 200
+DEFAULT_FRIEND_LIMIT = 200
+PRIVATE_CHAT_TYPE = 1
 GROUP_CHAT_TYPE = 2
 SECURITY_FILE_NAME = "security.json"
 QCE_DIR_NAME = ".qq-chat-exporter"
@@ -152,6 +155,16 @@ class ExportGroup:
     group_code: str
     group_name: str
     member_count: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ExportFriend:
+    """Normal friend descriptor from ``GET /api/friends``."""
+
+    session_id: str
+    display_name: str
+    peer_uin: str = ""
+    session_type: str = "private"
 
 
 @dataclass(frozen=True, slots=True)
@@ -357,25 +370,76 @@ class QQChatExporterProvider:
             )
         return groups
 
+    def list_friends(
+        self,
+        page: int = 1,
+        limit: int = DEFAULT_FRIEND_LIMIT,
+        force_refresh: bool = False,
+    ) -> list[ExportFriend]:
+        """Return normal QQ friends, excluding recent/system contacts."""
+        query = {"page": str(page), "limit": str(limit)}
+        if force_refresh:
+            query["forceRefresh"] = "true"
+        data = self._request("GET", "/api/friends", query=query)
+
+        rows: Any = []
+        if isinstance(data, Mapping):
+            rows = data.get("friends")
+        if not isinstance(rows, list):
+            return []
+
+        friends: list[ExportFriend] = []
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            uid = _clean_str(row.get("uid"))
+            if not uid:
+                continue
+            peer_uin = (
+                _clean_str(row.get("uin"))
+                or _clean_str(row.get("peerUin"))
+            )
+            display_name = (
+                _clean_str(row.get("remark"))
+                or _clean_str(row.get("nickname"))
+                or _clean_str(row.get("nick"))
+                or peer_uin
+                or uid
+            )
+            friends.append(
+                ExportFriend(
+                    session_id=uid,
+                    display_name=display_name,
+                    peer_uin=peer_uin,
+                )
+            )
+        return friends
+
     # ------------------------------------------------------------------ exports
 
     def create_export_task(
         self,
-        group_code: str,
+        peer_uid: str,
         start_time: Any = None,
         end_time: Any = None,
         session_name: str | None = None,
         output_dir: str | None = None,
+        chat_type: int = GROUP_CHAT_TYPE,
+        peer_uin: str | None = None,
     ) -> ExportTask:
-        """Register a group JSON export task and return its initial snapshot."""
-        code = _clean_str(group_code)
+        """Register a group or private JSON export task."""
+        code = _clean_str(peer_uid)
         if not code:
             raise RequestFailed(
-                "\u7f3a\u5c11\u7fa4\u53f7\uff0c\u65e0\u6cd5\u521b\u5efa\u5bfc\u51fa\u4efb\u52a1\u3002"
+                "缺少 QQ 会话标识，无法创建导出任务。"
             )
 
+        peer: dict[str, Any] = {"chatType": int(chat_type), "peerUid": code}
+        cleaned_uin = _clean_str(peer_uin)
+        if cleaned_uin:
+            peer["peerUin"] = cleaned_uin
         body: dict[str, Any] = {
-            "peer": {"chatType": GROUP_CHAT_TYPE, "peerUid": code},
+            "peer": peer,
             "format": "JSON",
         }
         filter_block: dict[str, Any] = {}
@@ -446,10 +510,35 @@ class QQChatExporterProvider:
         poll_interval: float = DEFAULT_POLL_INTERVAL_SECONDS,
     ) -> Path:
         """Convenience wrapper: create a task, then wait for its output file."""
-        task = self.create_export_task(
+        return self.export_chat_json(
             group_code,
+            chat_type=GROUP_CHAT_TYPE,
             start_time=start_time,
             end_time=end_time,
+            timeout=timeout,
+            poll_interval=poll_interval,
+        )
+
+    def export_chat_json(
+        self,
+        peer_uid: str,
+        *,
+        chat_type: int,
+        peer_uin: str | None = None,
+        session_name: str | None = None,
+        start_time: Any = None,
+        end_time: Any = None,
+        timeout: float = DEFAULT_EXPORT_TIMEOUT_SECONDS,
+        poll_interval: float = DEFAULT_POLL_INTERVAL_SECONDS,
+    ) -> Path:
+        """Create and wait for one group or private conversation export."""
+        task = self.create_export_task(
+            peer_uid,
+            start_time=start_time,
+            end_time=end_time,
+            session_name=session_name,
+            chat_type=chat_type,
+            peer_uin=peer_uin,
         )
         return self.wait_export_task(
             task.task_id,

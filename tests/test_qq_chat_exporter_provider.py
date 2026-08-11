@@ -352,6 +352,63 @@ def test_list_groups_returns_empty_for_unexpected_shape():
     assert provider.list_groups() == []
 
 
+def test_list_friends_maps_only_normal_friend_rows():
+    payload = {
+        "friends": [
+            {
+                "uid": "u_fictional_1",
+                "uin": "200001",
+                "nickname": "Fictional Alice Nickname",
+                "nick": "Fictional Alice",
+                "remark": "Alice Remark",
+            },
+            {
+                "uid": "u_fictional_2",
+                "uin": "200002",
+                "nickname": "Fictional Bob",
+            },
+            {"uid": "u_fictional_3", "uin": "200003"},
+            {"uin": "missing-uid", "nick": "Invalid"},
+        ]
+    }
+    provider, transport = _provider([(200, _envelope(payload))])
+
+    friends = provider.list_friends()
+
+    assert [friend.session_id for friend in friends] == [
+        "u_fictional_1",
+        "u_fictional_2",
+        "u_fictional_3",
+    ]
+    assert friends[0].display_name == "Alice Remark"
+    assert friends[0].peer_uin == "200001"
+    assert friends[0].session_type == "private"
+    assert friends[1].display_name == "Fictional Bob"
+    assert friends[2].display_name == "200003"
+    assert "/api/friends?" in transport.calls[0]["url"]
+
+
+def test_list_friends_uses_nickname_and_peer_uin_before_raw_uid():
+    raw_uid = "u_fictional_internal_uid"
+    payload = {
+        "friends": [
+            {
+                "uid": raw_uid,
+                "peerUin": "200003",
+                "nickname": "Fictional Carol",
+            }
+        ]
+    }
+    provider, _ = _provider([(200, _envelope(payload))])
+
+    friend = provider.list_friends()[0]
+
+    assert friend.session_id == raw_uid
+    assert friend.peer_uin == "200003"
+    assert friend.display_name == "Fictional Carol"
+    assert friend.display_name != raw_uid
+
+
 # ----------------------------------------------------------------- task list
 
 
@@ -477,6 +534,27 @@ def test_create_export_task_omits_empty_filter():
     provider.create_export_task("100001")
 
     assert "filter" not in transport.calls[0]["payload"]
+
+
+def test_create_export_task_builds_private_chat_request():
+    provider, transport = _provider(
+        [(200, _envelope({"taskId": "export-private", "status": "running"}))]
+    )
+
+    provider.create_export_task(
+        "u_fictional_1",
+        chat_type=1,
+        peer_uin="200001",
+        session_name="Fictional Alice",
+    )
+
+    body = transport.calls[0]["payload"]
+    assert body["peer"] == {
+        "chatType": 1,
+        "peerUid": "u_fictional_1",
+        "peerUin": "200001",
+    }
+    assert body["sessionName"] == "Fictional Alice"
 
 
 def test_create_export_task_rejects_blank_group_code():

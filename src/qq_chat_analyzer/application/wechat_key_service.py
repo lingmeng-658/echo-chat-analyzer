@@ -14,6 +14,7 @@ import ctypes
 import logging
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -70,6 +71,7 @@ class WeChatKeyService:
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
         helper_path: str | Path | None = None,
         node_executable: str = "node",
+        node_finder: Callable[[str], str | None] | None = None,
         subprocess_runner: Callable[..., Any] | None = None,
         koffi_module_path: str | Path | None = None,
         process_launcher: Callable[..., Any] | None = None,
@@ -93,6 +95,7 @@ class WeChatKeyService:
             else self._dll_path.with_name(HELPER_FILE_NAME)
         )
         self._node_executable = node_executable
+        self._node_finder = node_finder or shutil.which
         self._subprocess_runner = subprocess_runner
         self._process_launcher = process_launcher
         self._progress_callback = progress_callback
@@ -186,7 +189,7 @@ class WeChatKeyService:
     ) -> tuple[list[str], dict[str, Any]]:
         """Build the one command and option set both helper paths share."""
         command = [
-            self._node_executable,
+            self._resolve_node_executable(),
             str(self._helper_path),
             "--dll",
             str(self._dll_path),
@@ -206,6 +209,20 @@ class WeChatKeyService:
         if os.name == "nt":
             options["creationflags"] = subprocess.CREATE_NO_WINDOW
         return command, options
+
+    def _resolve_node_executable(self) -> str:
+        bundled_node = self._helper_path.with_name("node.exe")
+        if bundled_node.is_file():
+            return str(bundled_node)
+
+        system_node = self._node_finder(self._node_executable)
+        if system_node:
+            return str(system_node)
+
+        raise WeChatKeyUnavailable(
+            "微信连接组件缺少 Node.js 运行环境，"
+            "请重新安装余音后重试。"
+        )
 
     def _run_helper_buffered(
         self, command: list[str], options: dict[str, Any]

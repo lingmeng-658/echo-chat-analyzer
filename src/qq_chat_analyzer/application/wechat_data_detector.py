@@ -40,7 +40,7 @@ def detect_wechat_data_roots(
     location. Duplicates are removed and only structurally valid roots are
     returned.
     """
-    home_path = home or Path.home()
+    home_path = home or _default_home()
     appdata_path = appdata or _default_appdata()
     base_dirs: list[Path] = []
     base_dirs.extend(default_wechat_data_dirs(home_path))
@@ -219,6 +219,13 @@ def _default_appdata() -> Path:
     if value:
         return Path(value)
     return Path.home() / "AppData" / "Roaming"
+
+
+def _default_home() -> Path:
+    userprofile = os.environ.get("USERPROFILE", "").strip()
+    if userprofile:
+        return Path(userprofile)
+    return Path.home()
 
 
 __all__ = [

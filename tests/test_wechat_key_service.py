@@ -193,7 +193,13 @@ class _Completed:
         self.stderr = stderr
 
 
-def _helper_service(tmp_path: Path, result=None, runner=None):
+def _helper_service(
+    tmp_path: Path,
+    result=None,
+    runner=None,
+    *,
+    node_finder=lambda _name: "node",
+):
     dll = tmp_path / "wx_key.dll"
     helper = tmp_path / "wx_key_helper.cjs"
     dll.write_bytes(b"fake")
@@ -203,6 +209,7 @@ def _helper_service(tmp_path: Path, result=None, runner=None):
         dll_path=dll,
         helper_path=helper,
         subprocess_runner=runner or (lambda *_args, **_kwargs: result),
+        node_finder=node_finder,
     )
 
 
@@ -282,6 +289,51 @@ def test_helper_hides_node_console_on_windows(
     assert options["cwd"] == str(tmp_path)
     assert options["env"]["NODE_PATH"] == str(tmp_path / "node_modules")
     assert options["timeout"] == 605.0
+
+
+def test_helper_prefers_bundled_node_when_system_node_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    calls = []
+
+    def runner(command, **options):
+        calls.append((command, options))
+        return _Completed(stdout="a" * 64)
+
+    bundled_node = tmp_path / "node.exe"
+    bundled_node.write_bytes(b"fictional node")
+    service = _helper_service(
+        tmp_path,
+        runner=runner,
+        node_finder=lambda _name: None,
+    )
+
+    assert service.acquire() == "a" * 64
+    assert calls[0][0][0] == str(bundled_node)
+
+
+def test_helper_reports_missing_node_runtime_before_launch(
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    launched = False
+
+    def runner(*_args, **_kwargs):
+        nonlocal launched
+        launched = True
+        return _Completed(stdout="a" * 64)
+
+    service = _helper_service(
+        tmp_path,
+        runner=runner,
+        node_finder=lambda _name: None,
+    )
+
+    with pytest.raises(module.WeChatKeyUnavailable) as caught:
+        service.acquire()
+
+    assert "Node.js" in caught.value.public_message
+    assert launched is False
 
 
 def test_helper_omits_windows_creation_flags_on_non_windows(
@@ -472,6 +524,7 @@ def _streaming_service(tmp_path: Path, popen, progress=None):
         helper_path=helper,
         process_launcher=popen,
         progress_callback=progress,
+        node_finder=lambda _name: "node",
     )
 
 
