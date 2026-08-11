@@ -30,4 +30,7 @@ dist/
 .DS_Store
 Thumbs.db
 
-runtime/
+runtime/*
+!runtime/wechat/
+runtime/wechat/*
+!runtime/wechat/wx_key_helper.cjs

@@ -961,9 +961,36 @@ def test_wechat_connect_failure_surfaces_a_user_message(qt_app) -> None:
     )
 
     assert page._status_label.text() == (
-        "\U0001F534 \u5fae\u4fe1\u8fde\u63a5\u672a\u6210\u529f"
+        "\U0001F534 Key \u83b7\u53d6\u5931\u8d25"
     )
     assert received == ["\u767b\u5f55\u8d85\u65f6\uff0c\u8bf7\u91cd\u65b0\u5c1d\u8bd5\u3002"]
+
+
+def test_wechat_key_failure_does_not_claim_echo_needs_reinstall(qt_app) -> None:
+    facade = StubFacade(sources=_wechat_available_sources())
+    page = _analysis_page(qt_app, facade)
+
+    page._handle_wechat_connect_error(
+        "wechat_key_timeout",
+        "Key \u83b7\u53d6\u8d85\u65f6\uff0c\u8bf7\u5728\u5fae\u4fe1\u767b\u5f55\u65f6\u91cd\u8bd5\u3002",
+    )
+
+    visible = page._status_label.text() + page._hint_label.text()
+    assert "Key \u83b7\u53d6\u5931\u8d25" in visible
+    assert "\u91cd\u65b0\u5b89\u88c5" not in visible
+
+
+def test_wechat_hook_failure_keeps_the_classified_reason(qt_app) -> None:
+    facade = StubFacade(sources=_wechat_available_sources())
+    page = _analysis_page(qt_app, facade)
+
+    page._handle_wechat_connect_error(
+        "wechat_hook_failed",
+        "\u5fae\u4fe1 Hook \u5931\u8d25\uff0c\u5f53\u524d\u5fae\u4fe1\u8fdb\u7a0b\u53ef\u80fd\u4e0d\u517c\u5bb9\u3002",
+    )
+
+    assert "Hook \u5931\u8d25" in page._hint_label.text()
+    assert "\u83b7\u53d6\u6743\u9650\u65f6\u5931\u8d25" in page._status_label.text()
 
 
 def test_selecting_qq_without_ready_status_does_not_load_sessions(

@@ -173,11 +173,16 @@ class QQEnvironmentConfigLoader:
     def load_or_default(self) -> QQEnvironmentConfig:
         """Load user config, falling back to bundled runtime defaults."""
         try:
-            return self.load()
+            config = self.load()
         except QQConfigNotFound:
-            if bundled_qq_runtime_available():
-                return default_qq_environment_config()
-            raise
+            config = None
+        if config is not None and _runtime_paths_available(config):
+            return config
+        if bundled_qq_runtime_available():
+            return default_qq_environment_config()
+        if config is not None:
+            return config
+        raise QQConfigNotFound()
 
 
 def bundled_qq_runtime_available() -> bool:
@@ -212,6 +217,15 @@ def default_qq_environment_config() -> QQEnvironmentConfig:
         security_path=qce_config_directory / "security.json",
         napcat_bridge_url=DEFAULT_NAPCAT_BRIDGE_URL,
         version=None,
+    )
+
+
+def _runtime_paths_available(config: QQEnvironmentConfig) -> bool:
+    return bool(
+        config.runtime_directory is not None
+        and config.runtime_directory.is_dir()
+        and config.qce_path is not None
+        and config.qce_path.is_file()
     )
 
 

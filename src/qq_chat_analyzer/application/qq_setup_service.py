@@ -173,7 +173,7 @@ class QQSetupService:
         )
         runtime_status = None
         if config is not None and self._runtime_complete(config):
-            self._persist_bundled_config_if_missing(config)
+            self._persist_recovered_runtime_config(config)
             if self._connection_service is not None:
                 status = self._connection_service.check_status()
                 if status.available or status.qce_running:
@@ -312,19 +312,20 @@ class QQSetupService:
             ),
         )
 
-    def _persist_bundled_config_if_missing(
+    def _persist_recovered_runtime_config(
         self,
         config: QQEnvironmentConfig,
     ) -> None:
-        """Write the detected config only when no user config exists yet."""
+        """Persist defaults when config is missing or has stale paths."""
         try:
-            self._config_loader.load()
+            stored = self._config_loader.load()
         except QQConfigNotFound:
             pass
         except Exception:
             return
         else:
-            return
+            if self._runtime_complete(stored):
+                return
 
         try:
             self._config_writer.save(config)

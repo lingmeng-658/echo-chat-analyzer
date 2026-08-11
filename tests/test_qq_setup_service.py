@@ -224,6 +224,50 @@ def test_connect_persists_detected_default_when_no_config_exists(
     assert stored.qce_path == config.qce_path
 
 
+def test_connect_repairs_stale_portable_paths_with_bundled_runtime(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _module()
+    stale = module.QQEnvironmentConfig(
+        runtime_directory=tmp_path / "old-echo" / "runtime" / "qq",
+        qce_path=(
+            tmp_path
+            / "old-echo"
+            / "runtime"
+            / "qq"
+            / "qce-server.exe"
+        ),
+    )
+    _store_config(tmp_path, stale)
+    bundled = _config(tmp_path)
+    env_module = importlib.import_module(
+        "qq_chat_analyzer.application.qq_environment_config"
+    )
+    monkeypatch.setattr(
+        env_module, "bundled_qq_runtime_available", lambda: True
+    )
+    monkeypatch.setattr(
+        env_module, "default_qq_environment_config", lambda: bundled
+    )
+    manager = _FakeRuntimeManager()
+    factory = _FakeProviderFactory()
+    service = _service(
+        tmp_path,
+        config=stale,
+        runtime_manager=manager,
+        connection_status=_connection_status(available=False),
+        provider_factory=factory,
+    )
+
+    result = service.connect()
+
+    assert manager.start_calls == 1
+    assert result.qce_running is True
+    assert _stored_config(tmp_path).qce_path == bundled.qce_path
+    assert factory.invalidate_calls == 1
+
+
 def test_connect_starts_a_stopped_runtime_and_returns_connection_status(
     tmp_path: Path,
 ) -> None:

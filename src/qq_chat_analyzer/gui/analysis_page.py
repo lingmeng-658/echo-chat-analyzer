@@ -811,14 +811,24 @@ class AnalysisPage(QWidget):
         self._hint_label.setText(message)
 
     def _handle_wechat_connect_error(self, code: str, message: str) -> None:
-        """Show a plain-language failure. Internal wording is replaced."""
+        """Show the classified application failure without flattening it."""
         detail = message or ""
         lowered = detail.lower()
-        if any(term in lowered for term in _WECHAT_INTERNAL_TERMS):
+        titles = {
+            "wechat_environment_missing": "\u5fae\u4fe1\u8fde\u63a5\u73af\u5883\u4e0d\u5b8c\u6574",
+            "wechat_waiting_login": "\u7b49\u5f85\u5fae\u4fe1\u767b\u5f55",
+            "wechat_hook_failed": "\u6b63\u5728\u83b7\u53d6\u6743\u9650\u65f6\u5931\u8d25",
+            "wechat_process_incompatible": "\u5fae\u4fe1\u8fdb\u7a0b\u4e0d\u517c\u5bb9",
+            "wechat_key_timeout": "Key \u83b7\u53d6\u5931\u8d25",
+            "key_timeout": "Key \u83b7\u53d6\u5931\u8d25",
+        }
+        if code not in titles and any(
+            term in lowered for term in _WECHAT_INTERNAL_TERMS
+        ):
             detail = ""
         text = detail or _WECHAT_CONNECT_RETRY_HINT
         self._status_label.setText(
-            _DISCONNECTED_PREFIX + _WECHAT_CONNECT_FAILED
+            _DISCONNECTED_PREFIX + titles.get(code, _WECHAT_CONNECT_FAILED)
         )
         self._status_label.setToolTip(text)
         self._status_label.setVisible(True)

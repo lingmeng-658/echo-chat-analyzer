@@ -107,7 +107,7 @@ def test_acquire_missing_dll_is_user_safe(tmp_path: Path) -> None:
     with pytest.raises(module.WeChatKeyUnavailable) as caught:
         service.acquire()
 
-    assert caught.value.code == "wechat_key_unavailable"
+    assert caught.value.code == "wechat_environment_missing"
     assert caught.value.public_message
     assert "Traceback" not in caught.value.public_message
 
@@ -124,6 +124,7 @@ def test_acquire_without_weixin_process_is_user_safe(tmp_path: Path) -> None:
     with pytest.raises(module.WeChatKeyUnavailable) as caught:
         service.acquire()
 
+    assert caught.value.code == "wechat_waiting_login"
     assert "\u672a\u68c0\u6d4b\u5230\u5fae\u4fe1" in caught.value.public_message
 
 
@@ -135,7 +136,9 @@ def test_hook_failure_is_normalized(tmp_path: Path) -> None:
     with pytest.raises(module.WeChatKeyUnavailable) as caught:
         service.acquire()
 
-    assert "hook denied" in caught.value.public_message
+    assert caught.value.code == "wechat_hook_failed"
+    assert "Hook" in caught.value.public_message
+    assert "hook denied" not in caught.value.public_message
     assert "Traceback" not in caught.value.public_message
 
 
@@ -147,6 +150,7 @@ def test_timeout_is_normalized(tmp_path: Path) -> None:
     with pytest.raises(module.WeChatKeyUnavailable) as caught:
         service.acquire()
 
+    assert caught.value.code == "wechat_key_timeout"
     assert "\u8d85\u65f6" in caught.value.public_message
     assert api.cleanup_calls == 1
 
@@ -379,11 +383,11 @@ def test_helper_accepts_non_hex_payload_of_verified_length(tmp_path: Path):
     assert service.acquire() == "z" * 64
 
 
-def test_helper_source_uses_timeout_per_pid():
+def test_helper_source_uses_one_global_timeout_for_all_pids():
     source = (PROJECT_ROOT / "runtime" / "wechat" / "wx_key_helper.cjs").read_text(encoding="utf-8")
-    loop = source.index("for (const pid of ids)")
-    deadline = source.index("const deadline = Date.now() + timeout")
-    assert deadline > loop
+    loop = source.index("for (const [index, pid] of ids.entries())")
+    deadline = source.index("const deadline = Date.now() + timeoutMs")
+    assert deadline < loop
 
 
 # --------------------------------------------------------------- streaming
@@ -639,6 +643,29 @@ def test_streaming_failure_uses_collected_stderr(tmp_path: Path):
     with pytest.raises(module.WeChatKeyUnavailable) as caught:
         service.acquire()
     assert "\u672a\u68c0\u6d4b\u5230\u5fae\u4fe1" in caught.value.public_message
+
+
+def test_streaming_initialized_pid_without_key_reports_key_timeout(
+    tmp_path: Path,
+):
+    module = _module()
+    proc = _FakePopen(
+        stdout="",
+        stderr_lines=(
+            "Weixin PIDs: 101, 202",
+            "InitializeHook(101) -> true",
+            "key unavailable",
+        ),
+        returncode=1,
+    )
+    service = _streaming_service(tmp_path, lambda *_a, **_k: proc)
+
+    with pytest.raises(module.WeChatKeyUnavailable) as caught:
+        service.acquire()
+
+    assert caught.value.code == "wechat_key_timeout"
+    assert "Key" in caught.value.public_message
+    assert "\u91cd\u65b0\u5b89\u88c5" not in caught.value.public_message
 
 
 def test_streaming_and_injected_runner_share_invocation(tmp_path: Path):
