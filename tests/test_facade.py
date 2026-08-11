@@ -1017,6 +1017,22 @@ def test_analyze_file_runs_analysis_then_presentation(tmp_path: Path) -> None:
     assert outcome.result.processed_message_count == 5
 
 
+def test_analyze_file_reports_each_analysis_stage(tmp_path: Path) -> None:
+    progress: list[str] = []
+    facade = _facade()
+
+    facade.analyze_file(_export_file(tmp_path), progress=progress.append)
+
+    assert progress == [
+        "正在准备分析...",
+        "正在读取聊天记录...",
+        "正在处理消息...",
+        "正在分析聊天内容...",
+        "正在生成报告...",
+        "分析完成",
+    ]
+
+
 def test_analyze_file_accepts_a_string_path(tmp_path: Path) -> None:
     export_path = _export_file(tmp_path)
     facade = _facade()

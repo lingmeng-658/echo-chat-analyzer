@@ -304,14 +304,18 @@ class StubFacade:
             action_hint="",
         )
 
-    def analyze_session(self, source, session_id, config=None):
+    def analyze_session(self, source, session_id, config=None, progress=None):
         self.analyze_session_calls.append((source, session_id, config))
+        if progress is not None:
+            progress("正在分析聊天内容...")
         if self._error is not None:
             raise self._error
         return self._outcome
 
-    def analyze_file(self, path, config=None):
+    def analyze_file(self, path, config=None, progress=None):
         self.analyze_file_calls.append((path, config))
+        if progress is not None:
+            progress("正在分析聊天内容...")
         if self._error is not None:
             raise self._error
         return self._outcome
@@ -435,6 +439,20 @@ def _inline_executor():
     return module.run_inline
 
 
+def test_worker_forwards_analysis_progress_to_the_ui_callback() -> None:
+    workers = importlib.import_module("qq_chat_analyzer.gui.workers")
+    received: list[str] = []
+
+    workers.run_inline(
+        lambda report: report("正在分析聊天内容..."),
+        on_success=lambda _result: None,
+        on_error=lambda _code, _message: None,
+        on_progress=received.append,
+    )
+
+    assert received == ["正在分析聊天内容..."]
+
+
 class _DeferredExecutor:
     """Capture a facade call and let the test finish it manually."""
 
@@ -445,6 +463,7 @@ class _DeferredExecutor:
         self.on_finished = None
         self.on_progress = None
         self.submission_count = 0
+        self.cancelled = False
 
     def __call__(
         self,
@@ -461,6 +480,10 @@ class _DeferredExecutor:
         self.on_error = on_error
         self.on_finished = on_finished
         self.on_progress = on_progress
+        return self
+
+    def cancel(self):
+        self.cancelled = True
 
     def progress(self, message):
         if self.on_progress is not None:
@@ -1122,7 +1145,7 @@ def test_clicking_qq_connect_calls_the_facade(qt_app, sources) -> None:
     assert page._session_list.count() == 1
 
 
-def test_qq_connect_displays_backend_progress_without_guessing(qt_app, sources) -> None:
+def test_qq_connect_hides_backend_terms_behind_user_stage(qt_app, sources) -> None:
     module = _facade_module()
     executor = _DeferredExecutor()
     facade = StubFacade(sources=sources)
@@ -1133,8 +1156,41 @@ def test_qq_connect_displays_backend_progress_without_guessing(qt_app, sources) 
     page._qq_connect_button.click()
     executor.progress("正在加载 NapCat...")
 
-    assert "正在加载 NapCat..." in page._status_label.text()
-    assert page._hint_label.text() == "正在加载 NapCat..."
+    assert "正在启动QQ连接环境" in page._status_label.text()
+    assert "NapCat" not in page._status_label.text()
+    assert "不要手动打开QQ" in page._hint_label.text()
+
+
+@pytest.mark.parametrize(
+    ("code", "title"),
+    [
+        ("qq_runtime_missing", "QQ连接环境启动失败"),
+        ("qq_auth_failed", "QQ登录失败"),
+        ("qce_start_failed", "QQ连接服务启动失败"),
+    ],
+)
+def test_qq_connection_errors_keep_the_real_stage(qt_app, sources, code, title) -> None:
+    page = _analysis_page(qt_app, StubFacade(sources=sources))
+
+    page._handle_qq_connect_error(code, "请重试")
+
+    assert title in page._status_label.text()
+
+
+@pytest.mark.parametrize(
+    ("code", "title"),
+    [
+        ("wechat_not_running", "微信未启动"),
+        ("wechat_waiting_login", "等待微信登录"),
+        ("wechat_key_timeout", "Key 获取失败"),
+    ],
+)
+def test_wechat_connection_errors_keep_the_real_stage(qt_app, code, title) -> None:
+    page = _analysis_page(qt_app, StubFacade(sources=_wechat_available_sources()))
+
+    page._handle_wechat_connect_error(code, "请重试")
+
+    assert title in page._status_label.text()
 
 
 def test_clicking_qq_connect_through_the_real_worker_updates_the_page(
@@ -1387,7 +1443,7 @@ def test_qq_connect_remains_clickable_when_no_runtime_detected(
     assert facade.start_qq_auth_flow_calls == [1]
 
 
-def test_qq_connect_disables_button_while_connecting(qt_app, sources) -> None:
+def test_qq_connect_offers_cancel_while_connecting(qt_app, sources) -> None:
     module = _facade_module()
     status = _connection_status(
         available=True,
@@ -1413,7 +1469,8 @@ def test_qq_connect_disables_button_while_connecting(qt_app, sources) -> None:
     page._qq_connect_button.click()
 
     assert executor.operation is not None
-    assert page._qq_connect_button.isEnabled() is False
+    assert page._qq_connect_button.isEnabled() is True
+    assert page._qq_connect_button.text() == "取消连接"
     assert (
         "\u6b63\u5728\u51c6\u5907QQ\u8fde\u63a5\u73af\u5883\uff0c\u8bf7\u7a0d\u5019"
         in page._status_label.text()
@@ -1624,15 +1681,8 @@ def test_wechat_guide_shows_status_confirmation(qt_app) -> None:
     _drain(page)
 
     assert page._wechat_guide_label.isVisibleTo(page) is True
-    assert "\u8bf7\u4fdd\u6301\u5fae\u4fe1\u7535\u8111\u7248\u6253\u5f00" in (
-        page._wechat_guide_label.text()
-    )
-    assert "\u4f59\u97f3\u5c06\u5728\u8fde\u63a5\u8fc7\u7a0b\u4e2d\u7b49\u5f85\u767b\u5f55\u64cd\u4f5c" in (
-        page._wechat_guide_label.text()
-    )
-    assert "\u4ec5\u5728\u672c\u673a\u4f7f\u7528" in (
-        page._wechat_guide_label.text()
-    )
+    assert "保持在登录界面" in page._wechat_guide_label.text()
+    assert "不要进入聊天页面" in page._wechat_guide_label.text()
     assert "\u4e0d\u4e0a\u4f20" in page._wechat_guide_label.text()
     assert "\u4e0d\u4fdd\u5b58" in page._wechat_guide_label.text()
     assert "LCA" not in page._wechat_guide_label.text()
@@ -2311,6 +2361,106 @@ def test_analysis_enters_processing_page_and_rejects_second_start(
     assert window.analysis_page._analysis_running is True
 
 
+def test_analysis_progress_is_forwarded_to_the_processing_page(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    executor = _DeferredExecutor()
+    facade = StubFacade(
+        sources=sources,
+        sessions=[_session(module.ChatSource.QQ, "10001", "虚构群")],
+    )
+    window = _main_window(qt_app, facade, executor=executor)
+    page = window.analysis_page
+    page._selected_source = module.ChatSource.QQ
+    page._populate_sessions(facade._sessions)
+    page._session_list.setCurrentRow(0)
+
+    page.start_analysis()
+    QApplication.processEvents()
+    executor.progress("正在处理消息...")
+
+    assert window.processing_status_label.text() == "正在处理消息..."
+    assert page.isEnabled() is False
+    assert page._analysis_running is True
+
+
+def test_connecting_qq_locks_sources_and_cancel_restores_selection(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    executor = _DeferredExecutor()
+    facade = StubFacade(sources=sources)
+    page = _analysis_page(qt_app, facade, executor=executor)
+    page._selected_source = module.ChatSource.QQ
+
+    page.connect_qq()
+
+    assert all(not button.isEnabled() for button in page._source_buttons.values())
+    assert page._qq_connect_button.text() == "取消连接"
+
+    page.cancel_connection()
+
+    assert executor.cancelled is True
+    assert page._source_buttons[module.ChatSource.QQ].isEnabled() is True
+    assert page._source_buttons[module.ChatSource.WECHAT].isEnabled() is False
+    assert page._qq_connect_button.text() == "连接QQ"
+    assert "已取消" in page._status_label.text()
+
+
+def test_connecting_wechat_locks_sources_and_cancel_restores_selection(
+    qt_app,
+) -> None:
+    module = _facade_module()
+    executor = _DeferredExecutor()
+    facade = StubFacade(sources=_wechat_available_sources())
+    page = _analysis_page(qt_app, facade, executor=executor)
+    page._selected_source = module.ChatSource.WECHAT
+
+    page._start_wechat_connect(
+        module.WeChatEnvironmentConfig(data_root="D:/fictional_wechat")
+    )
+    assert page._wechat_connect_button.text() == "取消连接"
+    assert all(not button.isEnabled() for button in page._source_buttons.values())
+
+    page.cancel_connection()
+
+    assert executor.cancelled is True
+    assert page._wechat_connect_button.text() == "连接微信"
+    assert all(button.isEnabled() for button in page._source_buttons.values())
+
+
+def test_cancel_analysis_returns_to_selection_and_releases_all_locks(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    executor = _DeferredExecutor()
+    facade = StubFacade(
+        sources=sources,
+        sessions=[_session(module.ChatSource.QQ, "10001", "虚构群")],
+    )
+    window = _main_window(qt_app, facade, executor=executor)
+    page = window.analysis_page
+    page._selected_source = module.ChatSource.QQ
+    page._populate_sessions(facade._sessions)
+    page._session_list.setCurrentRow(0)
+
+    page.start_analysis()
+    QApplication.processEvents()
+    assert window._cancel_analysis_button.isHidden() is False
+
+    window._cancel_analysis_button.click()
+
+    assert executor.cancelled is True
+    assert window.stack.currentIndex() == 0
+    assert page._analysis_running is False
+    assert page.isEnabled() is True
+    assert page._session_list.isEnabled() is True
+
+
 def test_failed_analysis_returns_to_selection_and_releases_lock(
     qt_app,
     sources,
@@ -2338,7 +2488,7 @@ def test_failed_analysis_returns_to_selection_and_releases_lock(
     _drain(window.analysis_page)
 
     assert executor.operation is not None
-    executor.operation()
+    executor.operation(lambda _message: None)
     assert facade.analyze_session_calls[0][0] == module.ChatSource.WECHAT
     executor.fail("fictional_failure", "\u865a\u6784\u5206\u6790\u5931\u8d25")
 
@@ -2744,12 +2894,9 @@ def test_waiting_auth_state_shows_login_guide(qt_app, sources) -> None:
 
     assert page._qq_login_guide_label.isVisibleTo(page) is True
     text = page._qq_login_guide_label.text()
-    assert "登录QQ以读取聊天记录" in text
-    assert "1. 请使用手机QQ扫描下方二维码" in text
-    assert "2. 打开手机QQ扫一扫功能（通常位于右上角“+”菜单中）" in text
-    assert "3. 扫描二维码完成QQ登录授权" in text
-    assert "4. 登录成功后，余音会自动加载您的聊天会话" in text
-    assert "二维码仅用于QQ登录认证，聊天数据仅在本机处理。" in text
+    assert "等待QQ登录" in text
+    assert "请扫码登录QQ" in text
+    assert "不要手动启动QQ" in text
     lowered = text.lower()
     for forbidden in ("QCE", "NapCat", "API", "token", "runtime"):
         assert forbidden.lower() not in lowered

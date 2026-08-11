@@ -25,6 +25,7 @@ _READY = "\u5c31\u7eea"
 _BACK_LABEL = "\u8fd4\u56de\u9009\u62e9"
 _ERROR_TITLE = "\u5206\u6790\u5931\u8d25"
 _PREPARING = "\u6b63\u5728\u51c6\u5907..."
+_CANCEL_ANALYSIS = "取消分析"
 
 ANALYSIS_PAGE_INDEX = 0
 PROCESSING_PAGE_INDEX = 1
@@ -58,6 +59,9 @@ class MainWindow(QMainWindow):
         self.processing_status_label = QLabel(_PREPARING)
         self.processing_status_label.setWordWrap(True)
         processing_layout.addWidget(self.processing_status_label)
+        self._cancel_analysis_button = QPushButton(_CANCEL_ANALYSIS)
+        self._cancel_analysis_button.clicked.connect(self.cancel_analysis)
+        processing_layout.addWidget(self._cancel_analysis_button)
         processing_layout.addStretch(1)
         self.dashboard_page = DashboardPage()
         self.stack.addWidget(self.analysis_page)
@@ -101,6 +105,13 @@ class MainWindow(QMainWindow):
         self.processing_status_label.setText(_PREPARING)
         self.stack.setCurrentIndex(PROCESSING_PAGE_INDEX)
         self._back_button.setVisible(False)
+        self._cancel_analysis_button.setVisible(True)
+
+    def cancel_analysis(self) -> None:
+        """Cancel the page task and return to the stable selection state."""
+        self.analysis_page.cancel_analysis()
+        self.show_analysis_page()
+        self.statusBar().showMessage("分析已取消。")
 
     def show_status(self, message: str) -> None:
         """Show status globally and mirror it on the active processing page."""

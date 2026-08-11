@@ -53,6 +53,15 @@ from .wechat_setup_service import WeChatSetupStatus
 _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.facade")
 
 
+def _report_progress(
+    progress: Callable[[str], None] | None,
+    message: str,
+) -> None:
+    """Publish a facade-owned analysis stage when a caller is listening."""
+    if progress is not None:
+        progress(message)
+
+
 DEFAULT_TOP = 50
 DEFAULT_PROFILE = "default"
 
@@ -502,16 +511,20 @@ class ChatAnalyzerFacade:
         self,
         path: str | Path,
         config: AnalysisConfig | None = None,
+        progress: Callable[[str], None] | None = None,
     ) -> AnalysisOutcome:
         """Analyze one already-exported local file or directory."""
+        _report_progress(progress, "正在准备分析...")
         resolved_config = config or AnalysisConfig()
         input_path = Path(path)
+        _report_progress(progress, "正在读取聊天记录...")
 
         return self._analyze_path(
             input_path,
             resolved_config,
             source=ChatSource.LOCAL_FILE,
             session=None,
+            progress=progress,
         )
 
     def analyze_session(
@@ -519,6 +532,7 @@ class ChatAnalyzerFacade:
         source: ChatSource,
         session_id: str,
         config: AnalysisConfig | None = None,
+        progress: Callable[[str], None] | None = None,
     ) -> AnalysisOutcome:
         """Export one conversation, analyze it, and return a view.
 
@@ -526,6 +540,7 @@ class ChatAnalyzerFacade:
         a scratch directory, consumed by the analysis service, and discarded
         before this method returns.
         """
+        _report_progress(progress, "正在准备分析...")
         chat_source = _coerce_source(source)
         if chat_source is ChatSource.LOCAL_FILE:
             raise FacadeError(
@@ -539,6 +554,7 @@ class ChatAnalyzerFacade:
             )
 
         resolved_config = config or AnalysisConfig()
+        _report_progress(progress, "正在读取聊天记录...")
         service = self._require_service(chat_source)
         if chat_source in (ChatSource.QQ, ChatSource.WECHAT):
             raw_session = next(
@@ -585,6 +601,7 @@ class ChatAnalyzerFacade:
                 source=chat_source,
                 session=session,
                 conversation_names=conversation_names,
+                progress=progress,
             )
 
     # ------------------------------------------------------------- internals
@@ -598,6 +615,7 @@ class ChatAnalyzerFacade:
         session: SessionInfo | None,
         speaker_names: Mapping[str, str] | None = None,
         conversation_names: Mapping[str, str] | None = None,
+        progress: Callable[[str], None] | None = None,
     ) -> AnalysisOutcome:
         """Run analysis then presentation for one local path."""
         analysis_service = self._require_analysis_service()
@@ -613,17 +631,22 @@ class ChatAnalyzerFacade:
                 conversation_names=conversation_names or {},
             )
             with _translated_errors(source):
+                _report_progress(progress, "正在处理消息...")
+                _report_progress(progress, "正在分析聊天内容...")
                 result = analysis_service.execute(request)
 
+            _report_progress(progress, "正在生成报告...")
             view = self._build_view(result)
 
-        return AnalysisOutcome(
+        outcome = AnalysisOutcome(
             view=view,
             result=result,
             source=source,
             session=session,
             artifact_directory=config.output_directory,
         )
+        _report_progress(progress, "分析完成")
+        return outcome
 
     def _build_view(self, result: AnalysisResultDTO) -> DashboardView:
         """Hand the reports to the presentation layer without touching them."""

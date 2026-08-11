@@ -14,6 +14,7 @@ place.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any, Callable
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
@@ -113,6 +114,7 @@ class FacadeWorker(QRunnable):
         super().__init__()
         self._operation = operation
         self._reports_progress = reports_progress
+        self._cancelled = threading.Event()
         self.signals = WorkerSignals(signals_parent)
         self.setAutoDelete(False)
 
@@ -121,6 +123,8 @@ class FacadeWorker(QRunnable):
         _WORKER_LOGGER.info("[worker] facade operation started")
         try:
             def _report_progress(message: str) -> None:
+                if self._cancelled.is_set():
+                    raise _OperationCancelled
                 _WORKER_LOGGER.info("[wechat worker] emit progress: %s", message)
                 self.signals.progress.emit(message)
 
@@ -128,7 +132,11 @@ class FacadeWorker(QRunnable):
                 self._operation,
                 _report_progress if self._reports_progress else None,
             )
+        except _OperationCancelled:
+            _WORKER_LOGGER.info("[worker] facade operation cancelled")
         except FacadeError as error:
+            if self._cancelled.is_set():
+                return
             _WORKER_LOGGER.warning(
                 "facade operation failed code=%s message=%s",
                 error.code,
@@ -136,13 +144,25 @@ class FacadeWorker(QRunnable):
             )
             self.signals.failed.emit(error.code, error.public_message)
         except Exception as error:
+            if self._cancelled.is_set():
+                return
             _WORKER_LOGGER.exception("facade operation crashed", exc_info=error)
             self.signals.failed.emit("unexpected_error", GENERIC_ERROR_MESSAGE)
         else:
+            if self._cancelled.is_set():
+                return
             _WORKER_LOGGER.info("[worker] facade operation succeeded")
             self.signals.succeeded.emit(result)
         finally:
             self.signals.finished.emit()
+
+    def cancel(self) -> None:
+        """Request cooperative cancellation and suppress late callbacks."""
+        self._cancelled.set()
+
+
+class _OperationCancelled(Exception):
+    """Internal control flow used when an operation reaches a progress point."""
 
 
 def submit(

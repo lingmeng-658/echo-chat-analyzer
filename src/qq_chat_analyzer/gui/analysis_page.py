@@ -68,7 +68,10 @@ _LOCAL_FILE_HINT = (
     "\u672c\u5730\u6587\u4ef6\u6a21\u5f0f\uff1a\u8bf7\u9009\u62e9\u4e00\u4e2a"
     "\u5bfc\u51fa\u6587\u4ef6\u3002"
 )
-_ANALYZING = "\u6b63\u5728\u5206\u6790\uff0c\u8bf7\u7a0d\u5019..."
+_ANALYZING = "正在准备分析..."
+_CANCEL_CONNECTION_LABEL = "取消连接"
+_CONNECTION_CANCELLED = "连接已取消，可以重新连接。"
+_ANALYSIS_CANCELLED = "分析已取消。"
 _SOURCE_DISPLAY_NAMES = {
     ChatSource.QQ: "QQ",
     ChatSource.WECHAT: "\u5fae\u4fe1",
@@ -95,12 +98,14 @@ _QQ_STATUS_POLL_INTERVAL_MS = 2000
 _QQ_QRCODE_SIZE = 240
 _QQ_QRCODE_RELATIVE_PATH = Path("cache") / "qrcode.png"
 _QQ_LOGIN_GUIDE = (
-    "登录QQ以读取聊天记录\n\n"
-    "1. 请使用手机QQ扫描下方二维码\n"
-    "2. 打开手机QQ扫一扫功能（通常位于右上角“+”菜单中）\n"
-    "3. 扫描二维码完成QQ登录授权\n"
-    "4. 登录成功后，余音会自动加载您的聊天会话\n\n"
-    "二维码仅用于QQ登录认证，聊天数据仅在本机处理。"
+    "等待QQ登录\n\n请扫码登录QQ。\n"
+    "QQ主窗口可能不会正常显示，这是正常现象。\n\n"
+    "不要手动启动QQ，也不要关闭连接窗口。\n"
+    "登录成功后，余音会自动继续。"
+)
+_QQ_STARTING_GUIDE = (
+    "正在启动QQ连接环境\n\n请不要手动打开QQ。\n"
+    "余音会自动启动QQ环境，随后提示扫码登录。"
 )
 _QQ_STATE_DISCONNECTED = "disconnected"
 _QQ_STATE_INITIALIZING = "initializing"
@@ -142,16 +147,14 @@ _WECHAT_CONNECT_RETRY_HINT = (
     "请保持微信电脑版打开，在余音中重新点击连接，并按提示完成微信登录。"
 )
 _WECHAT_GUIDE_STATUS = (
-    "请保持微信电脑版打开，\n"
-    "余音将在连接过程中等待登录操作。\n"
-    "连接期间请不要退出微信或切换账号。"
+    "正在准备微信连接\n\n请确保微信电脑版已安装。\n"
+    "如需查看微信数据目录，完成后请退出微信账号，返回登录界面。"
 )
 _WECHAT_GUIDE_KEY = (
-    "为读取你的本地微信聊天记录，\n"
-    "余音会在本机完成微信连接准备。\n"
-    "- 仅在本机使用\n"
-    "- 不上传\n"
-    "- 不保存"
+    "等待微信登录\n\n请启动微信电脑版并保持在登录界面。\n"
+    "不要进入聊天页面、切换账号或关闭微信。\n"
+    "登录成功后，余音会自动继续。\n"
+    "聊天数据仅在本机读取，不上传、不保存额外副本。"
 )
 _WECHAT_GUIDE_DIRECTORY_MISSING = (
     "如果未自动识别微信数据目录，\n"
@@ -205,6 +208,9 @@ class AnalysisPage(QWidget):
         self._selected_source: ChatSource | None = None
         self._selected_file: Path | None = None
         self._analysis_running = False
+        self._analysis_task: Any = None
+        self._connection_task: Any = None
+        self._source_enabled_before_lock: dict[ChatSource, bool] = {}
         self._source_buttons: dict[ChatSource, QPushButton] = {}
         self._wechat_connect_pending = False
         self._qq_connect_in_flight = False
@@ -368,6 +374,8 @@ class AnalysisPage(QWidget):
 
     def select_source(self, source: ChatSource) -> None:
         """Select one source and load whatever it offers."""
+        if self._connection_task is not None or self._analysis_running:
+            return
         self._selected_source = source
         self._selected_file = None
         self._file_label.setText("")
@@ -664,20 +672,25 @@ class AnalysisPage(QWidget):
                 self._selected_source,
             )
             return
+        if self._qq_connect_in_flight:
+            self.cancel_connection()
+            return
         _LOGGER.info(
             "[qq gui] connect_qq requested selected_source=%r",
             self._selected_source,
         )
         started_at = time.monotonic()
         self._qq_connect_in_flight = True
-        self._qq_connect_button.setEnabled(False)
+        self._lock_sources(True)
+        self._qq_connect_button.setText(_CANCEL_CONNECTION_LABEL)
+        self._qq_connect_button.setEnabled(True)
         self._status_label.setVisible(True)
         self._status_label.setText(_QQ_CONNECTING)
         self._status_label.setToolTip("")
         self._hint_label.setText(_QQ_CONNECT_PREPARE)
         self.status_changed.emit(_QQ_CONNECTING)
         _LOGGER.info("[qq gui] connect_qq worker submitted")
-        self._executor(
+        self._connection_task = self._executor(
             lambda report: self._facade.start_qq_auth_flow(progress=report),
             on_success=lambda status: self._finish_qq_connect(
                 status,
@@ -692,14 +705,15 @@ class AnalysisPage(QWidget):
         )
 
     def _handle_qq_connect_progress(self, message: str) -> None:
-        """Render a stage reported by the QQ backend flow verbatim."""
+        """Translate backend progress into one of the user-facing stages."""
         if not message:
             return
-        self._status_label.setText(_QQ_PENDING_PREFIX + message)
+        stage, hint = _qq_progress_copy(message)
+        self._status_label.setText(_QQ_PENDING_PREFIX + stage)
         self._status_label.setToolTip("")
         self._status_label.setVisible(True)
-        self._hint_label.setText(message)
-        self.status_changed.emit(message)
+        self._hint_label.setText(hint)
+        self.status_changed.emit(stage)
 
     def _after_qq_connect(self, snapshot: Any) -> None:
         self._show_qq_status(snapshot, load_sessions_on_ready=True)
@@ -707,6 +721,8 @@ class AnalysisPage(QWidget):
     def _finish_qq_connect(self, status: Any, started_at: float) -> None:
         def _apply() -> None:
             self._qq_connect_in_flight = False
+            self._connection_task = None
+            self._lock_sources(False)
             _LOGGER.info(
                 "[qq gui] connect_qq succeeded state=%s",
                 _snapshot_state(status),
@@ -724,6 +740,8 @@ class AnalysisPage(QWidget):
     ) -> None:
         def _apply() -> None:
             self._qq_connect_in_flight = False
+            self._connection_task = None
+            self._lock_sources(False)
             _LOGGER.info("[qq gui] connect_qq failed code=%s", code)
             self._handle_qq_connect_error(code, message)
             self._qq_connect_button.setEnabled(True)
@@ -736,7 +754,7 @@ class AnalysisPage(QWidget):
         return max(0, _QQ_CONNECT_MIN_DISPLAY_MS - elapsed_ms)
 
     def _handle_qq_connect_error(self, code: str, message: str) -> None:
-        self._show_qq_error(_QQ_CONNECT_FAILED, message)
+        self._show_qq_error(_qq_error_title(code), message)
 
     def _show_qq_error(self, title: str, message: str) -> None:
         self._status_label.setText(_DISCONNECTED_PREFIX + title)
@@ -757,6 +775,9 @@ class AnalysisPage(QWidget):
         guide, and several candidates are shown for the user to pick.
         """
         if self._selected_source is not ChatSource.WECHAT:
+            return
+        if self._connection_task is not None:
+            self.cancel_connection()
             return
 
         detect_roots = detect_data_roots or self._facade.detect_wechat_data_roots
@@ -788,20 +809,73 @@ class AnalysisPage(QWidget):
 
     def _start_wechat_connect(self, config: Any) -> None:
         """Run save-then-key for one config, off the UI thread."""
-        self._wechat_connect_button.setEnabled(False)
+        self._lock_sources(True)
+        self._wechat_connect_button.setText(_CANCEL_CONNECTION_LABEL)
+        self._wechat_connect_button.setEnabled(True)
         self._status_label.setVisible(True)
         self._status_label.setText(_WECHAT_CONNECTING)
         self._status_label.setToolTip("")
         self._hint_label.setText(_WECHAT_LOGIN_PREPARE)
         self.status_changed.emit(_WECHAT_CONNECTING)
 
-        self._executor(
+        self._connection_task = self._executor(
             lambda report: self._connect_wechat_operation(config, report),
             on_success=self._after_wechat_key_acquired,
             on_error=self._handle_wechat_connect_error,
             on_progress=self._handle_wechat_connect_progress,
-            on_finished=lambda: self._wechat_connect_button.setEnabled(True),
+            on_finished=self._finish_wechat_connect,
         )
+
+    def _finish_wechat_connect(self) -> None:
+        self._connection_task = None
+        self._lock_sources(False)
+        self._wechat_connect_button.setEnabled(True)
+        if self._selected_source is ChatSource.WECHAT:
+            connected = self._status_label.text().startswith(_CONNECTED_PREFIX)
+            self._wechat_connect_button.setText(
+                _WECHAT_RECONNECT_LABEL if connected else _WECHAT_CONNECT_LABEL
+            )
+
+    def cancel_connection(self) -> None:
+        """Cancel the active source task and return to a reconnectable page."""
+        task = self._connection_task
+        if task is None and not self._qq_connect_in_flight:
+            return
+        cancel = getattr(task, "cancel", None)
+        if callable(cancel):
+            cancel()
+        if self._selected_source is ChatSource.QQ:
+            shutdown = getattr(self._facade, "shutdown_qq_runtime", None)
+            if callable(shutdown):
+                shutdown()
+        self._connection_task = None
+        self._qq_connect_in_flight = False
+        self._wechat_connect_pending = False
+        self._stop_qq_status_polling()
+        self._hide_qq_qrcode()
+        self._hide_qq_login_guide()
+        self._lock_sources(False)
+        self._qq_connect_button.setText(_QQ_CONNECT_LABEL)
+        self._wechat_connect_button.setText(_WECHAT_CONNECT_LABEL)
+        self._qq_connect_button.setEnabled(True)
+        self._wechat_connect_button.setEnabled(True)
+        self._status_label.setText(_CONNECTION_CANCELLED)
+        self._status_label.setVisible(True)
+        self._hint_label.setText(_CONNECTION_CANCELLED)
+        self.status_changed.emit(_CONNECTION_CANCELLED)
+
+    def _lock_sources(self, locked: bool) -> None:
+        if locked:
+            self._source_enabled_before_lock = {
+                source: button.isEnabled()
+                for source, button in self._source_buttons.items()
+            }
+            for button in self._source_buttons.values():
+                button.setEnabled(False)
+            return
+        for source, button in self._source_buttons.items():
+            button.setEnabled(self._source_enabled_before_lock.get(source, True))
+        self._source_enabled_before_lock.clear()
 
     def _connect_wechat_operation(
         self,
@@ -1179,7 +1253,11 @@ class AnalysisPage(QWidget):
             if self._selected_file is None:
                 return
             path = self._selected_file
-            operation = lambda: self._facade.analyze_file(path, config)
+            operation = lambda report: self._facade.analyze_file(
+                path,
+                config,
+                progress=report,
+            )
         else:
             session_id = self.selected_session_id()
             if not session_id:
@@ -1190,10 +1268,11 @@ class AnalysisPage(QWidget):
                 or not (item.flags() & Qt.ItemFlag.ItemIsEnabled)
             ):
                 return
-            operation = lambda: self._facade.analyze_session(
+            operation = lambda report: self._facade.analyze_session(
                 source,
                 session_id,
                 config,
+                progress=report,
             )
 
         self._set_busy(True)
@@ -1203,12 +1282,34 @@ class AnalysisPage(QWidget):
 
     def _submit_analysis(self, operation: Any) -> None:
         """Start expensive work only after Qt can paint the processing page."""
-        self._executor(
+        self._analysis_task = self._executor(
             operation,
             on_success=self._handle_success,
             on_error=self._handle_error,
-            on_finished=lambda: self._set_busy(False),
+            on_finished=self._finish_analysis,
+            on_progress=self._handle_analysis_progress,
         )
+
+    def _handle_analysis_progress(self, message: str) -> None:
+        """Display a stage supplied by the facade without deriving state."""
+        if message:
+            self.status_changed.emit(message)
+
+    def _finish_analysis(self) -> None:
+        self._analysis_task = None
+        self._set_busy(False)
+
+    def cancel_analysis(self) -> None:
+        """Cancel the active analysis and restore all selection controls."""
+        if not self._analysis_running:
+            return
+        cancel = getattr(self._analysis_task, "cancel", None)
+        if callable(cancel):
+            cancel()
+        self._analysis_task = None
+        self._set_busy(False)
+        self._hint_label.setText(_ANALYSIS_CANCELLED)
+        self.status_changed.emit(_ANALYSIS_CANCELLED)
 
     def _handle_success(self, outcome: Any) -> None:
         self.analysis_succeeded.emit(outcome)
@@ -1246,6 +1347,23 @@ def _wechat_unavailable_message(status: Any) -> str:
     if not bool(getattr(status, "db_key_available", False)):
         return _WECHAT_WAITING_LOGIN
     return getattr(status, "message", "") or _WECHAT_STATUS_DISCONNECTED
+
+
+def _qq_progress_copy(message: str) -> tuple[str, str]:
+    lowered = message.lower()
+    if any(term in lowered for term in ("扫码", "登录", "auth", "qrcode")):
+        return "等待QQ登录", _QQ_LOGIN_GUIDE
+    return "正在启动QQ连接环境", _QQ_STARTING_GUIDE
+
+
+def _qq_error_title(code: str) -> str:
+    if code in {"qq_not_installed", "qq_runtime_missing", "runtime_unavailable"}:
+        return "QQ连接环境启动失败"
+    if code in {"qq_login_timeout", "qq_auth_failed", "authentication_failed"}:
+        return "QQ登录失败"
+    if code in {"qce_unavailable", "qce_start_failed", "service_unavailable"}:
+        return "QQ连接服务启动失败"
+    return _QQ_CONNECT_FAILED
 
 
 def _snapshot_state(snapshot: Any) -> str:
