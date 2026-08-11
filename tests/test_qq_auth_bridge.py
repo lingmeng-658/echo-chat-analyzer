@@ -397,11 +397,12 @@ def test_default_launcher_opens_the_runtime_login_window(
         "/c",
         "call",
         str(tmp_path / "launcher-user.bat"),
-        str(tmp_path / "QQ.exe"),
     ]
     assert spawned["kwargs"]["cwd"] == str(tmp_path)
     assert "creationflags" not in spawned["kwargs"]
-    assert "env" not in spawned["kwargs"]
+    assert spawned["kwargs"]["env"]["NAPCAT_QQ_PATH"] == str(
+        (tmp_path / "QQ.exe").resolve()
+    )
 
 
 def test_default_launcher_hides_napcat_console_on_windows(
@@ -435,13 +436,12 @@ def test_default_launcher_hides_napcat_console_on_windows(
         "/c",
         "call",
         str(tmp_path / "launcher-user.bat"),
-        str(tmp_path / "QQ.exe"),
     ]
     assert spawned["kwargs"]["cwd"] == str(tmp_path)
     assert spawned["kwargs"]["creationflags"] == 0x08000000
     assert spawned["kwargs"]["stdin"] is bridge.subprocess.DEVNULL
-    assert spawned["kwargs"]["stdout"] is bridge.subprocess.DEVNULL
-    assert spawned["kwargs"]["stderr"] is bridge.subprocess.DEVNULL
+    assert spawned["kwargs"]["stdout"] is bridge.subprocess.PIPE
+    assert spawned["kwargs"]["stderr"] is bridge.subprocess.PIPE
 
 
 def test_default_launcher_rejects_immediate_batch_failure(
@@ -478,7 +478,8 @@ def test_launcher_command_runs_batch_from_portable_directory_with_spaces(
     qq_path.write_text("fictional", encoding="utf-8")
     launcher.write_text(
         "@echo off\n"
-        '> "%~dp0result.txt" echo QQ=%~1\n'
+        '> "%~dp0result.txt" echo QQ=%NAPCAT_QQ_PATH%\n'
+        '>> "%~dp0result.txt" echo ARG=%~1\n'
         '>> "%~dp0result.txt" echo CWD=%CD%\n'
         "exit /b 0\n",
         encoding="utf-8",
@@ -489,7 +490,38 @@ def test_launcher_command_runs_batch_from_portable_directory_with_spaces(
     assert process.wait(timeout=5) == 0
     result = (runtime / "result.txt").read_text(encoding="utf-8")
     assert f"QQ={qq_path}" in result
+    assert "ARG=" in result
+    assert str(qq_path) not in result.split("ARG=", 1)[1]
     assert f"CWD={runtime}" in result
+
+
+def test_default_launcher_logs_completed_stdout_and_stderr(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    bridge = _bridge_module()
+    config = _runtime_config(tmp_path)
+
+    class _CompletedProcess(_FakeProcess):
+        def poll(self):
+            return 0
+
+        def communicate(self):
+            return ("launcher output", "launcher warning")
+
+    monkeypatch.setattr(
+        bridge.subprocess,
+        "Popen",
+        lambda args, **kwargs: _CompletedProcess(pid=4247),
+    )
+
+    with caplog.at_level("INFO", logger="qq_chat_analyzer.desktop.qq_auth_bridge"):
+        bridge.default_auth_window_launcher(config)()
+
+    assert "returncode=0" in caplog.text
+    assert "stdout=launcher output" in caplog.text
+    assert "stderr=launcher warning" in caplog.text
 
 
 def test_default_launcher_logs_the_actual_command(
@@ -582,16 +614,18 @@ def test_default_launcher_prefers_the_configured_qq_path(
 
     def _fake_popen(args, **kwargs):
         spawned["args"] = list(args)
+        spawned["kwargs"] = kwargs
         return _FakeProcess(pid=4244)
 
     monkeypatch.setattr(bridge.subprocess, "Popen", _fake_popen)
 
     bridge.default_auth_window_launcher(config)()
 
-    assert spawned["args"][-2:] == [
-        str(tmp_path / "launcher-user.bat"),
-        str(configured),
-    ]
+    assert spawned["args"][-1] == str(tmp_path / "launcher-user.bat")
+    assert str(configured) not in spawned["args"]
+    assert spawned["kwargs"]["env"]["NAPCAT_QQ_PATH"] == str(
+        configured.resolve()
+    )
 
 
 def test_find_qq_script_hides_powershell_console_on_windows(

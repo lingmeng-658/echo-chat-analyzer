@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -334,7 +335,6 @@ def _launch_auth_window(
         "/c",
         "call",
         str(launcher),
-        str(qq_path),
     ]
     _LOGGER.info(
         "[qq auth] launch command=%s cwd=%s qq_path=%s",
@@ -344,9 +344,16 @@ def _launch_auth_window(
     )
     launch_options = {
         "cwd": str(runtime_directory),
+        "env": {
+            **os.environ,
+            "NAPCAT_QQ_PATH": str(qq_path.resolve()),
+        },
         "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
     }
     if os.name == "nt":
         launch_options["creationflags"] = subprocess.CREATE_NO_WINDOW
@@ -367,9 +374,44 @@ def _launch_auth_window(
         getattr(process, "pid", None),
         return_code,
     )
+    communicate = getattr(process, "communicate", None)
+    if callable(communicate):
+        if return_code is None:
+            threading.Thread(
+                target=_log_launcher_completion,
+                args=(process,),
+                name="echo-qq-launcher-log",
+                daemon=True,
+            ).start()
+        else:
+            _log_launcher_completion(process)
     if return_code not in (None, 0):
         raise QQAuthWindowUnavailable()
     return process
+
+
+def _log_launcher_completion(process: Any) -> None:
+    """Consume launcher pipes and record its eventual result without blocking."""
+    try:
+        stdout, stderr = process.communicate()
+    except Exception as error:
+        _LOGGER.warning(
+            "[qq auth] launcher output unavailable error=%s",
+            type(error).__name__,
+        )
+        return
+    _LOGGER.info(
+        "[qq auth] launcher completed returncode=%s stdout=%s stderr=%s",
+        getattr(process, "returncode", process.poll()),
+        _safe_launcher_output(stdout),
+        _safe_launcher_output(stderr),
+    )
+
+
+def _safe_launcher_output(value: Any, limit: int = 2000) -> str:
+    """Normalize and bound launcher diagnostics before writing them to logs."""
+    text = str(value or "").strip().replace("\r", " ").replace("\n", " | ")
+    return text[:limit]
 
 
 def _ensure_load_script(runtime_directory: Path) -> None:
