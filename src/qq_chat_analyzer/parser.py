@@ -7,7 +7,15 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+from .legacy_projection import project_legacy_messages
 from .message import ChatMessage
+from .rich_message import (
+    RecallState,
+    ReplyRelation,
+    RichMessage,
+    SenderIdentity,
+    TextContent,
+)
 
 
 SUPPORTED_MESSAGE_TYPES = frozenset({"text", "reply"})
@@ -68,8 +76,13 @@ def _load_jsonl_messages(path: Path) -> list[Any]:
 
 
 def parse_messages(raw_messages: Iterable[Any]) -> list[ChatMessage]:
-    """Normalize supported messages while isolating malformed entries."""
-    parsed_messages: list[ChatMessage] = []
+    """Project normalized QQ rich messages for existing analysis."""
+    return project_legacy_messages(parse_rich_messages(raw_messages))
+
+
+def parse_rich_messages(raw_messages: Iterable[Any]) -> list[RichMessage]:
+    """Normalize supported legacy QQ exports into P0 semantic facts."""
+    parsed_messages: list[RichMessage] = []
 
     try:
         iterator = iter(raw_messages)
@@ -77,14 +90,14 @@ def parse_messages(raw_messages: Iterable[Any]) -> list[ChatMessage]:
         return parsed_messages
 
     for raw_message in iterator:
-        parsed_message = _parse_message(raw_message)
+        parsed_message = _parse_rich_message(raw_message)
         if parsed_message is not None:
             parsed_messages.append(parsed_message)
 
     return parsed_messages
 
 
-def _parse_message(raw_message: Any) -> ChatMessage | None:
+def _parse_rich_message(raw_message: Any) -> RichMessage | None:
     if not isinstance(raw_message, Mapping):
         return None
 
@@ -110,16 +123,36 @@ def _parse_message(raw_message: Any) -> ChatMessage | None:
     if not isinstance(text, str):
         return None
 
-    return ChatMessage(
+    message_id = raw_message.get("messageId") or raw_message.get("id")
+    sender_id = sender_data.get("uid") or sender_data.get("uin")
+    recalled = raw_message.get("recalled")
+    relations: tuple[ReplyRelation, ...] = ()
+    for key in ("replyTo", "quote", "source"):
+        reference = content.get(key)
+        if not isinstance(reference, Mapping):
+            continue
+        target = reference.get("messageId") or reference.get("id")
+        if isinstance(target, (str, int)) and not isinstance(target, bool):
+            relations = (ReplyRelation(target_message_id=str(target)),)
+            break
+    return RichMessage(
+        message_id=(str(message_id) if message_id is not None else None),
+        source="qq",
+        conversation_id=None,
+        sender=SenderIdentity(
+            identity_id=(str(sender_id) if sender_id is not None else None),
+            display_name=_resolve_sender_name(sender_data),
+        ),
         timestamp=timestamp,
-        sender=_resolve_sender_name(sender_data),
         message_type=message_type,
-        text=text,
-        platform="qq",
-        message_id=raw_message.get("messageId") or raw_message.get("id"),
-        sender_id=sender_data.get("uid") or sender_data.get("uin"),
+        contents=(TextContent(text=text),),
+        relations=relations,
+        recall_state=(
+            RecallState(is_recalled=recalled)
+            if isinstance(recalled, bool)
+            else None
+        ),
         is_system=raw_message.get("system", False),
-        recalled=raw_message.get("recalled", False),
     )
 
 

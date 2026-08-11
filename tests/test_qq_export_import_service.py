@@ -34,6 +34,11 @@ from qq_chat_analyzer.qq_chat_exporter_adapter import (
 # --------------------------------------------------------------------- fixtures
 
 
+@pytest.fixture(autouse=True)
+def _isolate_user_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local-app-data"))
+
+
 def _qce_message(
     message_id: str,
     message_type: str = "text",
@@ -313,6 +318,121 @@ def test_export_only_returns_provider_path(tmp_path: Path) -> None:
 
     assert returned == export_path
     assert provider.calls == [("700000001", None, None)]
+
+
+def test_export_only_records_cache_after_provider_export(tmp_path: Path) -> None:
+    export_path = _write_fake_export(tmp_path / "fake_export.json")
+    provider = _StubProvider(export_path)
+    cache_directory = tmp_path / "cache"
+    service = QQExportImportService(
+        provider,
+        cache_directory=cache_directory,
+    )
+    request = QQExportImportRequest(
+        group_code="700000001",
+        start_time=1700000000000,
+        end_time=1800000000000,
+    )
+
+    returned = service.export_only(request)
+
+    assert returned == export_path
+    assert provider.calls == [
+        ("700000001", 1700000000000, 1800000000000)
+    ]
+    metadata = json.loads(
+        (cache_directory / "metadata.json").read_text(encoding="utf-8")
+    )
+    assert len(metadata["entries"]) == 1
+    entry = metadata["entries"][0]
+    assert entry["source"] == "qq"
+    assert entry["conversation_id"] == "700000001"
+    assert entry["export_file_path"] == str(export_path.resolve())
+    assert entry["start_time"] == 1700000000000
+    assert entry["end_time"] == 1800000000000
+    assert entry["format"] == "json"
+    assert isinstance(entry["created_time"], str) and entry["created_time"]
+    assert entry["message_count"] == 4
+
+
+def test_export_only_reuses_matching_existing_cache(tmp_path: Path) -> None:
+    export_path = _write_fake_export(tmp_path / "fake_export.json")
+    cache_directory = tmp_path / "cache"
+    request = QQExportImportRequest(
+        group_code="700000001",
+        start_time=1700000000000,
+        end_time=1800000000000,
+    )
+    first_provider = _StubProvider(export_path)
+    QQExportImportService(
+        first_provider,
+        cache_directory=cache_directory,
+    ).export_only(request)
+    second_provider = _StubProvider(tmp_path / "must-not-be-used.json")
+
+    returned = QQExportImportService(
+        second_provider,
+        cache_directory=cache_directory,
+    ).export_only(request)
+
+    assert returned == export_path
+    assert second_provider.calls == []
+
+
+def test_export_only_reexports_when_cached_file_is_missing(tmp_path: Path) -> None:
+    old_export = _write_fake_export(tmp_path / "old_export.json")
+    new_export = _write_fake_export(tmp_path / "new_export.json")
+    cache_directory = tmp_path / "cache"
+    request = QQExportImportRequest(group_code="700000001")
+    QQExportImportService(
+        _StubProvider(old_export),
+        cache_directory=cache_directory,
+    ).export_only(request)
+    old_export.unlink()
+    provider = _StubProvider(new_export)
+
+    returned = QQExportImportService(
+        provider,
+        cache_directory=cache_directory,
+    ).export_only(request)
+
+    assert returned == new_export
+    assert provider.calls == [("700000001", None, None)]
+
+
+def test_export_only_reexports_when_cache_conditions_differ(
+    tmp_path: Path,
+) -> None:
+    old_export = _write_fake_export(tmp_path / "old_export.json")
+    new_export = _write_fake_export(tmp_path / "new_export.json")
+    cache_directory = tmp_path / "cache"
+    QQExportImportService(
+        _StubProvider(old_export),
+        cache_directory=cache_directory,
+    ).export_only(
+        QQExportImportRequest(
+            group_code="700000001",
+            start_time=1700000000000,
+            end_time=1800000000000,
+        )
+    )
+    provider = _StubProvider(new_export)
+
+    returned = QQExportImportService(
+        provider,
+        cache_directory=cache_directory,
+    ).export_only(
+        QQExportImportRequest(
+            group_code="700000001",
+            start_time=1700000000001,
+            end_time=1800000000000,
+        )
+    )
+
+    assert returned == new_export
+    assert provider.calls == [
+        ("700000001", 1700000000001, 1800000000000)
+    ]
 
 
 def test_export_only_accepts_string_path(tmp_path: Path) -> None:

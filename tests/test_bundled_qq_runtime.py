@@ -99,11 +99,71 @@ def test_config_accepts_static_directory_and_bridge_url(tmp_path: Path) -> None:
     assert config.bridge_url == "http://127.0.0.1:40654"
 
 
+def test_qce_server_hides_console_on_windows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _runtime_module()
+    executable = tmp_path / "qce-server.exe"
+    executable.write_text("fake", encoding="utf-8")
+    runtime = _make_runtime(
+        executable=executable,
+        working_directory=tmp_path,
+    )
+    calls = []
+
+    def _popen(args, **kwargs):
+        calls.append((args, kwargs))
+        return _FakePopen(args)
+
+    monkeypatch.setattr(module.os, "name", "nt")
+    monkeypatch.setattr(
+        module.subprocess,
+        "CREATE_NO_WINDOW",
+        0x08000000,
+        raising=False,
+    )
+    monkeypatch.setattr(module.subprocess, "Popen", _popen)
+
+    info = runtime.start()
+
+    assert calls[0][0] == [str(executable)]
+    assert calls[0][1]["cwd"] == str(tmp_path)
+    assert calls[0][1]["creationflags"] == 0x08000000
+    assert info.pid == 9001
+    assert info.owned_process is True
+
+
+def test_qce_server_omits_windows_creation_flags_on_non_windows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _runtime_module()
+    executable = tmp_path / "qce-server.exe"
+    executable.write_text("fake", encoding="utf-8")
+    runtime = _make_runtime(
+        executable=executable,
+        working_directory=tmp_path,
+    )
+    calls = []
+
+    def _popen(args, **kwargs):
+        calls.append((args, kwargs))
+        return _FakePopen(args)
+
+    monkeypatch.setattr(module.os, "name", "posix")
+    monkeypatch.setattr(module.subprocess, "Popen", _popen)
+
+    runtime.start()
+
+    assert "creationflags" not in calls[0][1]
+
+
 def _make_runtime(
     *,
     executable: Path,
     working_directory: Path,
-    health: bool = True,
+    health: bool = False,
     health_error: Exception | None = None,
     ready_timeout: float = 5.0,
     poll_interval: float = 0.1,
@@ -205,7 +265,30 @@ def test_start_spawns_the_process_and_returns_info(tmp_path: Path) -> None:
     assert runtime.is_installed() is True
     assert info.pid == 9001
     assert info.version == "9.9.9"
+    assert info.owned_process is True
     assert Path(fake.cwd) == tmp_path
+    assert runtime.running() is True
+
+
+def test_start_reuses_healthy_external_qce_without_spawning(
+    tmp_path: Path,
+) -> None:
+    module = _runtime_module()
+    executable = tmp_path / "qce.exe"
+    executable.write_text("fake", encoding="utf-8")
+    runtime = _make_runtime(
+        executable=executable,
+        working_directory=tmp_path,
+        health=True,
+    )
+
+    with mock.patch.object(module.subprocess, "Popen") as popen:
+        info = runtime.start()
+
+    popen.assert_not_called()
+    assert info.pid is None
+    assert info.version == "9.9.9"
+    assert info.owned_process is False
     assert runtime.running() is True
 
 
@@ -266,6 +349,24 @@ def test_stop_without_process_is_a_noop(tmp_path: Path) -> None:
     runtime.stop()
 
     assert runtime.running() is False
+
+
+def test_stop_does_not_terminate_healthy_external_qce(tmp_path: Path) -> None:
+    module = _runtime_module()
+    executable = tmp_path / "qce.exe"
+    executable.write_text("fake", encoding="utf-8")
+    runtime = _make_runtime(
+        executable=executable,
+        working_directory=tmp_path,
+        health=True,
+    )
+
+    with mock.patch.object(module.subprocess, "Popen") as popen:
+        runtime.start()
+        runtime.stop()
+
+    popen.assert_not_called()
+    assert runtime.get_info().owned_process is False
 
 
 # -------------------------------------------------------- process lifecycle

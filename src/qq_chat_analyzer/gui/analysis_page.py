@@ -198,6 +198,7 @@ class AnalysisPage(QWidget):
         self._executor = executor or submit
         self._selected_source: ChatSource | None = None
         self._selected_file: Path | None = None
+        self._analysis_running = False
         self._source_buttons: dict[ChatSource, QPushButton] = {}
         self._wechat_connect_pending = False
         self._qq_connect_in_flight = False
@@ -344,6 +345,8 @@ class AnalysisPage(QWidget):
         self._status_label.setVisible(False)
 
         for info in self._facade.list_sources():
+            if info.source == ChatSource.LOCAL_FILE:
+                continue
             button = QPushButton(info.display_name)
             button.setCheckable(True)
             button.setEnabled(bool(info.available))
@@ -1077,6 +1080,8 @@ class AnalysisPage(QWidget):
 
     def start_analysis(self) -> None:
         """Dispatch to the facade, choosing file or session mode."""
+        if self._analysis_running:
+            return
         source = self._selected_source
         if source is None:
             return
@@ -1107,6 +1112,10 @@ class AnalysisPage(QWidget):
         self._set_busy(True)
         self.analysis_started.emit()
         self.status_changed.emit(_ANALYZING)
+        QTimer.singleShot(0, lambda: self._submit_analysis(operation))
+
+    def _submit_analysis(self, operation: Any) -> None:
+        """Start expensive work only after Qt can paint the processing page."""
         self._executor(
             operation,
             on_success=self._handle_success,
@@ -1122,6 +1131,8 @@ class AnalysisPage(QWidget):
         self.analysis_failed.emit(code, message)
 
     def _set_busy(self, busy: bool) -> None:
+        self._analysis_running = busy
+        self.setEnabled(not busy)
         self._analyze_button.setEnabled(not busy)
         if not busy:
             self._update_analyze_enabled()

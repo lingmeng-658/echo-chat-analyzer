@@ -40,6 +40,7 @@ class RuntimeInfo:
 
     pid: int | None = None
     version: str | None = None
+    owned_process: bool = False
 
 
 @runtime_checkable
@@ -139,7 +140,12 @@ class BundledQQRuntime:
         self._poll_interval = poll_interval
         self._monotonic = monotonic or time.monotonic
         self._process: subprocess.Popen | None = None
-        self._info = RuntimeInfo(pid=None, version=config.version)
+        self._external_service = False
+        self._info = RuntimeInfo(
+            pid=None,
+            version=config.version,
+            owned_process=False,
+        )
 
     def is_installed(self) -> bool:
         return self._config.executable_path.is_file()
@@ -147,7 +153,7 @@ class BundledQQRuntime:
     def running(self) -> bool:
         process = self._process
         if process is None:
-            return False
+            return self._external_service and self._service_is_healthy()
         return process.poll() is None
 
     def start(self) -> RuntimeInfo:
@@ -155,18 +161,34 @@ class BundledQQRuntime:
             raise QQChatRuntimeError(
                 "\u672a\u627e\u5230\u90e8\u7f72\u7684 QQ \u8fd0\u884c\u73af\u5883\u3002"
             )
+        if self._service_is_healthy():
+            self._process = None
+            self._external_service = True
+            self._info = RuntimeInfo(
+                pid=None,
+                version=self._config.version,
+                owned_process=False,
+            )
+            return self._info
+        launch_options = {
+            "cwd": str(self._config.working_directory),
+            "env": os.environ.copy(),
+        }
+        if os.name == "nt":
+            launch_options["creationflags"] = subprocess.CREATE_NO_WINDOW
         try:
             process = subprocess.Popen(
                 [str(self._config.executable_path)],
-                cwd=str(self._config.working_directory),
-                env=os.environ.copy(),
+                **launch_options,
             )
         except OSError as error:
             raise QQChatRuntimeError() from error
         self._process = process
+        self._external_service = False
         self._info = RuntimeInfo(
             pid=process.pid,
             version=self._config.version,
+            owned_process=True,
         )
         return self._info
 
@@ -182,13 +204,17 @@ class BundledQQRuntime:
                 process.kill()
                 process.wait(timeout=5)
         self._process = None
-        self._info = RuntimeInfo(pid=None, version=self._config.version)
+        self._info = RuntimeInfo(
+            pid=None,
+            version=self._config.version,
+            owned_process=False,
+        )
 
     def get_info(self) -> RuntimeInfo:
         return self._info
 
     def wait_ready(self, timeout: float | None = None) -> None:
-        if self._process is None:
+        if self._process is None and not self._external_service:
             raise QQChatRuntimeError(
                 "\u8fd0\u884c\u73af\u5883\u5c1a\u672a\u542f\u52a8\uff0c"
                 "\u65e0\u6cd5\u68c0\u6d4b\u5c31\u7eea\u72b6\u6001\u3002"
@@ -201,7 +227,7 @@ class BundledQQRuntime:
                     return
             except Exception:
                 pass
-            if self._process.poll() is not None:
+            if self._process is not None and self._process.poll() is not None:
                 raise QQChatRuntimeError(
                     "\u8fd0\u884c\u73af\u5883\u8fdb\u7a0b\u5df2\u9000\u51fa\uff0c"
                     "\u65e0\u6cd5\u5c31\u7eea\u3002"
@@ -212,6 +238,12 @@ class BundledQQRuntime:
                     "\u670d\u52a1\u672a\u5c31\u7eea\u3002"
                 )
             time.sleep(self._poll_interval)
+
+    def _service_is_healthy(self) -> bool:
+        try:
+            return bool(self._health_checker(self._config.base_url))
+        except Exception:
+            return False
 
 
 __all__ = [

@@ -84,6 +84,7 @@ class QQAuthBridge:
         self._connection_service = connection_service
         self._manager = manager
         self._window_launcher = window_launcher
+        self._auth_launch_started = False
         self._process_registry = (
             process_registry or default_qq_process_registry()
         )
@@ -106,6 +107,8 @@ class QQAuthBridge:
         )
         if snapshot.state is ConnectionState.CONNECTED:
             return snapshot
+        if snapshot.state is not ConnectionState.WAITING_AUTH:
+            self._auth_launch_started = False
         if self._setup_service is None:
             return self._error_snapshot(MESSAGE_ERROR, HINT_RETRY)
 
@@ -165,9 +168,13 @@ class QQAuthBridge:
         return self._manager
 
     def _launch_window(self) -> None:
+        if self._auth_launch_started:
+            _LOGGER.info("[qq auth] launcher already started; reusing")
+            return
         if self._window_launcher is not None:
             _LOGGER.info("[qq auth] using injected window launcher")
             self._window_launcher()
+            self._auth_launch_started = True
             return
         config = self._setup_service.get_environment_config()
         _LOGGER.info(
@@ -176,6 +183,7 @@ class QQAuthBridge:
         )
         launcher = default_auth_window_launcher(config)
         process = launcher()
+        self._auth_launch_started = True
         pid = getattr(process, "pid", None)
         if pid is not None:
             self._process_registry.record(pid)
@@ -198,17 +206,15 @@ def default_auth_window_launcher(config: Any) -> Callable[[], None]:
     account number is assumed or passed.
     """
     runtime_directory = _runtime_directory(config)
-    boot_main = runtime_directory / "NapCatWinBootMain.exe"
-    hook_dll = runtime_directory / "NapCatWinBootHook.dll"
+    launcher = runtime_directory / "launcher-user.bat"
     qq_path = resolve_qq_install_path(config, runtime_directory)
     _LOGGER.info(
         "[qq auth] runtime environment runtime_directory=%s exists=%s "
-        "boot_main=%s boot_main_found=%s hook_found=%s",
+        "launcher=%s launcher_found=%s",
         runtime_directory,
         runtime_directory.is_dir(),
-        boot_main,
-        boot_main.is_file(),
-        hook_dll.is_file(),
+        launcher,
+        launcher.is_file(),
     )
     _LOGGER.info(
         "[qq auth] qq install path=%s found=%s",
@@ -216,17 +222,14 @@ def default_auth_window_launcher(config: Any) -> Callable[[], None]:
         qq_path is not None and qq_path.is_file(),
     )
 
-    if not boot_main.is_file():
-        raise QQAuthWindowUnavailable(MESSAGE_WINDOW_MISSING)
-    if not hook_dll.is_file():
+    if not launcher.is_file():
         raise QQAuthWindowUnavailable(MESSAGE_WINDOW_MISSING)
     if qq_path is None or not qq_path.is_file():
         raise QQAuthWindowUnavailable(MESSAGE_QQ_MISSING)
 
     return lambda: _launch_auth_window(
         runtime_directory,
-        boot_main,
-        hook_dll,
+        launcher,
         qq_path,
     )
 
@@ -286,6 +289,14 @@ def _read_saved_qq_path(path: Path) -> Path | None:
 
 
 def _detect_qq_path_with_script(script: Path) -> Path | None:
+    options = {
+        "capture_output": True,
+        "text": True,
+        "timeout": 10,
+        "check": False,
+    }
+    if os.name == "nt":
+        options["creationflags"] = subprocess.CREATE_NO_WINDOW
     try:
         completed = subprocess.run(
             [
@@ -296,10 +307,7 @@ def _detect_qq_path_with_script(script: Path) -> Path | None:
                 "-File",
                 str(script),
             ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
+            **options,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -315,32 +323,37 @@ def _detect_qq_path_with_script(script: Path) -> Path | None:
 
 def _launch_auth_window(
     runtime_directory: Path,
-    boot_main: Path,
-    hook_dll: Path,
+    launcher: Path,
     qq_path: Path,
 ) -> Any:
     """Open the runtime login window once, without waiting for login."""
-    _ensure_load_script(runtime_directory)
-    (runtime_directory / "logs").mkdir(parents=True, exist_ok=True)
-    env = os.environ.copy()
-    env["NAPCAT_LOAD_PATH"] = str(runtime_directory / "loadNapCat.js")
-    env["NAPCAT_PATCH_PACKAGE"] = str(runtime_directory / "qqnt.json")
-    env["NAPCAT_MAIN_PATH"] = str(runtime_directory / "napcat.mjs")
-    env["QCE_LOG_DIR"] = str(runtime_directory / "logs")
-    env["QCE_LOG_FILE"] = str(runtime_directory / "logs" / "qce-runtime.log")
-
-    command = [str(boot_main), str(qq_path), str(hook_dll)]
+    command = [
+        "cmd.exe",
+        "/d",
+        "/s",
+        "/c",
+        "call",
+        str(launcher),
+        str(qq_path),
+    ]
     _LOGGER.info(
-        "[qq auth] launch command=%s cwd=%s env_keys=%s",
+        "[qq auth] launch command=%s cwd=%s qq_path=%s",
         command,
         runtime_directory,
-        sorted(env.keys()),
+        qq_path,
     )
+    launch_options = {
+        "cwd": str(runtime_directory),
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if os.name == "nt":
+        launch_options["creationflags"] = subprocess.CREATE_NO_WINDOW
     try:
         process = subprocess.Popen(
             command,
-            cwd=str(runtime_directory),
-            env=env,
+            **launch_options,
         )
     except OSError as error:
         _LOGGER.warning(
@@ -348,11 +361,14 @@ def _launch_auth_window(
             type(error).__name__,
         )
         raise QQAuthWindowUnavailable() from error
+    return_code = process.poll()
     _LOGGER.info(
-        "[qq auth] launch spawned pid=%s poll=%s",
+        "[qq auth] launch result pid=%s returncode=%s",
         getattr(process, "pid", None),
-        process.poll(),
+        return_code,
     )
+    if return_code not in (None, 0):
+        raise QQAuthWindowUnavailable()
     return process
 
 

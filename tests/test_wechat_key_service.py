@@ -255,6 +255,55 @@ def test_helper_default_timeout_is_600_seconds(tmp_path: Path):
     assert options["timeout"] == 605.0
 
 
+def test_helper_hides_node_console_on_windows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _module()
+    calls = []
+
+    def runner(command, **options):
+        calls.append((command, options))
+        return _Completed(stdout="a" * 64)
+
+    monkeypatch.setattr(module.os, "name", "nt")
+    monkeypatch.setattr(
+        module.subprocess,
+        "CREATE_NO_WINDOW",
+        0x08000000,
+        raising=False,
+    )
+    _helper_service(tmp_path, runner=runner).acquire()
+
+    command, options = calls[0]
+    assert command[0] == "node"
+    assert command[1] == str(tmp_path / "wx_key_helper.cjs")
+    assert options["creationflags"] == 0x08000000
+    assert options["cwd"] == str(tmp_path)
+    assert options["env"]["NODE_PATH"] == str(tmp_path / "node_modules")
+    assert options["timeout"] == 605.0
+
+
+def test_helper_omits_windows_creation_flags_on_non_windows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _module()
+    calls = []
+
+    def runner(command, **options):
+        calls.append((command, options))
+        return _Completed(stdout="a" * 64)
+
+    service = _helper_service(tmp_path, runner=runner)
+    monkeypatch.setattr(module.os, "name", "posix")
+    service.acquire()
+
+    command, options = calls[0]
+    assert command[0] == "node"
+    assert "creationflags" not in options
+
+
 def test_legacy_multiple_pids_each_get_independent_timeout(tmp_path: Path):
     module = _module()
     api = _FakeHookApi(key=None)

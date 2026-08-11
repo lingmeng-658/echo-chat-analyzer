@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from .builders import DashboardBuilder, build_dashboard_view
+from .builders import (
+    DashboardBuilder,
+    EchoReportBuilder,
+    build_dashboard_view,
+    build_echo_report_view,
+)
 from .formatters import (
     format_active_period,
     format_average,
@@ -13,6 +18,11 @@ from .formatters import (
     format_percent,
     format_weekday,
 )
+from .echo_serializer import (
+    ECHO_REPORT_SCHEMA_VERSION,
+    echo_report_to_dict,
+    export_echo_report_json,
+)
 from .models import (
     ChartData,
     ChartKind,
@@ -20,6 +30,8 @@ from .models import (
     ChartSeries,
     ConversationCard,
     DashboardView,
+    EchoMemberCard,
+    EchoReportView,
     MetricCard,
     UserCard,
 )
@@ -33,9 +45,16 @@ __all__ = [
     "ConversationCard",
     "DashboardBuilder",
     "DashboardView",
+    "EchoMemberCard",
+    "EchoReportBuilder",
+    "EchoReportView",
+    "ECHO_REPORT_SCHEMA_VERSION",
     "MetricCard",
     "UserCard",
     "build_dashboard_view",
+    "build_echo_report_view",
+    "echo_report_to_dict",
+    "export_echo_report_json",
     "format_active_period",
     "format_average",
     "format_count",

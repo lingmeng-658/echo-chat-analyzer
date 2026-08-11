@@ -168,11 +168,82 @@ def test_presentation_models_are_immutable_dataclasses() -> None:
         presentation.ChartSeries,
         presentation.UserCard,
         presentation.ConversationCard,
+        presentation.EchoReportView,
+        presentation.EchoMemberCard,
     ):
         assert dataclasses.is_dataclass(model_type)
 
     card = presentation.MetricCard(key="k", title="t", value="1")
     assert not hasattr(card, "__dict__")
+
+
+def test_echo_report_builder_reuses_reports_and_highlights_explicit_viewer() -> None:
+    presentation = _presentation()
+
+    view = presentation.EchoReportBuilder().build(
+        _full_reports(),
+        viewer_speaker_key="Fictional-Bob",
+    )
+
+    assert view.has_data is True
+    assert view.total_message_count == 3
+    assert view.participant_count == 2
+    assert len(view.hourly_activity) == 24
+    assert len(view.weekday_activity) == 7
+    assert [card.speaker_key for card in view.members] == [
+        "Fictional-Alice",
+        "Fictional-Bob",
+    ]
+    alice, bob = view.members
+    assert alice.is_viewer is False
+    assert bob.is_viewer is True
+
+
+def test_echo_report_builder_never_guesses_viewer_identity() -> None:
+    presentation = _presentation()
+
+    view = presentation.build_echo_report_view(_full_reports())
+
+    assert all(not member.is_viewer for member in view.members)
+
+
+def test_echo_member_card_carries_member_activity_without_recalculation() -> None:
+    presentation = _presentation()
+    models = _analysis_models()
+    profile = models.UserProfile(
+        speaker="Fictional-Alice",
+        message_count=2,
+        message_share_percent=100.0,
+        average_length=4.0,
+        max_length=5,
+        hourly_counts=_hourly({9: 2}),
+        weekday_counts=_weekday({0: 2}),
+    )
+    reports = models.AnalysisReports(
+        activity=_activity_report(total=2, dated=2),
+        user_profiles=models.UserProfileReport(
+            total_message_count=2,
+            speaker_count=1,
+            profiles=(profile,),
+        ),
+        conversations=_conversation_report(conversation_count=1),
+    )
+
+    card = presentation.build_echo_report_view(reports).members[0]
+
+    assert card.hourly_activity[9].value == 2.0
+    assert card.weekday_activity[0].value == 2.0
+
+
+def test_echo_report_handles_missing_reports() -> None:
+    presentation = _presentation()
+
+    view = presentation.build_echo_report_view(None, viewer_speaker_key="nobody")
+
+    assert view.has_data is False
+    assert view.total_message_count == 0
+    assert view.participant_count == 0
+    assert view.members == ()
 
 
 def test_chart_kind_supports_every_required_shape() -> None:

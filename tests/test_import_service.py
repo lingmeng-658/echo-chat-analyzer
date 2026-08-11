@@ -108,6 +108,7 @@ def _write_qce_json(path: Path) -> None:
             "version": "0.0.0-test",
         },
         "chatInfo": {
+            "groupCode": "fictional-group-9001",
             "name": "Fictional Group",
             "type": "group",
             "participantCount": 3,
@@ -266,6 +267,10 @@ def test_qce_json_import_returns_result_messages_and_warning(
         "Hello from QCE",
         "Reply from QCE",
     ]
+    assert all(
+        message.conversation_id == "fictional-group-9001"
+        for message in outcome.messages
+    )
 
 
 def test_qce_json_auto_detection_without_platform(tmp_path: Path) -> None:

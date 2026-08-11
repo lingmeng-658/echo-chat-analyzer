@@ -26,6 +26,17 @@ WECHAT_WX_KEY_DLL_FILE_NAME = "wx_key.dll"
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+class RuntimeResourceError(Exception):
+    """Raised when the packaged external runtime directory is unavailable."""
+
+    code = "runtime_directory_missing"
+    public_message = "运行组件不完整，请重新下载并解压完整的 Echo 安装包。"
+
+    def __init__(self) -> None:
+        self.public_message = type(self).public_message
+        super().__init__(self.public_message)
+
+
 def resources_dir() -> Path:
     """Return the directory containing bundled read-only resources."""
     meipass = getattr(sys, "_MEIPASS", None)
@@ -40,8 +51,23 @@ def resource_path(relative_path: str | Path) -> Path:
 
 
 def bundled_runtime_dir() -> Path:
-    """Return the directory holding bundled external chat runtimes."""
-    return resources_dir() / RUNTIME_DIR_NAME
+    """Return the stable directory holding external chat runtimes.
+
+    PyInstaller-internal resources may live under ``sys._MEIPASS``, but QQ
+    and WeChat launch child processes that require a stable on-disk location.
+    Frozen builds therefore resolve them beside the executable.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / RUNTIME_DIR_NAME
+    return _PROJECT_ROOT / RUNTIME_DIR_NAME
+
+
+def require_bundled_runtime_dir() -> Path:
+    """Return the external runtime directory or raise a user-safe error."""
+    directory = bundled_runtime_dir()
+    if not directory.is_dir():
+        raise RuntimeResourceError()
+    return directory
 
 
 def default_qq_runtime_directory() -> Path:
@@ -110,6 +136,7 @@ def bundled_data_files(
 
 __all__ = [
     "APP_DATA_DIR_NAME",
+    "RuntimeResourceError",
     "bundled_data_files",
     "bundled_runtime_dir",
     "default_qq_napcat_directory",
@@ -121,6 +148,7 @@ __all__ = [
     "default_wechat_wcdb_dll_path",
     "default_wechat_wx_key_dll_path",
     "resource_path",
+    "require_bundled_runtime_dir",
     "resources_dir",
     "user_data_dir",
 ]

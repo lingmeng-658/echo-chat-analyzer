@@ -519,6 +519,9 @@ def _run_subprocess(
     timeout: int,
     environment: Mapping[str, str],
 ) -> subprocess.CompletedProcess:
+    process_options: dict[str, Any] = {}
+    if os.name == "nt":
+        process_options["creationflags"] = subprocess.CREATE_NO_WINDOW
     return subprocess.run(  # noqa: S603 - resolved executable, list form, no shell
         list(command),
         capture_output=True,
@@ -529,4 +532,5 @@ def _run_subprocess(
         shell=False,
         check=False,
         env=dict(environment),
+        **process_options,
     )

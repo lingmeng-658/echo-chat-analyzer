@@ -100,3 +100,37 @@ class DashboardView:
     user_cards: tuple[UserCard, ...] = ()
     conversation_cards: tuple[ConversationCard, ...] = ()
     empty_description: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class EchoMemberCard:
+    """Display-ready Echo profile for one conversation member."""
+
+    speaker_key: str
+    display_name: str
+    is_viewer: bool
+    message_count: int
+    message_share_percent: float
+    average_length: float
+    max_length: int
+    active_period: str
+    hourly_activity: tuple[ChartPoint, ...] = ()
+    weekday_activity: tuple[ChartPoint, ...] = ()
+    top_words: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class EchoReportView:
+    """Display-only payload for Echo Report v0.1 Phase A."""
+
+    title: str
+    has_data: bool = False
+    conversation_kind: str = "unknown"
+    conversation_name: str = ""
+    time_span: str = ""
+    total_message_count: int = 0
+    participant_count: int = 0
+    hourly_activity: tuple[ChartPoint, ...] = ()
+    weekday_activity: tuple[ChartPoint, ...] = ()
+    members: tuple[EchoMemberCard, ...] = ()
+    empty_description: str = ""

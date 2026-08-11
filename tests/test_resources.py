@@ -141,11 +141,18 @@ def test_default_wechat_runtime_paths(
     assert module.default_wechat_wx_key_dll_path() == root / "wx_key.dll"
 
 
-def test_bundled_runtime_dir_points_at_meipass_runtime(
+def test_bundled_runtime_dir_points_at_executable_sibling_when_frozen(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     module = _fresh_module(monkeypatch)
-    fake_bundle = PROJECT_ROOT / ".tmp-runtime-bundle"
+    executable_directory = tmp_path / "Echo"
+    executable_directory.mkdir()
+    executable = executable_directory / "Echo.exe"
+    executable.write_text("fake", encoding="utf-8")
+    fake_bundle = tmp_path / "_MEIPASS"
+    monkeypatch.setattr(module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(module.sys, "executable", str(executable))
     monkeypatch.setattr(
         module.sys,
         "_MEIPASS",
@@ -153,10 +160,29 @@ def test_bundled_runtime_dir_points_at_meipass_runtime(
         raising=False,
     )
 
-    assert module.bundled_runtime_dir() == fake_bundle / "runtime"
+    assert module.bundled_runtime_dir() == executable_directory / "runtime"
     assert module.default_wechat_wcdb_cli_path() == (
-        fake_bundle / "runtime" / "wechat" / "wcdb_cli.exe"
+        executable_directory / "runtime" / "wechat" / "wcdb_cli.exe"
     )
     assert module.default_wechat_wcdb_dll_path() == (
-        fake_bundle / "runtime" / "wechat" / "WCDB.dll"
+        executable_directory / "runtime" / "wechat" / "WCDB.dll"
     )
+
+
+def test_require_bundled_runtime_dir_reports_missing_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _fresh_module(monkeypatch)
+    executable = tmp_path / "Echo" / "Echo.exe"
+    executable.parent.mkdir()
+    executable.write_text("fake", encoding="utf-8")
+    monkeypatch.setattr(module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(module.sys, "executable", str(executable))
+
+    with pytest.raises(module.RuntimeResourceError) as excinfo:
+        module.require_bundled_runtime_dir()
+
+    assert excinfo.value.code == "runtime_directory_missing"
+    assert excinfo.value.public_message != ""
+    assert str(executable.parent) not in excinfo.value.public_message

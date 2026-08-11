@@ -20,6 +20,8 @@ sys.path.insert(0, str(SRC_ROOT))
 from qq_chat_analyzer import wechat_db_adapter
 from qq_chat_analyzer.application import ImportRequest, ImportService
 from qq_chat_analyzer.application.import_service import WECHAT_DB_FORMAT
+from qq_chat_analyzer.legacy_projection import project_legacy_message
+from qq_chat_analyzer.rich_message import TextContent
 from qq_chat_analyzer.providers.wechat_database_provider import (
     DatabaseNotFound,
     KeyUnavailable,
@@ -30,6 +32,7 @@ from qq_chat_analyzer.providers.wechat_database_provider import (
     WeChatDatabaseProvider,
     message_table_name,
 )
+from qq_chat_analyzer.providers import wechat_database_provider
 
 
 TEXT_LOCAL_TYPE = 1
@@ -75,6 +78,52 @@ class _FakeCompleted:
         self.stderr = stderr
 
 
+def test_wcdb_subprocess_hides_console_on_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    def run(command, **options):
+        calls.append((command, options))
+        return _FakeCompleted()
+
+    monkeypatch.setattr(wechat_database_provider.os, "name", "nt")
+    monkeypatch.setattr(
+        wechat_database_provider.subprocess,
+        "CREATE_NO_WINDOW",
+        0x08000000,
+        raising=False,
+    )
+    monkeypatch.setattr(wechat_database_provider.subprocess, "run", run)
+
+    command = ["wcdb_cli.exe", "--wcdb", "WCDB.dll"]
+    wechat_database_provider._run_subprocess(command, 30, {"WX_DB_KEY": "x"})
+
+    assert calls[0][0] == command
+    assert calls[0][1]["creationflags"] == 0x08000000
+    assert calls[0][1]["timeout"] == 30
+    assert calls[0][1]["env"] == {"WX_DB_KEY": "x"}
+
+
+def test_wcdb_subprocess_omits_windows_creation_flags_on_non_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    def run(command, **options):
+        calls.append((command, options))
+        return _FakeCompleted()
+
+    monkeypatch.setattr(wechat_database_provider.os, "name", "posix")
+    monkeypatch.setattr(wechat_database_provider.subprocess, "run", run)
+
+    command = ["wcdb_cli.exe", "--wcdb", "WCDB.dll"]
+    wechat_database_provider._run_subprocess(command, 30, {"WX_DB_KEY": "x"})
+
+    assert calls[0][0] == command
+    assert "creationflags" not in calls[0][1]
+
+
 def _helper_result(rows: list[object], columns: list[str] | None = None) -> str:
     return json.dumps(
         {
@@ -112,6 +161,39 @@ def _provider(tmp_path: Path, runner) -> WeChatDatabaseProvider:
 
 
 # ------------------------------------------------------------------ adapter
+
+
+def test_text_row_becomes_rich_message_then_projects_to_legacy(
+    tmp_path: Path,
+) -> None:
+    export = tmp_path / "session.json"
+    row = _db_row()
+    row["sender_name"] = "Fictional Alice"
+    _write_db_export(export, [row])
+
+    rich_messages = wechat_db_adapter.parse_rich_messages(
+        wechat_db_adapter.load_messages(export)
+    )
+
+    assert len(rich_messages) == 1
+    rich_message = rich_messages[0]
+    assert rich_message.source == "wechat"
+    assert rich_message.message_id == "900001"
+    assert rich_message.conversation_id == FICTIONAL_SESSION
+    assert rich_message.sender.identity_id == "wxid_fictional_sender"
+    assert rich_message.sender.display_name == "Fictional Alice"
+    assert rich_message.timestamp == 1753412807
+    assert rich_message.message_type == "text"
+    assert rich_message.contents == (
+        TextContent(text="\u4f60\u597d\uff0c\u4eca\u5929\u5929\u6c14\u4e0d\u9519"),
+    )
+    assert rich_message.relations == ()
+    assert rich_message.recall_state is None
+
+    legacy_message = project_legacy_message(rich_message)
+    assert legacy_message.sender == "Fictional Alice"
+    assert legacy_message.text == "\u4f60\u597d\uff0c\u4eca\u5929\u5929\u6c14\u4e0d\u9519"
+    assert legacy_message.timestamp == 1753412807
 
 
 def test_text_row_becomes_chat_message_with_mapped_fields(tmp_path: Path) -> None:

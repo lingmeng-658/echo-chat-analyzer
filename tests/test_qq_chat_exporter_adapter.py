@@ -19,7 +19,9 @@ from qq_chat_analyzer.qq_chat_exporter_adapter import (
     is_qce_export,
     load_qce_json,
     parse_qce_messages,
+    parse_qce_rich_messages,
 )
+from qq_chat_analyzer.rich_message import MentionRelation, ReplyRelation, TextContent
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -119,6 +121,58 @@ def test_parse_qce_messages_maps_text_and_reply() -> None:
     assert messages[0].platform == "qq"
     assert messages[0].source_type == "qce-json"
     assert messages[1].message_type == "reply"
+
+
+def test_parse_qce_rich_messages_maps_p0_message_relations_and_recall() -> None:
+    raw_message = _qce_message(
+        message_type="reply",
+        message_id="fictional-rich-reply",
+        text="Replying to Bob",
+        recalled=True,
+    )
+    raw_message["content"]["elements"] = [
+        {
+            "type": "reply",
+            "replyElement": {
+                "replayMsgId": "fictional-target-message",
+            },
+        },
+        {
+            "type": "text",
+            "textElement": {
+                "content": "@Fictional Bob",
+                "atType": 2,
+                "atUid": "2002",
+                "atNtUid": "fictional-user-2002",
+            },
+        },
+    ]
+
+    messages, warnings = parse_qce_rich_messages(
+        [raw_message],
+        conversation_id="fictional-group-1",
+    )
+
+    assert warnings == ()
+    assert len(messages) == 1
+    message = messages[0]
+    assert message.message_id == "fictional-rich-reply"
+    assert message.source == "qq"
+    assert message.source_type == "qce-json"
+    assert message.conversation_id == "fictional-group-1"
+    assert message.sender.identity_id == "user-1001"
+    assert message.sender.display_name == "Fictional Alice"
+    assert message.contents == (TextContent(text="Replying to Bob"),)
+    assert message.relations == (
+        ReplyRelation(target_message_id="fictional-target-message"),
+        MentionRelation(
+            target_identity_id="fictional-user-2002",
+            display_text="@Fictional Bob",
+        ),
+    )
+    assert message.recall_state is not None
+    assert message.recall_state.is_recalled is True
+    assert message.recall_event is None
 
 
 def test_parse_qce_messages_preserves_metadata_flags() -> None:

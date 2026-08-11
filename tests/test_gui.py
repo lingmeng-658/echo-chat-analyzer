@@ -417,9 +417,9 @@ def _dashboard_page(qt_app):
     return module.DashboardPage()
 
 
-def _main_window(qt_app, facade):
+def _main_window(qt_app, facade, executor=None):
     module = importlib.import_module("qq_chat_analyzer.gui.main_window")
-    return module.MainWindow(facade, executor=_inline_executor())
+    return module.MainWindow(facade, executor=executor or _inline_executor())
 
 
 def _inline_executor():
@@ -440,6 +440,7 @@ class _DeferredExecutor:
         self.on_success = None
         self.on_error = None
         self.on_finished = None
+        self.submission_count = 0
 
     def __call__(
         self,
@@ -450,6 +451,7 @@ class _DeferredExecutor:
         on_finished=None,
         on_progress=None,
     ):
+        self.submission_count += 1
         self.operation = operation
         self.on_success = on_success
         self.on_error = on_error
@@ -469,8 +471,8 @@ class _DeferredExecutor:
 
 
 def _drain(page):
-    """No-op: the injected executor already ran everything synchronously."""
-    return None
+    """Deliver zero-timer GUI work used by the synchronous test executor."""
+    QApplication.processEvents()
 
 
 def _settle_workers(timeout_ms: int = 5000) -> None:
@@ -489,7 +491,7 @@ def _settle_workers(timeout_ms: int = 5000) -> None:
 def test_main_window_builds_both_pages(qt_app, sources) -> None:
     window = _main_window(qt_app, StubFacade(sources=sources))
 
-    assert window.stack.count() == 2
+    assert window.stack.count() == 3
     assert window.windowTitle() != ""
     assert window.stack.currentIndex() == 0
 
@@ -1629,9 +1631,10 @@ def test_analysis_page_lists_sources_from_the_facade(qt_app, sources) -> None:
 
     buttons = page._source_buttons
 
-    assert len(buttons) == 3
+    assert len(buttons) == 2
     assert buttons[module.ChatSource.QQ].isEnabled() is True
-    assert buttons[module.ChatSource.LOCAL_FILE].isEnabled() is True
+    assert module.ChatSource.WECHAT in buttons
+    assert module.ChatSource.LOCAL_FILE not in buttons
 
 
 def test_unavailable_sources_are_disabled_with_a_reason(
@@ -2122,7 +2125,7 @@ def test_successful_analysis_switches_to_the_dashboard(
     window.analysis_page.start_analysis()
     _drain(window.analysis_page)
 
-    assert window.stack.currentIndex() == 1
+    assert window.stack.currentIndex() == 2
     assert window.dashboard_page._user_table.rowCount() == 1
 
 
@@ -2131,7 +2134,77 @@ def test_show_outcome_accepts_a_bare_view(qt_app, sources) -> None:
 
     window.show_outcome(_dashboard_view())
 
+    assert window.stack.currentIndex() == 2
+
+
+def test_analysis_enters_processing_page_and_rejects_second_start(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    facade = StubFacade(
+        sources=sources,
+        sessions=[_session(module.ChatSource.QQ, "10001", "\u865a\u6784\u7fa4")],
+        qq_setup_status=_qq_setup_status(
+            configured=True,
+            runtime_available=True,
+        ),
+        qq_runtime_status=_qq_runtime_status(state="running"),
+    )
+    executor = _DeferredExecutor()
+    window = _main_window(qt_app, facade, executor=executor)
+    window.analysis_page._selected_source = module.ChatSource.QQ
+    window.analysis_page._populate_sessions(facade._sessions)
+    window.analysis_page._session_list.setCurrentRow(0)
+    executor.submission_count = 0
+
+    window.analysis_page.start_analysis()
+    window.analysis_page.start_analysis()
+
     assert window.stack.currentIndex() == 1
+    assert window.processing_status_label.text()
+    assert window.analysis_page.isEnabled() is False
+    assert executor.submission_count == 0
+    QApplication.processEvents()
+    assert executor.submission_count == 1
+    assert window.analysis_page._analysis_running is True
+
+
+def test_failed_analysis_returns_to_selection_and_releases_lock(
+    qt_app,
+    sources,
+    monkeypatch,
+) -> None:
+    module = _facade_module()
+    main_window_module = importlib.import_module(
+        "qq_chat_analyzer.gui.main_window"
+    )
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        "warning",
+        lambda *args: None,
+    )
+    facade = StubFacade(
+        sources=sources,
+        sessions=[_session(module.ChatSource.WECHAT, "room-1", "\u865a\u6784\u4f1a\u8bdd")],
+    )
+    executor = _DeferredExecutor()
+    window = _main_window(qt_app, facade, executor=executor)
+    window.analysis_page._selected_source = module.ChatSource.WECHAT
+    window.analysis_page._populate_sessions(facade._sessions)
+    window.analysis_page._session_list.setCurrentRow(0)
+    window.analysis_page.start_analysis()
+    _drain(window.analysis_page)
+
+    assert executor.operation is not None
+    executor.operation()
+    assert facade.analyze_session_calls[0][0] == module.ChatSource.WECHAT
+    executor.fail("fictional_failure", "\u865a\u6784\u5206\u6790\u5931\u8d25")
+
+    assert window.stack.currentIndex() == 0
+    assert window.analysis_page._analysis_running is False
+    assert window.analysis_page._analyze_button.isEnabled() is True
+    assert "\u865a\u6784\u5206\u6790\u5931\u8d25" in window.analysis_page._hint_label.text()
 
 
 # -------------------------------------------------------------------- errors

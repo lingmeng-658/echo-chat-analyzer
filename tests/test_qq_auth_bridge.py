@@ -221,6 +221,27 @@ def test_start_auth_flow_reopens_window_when_already_waiting() -> None:
     assert snapshot.state is module.ConnectionState.WAITING_AUTH
 
 
+def test_start_auth_flow_does_not_launch_twice_while_waiting() -> None:
+    module = _connection_module()
+    service = _StubConnectionService(
+        _status(available=False, qce_running=True, authenticated=True)
+    )
+    setup = _StubSetupService(runtime_status=_runtime_status())
+    launcher = _RecordingLauncher()
+    bridge = _bridge(
+        setup_service=setup,
+        connection_service=service,
+        window_launcher=launcher,
+    )
+
+    first = bridge.start_auth_flow()
+    second = bridge.start_auth_flow()
+
+    assert first.state is module.ConnectionState.WAITING_AUTH
+    assert second.state is module.ConnectionState.WAITING_AUTH
+    assert launcher.calls == 1
+
+
 def test_start_auth_flow_picks_up_login_completed_during_launch() -> None:
     module = _connection_module()
     service = _StubConnectionService(
@@ -331,6 +352,10 @@ def _runtime_config(tmp_path: Path, *, with_qq_path: bool = True):
     (tmp_path / "NapCatWinBootHook.dll").write_text("fake", encoding="utf-8")
     (tmp_path / "napcat.mjs").write_text("export {}", encoding="utf-8")
     (tmp_path / "qqnt.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "launcher-user.bat").write_text(
+        "@echo off\n",
+        encoding="utf-8",
+    )
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     qq_path = None
@@ -354,6 +379,7 @@ def test_default_launcher_opens_the_runtime_login_window(
     bridge = _bridge_module()
     config = _runtime_config(tmp_path)
     spawned = {}
+    monkeypatch.setattr(bridge.os, "name", "posix")
 
     def _fake_popen(args, **kwargs):
         spawned["args"] = list(args)
@@ -364,17 +390,106 @@ def test_default_launcher_opens_the_runtime_login_window(
 
     bridge.default_auth_window_launcher(config)()
 
-    assert spawned["args"][0].endswith("NapCatWinBootMain.exe")
-    assert spawned["args"][1] == str(tmp_path / "QQ.exe")
-    assert spawned["args"][2].endswith("NapCatWinBootHook.dll")
+    assert spawned["args"] == [
+        "cmd.exe",
+        "/d",
+        "/s",
+        "/c",
+        "call",
+        str(tmp_path / "launcher-user.bat"),
+        str(tmp_path / "QQ.exe"),
+    ]
     assert spawned["kwargs"]["cwd"] == str(tmp_path)
     assert "creationflags" not in spawned["kwargs"]
-    env = spawned["kwargs"]["env"]
-    assert env["NAPCAT_LOAD_PATH"] == str(tmp_path / "loadNapCat.js")
-    assert env["NAPCAT_PATCH_PACKAGE"] == str(tmp_path / "qqnt.json")
-    bootstrap = (tmp_path / "loadNapCat.js").read_text(encoding="utf-8")
-    assert "file:///" in bootstrap
-    assert "napcat.mjs" in bootstrap
+    assert "env" not in spawned["kwargs"]
+
+
+def test_default_launcher_hides_napcat_console_on_windows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = _bridge_module()
+    config = _runtime_config(tmp_path)
+    spawned = {}
+
+    def _fake_popen(args, **kwargs):
+        spawned["args"] = list(args)
+        spawned["kwargs"] = kwargs
+        return _FakeProcess(pid=4245)
+
+    monkeypatch.setattr(bridge.os, "name", "nt")
+    monkeypatch.setattr(
+        bridge.subprocess,
+        "CREATE_NO_WINDOW",
+        0x08000000,
+        raising=False,
+    )
+    monkeypatch.setattr(bridge.subprocess, "Popen", _fake_popen)
+
+    bridge.default_auth_window_launcher(config)()
+
+    assert spawned["args"] == [
+        "cmd.exe",
+        "/d",
+        "/s",
+        "/c",
+        "call",
+        str(tmp_path / "launcher-user.bat"),
+        str(tmp_path / "QQ.exe"),
+    ]
+    assert spawned["kwargs"]["cwd"] == str(tmp_path)
+    assert spawned["kwargs"]["creationflags"] == 0x08000000
+    assert spawned["kwargs"]["stdin"] is bridge.subprocess.DEVNULL
+    assert spawned["kwargs"]["stdout"] is bridge.subprocess.DEVNULL
+    assert spawned["kwargs"]["stderr"] is bridge.subprocess.DEVNULL
+
+
+def test_default_launcher_rejects_immediate_batch_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = _bridge_module()
+    config = _runtime_config(tmp_path)
+
+    class _FailedProcess(_FakeProcess):
+        def poll(self):
+            return 7
+
+    monkeypatch.setattr(
+        bridge.subprocess,
+        "Popen",
+        lambda args, **kwargs: _FailedProcess(pid=4246),
+    )
+
+    with pytest.raises(bridge.QQAuthWindowUnavailable):
+        bridge.default_auth_window_launcher(config)()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows cmd.exe only")
+def test_launcher_command_runs_batch_from_portable_directory_with_spaces(
+    tmp_path: Path,
+) -> None:
+    bridge = _bridge_module()
+    runtime = tmp_path / "Echo Portable" / "runtime" / "qq"
+    runtime.mkdir(parents=True)
+    launcher = runtime / "launcher-user.bat"
+    qq_path = tmp_path / "QQ Install" / "QQ.exe"
+    qq_path.parent.mkdir()
+    qq_path.write_text("fictional", encoding="utf-8")
+    launcher.write_text(
+        "@echo off\n"
+        '> "%~dp0result.txt" echo QQ=%~1\n'
+        '>> "%~dp0result.txt" echo CWD=%CD%\n'
+        "exit /b 0\n",
+        encoding="utf-8",
+    )
+
+    process = bridge._launch_auth_window(runtime, launcher, qq_path)
+
+    assert process.wait(timeout=5) == 0
+    result = (runtime / "result.txt").read_text(encoding="utf-8")
+    assert f"QQ={qq_path}" in result
+    assert f"CWD={runtime}" in result
 
 
 def test_default_launcher_logs_the_actual_command(
@@ -396,8 +511,10 @@ def test_default_launcher_logs_the_actual_command(
         bridge.default_auth_window_launcher(config)()
 
     assert "launch command=" in caplog.text
-    assert "launch spawned pid=4243" in caplog.text
-    assert "NapCatWinBootMain.exe" in caplog.text
+    assert "qq_path=" in caplog.text
+    assert "launch result pid=4243 returncode=None" in caplog.text
+    assert "launcher-user.bat" in caplog.text
+    assert "NapCatWinBootMain.exe" not in caplog.text
 
 
 def test_auth_flow_records_the_launched_window_pid(
@@ -449,6 +566,7 @@ def test_default_launcher_prefers_the_configured_qq_path(
     (tmp_path / "NapCatWinBootMain.exe").write_text("fake", encoding="utf-8")
     (tmp_path / "NapCatWinBootHook.dll").write_text("fake", encoding="utf-8")
     (tmp_path / "napcat.mjs").write_text("export {}", encoding="utf-8")
+    (tmp_path / "launcher-user.bat").write_text("@echo off\n", encoding="utf-8")
     configured = tmp_path / "configured-qq.exe"
     configured.write_text("fake", encoding="utf-8")
     saved = tmp_path / "saved-qq.exe"
@@ -470,7 +588,48 @@ def test_default_launcher_prefers_the_configured_qq_path(
 
     bridge.default_auth_window_launcher(config)()
 
-    assert spawned["args"][1] == str(configured)
+    assert spawned["args"][-2:] == [
+        str(tmp_path / "launcher-user.bat"),
+        str(configured),
+    ]
+
+
+def test_find_qq_script_hides_powershell_console_on_windows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = _bridge_module()
+    script = tmp_path / "find-qq.ps1"
+    script.write_text("Write-Output 'fictional'", encoding="utf-8")
+    calls = []
+
+    class _Completed:
+        stdout = ""
+
+    def _fake_run(command, **options):
+        calls.append((command, options))
+        return _Completed()
+
+    monkeypatch.setattr(bridge.os, "name", "nt")
+    monkeypatch.setattr(
+        bridge.subprocess,
+        "CREATE_NO_WINDOW",
+        0x08000000,
+        raising=False,
+    )
+    monkeypatch.setattr(bridge.subprocess, "run", _fake_run)
+
+    assert bridge._detect_qq_path_with_script(script) is None
+
+    assert calls[0][0] == [
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(script),
+    ]
+    assert calls[0][1]["creationflags"] == 0x08000000
 
 
 class _FakeProcess:

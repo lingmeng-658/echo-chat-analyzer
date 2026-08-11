@@ -13,6 +13,7 @@ from ..analysis.models import (
     AnalysisReports,
     ConversationReport,
     MessageLengthReport,
+    UserProfile,
     UserProfileReport,
 )
 from .formatters import (
@@ -32,6 +33,8 @@ from .models import (
     ChartSeries,
     ConversationCard,
     DashboardView,
+    EchoMemberCard,
+    EchoReportView,
     MetricCard,
     UserCard,
 )
@@ -44,6 +47,7 @@ DEFAULT_USER_CARD_LIMIT = 10
 DEFAULT_CONVERSATION_CARD_LIMIT = 10
 DEFAULT_TOP_WORD_LIMIT = 20
 DEFAULT_PROFILE_WORD_LIMIT = 5
+ECHO_REPORT_TITLE = "Echo Report"
 
 
 class DashboardBuilder:
@@ -127,6 +131,121 @@ def build_dashboard_view(
 ) -> DashboardView:
     """Convenience wrapper around :class:`DashboardBuilder`."""
     return DashboardBuilder().build(reports, top_words=top_words, title=title)
+
+
+class EchoReportBuilder:
+    """Reshape finished reports into the Phase A Echo presentation model."""
+
+    def build(
+        self,
+        reports: AnalysisReports | None,
+        *,
+        viewer_speaker_key: str | None = None,
+        conversation_kind: str = "unknown",
+        title: str = ECHO_REPORT_TITLE,
+    ) -> EchoReportView:
+        reports = reports or AnalysisReports()
+        activity = reports.activity
+        profiles = reports.user_profiles
+        conversation = (
+            reports.conversations.conversations[0]
+            if reports.conversations
+            and reports.conversations.conversations
+            else None
+        )
+
+        hourly_activity = tuple(
+            ChartPoint(label=format_hour(entry.hour), value=float(entry.count))
+            for entry in (activity.hourly_counts if activity else ())
+        )
+        weekday_activity = tuple(
+            ChartPoint(
+                label=format_weekday(entry.weekday),
+                value=float(entry.count),
+            )
+            for entry in (activity.weekday_counts if activity else ())
+        )
+        members = tuple(
+            _build_echo_member(profile, viewer_speaker_key)
+            for profile in (profiles.profiles if profiles else ())
+        )
+        total_message_count = activity.total_message_count if activity else 0
+        participant_count = profiles.speaker_count if profiles else 0
+        has_data = (
+            activity is not None
+            or profiles is not None
+            or conversation is not None
+        )
+
+        return EchoReportView(
+            title=title,
+            has_data=has_data,
+            conversation_kind=conversation_kind,
+            conversation_name=(
+                conversation.resolved_display_name if conversation else ""
+            ),
+            time_span=(
+                format_duration(conversation.duration_seconds)
+                if conversation
+                else ""
+            ),
+            total_message_count=total_message_count,
+            participant_count=participant_count,
+            hourly_activity=hourly_activity,
+            weekday_activity=weekday_activity,
+            members=members,
+            empty_description="" if has_data else EMPTY_DESCRIPTION,
+        )
+
+
+def build_echo_report_view(
+    reports: AnalysisReports | None,
+    *,
+    viewer_speaker_key: str | None = None,
+    conversation_kind: str = "unknown",
+    title: str = ECHO_REPORT_TITLE,
+) -> EchoReportView:
+    """Build an Echo report, highlighting only an explicitly supplied key."""
+    return EchoReportBuilder().build(
+        reports,
+        viewer_speaker_key=viewer_speaker_key,
+        conversation_kind=conversation_kind,
+        title=title,
+    )
+
+
+def _build_echo_member(
+    profile: UserProfile,
+    viewer_speaker_key: str | None,
+) -> EchoMemberCard:
+    return EchoMemberCard(
+        speaker_key=profile.speaker,
+        display_name=profile.resolved_display_name,
+        is_viewer=(
+            viewer_speaker_key is not None
+            and profile.speaker == viewer_speaker_key
+        ),
+        message_count=profile.message_count,
+        message_share_percent=profile.message_share_percent,
+        average_length=profile.average_length,
+        max_length=profile.max_length,
+        active_period=format_active_period(
+            profile.busiest_hour,
+            profile.busiest_weekday,
+        ),
+        hourly_activity=tuple(
+            ChartPoint(label=format_hour(entry.hour), value=float(entry.count))
+            for entry in profile.hourly_counts
+        ),
+        weekday_activity=tuple(
+            ChartPoint(
+                label=format_weekday(entry.weekday),
+                value=float(entry.count),
+            )
+            for entry in profile.weekday_counts
+        ),
+        top_words=tuple(word.word for word in profile.top_words),
+    )
 
 
 def _build_summary_metrics(

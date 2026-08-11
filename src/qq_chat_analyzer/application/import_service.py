@@ -14,6 +14,7 @@ from ..qq_chat_exporter_adapter import (
     is_qce_export,
     load_qce_json,
     parse_qce_messages,
+    qce_conversation_id,
 )
 from ..wechat_cli_adapter import (
     is_cli_export as is_wechat_cli_export,
@@ -211,7 +212,10 @@ def _import_qce_file(
 ) -> tuple[str, tuple[ChatMessage, ...], str, tuple[str, ...], int]:
     payload = load_qce_json(input_file)
     raw_messages = payload.get("messages", []) if payload is not None else []
-    parsed_messages, parse_warnings = parse_qce_messages(raw_messages)
+    parsed_messages, parse_warnings = parse_qce_messages(
+        raw_messages,
+        conversation_id=qce_conversation_id(payload),
+    )
     warnings = (
         *parse_warnings,
         *_import_warnings(input_file, "qq", raw_messages, parsed_messages),

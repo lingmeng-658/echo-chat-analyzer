@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 
-from ..models import ProfileWord, UserProfile, UserProfileReport
+from ..models import (
+    HourlyActivity,
+    ProfileWord,
+    UserProfile,
+    UserProfileReport,
+    WeekdayActivity,
+)
 from ..peaks import DAYS_PER_WEEK, HOURS_PER_DAY, busiest_index
 from ..timestamps import to_utc_datetime
 from ...analyzer import top_words
@@ -53,6 +59,16 @@ class UserProfileAnalyzer:
                 busiest_weekday=busiest_index(speaker_stats.weekday_counts),
                 top_words=speaker_words.get(speaker, ()),
                 display_name=_speaker_display_name(speaker, speaker_names),
+                hourly_counts=tuple(
+                    HourlyActivity(hour=hour, count=count)
+                    for hour, count in enumerate(speaker_stats.hourly_counts)
+                ),
+                weekday_counts=tuple(
+                    WeekdayActivity(weekday=weekday, count=count)
+                    for weekday, count in enumerate(
+                        speaker_stats.weekday_counts
+                    )
+                ),
             )
             for speaker, speaker_stats in stats.items()
         ]

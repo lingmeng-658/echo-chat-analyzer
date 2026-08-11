@@ -203,6 +203,8 @@ class WeChatKeyService:
             "env": environment,
             "cwd": str(self._helper_path.parent),
         }
+        if os.name == "nt":
+            options["creationflags"] = subprocess.CREATE_NO_WINDOW
         return command, options
 
     def _run_helper_buffered(

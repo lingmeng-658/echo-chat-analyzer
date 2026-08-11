@@ -2,9 +2,9 @@
 """PyInstaller build definition for the Local Chat Analyzer desktop app.
 
 Build with:
-    .\.venv\Scripts\pyinstaller.exe LocalChatAnalyzer.spec
+    python -m PyInstaller LocalChatAnalyzer.spec
 
-Output: dist/LocalChatAnalyzer.exe
+Output: dist/Echo/Echo.exe
 """
 
 from pathlib import Path
@@ -37,10 +37,9 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
-    name="LocalChatAnalyzer",
+    exclude_binaries=True,
+    name="Echo",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -53,4 +52,14 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name="Echo",
 )

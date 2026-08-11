@@ -208,6 +208,35 @@ def test_user_profile_analyzer_reports_shares_for_multiple_users() -> None:
     assert profiles["Fictional-Bob"].average_length == 6.0
 
 
+def test_user_profile_exposes_hourly_and_weekday_distributions() -> None:
+    messages = (
+        _message(timestamp=_epoch(hour=9)),
+        _message(timestamp=_epoch(hour=10)),
+    )
+
+    profile = _analyzers().UserProfileAnalyzer().analyze(messages).profiles[0]
+
+    assert len(profile.hourly_counts) == 24
+    assert sum(entry.count for entry in profile.hourly_counts) == 2
+    assert len(profile.weekday_counts) == 7
+    assert sum(entry.count for entry in profile.weekday_counts) == 2
+    assert isinstance(profile.hourly_counts[0], _models().HourlyActivity)
+    assert isinstance(profile.weekday_counts[0], _models().WeekdayActivity)
+
+
+def test_user_profile_time_distributions_default_to_empty_for_compatibility() -> None:
+    profile = _models().UserProfile(
+        speaker="Fictional-Alice",
+        message_count=1,
+        message_share_percent=100.0,
+        average_length=5.0,
+        max_length=5,
+    )
+
+    assert profile.hourly_counts == ()
+    assert profile.weekday_counts == ()
+
+
 def test_user_profile_analyzer_reuses_supplied_tokens_for_top_words() -> None:
     messages = (
         _message(sender="Fictional-Alice", text="fictional deck talk"),

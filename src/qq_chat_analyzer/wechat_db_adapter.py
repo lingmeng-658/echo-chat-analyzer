@@ -1,4 +1,4 @@
-"""Convert WCDB query exports of WeChat 4.x databases into ChatMessage.
+"""Convert WCDB query exports of WeChat 4.x databases into rich messages.
 
 The matching provider (``providers.wechat_database_provider``) writes a JSON
 document that keeps the database rows exactly as ``wcdb_cli`` returned them,
@@ -20,8 +20,8 @@ plus the conversation the rows were read from:
     }
 
 This module never opens a database, never touches WCDB, and never decides
-whether a message is worth analyzing. It only maps rows onto the shared
-:class:`~qq_chat_analyzer.message.ChatMessage` model.
+whether a message is worth analyzing. It maps rows onto the source-neutral
+rich model, then projects that model for legacy analysis callers.
 """
 
 from __future__ import annotations
@@ -31,7 +31,9 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+from .legacy_projection import project_legacy_message, project_legacy_messages
 from .message import ChatMessage
+from .rich_message import RichMessage, SenderIdentity, TextContent
 
 
 WECHAT_PLATFORM = "wechat"
@@ -83,8 +85,13 @@ def load_messages(path: str | Path) -> list[Any]:
 
 
 def parse_messages(raw_messages: Iterable[Any]) -> list[ChatMessage]:
-    """Normalize supported database rows, isolating malformed entries."""
-    parsed_messages: list[ChatMessage] = []
+    """Project supported database rows for existing analysis callers."""
+    return project_legacy_messages(parse_rich_messages(raw_messages))
+
+
+def parse_rich_messages(raw_messages: Iterable[Any]) -> list[RichMessage]:
+    """Normalize supported database rows into source-neutral facts."""
+    parsed_messages: list[RichMessage] = []
 
     try:
         iterator = iter(raw_messages)
@@ -92,7 +99,7 @@ def parse_messages(raw_messages: Iterable[Any]) -> list[ChatMessage]:
         return parsed_messages
 
     for raw_message in iterator:
-        parsed_message = parse_message(raw_message)
+        parsed_message = parse_rich_message(raw_message)
         if parsed_message is not None:
             parsed_messages.append(parsed_message)
 
@@ -100,7 +107,15 @@ def parse_messages(raw_messages: Iterable[Any]) -> list[ChatMessage]:
 
 
 def parse_message(raw_message: Any) -> ChatMessage | None:
-    """Convert one database row into a ChatMessage, or ``None`` if unusable."""
+    """Project one database row for callers of the legacy adapter API."""
+    rich_message = parse_rich_message(raw_message)
+    if rich_message is None:
+        return None
+    return project_legacy_message(rich_message)
+
+
+def parse_rich_message(raw_message: Any) -> RichMessage | None:
+    """Convert one database row into a RichMessage, or ``None`` if unusable."""
     if not isinstance(raw_message, Mapping):
         return None
 
@@ -122,19 +137,20 @@ def parse_message(raw_message: Any) -> ChatMessage | None:
         return None
     sender = _clean_string(raw_message.get("sender_name")) or sender_id
 
-    return ChatMessage(
-        timestamp=timestamp,
-        sender=sender,
-        message_type=message_type,
-        text=text,
-        platform=WECHAT_PLATFORM,
-        source_type=local_type,
+    return RichMessage(
         message_id=_stringify_id(raw_message.get("server_id"))
         or _stringify_id(raw_message.get("local_id")),
-        sender_id=sender_id,
+        source=WECHAT_PLATFORM,
         conversation_id=_clean_string(raw_message.get("username")),
+        sender=SenderIdentity(
+            identity_id=sender_id,
+            display_name=sender,
+        ),
+        timestamp=timestamp,
+        message_type=message_type,
+        contents=(TextContent(text=text),),
+        source_type=local_type,
         is_system=False,
-        recalled=False,
     )
 
 

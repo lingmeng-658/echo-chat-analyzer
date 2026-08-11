@@ -116,6 +116,8 @@ class UserProfile:
     busiest_weekday: int | None = None
     top_words: tuple[ProfileWord, ...] = ()
     display_name: str | None = None
+    hourly_counts: tuple[HourlyActivity, ...] = ()
+    weekday_counts: tuple[WeekdayActivity, ...] = ()
 
     @property
     def resolved_display_name(self) -> str:
