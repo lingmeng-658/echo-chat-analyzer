@@ -816,7 +816,7 @@ def test_selecting_wechat_without_ready_status_does_not_load_sessions(
     assert facade.list_sessions_calls == []
     assert page._session_list.count() == 0
     assert page._status_label.text() == (
-        "\U0001F534 \u5fae\u4fe1\u672a\u8fde\u63a5"
+        "\U0001F534 \u5fae\u4fe1\u8fde\u63a5\u73af\u5883\u4e0d\u5b58\u5728"
     )
     assert page._status_label.toolTip() == (
         "\u8bf7\u767b\u5f55\u5fae\u4fe1\u6216\u914d\u7f6e\u6570\u636e\u76ee\u5f55\u3002"
@@ -872,7 +872,7 @@ def test_wechat_status_bar_uses_unified_disconnected_text(qt_app) -> None:
     page.select_source(module.ChatSource.WECHAT)
     _drain(page)
 
-    assert received == ["\u5fae\u4fe1\u672a\u8fde\u63a5"]
+    assert received == ["\u5fae\u4fe1\u8fde\u63a5\u73af\u5883\u4e0d\u5b58\u5728"]
 
 
 def test_wechat_status_bar_stays_connected_after_session_load(qt_app) -> None:
@@ -943,9 +943,19 @@ def test_wechat_connect_progress_keeps_unified_status(qt_app) -> None:
 
     page._handle_wechat_connect_progress("\u6b63\u5728\u7b49\u5f85\u5fae\u4fe1\u767b\u5f55...")
 
-    assert page._status_label.text() == "\u6b63\u5728\u8fde\u63a5\u5fae\u4fe1..."
+    assert page._status_label.text() == "\u7b49\u5f85\u5fae\u4fe1\u767b\u5f55"
     assert page._hint_label.text() == "\u6b63\u5728\u7b49\u5f85\u5fae\u4fe1\u767b\u5f55..."
     assert received == ["\u6b63\u5728\u8fde\u63a5\u5fae\u4fe1..."]
+
+
+def test_wechat_connect_progress_shows_database_read_stage(qt_app) -> None:
+    facade = StubFacade(sources=_wechat_available_sources())
+    page = _analysis_page(qt_app, facade)
+
+    page._handle_wechat_connect_progress("\u6b63\u5728\u8bfb\u53d6\u5fae\u4fe1\u6570\u636e\u5e93...")
+
+    assert page._status_label.text() == "\u6b63\u5728\u8bfb\u53d6\u5fae\u4fe1\u6570\u636e\u5e93..."
+    assert page._hint_label.text() == "\u6b63\u5728\u8bfb\u53d6\u5fae\u4fe1\u6570\u636e\u5e93..."
 
 
 def test_wechat_connect_failure_surfaces_a_user_message(qt_app) -> None:
@@ -1441,7 +1451,7 @@ def test_wechat_connection_error_blocks_session_loading_without_leaks(
     assert "raw provider failure" not in page._hint_label.text()
 
 
-def test_wechat_unconfigured_shows_setup_entry(qt_app) -> None:
+def test_wechat_unconfigured_keeps_advanced_setup_hidden(qt_app) -> None:
     module = _facade_module()
     status = _wechat_connection_status(
         available=False,
@@ -1461,8 +1471,8 @@ def test_wechat_unconfigured_shows_setup_entry(qt_app) -> None:
     page.select_source(module.ChatSource.WECHAT)
     _drain(page)
 
-    assert page._wechat_setup_button.isVisibleTo(page) is True
-    assert "\u5fae\u4fe1\u73af\u5883\u8bbe\u7f6e" in page._wechat_setup_button.text()
+    assert page._wechat_setup_button.isVisibleTo(page) is False
+    assert page._wechat_connect_button.isVisibleTo(page) is True
 
 
 def test_clicking_wechat_setup_calls_facade(qt_app) -> None:
@@ -1520,6 +1530,61 @@ def test_clicking_wechat_connect_completes_without_uncaught_error(
     assert len(facade.acquire_wechat_db_key_calls) == 1
     assert page._wechat_connect_button.isEnabled() is True
     assert "\u5fae\u4fe1\u5df2\u8fde\u63a5" in page._status_label.text()
+
+
+def test_key_success_then_database_failure_shows_database_stage(
+    qt_app,
+) -> None:
+    module = _facade_module()
+    ready = _wechat_connection_status(
+        available=True,
+        data_found=True,
+        db_key_available=True,
+        runtime_available=True,
+        message="\u5fae\u4fe1\u6570\u636e\u6e90\u53ef\u7528",
+        action_hint="",
+    )
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        connection_status=ready,
+        data_root="D:/fake_xwechat_files",
+        error=module.FacadeError(
+            code="query_failed",
+            public_message="\u8bfb\u53d6\u5fae\u4fe1\u6570\u636e\u5e93\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5\u3002",
+            source=module.ChatSource.WECHAT,
+        ),
+    )
+    page = _analysis_page(qt_app, facade)
+    _drain(page)
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+    facade.list_sessions_calls.clear()
+    page._wechat_connect_button.click()
+    _drain(page)
+
+    assert facade.acquire_wechat_db_key_calls
+    assert facade.list_sessions_calls == [module.ChatSource.WECHAT]
+    assert "\u6570\u636e\u5e93\u8bfb\u53d6\u5931\u8d25" in page._status_label.text()
+    assert "\u5fae\u4fe1\u672a\u8fde\u63a5" not in page._status_label.text()
+
+
+def test_wechat_session_load_failure_shows_session_stage(qt_app) -> None:
+    module = _facade_module()
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        error=module.FacadeError(
+            code="wechat_session_load_failed",
+            public_message="\u5fae\u4fe1\u4f1a\u8bdd\u52a0\u8f7d\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5\u3002",
+            source=module.ChatSource.WECHAT,
+        ),
+    )
+    page = _analysis_page(qt_app, facade)
+
+    page._load_sessions(module.ChatSource.WECHAT)
+    _drain(page)
+
+    assert "\u4f1a\u8bdd\u52a0\u8f7d\u5931\u8d25" in page._status_label.text()
 
 
 def test_clicking_wechat_connect_without_detected_root_opens_setup(

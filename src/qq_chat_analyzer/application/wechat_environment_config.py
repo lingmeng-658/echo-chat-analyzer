@@ -8,7 +8,7 @@ databases, parse chat messages, or make any runtime decision.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -169,11 +169,30 @@ class WeChatEnvironmentConfigLoader:
     def load_or_default(self) -> WeChatEnvironmentConfig:
         """Load user config, falling back to bundled runtime defaults."""
         try:
-            return self.load()
+            config = self.load()
         except WeChatConfigNotFound:
-            if bundled_wechat_runtime_available():
-                return default_wechat_environment_config()
-            raise
+            config = None
+        if not bundled_wechat_runtime_available():
+            if config is not None:
+                return config
+            raise WeChatConfigNotFound()
+
+        defaults = default_wechat_environment_config()
+        if config is None:
+            return defaults
+        return replace(
+            config,
+            wcdb_cli_path=(
+                config.wcdb_cli_path
+                if _is_file(config.wcdb_cli_path)
+                else defaults.wcdb_cli_path
+            ),
+            wcdb_dll_path=(
+                config.wcdb_dll_path
+                if _is_file(config.wcdb_dll_path)
+                else defaults.wcdb_dll_path
+            ),
+        )
 
 
 def bundled_wechat_runtime_available() -> bool:
@@ -213,6 +232,10 @@ def _path_value(value: Any) -> Path | None:
     if text is None:
         return None
     return Path(text)
+
+
+def _is_file(path: Path | None) -> bool:
+    return path is not None and path.is_file()
 
 
 __all__ = [

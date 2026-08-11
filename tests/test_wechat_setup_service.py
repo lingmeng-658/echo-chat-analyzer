@@ -32,6 +32,10 @@ from qq_chat_analyzer.application.wechat_setup_service import (
 
 
 def _config(tmp_path: Path) -> WeChatEnvironmentConfig:
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "wcdb_cli.exe").write_text("fake", encoding="utf-8")
+    (runtime / "WCDB.dll").write_text("fake", encoding="utf-8")
     return WeChatEnvironmentConfig(
         data_root=tmp_path / "fake_xwechat_files",
         db_key="0f0f0f0f",
@@ -299,6 +303,53 @@ def test_detect_wechat_data_roots_swallows_detector_errors() -> None:
 
     assert service.detect_wechat_data_roots() == []
     assert service.detect_wechat_data_root() is None
+
+
+def test_detect_wechat_data_roots_restores_saved_valid_root(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "wechat.json"
+    saved_root = tmp_path / "saved" / "wxid_fictional"
+    saved_root.mkdir(parents=True)
+    (saved_root / "session.db").write_text("fake", encoding="utf-8")
+    WeChatEnvironmentConfigWriter(target).save(
+        WeChatEnvironmentConfig(data_root=saved_root, db_key="a" * 64)
+    )
+    detector_calls = []
+    service = WeChatSetupService(
+        config_loader=WeChatEnvironmentConfigLoader(target),
+        config_writer=WeChatEnvironmentConfigWriter(target),
+        data_roots_detector=lambda: detector_calls.append(1) or [],
+    )
+
+    assert service.detect_wechat_data_roots() == [saved_root]
+    assert detector_calls == []
+
+
+def test_invalid_saved_root_is_redetected_and_persisted(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "wechat.json"
+    stale_root = tmp_path / "moved" / "old"
+    detected_root = tmp_path / "current" / "wxid_fictional"
+    detected_root.mkdir(parents=True)
+    (detected_root / "session.db").write_text("fake", encoding="utf-8")
+    WeChatEnvironmentConfigWriter(target).save(
+        WeChatEnvironmentConfig(data_root=stale_root, db_key="b" * 64)
+    )
+    factory = _CountingFactory()
+    service = WeChatSetupService(
+        config_loader=WeChatEnvironmentConfigLoader(target),
+        config_writer=WeChatEnvironmentConfigWriter(target),
+        provider_factory=factory,
+        data_roots_detector=lambda: [detected_root],
+    )
+
+    assert service.detect_wechat_data_roots() == [detected_root]
+    restored = WeChatEnvironmentConfigLoader(target).load()
+    assert restored.data_root == detected_root
+    assert restored.db_key == "b" * 64
+    assert factory.invalidations == 1
 
 
 # --------------------------------------------------------- save_environment

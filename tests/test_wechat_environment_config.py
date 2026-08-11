@@ -145,18 +145,55 @@ def test_load_or_default_raises_without_bundled_runtime(
 
 
 def test_load_or_default_prefers_user_config(tmp_path: Path) -> None:
+    runtime = tmp_path / "custom-runtime"
+    runtime.mkdir()
+    cli = runtime / "wcdb_cli.exe"
+    dll = runtime / "WCDB.dll"
+    cli.write_text("fake", encoding="utf-8")
+    dll.write_text("fake", encoding="utf-8")
     loader = _loader(
         tmp_path,
         {
-            "wcdb_cli_path": "C:\\tools\\wcdb_cli.exe",
-            "wcdb_dll_path": "C:\\tools\\WCDB.dll",
+            "wcdb_cli_path": str(cli),
+            "wcdb_dll_path": str(dll),
         },
     )
 
     config = loader.load_or_default()
 
-    assert config.wcdb_cli_path == Path("C:\\tools\\wcdb_cli.exe")
-    assert config.wcdb_dll_path == Path("C:\\tools\\WCDB.dll")
+    assert config.wcdb_cli_path == cli
+    assert config.wcdb_dll_path == dll
+
+
+def test_load_or_default_repairs_stale_runtime_paths(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "bundle"
+    wechat = bundle / "runtime" / "wechat"
+    wechat.mkdir(parents=True)
+    (wechat / "wcdb_cli.exe").write_text("fake", encoding="utf-8")
+    (wechat / "WCDB.dll").write_text("fake", encoding="utf-8")
+    module = importlib.import_module(
+        "qq_chat_analyzer.application.wechat_environment_config"
+    )
+    _patch_bundled_defaults(monkeypatch, module, bundle)
+    loader = _loader(
+        tmp_path,
+        {
+            "data_root": str(tmp_path / "saved-root"),
+            "db_key": "c" * 64,
+            "wcdb_cli_path": str(tmp_path / "old" / "wcdb_cli.exe"),
+            "wcdb_dll_path": str(tmp_path / "old" / "WCDB.dll"),
+        },
+    )
+
+    config = loader.load_or_default()
+
+    assert config.data_root == tmp_path / "saved-root"
+    assert config.db_key == "c" * 64
+    assert config.wcdb_cli_path == wechat / "wcdb_cli.exe"
+    assert config.wcdb_dll_path == wechat / "WCDB.dll"
 
 
 def test_loader_tolerates_missing_fields(tmp_path: Path) -> None:

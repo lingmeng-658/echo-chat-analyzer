@@ -176,6 +176,12 @@ _WECHAT_LOGIN_PREPARE = (
     "\u6b63\u5728\u51c6\u5907\u5fae\u4fe1\u8fde\u63a5\uff0c\u8bf7\u7a0d\u5019\u3002"
     "\u51c6\u5907\u5b8c\u6210\u540e\u4f1a\u63d0\u793a\u767b\u5f55\u5fae\u4fe1\uff0c\u5c4a\u65f6\u8bf7\u767b\u5f55\u5fae\u4fe1\u5373\u53ef\u81ea\u52a8\u5b8c\u6210\u8fde\u63a5\u3002"
 )
+_WECHAT_READING_DATABASE = "\u6b63\u5728\u8bfb\u53d6\u5fae\u4fe1\u6570\u636e\u5e93..."
+_WECHAT_LOADING_SESSIONS = "\u6b63\u5728\u52a0\u8f7d\u5fae\u4fe1\u4f1a\u8bdd..."
+_WECHAT_WAITING_LOGIN = "\u7b49\u5f85\u5fae\u4fe1\u767b\u5f55"
+_WECHAT_KEY_ACQUIRING = "Key \u83b7\u53d6\u4e2d"
+_WECHAT_DATABASE_FAILED = "\u5fae\u4fe1\u6570\u636e\u5e93\u8bfb\u53d6\u5931\u8d25"
+_WECHAT_SESSIONS_FAILED = "\u5fae\u4fe1\u4f1a\u8bdd\u52a0\u8f7d\u5931\u8d25"
 
 
 class AnalysisPage(QWidget):
@@ -447,7 +453,7 @@ class AnalysisPage(QWidget):
             message = (
                 _WECHAT_STATUS_CONNECTED
                 if available
-                else _WECHAT_STATUS_DISCONNECTED
+                else _wechat_unavailable_message(status)
             )
         else:
             message = (
@@ -458,7 +464,7 @@ class AnalysisPage(QWidget):
         self._status_label.setToolTip(action_hint)
         self._status_label.setVisible(True)
         if source == ChatSource.WECHAT:
-            self._wechat_setup_button.setVisible(not available)
+            self._wechat_setup_button.setVisible(False)
             if available:
                 self._wechat_guide_label.setVisible(False)
             else:
@@ -486,7 +492,14 @@ class AnalysisPage(QWidget):
                 self.status_changed.emit(message)
 
         if available and load_sessions_on_ready:
-            self._hint_label.setText(_LOADING_SESSIONS)
+            loading_message = (
+                _WECHAT_LOADING_SESSIONS
+                if source == ChatSource.WECHAT
+                else _LOADING_SESSIONS
+            )
+            if source == ChatSource.WECHAT:
+                self._status_label.setText(loading_message)
+            self._hint_label.setText(loading_message)
             if source != ChatSource.WECHAT:
                 self.status_changed.emit(_LOADING_SESSIONS)
             self._load_sessions(source)
@@ -784,7 +797,7 @@ class AnalysisPage(QWidget):
 
         self._executor(
             lambda report: self._connect_wechat_operation(config, report),
-            on_success=lambda _result: self._after_wechat_environment_saved(),
+            on_success=self._after_wechat_key_acquired,
             on_error=self._handle_wechat_connect_error,
             on_progress=self._handle_wechat_connect_progress,
             on_finished=lambda: self._wechat_connect_button.setEnabled(True),
@@ -801,13 +814,29 @@ class AnalysisPage(QWidget):
         a login moment. Only the key step waits for the user to log in.
         """
         self._facade.setup_wechat_environment(config)
-        return self._facade.acquire_wechat_db_key(progress=progress)
+        self._facade.acquire_wechat_db_key(progress=progress)
+        if progress is not None:
+            progress(_WECHAT_READING_DATABASE)
+        return self._facade.get_connection_status(ChatSource.WECHAT)
+
+    def _after_wechat_key_acquired(self, status: Any) -> None:
+        self._show_connection_status(
+            ChatSource.WECHAT,
+            status,
+            load_sessions_on_ready=True,
+        )
 
     def _handle_wechat_connect_progress(self, message: str) -> None:
         """Keep the unified connecting status while showing progress detail."""
         _LOGGER.debug("[wechat gui] received progress: %s", message)
         self._status_label.setVisible(True)
-        self._status_label.setText(_WECHAT_CONNECTING)
+        if message == _WECHAT_READING_DATABASE:
+            stage = _WECHAT_READING_DATABASE
+        elif "\u767b\u5f55" in message:
+            stage = _WECHAT_WAITING_LOGIN
+        else:
+            stage = _WECHAT_KEY_ACQUIRING
+        self._status_label.setText(stage)
         self._hint_label.setText(message)
 
     def _handle_wechat_connect_error(self, code: str, message: str) -> None:
@@ -816,6 +845,7 @@ class AnalysisPage(QWidget):
         lowered = detail.lower()
         titles = {
             "wechat_environment_missing": "\u5fae\u4fe1\u8fde\u63a5\u73af\u5883\u4e0d\u5b8c\u6574",
+            "wechat_not_running": "\u5fae\u4fe1\u672a\u542f\u52a8",
             "wechat_waiting_login": "\u7b49\u5f85\u5fae\u4fe1\u767b\u5f55",
             "wechat_hook_failed": "\u6b63\u5728\u83b7\u53d6\u6743\u9650\u65f6\u5931\u8d25",
             "wechat_process_incompatible": "\u5fae\u4fe1\u8fdb\u7a0b\u4e0d\u517c\u5bb9",
@@ -900,9 +930,45 @@ class AnalysisPage(QWidget):
     def _load_sessions(self, source: ChatSource) -> None:
         self._executor(
             lambda: self._facade.list_sessions(source),
-            on_success=lambda sessions: self._populate_sessions(sessions),
-            on_error=self._handle_error,
+            on_success=(
+                self._handle_wechat_sessions_loaded
+                if source == ChatSource.WECHAT
+                else lambda sessions: self._populate_sessions(sessions)
+            ),
+            on_error=(
+                self._handle_wechat_session_error
+                if source == ChatSource.WECHAT
+                else self._handle_error
+            ),
         )
+
+    def _handle_wechat_sessions_loaded(self, sessions: Any) -> None:
+        self._populate_sessions(sessions)
+        self._status_label.setText(_CONNECTED_PREFIX + _WECHAT_STATUS_CONNECTED)
+        self._status_label.setToolTip("")
+        self._status_label.setVisible(True)
+        self._wechat_guide_label.setVisible(False)
+
+    def _handle_wechat_session_error(self, code: str, message: str) -> None:
+        database_codes = {
+            "database_not_found",
+            "key_unavailable",
+            "query_failed",
+            "wechat_database_error",
+            "wcdb_helper_not_found",
+            "wcdb_library_not_found",
+        }
+        title = (
+            _WECHAT_DATABASE_FAILED
+            if code in database_codes
+            else _WECHAT_SESSIONS_FAILED
+        )
+        detail = message or _WECHAT_CONNECT_RETRY_HINT
+        self._status_label.setText(_DISCONNECTED_PREFIX + title)
+        self._status_label.setToolTip(detail)
+        self._status_label.setVisible(True)
+        self._hint_label.setText(detail)
+        self.status_changed.emit(detail)
 
     def _on_session_selection_changed(self) -> None:
         self._update_analyze_enabled()
@@ -1171,6 +1237,16 @@ class AnalysisPage(QWidget):
             item is not None
             and bool(item.flags() & Qt.ItemFlag.ItemIsEnabled)
         )
+
+def _wechat_unavailable_message(status: Any) -> str:
+    if not bool(getattr(status, "runtime_available", False)):
+        return "\u5fae\u4fe1\u8fde\u63a5\u73af\u5883\u4e0d\u5b58\u5728"
+    if not bool(getattr(status, "data_found", False)):
+        return "\u5fae\u4fe1\u6570\u636e\u5e93\u672a\u5c31\u7eea"
+    if not bool(getattr(status, "db_key_available", False)):
+        return _WECHAT_WAITING_LOGIN
+    return getattr(status, "message", "") or _WECHAT_STATUS_DISCONNECTED
+
 
 def _snapshot_state(snapshot: Any) -> str:
     """Read the lifecycle state a connection snapshot resolved."""

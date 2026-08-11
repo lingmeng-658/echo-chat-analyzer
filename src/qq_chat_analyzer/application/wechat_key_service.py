@@ -138,7 +138,7 @@ class WeChatKeyService:
                 "\u672a\u68c0\u6d4b\u5230\u5fae\u4fe1\uff0c"
                 "\u8bf7\u5148\u6253\u5f00\u5e76\u767b\u5f55"
                 "\u5fae\u4fe1\u7535\u8111\u7248\u3002",
-                code="wechat_waiting_login",
+                code="wechat_not_running",
             )
 
         timeout_seconds = self._timeout if timeout is None else timeout
@@ -505,7 +505,7 @@ def _helper_failure_message(stderr: Any) -> str:
 def _helper_failure_code(stderr: Any) -> str:
     detail = str(stderr or "").lower()
     if "no weixin process" in detail:
-        return "wechat_waiting_login"
+        return "wechat_not_running"
     if "initializehook" in detail and "-> true" not in detail:
         return "wechat_hook_failed"
     if "timeout" in detail or "key unavailable" in detail:

@@ -26,7 +26,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .errors import ApplicationServiceError
-from .wechat_data_detector import detect_wechat_data_roots
+from .wechat_data_detector import (
+    detect_wechat_data_roots,
+    is_valid_wechat_data_root,
+)
 from .wechat_environment_config import (
     WeChatConfigNotFound,
     WeChatEnvironmentConfig,
@@ -161,6 +164,10 @@ class WeChatSetupService:
         The caller decides what to do with several candidates; this service
         never picks one on the user's behalf.
         """
+        saved = self._saved_valid_data_root()
+        if saved is not None:
+            return [saved]
+
         try:
             detected = self._data_roots_detector()
         except Exception:
@@ -172,6 +179,8 @@ class WeChatSetupService:
             path = Path(value)
             if path not in roots:
                 roots.append(path)
+        if len(roots) == 1 and is_valid_wechat_data_root(roots[0]):
+            self._persist_detected_data_root(roots[0])
         return roots
 
     def save_environment(self, config: WeChatEnvironmentConfig) -> Any:
@@ -252,6 +261,30 @@ class WeChatSetupService:
             wcdb_dll_path=config.wcdb_dll_path or existing.wcdb_dll_path,
         )
 
+    def _saved_valid_data_root(self) -> Path | None:
+        try:
+            root = self._config_loader.load().data_root
+        except Exception:
+            return None
+        if root is None or not is_valid_wechat_data_root(root):
+            return None
+        return root
+
+    def _persist_detected_data_root(self, root: Path) -> None:
+        try:
+            existing = self._config_loader.load()
+        except Exception:
+            existing = WeChatEnvironmentConfig()
+        config = self._apply_default_runtime(
+            replace(existing, data_root=root)
+        )
+        try:
+            self._config_writer.save(config)
+        except Exception:
+            return
+        if self._provider_factory is not None:
+            self._provider_factory.invalidate()
+
     @staticmethod
     def _apply_default_runtime(
         config: WeChatEnvironmentConfig,
@@ -259,8 +292,18 @@ class WeChatSetupService:
         defaults = default_wechat_environment_config()
         return replace(
             config,
-            wcdb_cli_path=config.wcdb_cli_path or defaults.wcdb_cli_path,
-            wcdb_dll_path=config.wcdb_dll_path or defaults.wcdb_dll_path,
+            wcdb_cli_path=(
+                config.wcdb_cli_path
+                if config.wcdb_cli_path is not None
+                and config.wcdb_cli_path.is_file()
+                else defaults.wcdb_cli_path
+            ),
+            wcdb_dll_path=(
+                config.wcdb_dll_path
+                if config.wcdb_dll_path is not None
+                and config.wcdb_dll_path.is_file()
+                else defaults.wcdb_dll_path
+            ),
         )
     def _ensure_db_key(
         self,

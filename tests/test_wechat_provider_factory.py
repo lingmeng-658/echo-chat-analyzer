@@ -45,6 +45,8 @@ def _export_module():
 
 
 def _write_config(directory: Path, **overrides) -> Path:
+    (directory / "wcdb_cli.exe").write_text("fake", encoding="utf-8")
+    (directory / "WCDB.dll").write_text("fake", encoding="utf-8")
     payload = {
         "data_root": str(directory / "data"),
         "db_key": "fictional-key",

@@ -124,7 +124,7 @@ def test_acquire_without_weixin_process_is_user_safe(tmp_path: Path) -> None:
     with pytest.raises(module.WeChatKeyUnavailable) as caught:
         service.acquire()
 
-    assert caught.value.code == "wechat_waiting_login"
+    assert caught.value.code == "wechat_not_running"
     assert "\u672a\u68c0\u6d4b\u5230\u5fae\u4fe1" in caught.value.public_message
 
 
