@@ -311,6 +311,38 @@ class _StubAnalysisService:
         return self._result
 
 
+class _ConversationSummaryAnalysisService:
+    """Exercise the real summary/presentation name consumers for one session."""
+
+    def __init__(self, conversation_id: str) -> None:
+        self._conversation_id = conversation_id
+
+    def execute(self, request):
+        message_module = importlib.import_module("qq_chat_analyzer.message")
+        analyzer_module = importlib.import_module(
+            "qq_chat_analyzer.analysis.analyzers.conversation_analyzer"
+        )
+        report = analyzer_module.ConversationAnalyzer().analyze(
+            [
+                message_module.ChatMessage(
+                    timestamp=1704099600,
+                    sender="Fictional Sender",
+                    message_type="text",
+                    text="Fictional message",
+                    conversation_id=self._conversation_id,
+                )
+            ],
+            conversation_names=request.conversation_names,
+        )
+        dto = _dto()
+        return dto.AnalysisResultDTO(
+            status=dto.AnalysisStatus.COMPLETED,
+            processed_message_count=1,
+            valid_text_count=1,
+            reports=_analysis_models().AnalysisReports(conversations=report),
+        )
+
+
 class _RecordingBuilder:
     def __init__(self, view=None):
         self.calls: list[object] = []
@@ -1135,6 +1167,50 @@ def test_analyze_private_qq_session_preserves_private_export_identity(
     assert request.session_name == "Fictional Alice"
     assert outcome.session.display_name == "Fictional Alice"
     assert outcome.session.session_type == "private"
+
+
+def test_analyze_qq_group_uses_session_name_in_conversation_summary(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    session_id = "365970690"
+    display_name = "Fictional Study Group"
+    qq_service = _StubQQService(
+        groups=[_FakeQQGroup(session_id, display_name)],
+        export_path=_export_file(tmp_path, "qq_group_export.json"),
+    )
+
+    outcome = _facade(
+        qq_service=qq_service,
+        analysis_service=_ConversationSummaryAnalysisService(session_id),
+    ).analyze_session(module.ChatSource.QQ, session_id)
+
+    summary = outcome.result.reports.conversations.conversations[0]
+    assert summary.display_name == display_name
+    assert summary.resolved_display_name == display_name
+    assert outcome.view.conversation_cards[0].conversation_id == display_name
+
+
+def test_analyze_qq_private_uses_friend_name_in_conversation_summary(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    session_id = "u_fictional_internal_uid"
+    display_name = "Fictional Alice"
+    qq_service = _StubQQService(
+        groups=[_FakeQQFriend(session_id, display_name, "200001")],
+        export_path=_export_file(tmp_path, "qq_private_export.json"),
+    )
+
+    outcome = _facade(
+        qq_service=qq_service,
+        analysis_service=_ConversationSummaryAnalysisService(session_id),
+    ).analyze_session(module.ChatSource.QQ, session_id)
+
+    summary = outcome.result.reports.conversations.conversations[0]
+    assert summary.display_name == display_name
+    assert summary.resolved_display_name == display_name
+    assert outcome.view.conversation_cards[0].conversation_id == display_name
 
 
 def test_analyze_session_converts_wechat_time_range_to_epoch_seconds(

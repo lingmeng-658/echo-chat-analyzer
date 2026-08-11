@@ -558,11 +558,7 @@ class ChatAnalyzerFacade:
                     display_name=session_id,
                 )
             )
-            conversation_names = (
-                {session_id: session.display_name}
-                if chat_source is ChatSource.WECHAT
-                else None
-            )
+            conversation_names = {session_id: session.display_name}
         else:
             session = SessionInfo(
                 source=chat_source,
