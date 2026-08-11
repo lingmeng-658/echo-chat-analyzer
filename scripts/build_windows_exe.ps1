@@ -20,6 +20,7 @@ $PortableRuntime = Join-Path $PortableDirectory "runtime"
 $RequiredRuntimePaths = @(
     "qq\qce-server.exe",
     "qq\napcat.mjs",
+    "qq\config\plugins.json",
     "qq\static\qce",
     "wechat\wcdb_cli.exe",
     "wechat\WCDB.dll",
@@ -64,6 +65,15 @@ try {
             Remove-Item -LiteralPath $GeneratedPath -Recurse -Force
         }
     }
+
+    # Restore only the machine-independent plugin enablement seed. Account,
+    # protocol, WebUI, cache, and log state remain excluded from Portable.
+    $QQPluginConfigSource = Join-Path $RuntimeSource "qq\config\plugins.json"
+    $QQPluginConfigDestination = Join-Path $PortableRuntime "qq\config\plugins.json"
+    New-Item -ItemType Directory -Force -Path (
+        Split-Path -Parent $QQPluginConfigDestination
+    ) | Out-Null
+    Copy-Item -LiteralPath $QQPluginConfigSource -Destination $QQPluginConfigDestination
 
     foreach ($RelativePath in $RequiredRuntimePaths) {
         $CopiedPath = Join-Path $PortableRuntime $RelativePath

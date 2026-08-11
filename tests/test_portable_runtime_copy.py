@@ -40,6 +40,14 @@ def _fictional_runtime(project_root: Path, *, koffi_index: bool = True) -> Path:
         runtime / "wechat/node_modules/koffi/nested/sentinel.txt",
         "nested dependency",
     )
+    _write(
+        runtime / "qq/config/plugins.json",
+        '{"napcat-plugin-qce": true}\n',
+    )
+    _write(
+        runtime / "qq/config/napcat_fictional-account.json",
+        '{"account": "fictional"}\n',
+    )
     return runtime
 
 
@@ -88,6 +96,21 @@ def test_runtime_build_rejects_koffi_without_entrypoint(tmp_path: Path) -> None:
     assert "runtime\\wechat\\node_modules\\koffi\\index.js" in (
         completed.stderr + completed.stdout
     )
+
+
+def test_runtime_build_keeps_qce_plugin_enablement_without_account_state(
+    tmp_path: Path,
+) -> None:
+    _fictional_runtime(tmp_path)
+
+    completed = _copy_runtime(tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    portable_config = tmp_path / "dist/Echo/runtime/qq/config"
+    assert (portable_config / "plugins.json").read_text(encoding="utf-8") == (
+        '{"napcat-plugin-qce": true}\n'
+    )
+    assert not (portable_config / "napcat_fictional-account.json").exists()
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")

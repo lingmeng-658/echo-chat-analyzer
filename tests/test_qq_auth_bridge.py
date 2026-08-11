@@ -8,6 +8,9 @@ exercised against temp files with ``subprocess.Popen`` mocked.
 from __future__ import annotations
 
 import importlib
+import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -403,6 +406,58 @@ def test_default_launcher_opens_the_runtime_login_window(
     assert spawned["kwargs"]["env"]["NAPCAT_QQ_PATH"] == str(
         (tmp_path / "QQ.exe").resolve()
     )
+    assert spawned["kwargs"]["env"]["ECHO_MODE"] == "1"
+
+
+def _start_launcher_exit_fixture(tmp_path: Path, *, echo_mode: bool):
+    runtime = tmp_path / "runtime" / "qq"
+    runtime.mkdir(parents=True)
+    launcher = runtime / "launcher-user.bat"
+    shutil.copy2(PROJECT_ROOT / "runtime" / "qq" / "launcher-user.bat", launcher)
+    qq_path = tmp_path / "Bin" / "QQ.exe"
+    qq_path.parent.mkdir()
+    qq_path.write_text("fictional", encoding="utf-8")
+    environment = os.environ.copy()
+    environment["NAPCAT_QQ_PATH"] = str(qq_path)
+    if echo_mode:
+        environment["ECHO_MODE"] = "1"
+    else:
+        environment.pop("ECHO_MODE", None)
+    return subprocess.Popen(
+        ["cmd.exe", "/d", "/s", "/c", "call", str(launcher)],
+        cwd=runtime,
+        env=environment,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+        text=True,
+    )
+
+
+def test_launcher_user_exits_without_pause_in_echo_mode(tmp_path: Path) -> None:
+    process = _start_launcher_exit_fixture(tmp_path, echo_mode=True)
+    try:
+        assert process.wait(timeout=2) == 0
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=2)
+
+
+def test_launcher_user_keeps_pause_for_interactive_mode(tmp_path: Path) -> None:
+    process = _start_launcher_exit_fixture(tmp_path, echo_mode=False)
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            process.wait(timeout=0.2)
+        assert process.stdin is not None
+        process.stdin.write("\n")
+        process.stdin.flush()
+        assert process.wait(timeout=2) == 0
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=2)
 
 
 def test_default_launcher_hides_napcat_console_on_windows(

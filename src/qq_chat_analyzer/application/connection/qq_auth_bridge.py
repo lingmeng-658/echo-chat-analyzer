@@ -346,6 +346,7 @@ def _launch_auth_window(
         "cwd": str(runtime_directory),
         "env": {
             **os.environ,
+            "ECHO_MODE": "1",
             "NAPCAT_QQ_PATH": str(qq_path.resolve()),
         },
         "stdin": subprocess.DEVNULL,
