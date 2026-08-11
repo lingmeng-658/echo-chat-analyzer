@@ -9,6 +9,8 @@ import importlib
 import sys
 from pathlib import Path
 
+import pytest
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
@@ -66,6 +68,39 @@ def test_terminate_all_never_raises_on_terminator_failure() -> None:
     registry.record(3001)
 
     assert registry.terminate_all() == 1
+
+
+def test_windows_taskkill_hides_its_console(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _module()
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def _run(args, **kwargs):
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr(module.os, "name", "nt")
+    monkeypatch.setattr(
+        module.subprocess,
+        "CREATE_NO_WINDOW",
+        0x08000000,
+        raising=False,
+    )
+    monkeypatch.setattr(module.subprocess, "run", _run)
+
+    module._terminate_process_tree(6001)
+
+    assert calls == [
+        (
+            ["taskkill", "/PID", "6001", "/T", "/F"],
+            {
+                "capture_output": True,
+                "timeout": 5,
+                "check": False,
+                "creationflags": 0x08000000,
+            },
+        )
+    ]
 
 
 def test_discard_forgets_one_pid() -> None:

@@ -70,6 +70,7 @@ def _terminate_process_tree(pid: int) -> None:
             capture_output=True,
             timeout=5,
             check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
         return
     try:

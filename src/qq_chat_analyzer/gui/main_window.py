@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from PySide6.QtWidgets import (
@@ -82,10 +83,12 @@ class MainWindow(QMainWindow):
         """Clean up QQ processes LCA started before the window closes."""
         shutdown = getattr(self._facade, "shutdown_qq_runtime", None)
         if callable(shutdown):
-            try:
-                shutdown()
-            except Exception:
-                pass
+            threading.Thread(
+                target=_best_effort_shutdown,
+                args=(shutdown,),
+                name="echo-qq-shutdown",
+                daemon=False,
+            ).start()
         super().closeEvent(event)
 
     def show_analysis_page(self) -> None:
@@ -120,3 +123,11 @@ class MainWindow(QMainWindow):
         self.show_analysis_page()
         self.statusBar().showMessage(message)
         QMessageBox.warning(self, _ERROR_TITLE, message)
+
+
+def _best_effort_shutdown(shutdown: Any) -> None:
+    """Run owned-process cleanup away from the Qt GUI thread."""
+    try:
+        shutdown()
+    except Exception:
+        pass

@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -502,7 +503,32 @@ def test_main_window_close_cleans_up_qq_runtime(qt_app, sources) -> None:
 
     window.close()
 
+    deadline = time.monotonic() + 1.0
+    while not facade.shutdown_qq_runtime_calls and time.monotonic() < deadline:
+        time.sleep(0.005)
+
     assert facade.shutdown_qq_runtime_calls == [1]
+
+
+def test_main_window_close_does_not_wait_for_slow_process_cleanup(
+    qt_app,
+    sources,
+) -> None:
+    cleanup_finished = threading.Event()
+
+    class _SlowShutdownFacade(StubFacade):
+        def shutdown_qq_runtime(self):
+            time.sleep(0.2)
+            cleanup_finished.set()
+
+    window = _main_window(qt_app, _SlowShutdownFacade(sources=sources))
+
+    started = time.monotonic()
+    window.close()
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.1
+    assert cleanup_finished.wait(timeout=1.0)
 
 
 def _connection_status(
