@@ -454,6 +454,71 @@ def test_same_sender_automation_candidates_create_one_decision() -> None:
     ]
 
 
+def test_high_score_repeated_template_with_short_static_text_is_reviewed() -> None:
+    candidate = Candidate(
+        target="@{user} 虚构查询",
+        candidate_type="repeated_template",
+        score=1.0,
+        metadata={"static_character_count": 4},
+    )
+
+    decisions = create_filter_decisions([candidate])
+
+    assert decisions == [
+        FilterDecision(
+            target="@{user} 虚构查询",
+            target_type="template",
+            action="review",
+            confidence=1.0,
+            reason="possible_repeated_template",
+            source="auto",
+        )
+    ]
+
+
+def test_high_confidence_repeated_template_is_ignored() -> None:
+    candidate = Candidate(
+        target="签到成功，积分+{number}",
+        candidate_type="repeated_template",
+        score=1.0,
+        metadata={"static_character_count": 8},
+    )
+
+    decisions = create_filter_decisions([candidate])
+
+    assert decisions == [
+        FilterDecision(
+            target="签到成功，积分+{number}",
+            target_type="template",
+            action="ignore",
+            confidence=1.0,
+            reason="high_confidence_repeated_template",
+            source="auto",
+        )
+    ]
+
+
+def test_medium_confidence_repeated_template_is_reviewed() -> None:
+    candidate = Candidate(
+        target="查询结果：{variable}",
+        candidate_type="repeated_template",
+        score=0.8,
+    )
+
+    decisions = create_filter_decisions([candidate])
+
+    assert decisions == [
+        FilterDecision(
+            target="查询结果：{variable}",
+            target_type="template",
+            action="review",
+            confidence=0.8,
+            reason="possible_repeated_template",
+            source="auto",
+        )
+    ]
+
+
 def test_unknown_candidate_type_is_reviewed_safely() -> None:
     candidate = Candidate(
         target="虚构未知对象",

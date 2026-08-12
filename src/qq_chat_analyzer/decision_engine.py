@@ -14,6 +14,8 @@ _ACTION_PRIORITY = {
     "ignore": 2,
 }
 
+MIN_IGNORE_STATIC_TEMPLATE_LENGTH = 5
+
 
 def create_filter_decisions(
     candidates: Iterable[Candidate],
@@ -41,6 +43,18 @@ def create_filter_decisions(
             else:
                 action = "review"
                 reason = "possible_welcome_template"
+        elif candidate.candidate_type == "repeated_template":
+            target_type = "template"
+            if (
+                candidate.score >= 0.9
+                and _static_template_length(candidate)
+                >= MIN_IGNORE_STATIC_TEMPLATE_LENGTH
+            ):
+                action = "ignore"
+                reason = "high_confidence_repeated_template"
+            else:
+                action = "review"
+                reason = "possible_repeated_template"
         elif candidate.candidate_type == "automation_source":
             target_type = "sender"
             source_kind = candidate.metadata.get("source_kind")
@@ -78,6 +92,14 @@ def create_filter_decisions(
             decisions[existing_index] = decision
 
     return decisions
+
+
+def _static_template_length(candidate: Candidate) -> int:
+    """Return the candidate's static template length when it is an integer."""
+    static_length = candidate.metadata.get("static_character_count")
+    if type(static_length) is not int:
+        return 0
+    return static_length
 
 
 def _has_strong_interactive_bot_evidence(

@@ -62,6 +62,55 @@ def test_welcome_template_flows_through_decision_engine_and_pipeline() -> None:
     assert result.applied_decisions[0].action == "ignore"
 
 
+def test_repeated_template_flows_through_decision_engine_and_pipeline() -> None:
+    sign_in_messages = [
+        _message(
+            "虚构签到助手",
+            f"签到成功，积分+{points}",
+            index,
+        )
+        for index, points in enumerate((10, 20, 30, 40, 50))
+    ]
+    ordinary_message = _message(
+        "虚构普通用户",
+        "今天讨论本地测试方案",
+        5,
+    )
+
+    result = run_smart_profile([*sign_in_messages, ordinary_message])
+
+    assert result.kept_messages == [ordinary_message]
+    assert result.filtered_messages == sign_in_messages
+    assert len(result.applied_decisions) == 1
+    assert result.applied_decisions[0].target_type == "template"
+    assert result.applied_decisions[0].action == "ignore"
+    assert result.applied_decisions[0].reason == (
+        "high_confidence_repeated_template"
+    )
+
+
+def test_repeated_template_review_does_not_filter_ordinary_messages() -> None:
+    low_frequency_messages = [
+        _message(
+            "虚构查询助手",
+            f"查询结果：虚构记录{index}",
+            index,
+        )
+        for index in range(3)
+    ]
+    ordinary_message = _message(
+        "虚构普通用户",
+        "今天讨论本地测试方案",
+        3,
+    )
+
+    result = run_smart_profile([*low_frequency_messages, ordinary_message])
+
+    assert result.kept_messages == [*low_frequency_messages, ordinary_message]
+    assert result.filtered_messages == []
+    assert result.applied_decisions == []
+
+
 def test_ordinary_messages_are_preserved_with_traceable_empty_result() -> None:
     messages = [
         _message("虚构用户甲", "今天讨论什么主题", 1),
