@@ -176,3 +176,20 @@ class AnalysisReports:
     message_length: MessageLengthReport | None = None
     user_profiles: UserProfileReport | None = None
     conversations: ConversationReport | None = None
+    message_composition: MessageCompositionReport | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MessageCompositionCategory:
+    """Message count for one display category."""
+
+    category: str
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class MessageCompositionReport:
+    """Message counts grouped by display category, excluding system messages."""
+
+    total_count: int
+    categories: tuple[MessageCompositionCategory, ...] = ()

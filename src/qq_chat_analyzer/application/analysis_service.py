@@ -9,6 +9,7 @@ from pathlib import Path
 from ..analysis.analyzers import (
     ActivityAnalyzer,
     ConversationAnalyzer,
+    MessageCompositionAnalyzer,
     MessageLengthAnalyzer,
     UserProfileAnalyzer,
 )
@@ -31,6 +32,7 @@ from ..message import ChatMessage
 from ..smart_profile import run_smart_profile
 from ..tokenizer import tokenize
 from .dto import (
+    AnalysisDiagnosticCounts,
     AnalysisRequestDTO,
     AnalysisResultDTO,
     AnalysisStatus,
@@ -85,6 +87,13 @@ class AnalysisApplicationService:
             processed_message_count = len(scoped_messages)
         filtering_result = run_smart_profile(scoped_messages)
         kept_messages = filtering_result.kept_messages
+        diagnostic_counts = AnalysisDiagnosticCounts(
+            raw_message_count=outcome.processed_message_count,
+            imported_message_count=len(parsed_messages),
+            scope_message_count=len(scoped_messages),
+            filtered_message_count=len(kept_messages),
+            analyzed_message_count=len(kept_messages),
+        )
         analyzed = _analyze_kept_messages(
             kept_messages,
             request.stopwords_path,
@@ -95,12 +104,14 @@ class AnalysisApplicationService:
                 status=AnalysisStatus.NO_VALID_TEXT,
                 processed_message_count=processed_message_count,
                 valid_text_count=0,
+                diagnostic_counts=diagnostic_counts,
             )
         if not analyzed.tokens:
             return AnalysisResultDTO(
                 status=AnalysisStatus.NO_TOKENS,
                 processed_message_count=processed_message_count,
                 valid_text_count=analyzed.valid_text_count,
+                diagnostic_counts=diagnostic_counts,
             )
 
         ranked_words = top_words(analyzed.tokens, request.top)
@@ -109,6 +120,7 @@ class AnalysisApplicationService:
                 status=AnalysisStatus.NO_TOKENS,
                 processed_message_count=processed_message_count,
                 valid_text_count=analyzed.valid_text_count,
+                diagnostic_counts=diagnostic_counts,
             )
 
         reports = _build_reports(
@@ -142,6 +154,7 @@ class AnalysisApplicationService:
             status=AnalysisStatus.COMPLETED,
             processed_message_count=processed_message_count,
             valid_text_count=analyzed.valid_text_count,
+            diagnostic_counts=diagnostic_counts,
             top_words=tuple(
                 WordFrequencyDTO(word=word, count=count)
                 for word, count in ranked_words
@@ -178,6 +191,7 @@ def _build_reports(
             messages,
             conversation_names=conversation_names,
         ),
+        message_composition=MessageCompositionAnalyzer().analyze(messages),
     )
 
 

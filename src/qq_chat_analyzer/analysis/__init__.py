@@ -3,6 +3,7 @@
 from .analyzers import (
     ActivityAnalyzer,
     ConversationAnalyzer,
+    MessageCompositionAnalyzer,
     MessageLengthAnalyzer,
     UserProfileAnalyzer,
 )
@@ -13,6 +14,8 @@ from .models import (
     ConversationSummary,
     HourlyActivity,
     LengthBucket,
+    MessageCompositionCategory,
+    MessageCompositionReport,
     MessageLengthReport,
     ProfileWord,
     SpeakerLength,
@@ -30,6 +33,9 @@ __all__ = [
     "ConversationSummary",
     "HourlyActivity",
     "LengthBucket",
+    "MessageCompositionAnalyzer",
+    "MessageCompositionCategory",
+    "MessageCompositionReport",
     "MessageLengthAnalyzer",
     "MessageLengthReport",
     "ProfileWord",

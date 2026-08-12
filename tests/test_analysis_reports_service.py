@@ -28,11 +28,12 @@ def _raw_message(
     timestamp: int,
     nickname: str,
     text: str,
+    message_type: str = "text",
 ) -> dict[str, object]:
     return {
         "timestamp": timestamp,
         "sender": {"nickname": nickname},
-        "type": "text",
+        "type": message_type,
         "content": {"text": text},
     }
 
@@ -78,6 +79,7 @@ def test_result_exposes_default_reports_bundle_without_reports_argument() -> Non
     assert result.reports.message_length is None
     assert result.reports.user_profiles is None
     assert result.reports.conversations is None
+    assert result.reports.message_composition is None
 
 
 def test_execute_attaches_every_report_to_the_result(tmp_path: Path) -> None:
@@ -109,6 +111,9 @@ def test_execute_attaches_every_report_to_the_result(tmp_path: Path) -> None:
     assert reports.user_profiles.speaker_count == 2
     assert reports.conversations is not None
     assert reports.conversations.conversation_count == 1
+    assert reports.message_composition is not None
+    assert reports.message_composition.total_count == 3
+    assert _text_category_count(reports.message_composition) == 3
 
 
 def test_reports_stay_out_of_the_result_repr(tmp_path: Path) -> None:
@@ -158,3 +163,68 @@ def test_user_profile_report_reuses_pipeline_tokens(tmp_path: Path) -> None:
     alice_words = {word.word: word.count for word in profiles["Fictional-Alice"].top_words}
     assert alice_words.get("Python") == 2
     assert profiles["Fictional-Bob"].top_words != ()
+
+
+def _text_category_count(report) -> int:
+    for item in report.categories:
+        if item.category == "文本":
+            return item.count
+    return 0
+
+
+def test_execute_attaches_message_composition_with_type_counts(
+    tmp_path: Path,
+) -> None:
+    application = _application_module()
+    input_path = tmp_path / "fictional-chat.json"
+    output_directory = tmp_path / "private-output"
+    output_directory.mkdir()
+    _write_fictional_chat(
+        input_path,
+        [
+            _raw_message(1704099600, "Fictional-Alice", "hello"),
+            _raw_message(
+                1704103200,
+                "Fictional-Alice",
+                "world",
+                message_type="reply",
+            ),
+            _raw_message(1704106800, "Fictional-Bob", "python"),
+            _raw_message(
+                1704110400,
+                "Fictional-Bob",
+                "project",
+                message_type="reply",
+            ),
+        ],
+    )
+
+    result = application.AnalysisApplicationService().execute(
+        _request(application, tmp_path, input_path)
+    )
+    reports = result.reports
+
+    assert result.status is application.AnalysisStatus.COMPLETED
+    assert reports.message_composition is not None
+    assert reports.message_composition.total_count == 4
+    assert _text_category_count(reports.message_composition) == 4
+    assert (
+        sum(item.count for item in reports.message_composition.categories)
+        == 4
+    )
+
+
+def test_execute_with_no_messages_keeps_empty_reports_bundle(
+    tmp_path: Path,
+) -> None:
+    application = _application_module()
+    input_path = tmp_path / "fictional-chat.json"
+    _write_fictional_chat(input_path, [])
+
+    result = application.AnalysisApplicationService().execute(
+        _request(application, tmp_path, input_path)
+    )
+
+    assert result.status is not application.AnalysisStatus.COMPLETED
+    assert result.reports == application.AnalysisReports()
+    assert result.reports.message_composition is None
