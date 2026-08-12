@@ -15,6 +15,7 @@ resources = (
     project_root / "stopwords.txt",
     project_root / "stopwords_topic.txt",
     project_root / "stopwords_culture.txt",
+    project_root / "wechat_login_guide.png",
 )
 datas = [(str(path), ".") for path in resources]
 

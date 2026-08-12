@@ -96,7 +96,7 @@ def test_user_data_dir_falls_back_to_home(
     assert (tmp_path / ".localchatanalyzer").is_dir()
 
 
-def test_bundled_data_files_lists_stopwords(
+def test_bundled_data_files_lists_gui_resources_and_stopwords(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = _fresh_module(monkeypatch)
@@ -114,7 +114,25 @@ def test_bundled_data_files_lists_stopwords(
         (str(fake_bundle / "stopwords.txt"), "."),
         (str(fake_bundle / "stopwords_topic.txt"), "."),
         (str(fake_bundle / "stopwords_culture.txt"), "."),
+        (str(fake_bundle / "wechat_login_guide.png"), "."),
     ]
+
+
+def test_wechat_login_guide_path_uses_bundled_resource_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _fresh_module(monkeypatch)
+    fake_bundle = PROJECT_ROOT / ".tmp-resources-bundle"
+    monkeypatch.setattr(
+        module.sys,
+        "_MEIPASS",
+        str(fake_bundle),
+        raising=False,
+    )
+
+    assert module.default_wechat_login_guide_path() == (
+        fake_bundle / "wechat_login_guide.png"
+    )
 
 
 def test_bundled_runtime_dir_points_at_project_runtime_in_dev(

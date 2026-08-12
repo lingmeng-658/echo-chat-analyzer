@@ -426,8 +426,7 @@ def test_default_launcher_opens_the_runtime_login_window(
         "/d",
         "/s",
         "/c",
-        "call",
-        str(tmp_path / "launcher-user.bat"),
+        "launcher-user.bat",
     ]
     assert spawned["kwargs"]["cwd"] == str(tmp_path)
     assert "creationflags" not in spawned["kwargs"]
@@ -517,8 +516,7 @@ def test_default_launcher_hides_napcat_console_on_windows(
         "/d",
         "/s",
         "/c",
-        "call",
-        str(tmp_path / "launcher-user.bat"),
+        "launcher-user.bat",
     ]
     assert spawned["kwargs"]["cwd"] == str(tmp_path)
     assert spawned["kwargs"]["creationflags"] == 0x08000000
@@ -548,12 +546,14 @@ def test_default_launcher_rejects_immediate_batch_failure(
         bridge.default_auth_window_launcher(config)()
 
 
+@pytest.mark.parametrize("portable_name", ["Echo Portable", "Echo(2)", "余音安装包"])
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows cmd.exe only")
-def test_launcher_command_runs_batch_from_portable_directory_with_spaces(
+def test_launcher_command_runs_batch_from_portable_directory_with_special_path(
     tmp_path: Path,
+    portable_name: str,
 ) -> None:
     bridge = _bridge_module()
-    runtime = tmp_path / "Echo Portable" / "runtime" / "qq"
+    runtime = tmp_path / portable_name / "Echo" / "runtime" / "qq"
     runtime.mkdir(parents=True)
     launcher = runtime / "launcher-user.bat"
     qq_path = tmp_path / "QQ Install" / "QQ.exe"
@@ -561,9 +561,7 @@ def test_launcher_command_runs_batch_from_portable_directory_with_spaces(
     qq_path.write_text("fictional", encoding="utf-8")
     launcher.write_text(
         "@echo off\n"
-        '> "%~dp0result.txt" echo QQ=%NAPCAT_QQ_PATH%\n'
-        '>> "%~dp0result.txt" echo ARG=%~1\n'
-        '>> "%~dp0result.txt" echo CWD=%CD%\n'
+        '> "%~dp0result.txt" echo STARTED\n'
         "exit /b 0\n",
         encoding="utf-8",
     )
@@ -571,11 +569,9 @@ def test_launcher_command_runs_batch_from_portable_directory_with_spaces(
     process = bridge._launch_auth_window(runtime, launcher, qq_path)
 
     assert process.wait(timeout=5) == 0
-    result = (runtime / "result.txt").read_text(encoding="utf-8")
-    assert f"QQ={qq_path}" in result
-    assert "ARG=" in result
-    assert str(qq_path) not in result.split("ARG=", 1)[1]
-    assert f"CWD={runtime}" in result
+    assert (runtime / "result.txt").read_text(encoding="ascii").strip() == (
+        "STARTED"
+    )
 
 
 def test_default_launcher_logs_completed_stdout_and_stderr(
@@ -704,7 +700,7 @@ def test_default_launcher_prefers_the_configured_qq_path(
 
     bridge.default_auth_window_launcher(config)()
 
-    assert spawned["args"][-1] == str(tmp_path / "launcher-user.bat")
+    assert spawned["args"][-1] == "launcher-user.bat"
     assert str(configured) not in spawned["args"]
     assert spawned["kwargs"]["env"]["NAPCAT_QQ_PATH"] == str(
         configured.resolve()

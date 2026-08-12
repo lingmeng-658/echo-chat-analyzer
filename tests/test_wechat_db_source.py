@@ -73,9 +73,15 @@ def _write_db_export(
 
 
 class _FakeCompleted:
-    def __init__(self, stdout: str = "", stderr: str = "") -> None:
+    def __init__(
+        self,
+        stdout: str = "",
+        stderr: str = "",
+        returncode: int = 0,
+    ) -> None:
         self.stdout = stdout
         self.stderr = stderr
+        self.returncode = returncode
 
 
 def test_wcdb_subprocess_hides_console_on_windows(
@@ -700,6 +706,68 @@ def test_helper_failure_and_timeout_become_query_failed(tmp_path: Path) -> None:
 
     with pytest.raises(QueryFailed):
         _provider(tmp_path, garbage).list_sessions()
+
+
+def test_query_failure_logs_safe_wcdb_diagnostics(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret_key = FICTIONAL_KEY
+
+    def failing(command, timeout, environment):
+        assert environment["WX_DB_KEY"] == secret_key
+        return _FakeCompleted(
+            stdout=json.dumps(
+                {
+                    "ok": False,
+                    "stage": "open",
+                    "error": f"cipher open failed {secret_key}",
+                }
+            ),
+            stderr=f"native stderr: open failed {secret_key}",
+            returncode=17,
+        )
+
+    provider = _provider(tmp_path, failing)
+
+    with caplog.at_level(
+        "INFO",
+        logger="qq_chat_analyzer.providers.wechat_database_provider",
+    ):
+        with pytest.raises(QueryFailed):
+            provider.list_sessions()
+
+    logs = caplog.text
+    assert "database_type=session" in logs
+    assert "database_file=session.db" in logs
+    assert "database_path=" in logs
+    assert "query_stage=session_list" in logs
+    assert "wcdb_stage=open" in logs
+    assert "returncode=17" in logs
+    assert "stderr=native stderr: open failed [REDACTED]" in logs
+    assert "helper_error=cipher open failed [REDACTED]" in logs
+    assert "error_type=QueryFailed" in logs
+    assert secret_key not in logs
+    assert "WX_DB_KEY" not in logs
+
+
+def test_query_runner_exception_logs_original_error_type_without_key(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def crashing(command, timeout, environment):
+        raise RuntimeError(FICTIONAL_KEY)
+
+    with caplog.at_level(
+        "INFO",
+        logger="qq_chat_analyzer.providers.wechat_database_provider",
+    ):
+        with pytest.raises(QueryFailed):
+            _provider(tmp_path, crashing).list_sessions()
+
+    assert "original_error_type=RuntimeError" in caplog.text
+    assert "query_stage=session_list" in caplog.text
+    assert FICTIONAL_KEY not in caplog.text
 
 
 def test_helper_absent_at_runtime_becomes_helper_not_found(tmp_path: Path) -> None:

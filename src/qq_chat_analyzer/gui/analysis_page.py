@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QRadioButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -41,7 +42,10 @@ from ..application.facade import (
     ChatSource,
     WeChatEnvironmentConfig,
 )
-from ..resources import default_qq_runtime_directory
+from ..resources import (
+    default_qq_runtime_directory,
+    default_wechat_login_guide_path,
+)
 from .workers import submit
 from .wechat_setup_dialog import WeChatSetupDialog
 
@@ -55,7 +59,9 @@ _SELECT_SOURCE_HINT = "\u8bf7\u5148\u9009\u62e9\u6570\u636e\u6765\u6e90\u3002"
 _LOADING_SESSIONS = "\u6b63\u5728\u52a0\u8f7d\u4f1a\u8bdd\u5217\u8868..."
 _NO_SESSIONS = "\u8be5\u6765\u6e90\u6ca1\u6709\u53ef\u5206\u6790\u7684\u4f1a\u8bdd\u3002"
 _SESSION_EMPTY_TITLE = "暂无会话"
-_SESSION_LOADING_TITLE = "正在加载聊天列表..."
+_SESSION_EMPTY_DETAIL = "连接数据源后，这里会显示聊天记录"
+_SESSION_CONNECTING_TITLE = "正在连接数据源..."
+_SESSION_READING_TITLE = "正在读取聊天数据..."
 _SESSION_NO_DATA_TITLE = "没有找到可分析的聊天记录"
 _NO_MESSAGES_AVAILABLE = "\u8be5\u4f1a\u8bdd\u6ca1\u6709\u53ef\u5206\u6790\u6d88\u606f"
 _NO_MATCHING_SESSIONS = "没有匹配的会话。"
@@ -75,7 +81,9 @@ _LOCAL_FILE_HINT = (
 )
 _ANALYZING = "正在准备分析..."
 _CANCEL_CONNECTION_LABEL = "取消连接"
-_CONNECTION_CANCELLED = "连接已取消，可以重新连接。"
+_RESTART_CONNECTION_LABEL = "重新开始"
+_RETURN_SOURCE_LABEL = "返回数据源选择"
+_CONNECTION_CANCELLED = "连接已取消，可以重新开始。"
 _ANALYSIS_CANCELLED = "分析已取消。"
 _SOURCE_DISPLAY_NAMES = {
     ChatSource.QQ: "QQ",
@@ -91,7 +99,6 @@ _CONNECTION_STATUS_UNKNOWN = (
 )
 _QQ_STATUS_CHECKING = "\u6b63\u5728\u68c0\u6d4b QQ \u8fde\u63a5\u72b6\u6001..."
 _QQ_CONNECT_LABEL = "\u8fde\u63a5QQ"
-_QQ_RECONNECT_LABEL = "\u91cd\u65b0\u8fde\u63a5QQ"
 _QQ_CONNECTING = (
     "\u6b63\u5728\u51c6\u5907QQ\u8fde\u63a5\u73af\u5883\uff0c"
     "\u8bf7\u7a0d\u5019..."
@@ -109,8 +116,11 @@ _QQ_LOGIN_GUIDE = (
     "登录成功后，余音会自动继续。"
 )
 _QQ_STARTING_GUIDE = (
-    "正在启动QQ连接环境\n\n请不要手动打开QQ。\n"
-    "余音会自动启动QQ环境，随后提示扫码登录。"
+    "首次连接 QQ 时，系统可能弹出权限确认窗口。\n\n"
+    "这是 Echo 内置的 QQ 数据读取组件，用于分析你的聊天记录，"
+    "请允许它运行。\n"
+    "聊天数据仅在本机处理，不会上传。\n\n"
+    "请不要手动打开QQ。余音会自动启动QQ环境，随后提示扫码登录。"
 )
 _QQ_STATE_DISCONNECTED = "disconnected"
 _QQ_STATE_INITIALIZING = "initializing"
@@ -140,7 +150,6 @@ _QQ_STATE_MESSAGES = {
     ),
 }
 _WECHAT_CONNECT_LABEL = "\u8fde\u63a5\u5fae\u4fe1"
-_WECHAT_RECONNECT_LABEL = "\u91cd\u65b0\u8fde\u63a5\u5fae\u4fe1"
 _WECHAT_STATUS_DISCONNECTED = "\u5fae\u4fe1\u672a\u8fde\u63a5"
 _WECHAT_STATUS_CONNECTING = "\u6b63\u5728\u8fde\u63a5\u5fae\u4fe1..."
 _WECHAT_STATUS_CONNECTED = (
@@ -156,9 +165,12 @@ _WECHAT_GUIDE_STATUS = (
     "如需查看微信数据目录，完成后请退出微信账号，返回登录界面。"
 )
 _WECHAT_GUIDE_KEY = (
-    "等待微信登录\n\n请启动微信电脑版并保持在登录界面。\n"
-    "不要进入聊天页面、切换账号或关闭微信。\n"
-    "登录成功后，余音会自动继续。\n"
+    "等待微信登录<br><br>"
+    "<span style='color:#c2410c;font-weight:600'>"
+    "请保持微信停留在登录界面，不要点击进入微信"
+    "</span><br>"
+    "不要进入聊天页面、切换账号或关闭微信。<br>"
+    "登录成功后，余音会自动继续。<br>"
     "聊天数据仅在本机读取，不上传、不保存额外副本。"
 )
 _WECHAT_GUIDE_DIRECTORY_MISSING = (
@@ -190,6 +202,8 @@ _WECHAT_WAITING_LOGIN = "\u7b49\u5f85\u5fae\u4fe1\u767b\u5f55"
 _WECHAT_KEY_ACQUIRING = "Key \u83b7\u53d6\u4e2d"
 _WECHAT_DATABASE_FAILED = "\u5fae\u4fe1\u6570\u636e\u5e93\u8bfb\u53d6\u5931\u8d25"
 _WECHAT_SESSIONS_FAILED = "\u5fae\u4fe1\u4f1a\u8bdd\u52a0\u8f7d\u5931\u8d25"
+_WECHAT_GUIDE_IMAGE_WIDTH = 160
+_WECHAT_GUIDE_IMAGE_HEIGHT = 220
 
 
 class AnalysisPage(QWidget):
@@ -206,6 +220,7 @@ class AnalysisPage(QWidget):
         parent: QWidget | None = None,
         executor: Any = None,
         qq_qrcode_path: str | Path | None = None,
+        wechat_guide_image_path: str | Path | None = None,
     ) -> None:
         super().__init__(parent)
         self._facade = facade
@@ -227,25 +242,43 @@ class AnalysisPage(QWidget):
             if qq_qrcode_path is not None
             else _default_qq_qrcode_path()
         )
+        self._wechat_guide_image_path = (
+            Path(wechat_guide_image_path)
+            if wechat_guide_image_path is not None
+            else default_wechat_login_guide_path()
+        )
         self._qq_status_timer = QTimer(self)
         self._qq_status_timer.setInterval(_QQ_STATUS_POLL_INTERVAL_MS)
         self._qq_status_timer.timeout.connect(self._poll_qq_status)
 
         self._build_ui()
         self.refresh_sources()
+        self._show_unconnected_session_placeholder()
 
     # ------------------------------------------------------------------ setup
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
+        layout.setSpacing(12)
 
         self._source_box = QGroupBox("\u6570\u636e\u6765\u6e90")
         self._source_layout = QHBoxLayout(self._source_box)
         layout.addWidget(self._source_box)
 
+        self._return_source_button = QPushButton(_RETURN_SOURCE_LABEL)
+        self._return_source_button.setVisible(False)
+        self._return_source_button.clicked.connect(
+            self.return_to_source_selection
+        )
+        layout.addWidget(self._return_source_button)
+
         self._status_label = QLabel("")
         self._status_label.setWordWrap(True)
         self._status_label.setVisible(False)
+        self._status_label.setStyleSheet(
+            "padding: 8px 10px; border-radius: 6px; "
+            "background: palette(alternate-base);"
+        )
         layout.addWidget(self._status_label)
 
         self._wechat_connect_button = QPushButton(_WECHAT_CONNECT_LABEL)
@@ -260,9 +293,25 @@ class AnalysisPage(QWidget):
         self._wechat_setup_button.clicked.connect(self.open_wechat_setup)
         layout.addWidget(self._wechat_setup_button)
 
+        self._wechat_guide_image_label = QLabel("")
+        self._wechat_guide_image_label.setAlignment(
+            Qt.AlignmentFlag.AlignCenter
+        )
+        self._wechat_guide_image_label.setVisible(False)
+        layout.addWidget(self._wechat_guide_image_label)
+
         self._wechat_guide_label = QLabel("")
-        self._wechat_guide_label.setWordWrap(True)
+        self._wechat_guide_label.setWordWrap(False)
+        self._wechat_guide_label.setMinimumWidth(480)
+        self._wechat_guide_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
         self._wechat_guide_label.setVisible(False)
+        self._wechat_guide_label.setStyleSheet(
+            "padding: 10px; border-radius: 6px; "
+            "background: palette(alternate-base);"
+        )
         layout.addWidget(self._wechat_guide_label)
 
         self._qq_connect_button = QPushButton(_QQ_CONNECT_LABEL)
@@ -279,6 +328,10 @@ class AnalysisPage(QWidget):
         self._qq_login_guide_label = QLabel("")
         self._qq_login_guide_label.setWordWrap(True)
         self._qq_login_guide_label.setVisible(False)
+        self._qq_login_guide_label.setStyleSheet(
+            "padding: 10px; border-radius: 6px; "
+            "background: palette(alternate-base);"
+        )
         layout.addWidget(self._qq_login_guide_label)
 
         self._file_button = QPushButton("\u9009\u62e9\u6587\u4ef6...")
@@ -291,8 +344,9 @@ class AnalysisPage(QWidget):
         file_row.addWidget(self._file_label, stretch=1)
         layout.addLayout(file_row)
 
-        session_box = QGroupBox("\u4f1a\u8bdd")
-        session_layout = QVBoxLayout(session_box)
+        self._session_box = QGroupBox("\u4f1a\u8bdd")
+        self._session_box.setVisible(False)
+        session_layout = QVBoxLayout(self._session_box)
         self._session_search = QLineEdit()
         self._session_search.setPlaceholderText(_SESSION_SEARCH_PLACEHOLDER)
         self._session_search.setClearButtonEnabled(True)
@@ -318,7 +372,7 @@ class AnalysisPage(QWidget):
             self._reapply_session_view
         )
         session_layout.addWidget(self._session_list)
-        layout.addWidget(session_box, stretch=1)
+        layout.addWidget(self._session_box, stretch=1)
 
         range_box = QGroupBox("分析范围")
         range_layout = QVBoxLayout(range_box)
@@ -365,6 +419,16 @@ class AnalysisPage(QWidget):
         self._hint_label.setWordWrap(True)
         layout.addWidget(self._hint_label)
 
+        for button in (
+            self._return_source_button,
+            self._wechat_connect_button,
+            self._wechat_setup_button,
+            self._qq_connect_button,
+            self._file_button,
+            self._analyze_button,
+        ):
+            button.setMinimumHeight(34)
+
     # ----------------------------------------------------------- source logic
 
     def refresh_sources(self) -> None:
@@ -395,9 +459,12 @@ class AnalysisPage(QWidget):
         """Select one source and load whatever it offers."""
         if self._connection_task is not None or self._analysis_running:
             return
+        source = ChatSource(source)
+        self._clear_connection_view()
         self._selected_source = source
         self._selected_file = None
         self._file_label.setText("")
+        self._return_source_button.setVisible(True)
         if source != ChatSource.QQ:
             self._stop_qq_status_polling()
             self._hide_qq_qrcode()
@@ -411,19 +478,18 @@ class AnalysisPage(QWidget):
         self._file_label.setVisible(is_local)
         self._wechat_connect_button.setVisible(source == ChatSource.WECHAT)
         self._wechat_setup_button.setVisible(source == ChatSource.WECHAT)
-        self._wechat_guide_label.setVisible(source == ChatSource.WECHAT)
         if source == ChatSource.WECHAT:
             self._show_wechat_guide()
         else:
             self._wechat_guide_label.clear()
+            self._hide_wechat_guide_image()
         self._qq_connect_button.setVisible(source == ChatSource.QQ)
         self._qq_connect_button.setEnabled(True)
         self._qq_connect_button.setToolTip("")
-        self._session_list.clear()
-
         if is_local:
             self._status_label.setVisible(False)
             self._hint_label.setText(_LOCAL_FILE_HINT)
+            self._session_list.clear()
             self._update_analyze_enabled()
             return
 
@@ -434,6 +500,60 @@ class AnalysisPage(QWidget):
 
         self._session_list.clear()
         self.refresh_connection_status(source, load_sessions_on_ready=True)
+
+    def return_to_source_selection(self) -> None:
+        """Abandon the current view without closing an external chat client."""
+        if self._analysis_running:
+            return
+        task = self._connection_task
+        cancel = getattr(task, "cancel", None)
+        if callable(cancel):
+            cancel()
+        self._connection_task = None
+        self._qq_connect_in_flight = False
+        self._wechat_connect_pending = False
+        self._stop_qq_status_polling()
+        self._lock_sources(False)
+        self._selected_source = None
+        for button in self._source_buttons.values():
+            button.setChecked(False)
+        self._clear_connection_view()
+        self._return_source_button.setVisible(False)
+        self._hint_label.setText(_SELECT_SOURCE_HINT)
+        self._show_unconnected_session_placeholder()
+
+    def _clear_connection_view(self) -> None:
+        """Clear source-specific presentation state before changing source."""
+        self._sessions = []
+        self._message_range = None
+        self._last_qq_status_message = ""
+        self._selected_file = None
+        self._file_label.clear()
+        self._session_search.blockSignals(True)
+        self._session_search.clear()
+        self._session_search.blockSignals(False)
+        self._session_sort.blockSignals(True)
+        self._session_sort.setCurrentIndex(0)
+        self._session_sort.blockSignals(False)
+        self._session_list.clear()
+        self._session_box.setVisible(False)
+        self._status_label.clear()
+        self._status_label.setToolTip("")
+        self._status_label.setVisible(False)
+        self._file_button.setVisible(False)
+        self._file_label.setVisible(False)
+        self._qq_connect_button.setText(_QQ_CONNECT_LABEL)
+        self._qq_connect_button.setVisible(False)
+        self._wechat_connect_button.setText(_WECHAT_CONNECT_LABEL)
+        self._wechat_connect_button.setVisible(False)
+        self._wechat_setup_button.setVisible(False)
+        self._wechat_guide_label.clear()
+        self._wechat_guide_label.setVisible(False)
+        self._hide_wechat_guide_image()
+        self._hide_qq_qrcode()
+        self._hide_qq_login_guide()
+        self._set_session_controls_ready(False)
+        self._update_analyze_enabled()
 
     def refresh_connection_status(
         self,
@@ -455,7 +575,7 @@ class AnalysisPage(QWidget):
             _CONNECTION_STATUS_LOADING.format(source=display_name)
         )
         self._status_label.setToolTip("")
-        self._show_session_placeholder(_SESSION_LOADING_TITLE)
+        self._show_session_placeholder(_SESSION_CONNECTING_TITLE)
         if load_sessions_on_ready:
             self._hint_label.setText("")
         self._executor(
@@ -465,7 +585,11 @@ class AnalysisPage(QWidget):
                 status,
                 load_sessions_on_ready,
             ),
-            on_error=self._handle_connection_status_error,
+            on_error=lambda code, message: self._handle_source_status_error(
+                source,
+                code,
+                message,
+            ),
         )
 
     def _show_connection_status(
@@ -475,6 +599,8 @@ class AnalysisPage(QWidget):
         load_sessions_on_ready: bool,
     ) -> None:
         """Render one source's connection status returned by the facade."""
+        if self._selected_source != source:
+            return
         available = bool(getattr(status, "available", False))
         prefix = _CONNECTED_PREFIX if available else _DISCONNECTED_PREFIX
         if source == ChatSource.WECHAT:
@@ -495,17 +621,14 @@ class AnalysisPage(QWidget):
             self._wechat_setup_button.setVisible(False)
             if available:
                 self._wechat_guide_label.setVisible(False)
+                self._hide_wechat_guide_image()
             else:
                 self._show_wechat_guide()
-            self._wechat_connect_button.setText(
-                _WECHAT_RECONNECT_LABEL
-                if available
-                else _WECHAT_CONNECT_LABEL
-            )
+            self._wechat_connect_button.setText(_WECHAT_CONNECT_LABEL)
+            self._wechat_connect_button.setVisible(not available)
         elif source == ChatSource.QQ:
-            self._qq_connect_button.setText(
-                _QQ_RECONNECT_LABEL if available else _QQ_CONNECT_LABEL
-            )
+            self._qq_connect_button.setText(_QQ_CONNECT_LABEL)
+            self._qq_connect_button.setVisible(not available)
             self._qq_connect_button.setEnabled(True)
             self._qq_connect_button.setToolTip("")
 
@@ -528,6 +651,7 @@ class AnalysisPage(QWidget):
             if source == ChatSource.WECHAT:
                 self._status_label.setText(loading_message)
             self._hint_label.setText(loading_message)
+            self._show_session_placeholder(_SESSION_READING_TITLE)
             if source != ChatSource.WECHAT:
                 self.status_changed.emit(_LOADING_SESSIONS)
             self._load_sessions(source)
@@ -543,8 +667,45 @@ class AnalysisPage(QWidget):
         parts = [_WECHAT_GUIDE_STATUS, _WECHAT_GUIDE_KEY]
         if include_directory_help:
             parts.append(_WECHAT_GUIDE_DIRECTORY_MISSING)
-        self._wechat_guide_label.setText("\n\n".join(parts))
+        self._wechat_guide_label.setText("<br><br>".join(parts))
         self._wechat_guide_label.setVisible(True)
+
+        self._refresh_wechat_guide_image()
+
+    def _refresh_wechat_guide_image(self) -> None:
+        """Load the optional guide image without making connection depend on it."""
+        if not self._wechat_guide_image_path.is_file():
+            self._hide_wechat_guide_image()
+            return
+        try:
+            pixmap = QPixmap(str(self._wechat_guide_image_path))
+        except Exception:
+            pixmap = QPixmap()
+        if pixmap.isNull():
+            self._hide_wechat_guide_image()
+            return
+        scaled = pixmap.scaled(
+            _WECHAT_GUIDE_IMAGE_WIDTH,
+            _WECHAT_GUIDE_IMAGE_HEIGHT,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self._wechat_guide_image_label.setPixmap(scaled)
+        self._wechat_guide_image_label.setVisible(True)
+
+    def _hide_wechat_guide_image(self) -> None:
+        self._wechat_guide_image_label.clear()
+        self._wechat_guide_image_label.setVisible(False)
+
+    def _handle_source_status_error(
+        self,
+        source: ChatSource,
+        code: str,
+        message: str,
+    ) -> None:
+        if self._selected_source != source:
+            return
+        self._handle_connection_status_error(code, message)
 
     def _handle_connection_status_error(self, code: str, message: str) -> None:
         if self._qq_connect_in_flight and self._selected_source == ChatSource.QQ:
@@ -556,6 +717,7 @@ class AnalysisPage(QWidget):
         self._session_list.clear()
         if self._selected_source in (ChatSource.QQ, ChatSource.WECHAT):
             self._show_disconnected_session_placeholder(self._selected_source)
+            self._set_restart_action(self._selected_source)
         self._update_analyze_enabled()
 
     def refresh_qq_status(self, *, load_sessions_on_ready: bool = False) -> None:
@@ -563,7 +725,7 @@ class AnalysisPage(QWidget):
         self._status_label.setVisible(True)
         self._status_label.setText(_QQ_STATUS_CHECKING)
         self._status_label.setToolTip("")
-        self._show_session_placeholder(_SESSION_LOADING_TITLE)
+        self._show_session_placeholder(_SESSION_CONNECTING_TITLE)
         self._update_analyze_enabled()
         self._executor(
             lambda: self._facade.get_qq_connection_snapshot(),
@@ -571,7 +733,11 @@ class AnalysisPage(QWidget):
                 snapshot,
                 load_sessions_on_ready,
             ),
-            on_error=self._handle_connection_status_error,
+            on_error=lambda code, message: self._handle_source_status_error(
+                ChatSource.QQ,
+                code,
+                message,
+            ),
         )
 
     def _show_qq_status(
@@ -584,7 +750,7 @@ class AnalysisPage(QWidget):
         The page does not decide what "connected" means; it reads the state
         the connection manager already resolved.
         """
-        if self._qq_connect_in_flight:
+        if self._selected_source != ChatSource.QQ or self._qq_connect_in_flight:
             return
         state = _snapshot_state(snapshot)
         message = _snapshot_message(snapshot)
@@ -594,13 +760,10 @@ class AnalysisPage(QWidget):
         self._status_label.setText(f"{_snapshot_prefix(snapshot)}{message}")
         self._status_label.setToolTip(action_hint)
         self._status_label.setVisible(True)
-        self._qq_connect_button.setText(
-            (
-                _QQ_RECONNECT_LABEL
-                if state == _QQ_STATE_CONNECTED
-                else _QQ_CONNECT_LABEL
-            )
-        )
+        self._qq_connect_button.setText(_QQ_CONNECT_LABEL)
+        self._qq_connect_button.setVisible(state != _QQ_STATE_CONNECTED)
+        if state == _QQ_STATE_ERROR:
+            self._qq_connect_button.setText(_RESTART_CONNECTION_LABEL)
         self._qq_connect_button.setEnabled(not _snapshot_in_progress(snapshot))
         self._qq_connect_button.setToolTip("")
         self._session_list.clear()
@@ -612,10 +775,11 @@ class AnalysisPage(QWidget):
 
         if state == _QQ_STATE_CONNECTED and load_sessions_on_ready:
             self._hint_label.setText(_LOADING_SESSIONS)
+            self._show_session_placeholder(_SESSION_READING_TITLE)
             self.status_changed.emit(_LOADING_SESSIONS)
             self._load_sessions(ChatSource.QQ)
         elif state in _QQ_PROGRESS_STATES or state == _QQ_STATE_WAITING_AUTH:
-            self._show_session_placeholder(_SESSION_LOADING_TITLE)
+            self._show_session_placeholder(_SESSION_CONNECTING_TITLE)
         elif state != _QQ_STATE_CONNECTED:
             self._show_disconnected_session_placeholder(ChatSource.QQ)
 
@@ -623,6 +787,10 @@ class AnalysisPage(QWidget):
             self._show_qq_login_guide()
             self._start_qq_status_polling()
             self._refresh_qq_qrcode()
+        elif state in _QQ_PROGRESS_STATES:
+            self._show_qq_starting_guide()
+            self._stop_qq_status_polling()
+            self._hide_qq_qrcode()
         else:
             self._hide_qq_login_guide()
             self._stop_qq_status_polling()
@@ -682,6 +850,11 @@ class AnalysisPage(QWidget):
         self._qq_login_guide_label.setText(_QQ_LOGIN_GUIDE)
         self._qq_login_guide_label.setVisible(True)
 
+    def _show_qq_starting_guide(self) -> None:
+        """Explain the expected Windows prompt before QQ login begins."""
+        self._qq_login_guide_label.setText(_QQ_STARTING_GUIDE)
+        self._qq_login_guide_label.setVisible(True)
+
     def _hide_qq_login_guide(self) -> None:
         """Hide QR login instructions once the QQ state moves on."""
         self._qq_login_guide_label.clear()
@@ -716,7 +889,8 @@ class AnalysisPage(QWidget):
         self._status_label.setText(_QQ_CONNECTING)
         self._status_label.setToolTip("")
         self._hint_label.setText(_QQ_CONNECT_PREPARE)
-        self._show_session_placeholder(_SESSION_LOADING_TITLE)
+        self._show_qq_starting_guide()
+        self._show_session_placeholder(_SESSION_CONNECTING_TITLE)
         self.status_changed.emit(_QQ_CONNECTING)
         _LOGGER.info("[qq gui] connect_qq worker submitted")
         self._connection_task = self._executor(
@@ -730,7 +904,11 @@ class AnalysisPage(QWidget):
                 message,
                 started_at,
             ),
-            on_progress=self._handle_qq_connect_progress,
+            on_progress=lambda message: (
+                self._handle_qq_connect_progress(message)
+                if self._selected_source == ChatSource.QQ
+                else None
+            ),
         )
 
     def _handle_qq_connect_progress(self, message: str) -> None:
@@ -742,6 +920,10 @@ class AnalysisPage(QWidget):
         self._status_label.setToolTip("")
         self._status_label.setVisible(True)
         self._hint_label.setText(hint)
+        if stage == "等待QQ登录":
+            self._show_qq_login_guide()
+        else:
+            self._show_qq_starting_guide()
         self.status_changed.emit(stage)
 
     def _after_qq_connect(self, snapshot: Any) -> None:
@@ -749,6 +931,8 @@ class AnalysisPage(QWidget):
 
     def _finish_qq_connect(self, status: Any, started_at: float) -> None:
         def _apply() -> None:
+            if self._selected_source != ChatSource.QQ:
+                return
             self._qq_connect_in_flight = False
             self._connection_task = None
             self._lock_sources(False)
@@ -768,6 +952,8 @@ class AnalysisPage(QWidget):
         started_at: float,
     ) -> None:
         def _apply() -> None:
+            if self._selected_source != ChatSource.QQ:
+                return
             self._qq_connect_in_flight = False
             self._connection_task = None
             self._lock_sources(False)
@@ -791,6 +977,7 @@ class AnalysisPage(QWidget):
         self._status_label.setVisible(True)
         self._hint_label.setText(message)
         self._show_disconnected_session_placeholder(ChatSource.QQ)
+        self._set_restart_action(ChatSource.QQ)
         self.status_changed.emit(title)
 
     def connect_wechat(
@@ -846,14 +1033,23 @@ class AnalysisPage(QWidget):
         self._status_label.setText(_WECHAT_CONNECTING)
         self._status_label.setToolTip("")
         self._hint_label.setText(_WECHAT_LOGIN_PREPARE)
-        self._show_session_placeholder(_SESSION_LOADING_TITLE)
+        self._show_wechat_guide()
+        self._show_session_placeholder(_SESSION_CONNECTING_TITLE)
         self.status_changed.emit(_WECHAT_CONNECTING)
 
         self._connection_task = self._executor(
             lambda report: self._connect_wechat_operation(config, report),
             on_success=self._after_wechat_key_acquired,
-            on_error=self._handle_wechat_connect_error,
-            on_progress=self._handle_wechat_connect_progress,
+            on_error=lambda code, message: (
+                self._handle_wechat_connect_error(code, message)
+                if self._selected_source is ChatSource.WECHAT
+                else None
+            ),
+            on_progress=lambda message: (
+                self._handle_wechat_connect_progress(message)
+                if self._selected_source is ChatSource.WECHAT
+                else None
+            ),
             on_finished=self._finish_wechat_connect,
         )
 
@@ -863,9 +1059,11 @@ class AnalysisPage(QWidget):
         self._wechat_connect_button.setEnabled(True)
         if self._selected_source is ChatSource.WECHAT:
             connected = self._status_label.text().startswith(_CONNECTED_PREFIX)
-            self._wechat_connect_button.setText(
-                _WECHAT_RECONNECT_LABEL if connected else _WECHAT_CONNECT_LABEL
-            )
+            self._wechat_connect_button.setVisible(not connected)
+            if not connected and self._wechat_connect_button.text() == (
+                _CANCEL_CONNECTION_LABEL
+            ):
+                self._wechat_connect_button.setText(_RESTART_CONNECTION_LABEL)
 
     def cancel_connection(self) -> None:
         """Cancel the active source task and return to a reconnectable page."""
@@ -904,6 +1102,8 @@ class AnalysisPage(QWidget):
             for button in self._source_buttons.values():
                 button.setEnabled(False)
             return
+        if not self._source_enabled_before_lock:
+            return
         for source, button in self._source_buttons.items():
             button.setEnabled(self._source_enabled_before_lock.get(source, True))
         self._source_enabled_before_lock.clear()
@@ -937,10 +1137,13 @@ class AnalysisPage(QWidget):
         self._status_label.setVisible(True)
         if message == _WECHAT_READING_DATABASE:
             stage = _WECHAT_READING_DATABASE
+            self._show_session_placeholder(_SESSION_READING_TITLE)
         elif "\u767b\u5f55" in message:
             stage = _WECHAT_WAITING_LOGIN
+            self._show_session_placeholder(_SESSION_CONNECTING_TITLE)
         else:
             stage = _WECHAT_KEY_ACQUIRING
+            self._show_session_placeholder(_SESSION_CONNECTING_TITLE)
         self._status_label.setText(stage)
         self._hint_label.setText(message)
 
@@ -969,7 +1172,18 @@ class AnalysisPage(QWidget):
         self._status_label.setVisible(True)
         self._hint_label.setText(text)
         self._show_disconnected_session_placeholder(ChatSource.WECHAT)
+        self._set_restart_action(ChatSource.WECHAT)
         self.status_changed.emit(text)
+
+    def _set_restart_action(self, source: ChatSource) -> None:
+        button = (
+            self._qq_connect_button
+            if source == ChatSource.QQ
+            else self._wechat_connect_button
+        )
+        button.setText(_RESTART_CONNECTION_LABEL)
+        button.setEnabled(True)
+        button.setVisible(self._selected_source == source)
 
     def open_wechat_setup(self, data_roots: Any = None) -> None:
         """Open the setup dialog, showing the current facade state."""
@@ -1031,22 +1245,48 @@ class AnalysisPage(QWidget):
         self._status_label.setToolTip(message)
         self._status_label.setVisible(True)
         self._hint_label.setText(message)
+        if self._selected_source is ChatSource.WECHAT:
+            self._set_restart_action(ChatSource.WECHAT)
         self.status_changed.emit(message)
 
     def _load_sessions(self, source: ChatSource) -> None:
         self._executor(
             lambda: self._facade.list_sessions(source),
-            on_success=(
-                self._handle_wechat_sessions_loaded
-                if source == ChatSource.WECHAT
-                else lambda sessions: self._populate_sessions(sessions)
+            on_success=lambda sessions: self._handle_source_sessions_loaded(
+                source,
+                sessions,
             ),
-            on_error=(
-                self._handle_wechat_session_error
-                if source == ChatSource.WECHAT
-                else self._handle_error
+            on_error=lambda code, message: self._handle_source_session_error(
+                source,
+                code,
+                message,
             ),
         )
+
+    def _handle_source_sessions_loaded(
+        self,
+        source: ChatSource,
+        sessions: Any,
+    ) -> None:
+        if self._selected_source != source:
+            return
+        if source == ChatSource.WECHAT:
+            self._handle_wechat_sessions_loaded(sessions)
+        else:
+            self._populate_sessions(sessions)
+
+    def _handle_source_session_error(
+        self,
+        source: ChatSource,
+        code: str,
+        message: str,
+    ) -> None:
+        if self._selected_source != source:
+            return
+        if source == ChatSource.WECHAT:
+            self._handle_wechat_session_error(code, message)
+        else:
+            self._handle_error(code, message)
 
     def _handle_wechat_sessions_loaded(self, sessions: Any) -> None:
         self._populate_sessions(sessions)
@@ -1054,6 +1294,8 @@ class AnalysisPage(QWidget):
         self._status_label.setToolTip("")
         self._status_label.setVisible(True)
         self._wechat_guide_label.setVisible(False)
+        self._hide_wechat_guide_image()
+        self._wechat_connect_button.setVisible(False)
 
     def _handle_wechat_session_error(self, code: str, message: str) -> None:
         database_codes = {
@@ -1074,6 +1316,7 @@ class AnalysisPage(QWidget):
         self._status_label.setToolTip(detail)
         self._status_label.setVisible(True)
         self._hint_label.setText(detail)
+        self._set_restart_action(ChatSource.WECHAT)
         self.status_changed.emit(detail)
 
     def _on_session_selection_changed(self) -> None:
@@ -1149,6 +1392,7 @@ class AnalysisPage(QWidget):
     def _populate_sessions(self, sessions: Any) -> None:
         """Fill the list with sessions, keeping ids out of the visible text."""
         self._sessions = list(sessions or ())
+        self._set_session_controls_ready(True)
         self._reapply_session_view()
 
     def _reapply_session_view(self) -> None:
@@ -1184,11 +1428,19 @@ class AnalysisPage(QWidget):
         count = self._session_list.count()
         if count == 0 and self._sessions:
             self._hint_label.setText(_NO_MATCHING_SESSIONS)
-            self._show_session_placeholder(_NO_MATCHING_SESSIONS)
+            self._show_session_placeholder(
+                _NO_MATCHING_SESSIONS,
+                session_controls_ready=True,
+                session_container_visible=True,
+            )
         elif count == 0:
             self._hint_label.setText(_NO_SESSIONS)
-            self._show_session_placeholder(_SESSION_NO_DATA_TITLE)
+            self._show_session_placeholder(
+                _SESSION_NO_DATA_TITLE,
+                session_controls_ready=True,
+            )
         else:
+            self._session_box.setVisible(True)
             self._hint_label.setText(f"\u5171 {count} \u4e2a\u4f1a\u8bdd\u3002")
         if self._selected_source == ChatSource.QQ:
             self.status_changed.emit(
@@ -1198,18 +1450,25 @@ class AnalysisPage(QWidget):
         self._update_analyze_enabled()
 
     def _show_disconnected_session_placeholder(self, source: ChatSource) -> None:
-        display_name = _SOURCE_DISPLAY_NAMES.get(source, "数据源")
+        self._show_unconnected_session_placeholder()
+
+    def _show_unconnected_session_placeholder(self) -> None:
         self._show_session_placeholder(
             _SESSION_EMPTY_TITLE,
-            f"连接{display_name}后，这里会显示你的聊天记录",
+            _SESSION_EMPTY_DETAIL,
         )
 
     def _show_session_placeholder(
         self,
         title: str,
         detail: str = "",
+        *,
+        session_controls_ready: bool = False,
+        session_container_visible: bool = False,
     ) -> None:
         """Render a non-interactive state inside the session list region."""
+        self._session_box.setVisible(session_container_visible)
+        self._set_session_controls_ready(session_controls_ready)
         self._session_list.clear()
         text = f"{title}\n{detail}" if detail else title
         item = QListWidgetItem(text)
@@ -1220,6 +1479,10 @@ class AnalysisPage(QWidget):
         )
         self._session_list.addItem(item)
         self._update_analyze_enabled()
+
+    def _set_session_controls_ready(self, ready: bool) -> None:
+        self._session_search.setEnabled(ready)
+        self._session_sort.setEnabled(ready)
 
     def _add_session_item(self, session: Any) -> None:
         item = QListWidgetItem(session.display_name)

@@ -28,7 +28,7 @@ pytest.importorskip("PySide6", reason="PySide6 is required for the GUI layer")
 
 from PySide6.QtCore import QDate, QThreadPool, Qt  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QSizePolicy  # noqa: E402
 
 
 def _facade_module():
@@ -419,12 +419,19 @@ class _StubOutcome:
         self.data_acquired_at = data_acquired_at
 
 
-def _analysis_page(qt_app, facade, executor=None, qq_qrcode_path=None):
+def _analysis_page(
+    qt_app,
+    facade,
+    executor=None,
+    qq_qrcode_path=None,
+    wechat_guide_image_path=None,
+):
     module = importlib.import_module("qq_chat_analyzer.gui.analysis_page")
     return module.AnalysisPage(
         facade,
         executor=executor or _inline_executor(),
         qq_qrcode_path=qq_qrcode_path,
+        wechat_guide_image_path=wechat_guide_image_path,
     )
 
 
@@ -813,7 +820,8 @@ def test_selecting_wechat_checks_status_then_loads_sessions(qt_app) -> None:
     assert page._status_label.text() == (
         "\U0001F7E2 \u5fae\u4fe1\u5df2\u8fde\u63a5\uff0c\u53ef\u4ee5\u5f00\u59cb\u5206\u6790"
     )
-    assert page._wechat_connect_button.text() == "\u91cd\u65b0\u8fde\u63a5\u5fae\u4fe1"
+    assert page._wechat_connect_button.isVisibleTo(page) is False
+    assert "重新连接" not in page._wechat_connect_button.text()
 
 
 def test_selecting_wechat_without_ready_status_does_not_load_sessions(
@@ -1204,7 +1212,7 @@ def test_wechat_connection_errors_keep_the_real_stage(qt_app, code, title) -> No
     assert title in page._status_label.text()
 
 
-def test_clicking_qq_connect_through_the_real_worker_updates_the_page(
+def test_ready_qq_through_the_real_worker_has_no_reconnect_action(
     qt_app,
     sources,
 ) -> None:
@@ -1239,14 +1247,10 @@ def test_clicking_qq_connect_through_the_real_worker_updates_the_page(
     assert page._session_list.count() == 1
     assert "\u5df2\u8fde\u63a5" in page._status_label.text()
 
-    page._qq_connect_button.click()
-    _settle_workers()
-
-    assert facade.start_qq_auth_flow_calls == [1]
     assert page._session_list.count() == 1
     assert "\u5df2\u8fde\u63a5" in page._status_label.text()
-    assert "\u91cd\u65b0\u8fde\u63a5QQ" in page._qq_connect_button.text()
-    assert page._qq_connect_button.isEnabled() is True
+    assert page._qq_connect_button.isVisibleTo(page) is False
+    assert facade.start_qq_auth_flow_calls == []
 
 
 def test_qq_connect_accepts_a_string_source_value(qt_app, sources) -> None:
@@ -1313,7 +1317,7 @@ def test_qq_setup_dialog_prefills_effective_config(qt_app) -> None:
     assert dialog._base_url_edit.text() == "http://127.0.0.1:40653"
 
 
-def test_qq_ready_shows_reconnect_button_and_loads_sessions(
+def test_qq_ready_hides_connect_action_and_loads_sessions(
     qt_app,
     sources,
 ) -> None:
@@ -1343,9 +1347,8 @@ def test_qq_ready_shows_reconnect_button_and_loads_sessions(
     page.select_source(module.ChatSource.QQ)
     _drain(page)
 
-    assert page._qq_connect_button.isVisibleTo(page) is True
-    assert page._qq_connect_button.isEnabled() is True
-    assert "\u91cd\u65b0\u8fde\u63a5QQ" in page._qq_connect_button.text()
+    assert page._qq_connect_button.isVisibleTo(page) is False
+    assert "重新连接" not in page._qq_connect_button.text()
     assert facade.list_sessions_calls == [module.ChatSource.QQ]
     assert page._session_list.count() == 1
 
@@ -1492,7 +1495,8 @@ def test_qq_connect_offers_cancel_while_connecting(qt_app, sources) -> None:
     QTest.qWait(600)
 
     assert page._qq_connect_button.isEnabled() is True
-    assert "\u91cd\u65b0\u8fde\u63a5QQ" in page._qq_connect_button.text()
+    assert page._qq_connect_button.isVisibleTo(page) is False
+    assert "重新连接" not in page._qq_connect_button.text()
 
 
 def test_wechat_connection_error_blocks_session_loading_without_leaks(
@@ -1649,6 +1653,7 @@ def test_wechat_session_load_failure_shows_session_stage(qt_app) -> None:
         ),
     )
     page = _analysis_page(qt_app, facade)
+    page._selected_source = module.ChatSource.WECHAT
 
     page._load_sessions(module.ChatSource.WECHAT)
     _drain(page)
@@ -1693,11 +1698,32 @@ def test_wechat_guide_shows_status_confirmation(qt_app) -> None:
     _drain(page)
 
     assert page._wechat_guide_label.isVisibleTo(page) is True
-    assert "保持在登录界面" in page._wechat_guide_label.text()
+    assert "请保持微信停留在登录界面，不要点击进入微信" in (
+        page._wechat_guide_label.text()
+    )
     assert "不要进入聊天页面" in page._wechat_guide_label.text()
     assert "\u4e0d\u4e0a\u4f20" in page._wechat_guide_label.text()
     assert "\u4e0d\u4fdd\u5b58" in page._wechat_guide_label.text()
     assert "LCA" not in page._wechat_guide_label.text()
+
+
+def test_wechat_critical_login_hint_uses_layout_instead_of_word_wrap(
+    qt_app,
+) -> None:
+    page = _analysis_page(
+        qt_app,
+        StubFacade(sources=_wechat_available_sources()),
+    )
+
+    assert page._wechat_guide_label.wordWrap() is False
+    assert page._wechat_guide_label.sizePolicy().horizontalPolicy() == (
+        QSizePolicy.Policy.Expanding
+    )
+    assert "请保持微信停留在登录界面，不要点击进入微信" in (
+        importlib.import_module(
+            "qq_chat_analyzer.gui.analysis_page"
+        )._WECHAT_GUIDE_KEY
+    )
 
 
 def test_wechat_auto_detected_root_continues_connect(qt_app) -> None:
@@ -2889,7 +2915,7 @@ def test_disconnected_source_shows_session_placeholder(qt_app, sources) -> None:
     assert page._session_list.count() == 1
     item = page._session_list.item(0)
     assert "暂无会话" in item.text()
-    assert "连接QQ后" in item.text()
+    assert "连接数据源后，这里会显示聊天记录" in item.text()
     assert not (item.flags() & Qt.ItemFlag.ItemIsSelectable)
 
 
@@ -2901,7 +2927,7 @@ def test_connecting_source_shows_loading_placeholder(qt_app, sources) -> None:
     )
 
     assert page._session_list.count() == 1
-    assert "正在加载聊天列表" in page._session_list.item(0).text()
+    assert "正在连接数据源" in page._session_list.item(0).text()
 
 
 def test_connected_source_replaces_placeholder_with_sessions(
@@ -3115,6 +3141,7 @@ def test_error_state_shows_a_user_safe_message(qt_app, sources) -> None:
     assert _disconnected_prefix() in page._status_label.text()
     assert "\u65e0\u6cd5\u8fde\u63a5 QQ\u3002" in page._status_label.text()
     assert page._qq_connect_button.isEnabled() is True
+    assert page._qq_connect_button.text() == "重新开始"
 
 
 def test_connected_state_loads_sessions(qt_app, sources) -> None:
@@ -3132,7 +3159,8 @@ def test_connected_state_loads_sessions(qt_app, sources) -> None:
     _drain(page)
 
     assert _connected_prefix() in page._status_label.text()
-    assert page._qq_connect_button.text() == "\u91cd\u65b0\u8fde\u63a5QQ"
+    assert page._qq_connect_button.isVisibleTo(page) is False
+    assert "重新连接" not in page._qq_connect_button.text()
     assert page._session_list.count() == 1
 
 
@@ -3313,7 +3341,7 @@ def test_automatic_refresh_detects_login_and_loads_sessions(
 
     assert page._qq_status_timer.isActive() is True
     assert page._session_list.count() == 1
-    assert "正在加载聊天列表" in page._session_list.item(0).text()
+    assert "正在连接数据源" in page._session_list.item(0).text()
 
     facade.set_snapshot(
         _qq_snapshot("connected", message="QQ \u5df2\u8fde\u63a5\u3002")
@@ -3348,3 +3376,308 @@ def test_connect_result_waiting_auth_starts_automatic_refresh(
     assert facade.start_qq_auth_flow_calls == [1]
     assert page._qq_status_timer.isActive() is True
     assert "\u767b\u5f55" in page._status_label.text()
+
+
+def test_switching_sources_clears_previous_sessions_and_status(qt_app) -> None:
+    module = _facade_module()
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        sessions=[_session(module.ChatSource.QQ, "10001", "QQ 虚构群")],
+    )
+    page = _analysis_page(qt_app, facade)
+    page.show()
+
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+    assert page._session_list.item(0).text() == "QQ 虚构群"
+
+    facade._sessions = []
+    facade._connection_status = _wechat_connection_status(
+        available=False,
+        data_found=False,
+        db_key_available=False,
+        runtime_available=False,
+        message="微信尚未连接",
+        action_hint="请开始微信连接流程。",
+    )
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+
+    assert page._selected_source is module.ChatSource.WECHAT
+    assert page._sessions == []
+    assert "QQ 虚构群" not in page._session_list.item(0).text()
+    assert "QQ" not in page._status_label.text()
+    assert page._session_search.text() == ""
+
+    facade._sessions = [_session(module.ChatSource.QQ, "10002", "新 QQ 会话")]
+    facade._connection_status = _connection_status(
+        available=True,
+        qce_running=True,
+        authenticated=True,
+        message="QQ 已连接。",
+        action_hint="",
+    )
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+
+    assert page._selected_source is module.ChatSource.QQ
+    assert page._session_list.item(0).text() == "新 QQ 会话"
+    assert "微信" not in page._status_label.text()
+
+
+def test_non_ready_source_never_shows_cached_real_sessions(qt_app, sources) -> None:
+    module = _facade_module()
+    page = _analysis_page(qt_app, StubFacade(sources=sources))
+    page._selected_source = module.ChatSource.QQ
+    page._populate_sessions([_session(module.ChatSource.QQ, "10001", "旧会话")])
+
+    page._show_qq_status(_qq_snapshot("starting"), True)
+
+    assert page._session_list.count() == 1
+    assert page._session_list.item(0).text() == "正在连接数据源..."
+    assert "旧会话" not in page._session_list.item(0).text()
+
+
+@pytest.mark.parametrize("source", ["qq", "wechat"])
+def test_non_ready_sources_hide_the_entire_session_container(
+    qt_app,
+    source: str,
+) -> None:
+    module = _facade_module()
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        connection_status=(
+            _connection_status(
+                available=False,
+                qce_running=False,
+                authenticated=False,
+                message="QQ 未连接。",
+                action_hint="请开始连接。",
+            )
+            if source == "qq"
+            else _wechat_connection_status(
+                available=False,
+                data_found=False,
+                db_key_available=False,
+                runtime_available=False,
+                message="微信未连接。",
+                action_hint="请开始连接。",
+            )
+        ),
+    )
+    page = _analysis_page(qt_app, facade)
+    page.show()
+
+    page.select_source(module.ChatSource(source))
+    _drain(page)
+
+    assert page._session_box.isVisibleTo(page) is False
+
+
+@pytest.mark.parametrize("source", ["qq", "wechat"])
+def test_ready_sources_show_session_container_after_real_sessions_load(
+    qt_app,
+    source: str,
+) -> None:
+    module = _facade_module()
+    selected = module.ChatSource(source)
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        sessions=[_session(selected, "fictional-session", "虚构会话")],
+        connection_status=(
+            _connection_status(
+                available=True,
+                qce_running=True,
+                authenticated=True,
+                message="QQ 已连接。",
+                action_hint="",
+            )
+            if source == "qq"
+            else _wechat_connection_status(
+                available=True,
+                data_found=True,
+                db_key_available=True,
+                runtime_available=True,
+                message="微信已连接。",
+                action_hint="",
+            )
+        ),
+    )
+    page = _analysis_page(qt_app, facade)
+    page.show()
+
+    page.select_source(selected)
+    _drain(page)
+
+    assert page._session_box.isVisibleTo(page) is True
+    assert page._session_list.item(0).text() == "虚构会话"
+
+
+def test_return_to_source_selection_clears_connection_view(qt_app, sources) -> None:
+    module = _facade_module()
+    facade = StubFacade(
+        sources=sources,
+        sessions=[_session(module.ChatSource.QQ, "10001", "虚构群")],
+    )
+    page = _analysis_page(qt_app, facade)
+    page.show()
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+
+    page._return_source_button.click()
+
+    assert page._selected_source is None
+    assert all(not button.isChecked() for button in page._source_buttons.values())
+    assert page._status_label.text() == ""
+    assert page._status_label.isVisibleTo(page) is False
+    assert page._qq_connect_button.isVisibleTo(page) is False
+    assert page._wechat_connect_button.isVisibleTo(page) is False
+    assert page._session_list.item(0).text() == (
+        "暂无会话\n连接数据源后，这里会显示聊天记录"
+    )
+    assert page._hint_label.text() == "请先选择数据来源。"
+    assert page._source_buttons[module.ChatSource.WECHAT].isEnabled() is False
+
+
+def test_return_to_source_selection_cancels_without_stopping_qq(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    executor = _DeferredExecutor()
+    facade = StubFacade(sources=sources)
+    page = _analysis_page(qt_app, facade, executor=executor)
+    page._selected_source = module.ChatSource.QQ
+    page.connect_qq()
+
+    page.return_to_source_selection()
+
+    executor.progress("正在加载 QQ...")
+    executor.succeed(facade._qq_snapshot())
+    QTest.qWait(600)
+
+    assert executor.cancelled is True
+    assert facade.shutdown_qq_runtime_calls == []
+    assert page._selected_source is None
+    assert page._status_label.text() == ""
+
+
+def test_qq_connect_shows_first_run_permission_and_privacy_hint(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    executor = _DeferredExecutor()
+    page = _analysis_page(qt_app, StubFacade(sources=sources), executor=executor)
+    page._selected_source = module.ChatSource.QQ
+
+    page.connect_qq()
+
+    text = page._qq_login_guide_label.text()
+    assert page._qq_login_guide_label.isVisibleTo(page) is True
+    assert "权限确认窗口" in text
+    assert "内置的 QQ 数据读取组件" in text
+    assert "请允许它运行" in text
+    assert "仅在本机处理" in text
+    assert "不会上传" in text
+
+
+def test_wechat_guide_image_load_failure_is_safe(qt_app, tmp_path: Path) -> None:
+    module = _facade_module()
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        connection_status=_wechat_connection_status(
+            available=False,
+            data_found=False,
+            db_key_available=False,
+            runtime_available=False,
+            message="微信尚未连接",
+            action_hint="请开始微信连接流程。",
+        ),
+    )
+    page = _analysis_page(
+        qt_app,
+        facade,
+        wechat_guide_image_path=tmp_path / "missing.png",
+    )
+    page.show()
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+
+    assert page._wechat_guide_image_label.isVisibleTo(page) is False
+    assert "请保持微信停留在登录界面，不要点击进入微信" in (
+        page._wechat_guide_label.text()
+    )
+
+
+def test_wechat_waiting_page_shows_bundled_guide_image(qt_app) -> None:
+    module = _facade_module()
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        connection_status=_wechat_connection_status(
+            available=False,
+            data_found=False,
+            db_key_available=False,
+            runtime_available=False,
+            message="微信尚未连接",
+            action_hint="请开始微信连接流程。",
+        ),
+    )
+    page = _analysis_page(
+        qt_app,
+        facade,
+        wechat_guide_image_path=PROJECT_ROOT / "wechat_login_guide.png",
+    )
+    page.show()
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+
+    assert page._wechat_guide_image_label.isVisibleTo(page) is True
+    assert page._wechat_guide_image_label.pixmap().isNull() is False
+
+
+def test_connection_failure_offers_restart_instead_of_reconnect(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    page = _analysis_page(qt_app, StubFacade(sources=sources))
+    page._selected_source = module.ChatSource.QQ
+
+    page._handle_qq_connect_error("qq_connect_failed", "请检查后重试。")
+
+    assert page._qq_connect_button.text() == "重新开始"
+    assert "重新连接" not in page._qq_connect_button.text()
+
+
+def test_ready_sources_hide_reconnect_actions(qt_app, sources) -> None:
+    page = _qq_page_in_state(
+        qt_app,
+        sources,
+        _qq_snapshot("connected"),
+    )
+
+    assert page._qq_connect_button.isVisibleTo(page) is False
+    assert "重新连接" not in page._qq_connect_button.text()
+    assert page._return_source_button.isVisibleTo(page) is True
+
+
+def test_ready_session_search_remains_available_when_no_name_matches(
+    qt_app,
+) -> None:
+    module = _facade_module()
+    page = _analysis_page(
+        qt_app,
+        StubFacade(
+            sources=_wechat_available_sources(),
+            sessions=[_session(module.ChatSource.WECHAT, "room-1", "Alice")],
+        ),
+    )
+    page.select_source(module.ChatSource.WECHAT)
+
+    page._session_search.setText("missing")
+
+    assert page._session_search.isEnabled() is True
+    assert "没有匹配的会话" in page._session_list.item(0).text()

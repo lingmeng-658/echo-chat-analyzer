@@ -343,13 +343,16 @@ def _launch_auth_window(
     qq_path: Path,
 ) -> Any:
     """Open the runtime login window once, without waiting for login."""
+    # The launcher directory is already the child process cwd. Invoking the
+    # fixed basename avoids passing any user-controlled path through cmd's
+    # parsing rules, so spaces, parentheses, and Unicode parent directories
+    # cannot split or group the command.
     command = [
         "cmd.exe",
         "/d",
         "/s",
         "/c",
-        "call",
-        str(launcher),
+        launcher.name,
     ]
     _LOGGER.info(
         "[qq auth] launch command=%s cwd=%s qq_path=%s",

@@ -464,3 +464,13 @@ ChatMessage 是唯一跨层模型并视为冻结契约。Phase 9.2 只记录推�
 
 这些问题需要独立架构决策和实施计划。本文件不授权修改 ChatMessage、Provider、Adapter、
 数据库读取或 Analysis。
+
+## 15. GUI 连接状态不进入数据模型
+
+连接页的“未连接 / 连接中 / 数据读取中 / READY”是 GUI 对 Facade 状态的展示映射，
+不是聊天事实，也不是 Message、Relation、Event 或 Identity。数据源切换时清理的会话
+列表、提示文字、搜索条件和引导图片均为临时界面状态，不写入 `ChatMessage` 或未来
+Rich Semantic Model。
+
+因此本次连接体验调整不增加任何数据字段，不改变 QQ/微信身份语义，也不授权保存登录
+状态、权限提示或外部客户端生命周期信息。
