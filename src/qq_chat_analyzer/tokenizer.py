@@ -15,6 +15,11 @@ _SINGLE_CHINESE_CHARACTER_RE = re.compile(
 _HYPHENATED_ASCII_RE = re.compile(
     r"(?<![A-Za-z0-9-])[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+(?![A-Za-z0-9-])"
 )
+_URL_RE = re.compile(
+    r"(?:https?://|www\.)[^\s\uFF0C\u3002\uFF01\uFF1F\u3001\uFF1B\uFF1A]+",
+    re.IGNORECASE,
+)
+_URL_PLACEHOLDER = "QQCHATURLPLACEHOLDER"
 _SINGLE_ASCII_LETTER_RE = re.compile(r"[A-Za-z]")
 _SHORT_INTEGER_RE = re.compile(r"[0-9]{1,2}")
 _DECK_QUANTITY_RE = re.compile(r"[0-9]+x", re.IGNORECASE)
@@ -32,12 +37,15 @@ def tokenize(
     _load_user_dictionary(user_dict_path)
     stopwords = _load_stopwords(stopwords_path)
     protected_text, protected_tokens = _protect_hyphenated_ascii(text)
+    url_masked_text = _URL_RE.sub(_URL_PLACEHOLDER, protected_text)
     tokens: list[str] = []
 
-    for raw_token in jieba.lcut(protected_text):
+    for raw_token in jieba.lcut(url_masked_text):
         token = raw_token.strip()
         token = protected_tokens.get(token, token)
-        if not token or token in stopwords:
+        if not token or token == _URL_PLACEHOLDER:
+            continue
+        if token.lower() in stopwords:
             continue
         if _WORD_CONTENT_RE.search(token) is None:
             continue
@@ -73,7 +81,7 @@ def _load_stopwords(stopwords_path: str | None) -> set[str]:
     try:
         with Path(stopwords_path).open("r", encoding="utf-8") as file:
             return {
-                line.strip()
+                line.strip().lower()
                 for line in file
                 if line.strip()
             }

@@ -32,3 +32,29 @@ def test_profiles_preserve_new_student_topic_while_filtering_template_terms(
     )
 
     assert tokens == ["新生", "2026"]
+
+@pytest.mark.parametrize(
+    "profile_filename",
+    [
+        "stopwords.txt",
+        "stopwords_topic.txt",
+        "stopwords_culture.txt",
+    ],
+)
+def test_profiles_filter_english_function_words_but_keep_topic_words(
+    profile_filename: str,
+) -> None:
+    profile = str(PROJECT_ROOT / profile_filename)
+
+    assert tokenize("Hello to my friends in China", profile) == [
+        "Hello",
+        "friends",
+        "China",
+    ]
+    assert tokenize("Crazy Thursday friends China Trump", profile) == [
+        "Crazy",
+        "Thursday",
+        "friends",
+        "China",
+        "Trump",
+    ]

@@ -13,8 +13,10 @@ _IMAGE_PLACEHOLDER_RE = re.compile(
 _REPLY_MARKER_RE = re.compile(
     r"\[(?:回复消息|回复)(?:[：:][^\]]*)?\]",
 )
-_MENTION_ALL_RE = re.compile(r"(?<!\w)@全体成员")
-_MENTION_RE = re.compile(r"(?<!\w)@[^\s@，。！？、,:;；]+")
+_MENTION_ALL_RE = re.compile(r"(?<!\w)@全体成员[：:]?")
+_MENTION_RE = re.compile(
+    r"(?<!\w)@[^\s@，。！？、:：;；]+[：:]?"
+)
 _WECHAT_INTERNAL_ID_RE = re.compile(
     r"(?<![A-Za-z0-9])(?:wxid_[A-Za-z0-9_]+|wx_[A-Za-z0-9_]+)"
     r"(?![A-Za-z0-9])",

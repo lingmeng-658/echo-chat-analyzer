@@ -34,6 +34,34 @@ def test_removes_nickname_mention() -> None:
     assert clean_text("@虚构用户乙 请查看资料") == "请查看资料"
 
 
+def test_removes_mention_followed_by_full_width_colon() -> None:
+    assert clean_text("小明：明天一起吃饭".replace("小明", "@小明")) == (
+        "明天一起吃饭"
+    )
+    assert clean_text("@全体成员：明天下午开会") == (
+        "明天下午开会"
+    )
+
+
+def test_removes_mention_followed_by_half_width_colon() -> None:
+    assert clean_text("@小明:明天一起吃饭") == (
+        "明天一起吃饭"
+    )
+    assert clean_text("@Alice:hello", platform="wechat") == "hello"
+
+
+def test_mention_cleaning_preserves_regular_text() -> None:
+    assert clean_text("邮箱 a@b.com 正常") == (
+        "邮箱 a@b.com 正常"
+    )
+    assert clean_text("今天@一下试试") == (
+        "今天@一下试试"
+    )
+    assert clean_text("@张三 @李四 一起吃饭") == (
+        "一起吃饭"
+    )
+
+
 def test_removes_mention_all() -> None:
     assert clean_text("@全体成员 明天下午开会") == "明天下午开会"
 
@@ -87,3 +115,11 @@ def test_structural_only_text_cleans_to_empty_string() -> None:
     raw_text = "@全体成员 [图片] [回复消息]\u200b \x00"
 
     assert clean_text(raw_text) == ""
+
+def test_preserves_url_text() -> None:
+    assert clean_text("看看 https://example.com/a?b=1") == (
+        "看看 https://example.com/a?b=1"
+    )
+    assert clean_text("明天 https://b23.tv/abc 见") == (
+        "明天 https://b23.tv/abc 见"
+    )
