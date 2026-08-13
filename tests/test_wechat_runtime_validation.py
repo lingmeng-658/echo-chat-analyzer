@@ -27,6 +27,8 @@ from qq_chat_analyzer.providers.wechat_database_provider import (  # noqa: E402
     WeChatSession,
 )
 from qq_chat_analyzer.validation.wechat_runtime_validator import (  # noqa: E402
+    VC_RUNTIME_ERROR_MESSAGE,
+    check_vc_runtime,
     validate_wechat_runtime,
 )
 
@@ -269,3 +271,83 @@ def test_empty_session_list_fails_validation() -> None:
     assert report.environment_ok is True
     assert report.session_read is False
     assert any("\u4f1a\u8bdd" in error for error in report.errors)
+
+# ------------------------------------------------------------ VC++ runtime
+
+
+def test_vc_runtime_sufficient_version_passes() -> None:
+    ok, message = check_vc_runtime(
+        platform="win32",
+        version_reader=lambda _path: (14, 51, 36247, 0),
+    )
+
+    assert ok is True
+    assert message is None
+
+
+def test_vc_runtime_exact_minimum_passes() -> None:
+    ok, message = check_vc_runtime(
+        platform="win32",
+        version_reader=lambda _path: (14, 43, 0, 0),
+    )
+
+    assert ok is True
+    assert message is None
+
+
+def test_vc_runtime_missing_dll_fails() -> None:
+    ok, message = check_vc_runtime(
+        platform="win32",
+        version_reader=lambda _path: None,
+    )
+
+    assert ok is False
+    assert message == VC_RUNTIME_ERROR_MESSAGE
+
+
+def test_vc_runtime_too_old_fails() -> None:
+    ok, message = check_vc_runtime(
+        platform="win32",
+        version_reader=lambda _path: (14, 16, 27033, 0),
+    )
+
+    assert ok is False
+    assert message == VC_RUNTIME_ERROR_MESSAGE
+
+
+def test_vc_runtime_non_windows_is_not_flagged() -> None:
+    ok, message = check_vc_runtime(
+        platform="linux",
+        version_reader=lambda _path: None,
+    )
+
+    assert ok is True
+    assert message is None
+
+
+def test_validation_fails_when_vc_runtime_missing() -> None:
+    def missing_runtime() -> tuple[bool, str | None]:
+        return False, VC_RUNTIME_ERROR_MESSAGE
+
+    report = validate_wechat_runtime(_provider(), vc_runtime_check=missing_runtime)
+
+    assert report.ok is False
+    assert report.environment_ok is False
+    assert report.session_read is False
+    assert report.message_read is False
+    assert report.analysis_ok is False
+    assert VC_RUNTIME_ERROR_MESSAGE in report.errors
+
+
+def test_validation_passes_when_vc_runtime_ok() -> None:
+    def ok_runtime() -> tuple[bool, str | None]:
+        return True, None
+
+    report = validate_wechat_runtime(
+        _provider(),
+        vc_runtime_check=ok_runtime,
+        message_limit=10,
+    )
+
+    assert report.ok is True
+    assert report.environment_ok is True

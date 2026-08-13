@@ -55,6 +55,13 @@ def _fictional_runtime(
         runtime / "qq/config/napcat_fictional-account.json",
         '{"account": "fictional"}\n',
     )
+    # The build script also ships the WeChat WCDB diagnostic runner next to
+    # the frozen app; mirror it in the fictional project so RuntimeOnly builds
+    # exercise the same runner packaging path as real builds.
+    _write(
+        project_root / "scripts" / "run_wechat_wcdb_diagnostic.ps1",
+        "# fictional diagnostic runner\n",
+    )
     return runtime
 
 
@@ -91,6 +98,11 @@ def test_runtime_only_build_copies_complete_wechat_node_module(
     assert (copied / "index.js").is_file()
     assert (copied / "nested/sentinel.txt").read_text(encoding="utf-8") == (
         "nested dependency"
+    )
+    shipped_runner = tmp_path / "dist/Echo/scripts/run_wechat_wcdb_diagnostic.ps1"
+    assert shipped_runner.is_file()
+    assert shipped_runner.read_text(encoding="utf-8").startswith(
+        "# fictional diagnostic runner"
     )
 
 

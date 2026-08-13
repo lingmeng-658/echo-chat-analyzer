@@ -12,10 +12,12 @@ counts plus user-safe error messages.
 
 from __future__ import annotations
 
+import os
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..application.dto import AnalysisRequestDTO
 from ..application.wechat_connection_service import WeChatConnectionService
@@ -29,6 +31,18 @@ from ..resources import resources_dir
 DEFAULT_MESSAGE_LIMIT = 50
 DEFAULT_ANALYSIS_TOP = 20
 STOPWORDS_FILENAME = "stopwords.txt"
+
+# Minimum MSVCP140.dll major/minor derived from the build toolchain (MSVC 14.43).
+# Echo native components are built with that toolset; older x64 redistributables
+# (e.g. 14.16) crash natively with 0xC0000005.
+MSVC_RUNTIME_MINIMUM = (14, 43)
+MSVCP140_X64_PATH = Path(
+    os.environ.get("SystemRoot", r"C:\Windows")
+) / "System32" / "msvcp140.dll"
+VC_RUNTIME_ERROR_MESSAGE = (
+    "Microsoft Visual C++ Runtime ????????"
+    "???/?? Microsoft Visual C++ 2015-2022 Redistributable (x64)?"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +71,97 @@ class WeChatRuntimeValidation:
             and self.message_read
             and self.analysis_ok
         )
+
+
+def _read_file_version(path: Path) -> tuple[int, int, int, int] | None:
+    """Read a Windows DLL file version tuple, or None when unavailable."""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    version = ctypes.windll.version
+    version.GetFileVersionInfoSizeW.argtypes = [
+        wintypes.LPCWSTR,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    version.GetFileVersionInfoSizeW.restype = wintypes.DWORD
+    version.GetFileVersionInfoW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+    ]
+    version.GetFileVersionInfoW.restype = wintypes.BOOL
+    version.VerQueryValueW.argtypes = [
+        ctypes.c_void_p,
+        wintypes.LPCWSTR,
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(wintypes.UINT),
+    ]
+    version.VerQueryValueW.restype = wintypes.BOOL
+
+    class VS_FIXEDFILEINFO(ctypes.Structure):
+        _fields_ = [
+            ("dwSignature", wintypes.DWORD),
+            ("dwStrucVersion", wintypes.DWORD),
+            ("dwFileVersionMS", wintypes.DWORD),
+            ("dwFileVersionLS", wintypes.DWORD),
+            ("dwProductVersionMS", wintypes.DWORD),
+            ("dwProductVersionLS", wintypes.DWORD),
+            ("dwFileFlagsMask", wintypes.DWORD),
+            ("dwFileFlags", wintypes.DWORD),
+            ("dwFileOS", wintypes.DWORD),
+            ("dwFileType", wintypes.DWORD),
+            ("dwFileSubtype", wintypes.DWORD),
+            ("dwFileDateMS", wintypes.DWORD),
+            ("dwFileDateLS", wintypes.DWORD),
+        ]
+
+    size = version.GetFileVersionInfoSizeW(str(path), None)
+    if size == 0:
+        return None
+    buffer = ctypes.create_string_buffer(size)
+    if not version.GetFileVersionInfoW(str(path), 0, size, buffer):
+        return None
+    value_ptr = ctypes.c_void_p()
+    value_len = wintypes.UINT()
+    if not version.VerQueryValueW(
+        buffer, "\\", ctypes.byref(value_ptr), ctypes.byref(value_len)
+    ):
+        return None
+    info = ctypes.cast(value_ptr, ctypes.POINTER(VS_FIXEDFILEINFO)).contents
+    return (
+        info.dwFileVersionMS >> 16,
+        info.dwFileVersionMS & 0xFFFF,
+        info.dwFileVersionLS >> 16,
+        info.dwFileVersionLS & 0xFFFF,
+    )
+
+
+def check_vc_runtime(
+    *,
+    platform: str | None = None,
+    dll_path: Path | None = None,
+    version_reader: Callable[[Path], tuple[int, int, int, int] | None] | None = None,
+    minimum: tuple[int, int] = MSVC_RUNTIME_MINIMUM,
+) -> tuple[bool, str | None]:
+    """Check that the x64 VC++ Runtime (MSVCP140.dll) is present and new enough.
+
+    Returns ``(ok, error_message)``. Non-Windows platforms always pass so the
+    check never misjudges other operating systems. All inputs are injectable
+    for tests; the defaults read the real x64 redistributable on Windows.
+    """
+    if (platform or sys.platform) != "win32":
+        return True, None
+    reader = version_reader or _read_file_version
+    path = dll_path or MSVCP140_X64_PATH
+    version = reader(path)
+    if version is None:
+        return False, VC_RUNTIME_ERROR_MESSAGE
+    if (version[0], version[1]) < minimum:
+        return False, VC_RUNTIME_ERROR_MESSAGE
+    return True, None
 
 
 class _LimitedExportProvider:
@@ -92,6 +197,7 @@ def validate_wechat_runtime(
     message_limit: int = DEFAULT_MESSAGE_LIMIT,
     analysis_service: Any | None = None,
     stopwords_path: Path | None = None,
+    vc_runtime_check: Callable[[], tuple[bool, str | None]] | None = None,
 ) -> WeChatRuntimeValidation:
     """Run the complete WeChat chain against one local provider.
 
@@ -102,6 +208,18 @@ def validate_wechat_runtime(
     returned report.
     """
     errors: list[str] = []
+    runtime_check = vc_runtime_check or check_vc_runtime
+    runtime_ok, runtime_error = runtime_check()
+    if not runtime_ok:
+        errors.append(runtime_error or VC_RUNTIME_ERROR_MESSAGE)
+        return _report(
+            environment_ok=False,
+            session_read=False,
+            message_read=False,
+            chat_message_count=0,
+            analysis_ok=False,
+            errors=errors,
+        )
     effective_limit = (
         message_limit
         if isinstance(message_limit, int)
@@ -282,6 +400,10 @@ def _report(
 
 
 __all__ = [
+    "MSVC_RUNTIME_MINIMUM",
+    "MSVCP140_X64_PATH",
+    "VC_RUNTIME_ERROR_MESSAGE",
     "WeChatRuntimeValidation",
+    "check_vc_runtime",
     "validate_wechat_runtime",
 ]
