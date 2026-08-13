@@ -213,8 +213,10 @@ class _StubQQSetupService:
 
 
 class _StubQQAuthBridge:
-    def __init__(self, snapshot=None):
+    def __init__(self, snapshot=None, qr_ready=True):
         self._snapshot = snapshot
+        self.qr_ready = qr_ready
+        self.qr_ready_calls = 0
         self.calls: list[int] = []
 
     def start_auth_flow(self, progress=None):
@@ -231,6 +233,10 @@ class _StubQQAuthBridge:
             source="qq",
             message="\u7b49\u5f85\u6388\u6743",
         )
+
+    def is_qrcode_ready(self):
+        self.qr_ready_calls += 1
+        return self.qr_ready
 
 
 class _RecordingProcessRegistry:
@@ -316,6 +322,19 @@ def _result(message_count: int = 2):
         ),
         top_words=(dto.WordFrequencyDTO(word="deck", count=3),),
         reports=_reports(message_count),
+    )
+
+
+def _result_with_echo_artifact(message_count: int = 2):
+    dto = _dto()
+    return dataclasses.replace(
+        _result(message_count),
+        artifacts=(
+            dto.ArtifactDTO(
+                kind="echo_report_html",
+                filename="echo-report.html",
+            ),
+        ),
     )
 
 
@@ -560,30 +579,21 @@ def test_facade_returns_qq_environment_config_for_prefill() -> None:
     assert setup.config_calls == 1
 
 
-def test_connect_qq_delegates_to_the_setup_service() -> None:
+def test_connect_qq_redirects_to_auth_flow() -> None:
     module = _facade_module()
-    status = module.QQConnectionStatus(
-        available=True,
-        qce_running=True,
-        authenticated=True,
-        version="4.1.0",
-        message="QQ \u5df2\u8fde\u63a5\u3002",
-        action_hint="",
-    )
-    setup = _StubQQSetupService(connect_status=status)
-    facade = _facade(qq_setup_service=setup)
+    bridge = _StubQQAuthBridge()
+    setup = _StubQQSetupService()
+    facade = _facade(qq_auth_bridge=bridge, qq_setup_service=setup)
 
     result = facade.connect_qq()
 
-    assert setup.connect_calls == 1
+    assert bridge.calls == [1]
+    assert setup.connect_calls == 0
     connection = importlib.import_module(
         "qq_chat_analyzer.application.connection"
     )
     assert isinstance(result, connection.ConnectionSnapshot)
-    assert result.state is connection.ConnectionState.CONNECTED
-    assert result.connected is True
-    assert result.version == "4.1.0"
-    assert result.message == "QQ \u5df2\u8fde\u63a5\u3002"
+    assert result.state is connection.ConnectionState.WAITING_AUTH
 
 
 def test_start_qq_auth_flow_delegates_to_the_auth_bridge() -> None:
@@ -608,6 +618,15 @@ def test_start_qq_auth_flow_forwards_progress_callback() -> None:
     _facade(qq_auth_bridge=bridge).start_qq_auth_flow(progress=progress.append)
 
     assert progress == ["backend stage"]
+
+
+def test_is_qq_qrcode_ready_delegates_to_the_auth_bridge() -> None:
+    bridge = _StubQQAuthBridge(qr_ready=False)
+    facade = _facade(qq_auth_bridge=bridge)
+
+    assert facade.is_qq_qrcode_ready() is False
+
+    assert bridge.qr_ready_calls == 1
 
 
 def test_shutdown_qq_runtime_terminates_recorded_processes() -> None:
@@ -1074,6 +1093,180 @@ def test_analyze_file_uses_defaults_without_a_config(tmp_path: Path) -> None:
     request = analysis_service.requests[0]
     assert request.top == module.DEFAULT_TOP
     assert request.output_directory.is_absolute()
+
+
+def test_default_output_keeps_generated_echo_report_after_return(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+
+    class _WritingAnalysisService(_StubAnalysisService):
+        def execute(self, request):
+            self.requests.append(request)
+            report_path = request.output_directory / "echo-report.html"
+            report_path.write_text("<html>fictional echo</html>", encoding="utf-8")
+            return _result_with_echo_artifact()
+
+    facade = _facade(analysis_service=_WritingAnalysisService())
+
+    outcome = facade.analyze_file(_export_file(tmp_path))
+
+    assert outcome.report_path is not None
+    assert outcome.report_path.name == "echo-report.html"
+    assert outcome.report_path.is_file()
+    assert outcome.artifact_directory == outcome.report_path.parent
+
+
+def test_real_analysis_report_survives_facade_return(tmp_path: Path) -> None:
+    application = importlib.import_module("qq_chat_analyzer.application")
+    input_path = tmp_path / "fictional-chat.json"
+    input_path.write_text(
+        '{"messages": ['
+        '{"timestamp": 1704099600, "sender": {"nickname": "Fictional-Alice"}, '
+        '"type": "text", "content": {"text": "Python 数据分析"}}'
+        "]}",
+        encoding="utf-8",
+    )
+    facade = _facade(
+        analysis_service=application.AnalysisApplicationService(),
+    )
+
+    outcome = facade.analyze_file(input_path)
+
+    assert outcome.report_path is not None
+    assert Path(outcome.report_path).is_file()
+
+
+def test_second_analysis_updates_to_the_latest_generated_report(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+
+    class _WritingAnalysisService(_StubAnalysisService):
+        def execute(self, request):
+            self.requests.append(request)
+            report_path = request.output_directory / "echo-report.html"
+            report_path.write_text(
+                f"<html>report {len(self.requests)}</html>",
+                encoding="utf-8",
+            )
+            return _result_with_echo_artifact()
+
+    facade = _facade(analysis_service=_WritingAnalysisService())
+
+    first = facade.analyze_file(_export_file(tmp_path, "first.json"))
+    second = facade.analyze_file(_export_file(tmp_path, "second.json"))
+
+    assert second.report_path is not None
+    assert second.report_path.is_file()
+    assert second.report_path != first.report_path
+    assert first.report_path is not None
+    assert not first.report_path.exists()
+    assert second.report_path.read_text(encoding="utf-8") == (
+        "<html>report 2</html>"
+    )
+
+
+def test_shutdown_cleans_the_current_temporary_report(tmp_path: Path) -> None:
+    class _WritingAnalysisService(_StubAnalysisService):
+        def execute(self, request):
+            self.requests.append(request)
+            (request.output_directory / "echo-report.html").write_text(
+                "<html>fictional echo</html>",
+                encoding="utf-8",
+            )
+            return _result_with_echo_artifact()
+
+    facade = _facade(analysis_service=_WritingAnalysisService())
+    outcome = facade.analyze_file(_export_file(tmp_path))
+    assert outcome.report_path is not None
+    report_path = outcome.report_path
+    report_directory = report_path.parent
+
+    facade.shutdown()
+
+    assert not report_path.exists()
+    assert not report_directory.exists()
+
+
+def test_missing_echo_artifact_returns_no_report_path(tmp_path: Path) -> None:
+    facade = _facade(analysis_service=_StubAnalysisService(result=_result()))
+
+    outcome = facade.analyze_file(_export_file(tmp_path))
+
+    assert outcome.report_path is None
+
+
+def test_qq_and_wechat_share_the_same_retained_report_contract(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+
+    class _WritingAnalysisService(_StubAnalysisService):
+        def execute(self, request):
+            self.requests.append(request)
+            (request.output_directory / "echo-report.html").write_text(
+                "<html>fictional source-neutral report</html>",
+                encoding="utf-8",
+            )
+            return _result_with_echo_artifact()
+
+    analysis_service = _WritingAnalysisService()
+    export_path = _export_file(tmp_path, "session-export.json")
+    qq = _StubQQService(groups=[], export_path=export_path)
+    wechat = _StubWeChatService(sessions=[], export_path=export_path)
+    facade = _facade(
+        qq_service=qq,
+        wechat_service=wechat,
+        analysis_service=analysis_service,
+    )
+
+    qq_outcome = facade.analyze_session(module.ChatSource.QQ, "qq-fictional")
+    wechat_outcome = facade.analyze_session(
+        module.ChatSource.WECHAT,
+        "wechat-fictional",
+    )
+
+    assert qq_outcome.report_path is not None
+    assert wechat_outcome.report_path is not None
+    assert qq_outcome.report_path.name == "echo-report.html"
+    assert wechat_outcome.report_path.name == "echo-report.html"
+    assert wechat_outcome.report_path.is_file()
+
+
+def test_analyze_file_forwards_speaker_names_and_viewer_key(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    analysis_service = _StubAnalysisService(result=_result())
+    facade = _facade(analysis_service=analysis_service)
+
+    facade.analyze_file(
+        _export_file(tmp_path),
+        speaker_names={"u-fictional-1": "Fictional Alice"},
+        viewer_speaker_key="u-fictional-1",
+    )
+
+    request = analysis_service.requests[0]
+    assert request.speaker_names == {"u-fictional-1": "Fictional Alice"}
+    assert request.viewer_speaker_key == "u-fictional-1"
+    assert request.conversation_kind == "unknown"
+
+
+def test_analyze_qq_private_forwards_conversation_kind(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    analysis_service = _StubAnalysisService(result=_result())
+    qq_service = _StubQQService(
+        groups=[_FakeQQFriend("u_fictional_1", "Fictional Alice", "200001")],
+        export_path=_export_file(tmp_path, "qq_private_export.json"),
+    )
+    facade = _facade(qq_service=qq_service, analysis_service=analysis_service)
+
+    facade.analyze_session(module.ChatSource.QQ, "u_fictional_1")
+
+    assert analysis_service.requests[0].conversation_kind == "private"
 
 
 def test_analyze_file_maps_profile_to_a_stopwords_file(tmp_path: Path) -> None:
@@ -1744,7 +1937,7 @@ def test_analyze_session_hides_the_intermediate_export_file(
     public_values = [
         getattr(outcome, field.name)
         for field in dataclasses.fields(outcome)
-        if field.name != "artifact_directory"
+        if field.name not in {"artifact_directory", "report_path"}
     ]
     assert not any(isinstance(value, Path) for value in public_values)
     assert not hasattr(outcome, "export_path")

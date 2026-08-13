@@ -1,0 +1,214 @@
+"""Behavior tests for source-neutral conversation session analysis."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = PROJECT_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
+
+from qq_chat_analyzer.analysis.conversation_sessions import (  # noqa: E402
+    DEFAULT_SESSION_THRESHOLD_SECONDS,
+    analyze_conversation_sessions,
+)
+from qq_chat_analyzer.message import ChatMessage  # noqa: E402
+
+
+BASE_TIMESTAMP = 1_704_067_200
+
+
+def _message(
+    offset_seconds: int | None,
+    *,
+    sender: str = "Fictional Alice",
+    sender_id: str | None = "fictional-alice-id",
+    conversation_type: str = "private",
+    is_self: bool | None = True,
+) -> ChatMessage:
+    timestamp: int | str = (
+        BASE_TIMESTAMP + offset_seconds
+        if offset_seconds is not None
+        else "invalid-time"
+    )
+    return ChatMessage(
+        timestamp=timestamp,
+        sender=sender,
+        sender_id=sender_id,
+        message_type="text",
+        text="fictional message",
+        platform="fictional",
+        conversation_id="fictional-conversation",
+        conversation_type=conversation_type,
+        is_self=is_self,
+    )
+
+
+def test_empty_messages_produce_empty_session_report() -> None:
+    report = analyze_conversation_sessions(())
+
+    assert report.threshold_seconds == DEFAULT_SESSION_THRESHOLD_SECONDS
+    assert report.session_count == 0
+    assert report.sessions == ()
+    assert report.average_duration_seconds == 0.0
+    assert report.median_duration_seconds == 0.0
+    assert report.longest_duration_seconds == 0
+    assert report.average_message_count == 0.0
+    assert report.private_stats is None
+
+
+def test_messages_within_thirty_minutes_stay_in_one_session() -> None:
+    report = analyze_conversation_sessions(
+        (_message(0), _message(29 * 60 + 59))
+    )
+
+    assert report.session_count == 1
+    assert report.sessions[0].message_count == 2
+    assert report.sessions[0].duration_seconds == 29 * 60 + 59
+
+
+def test_gap_over_thirty_minutes_starts_new_session() -> None:
+    report = analyze_conversation_sessions(
+        (_message(0), _message(30 * 60 + 1))
+    )
+
+    assert report.session_count == 2
+    assert tuple(item.message_count for item in report.sessions) == (1, 1)
+
+
+def test_gap_exactly_thirty_minutes_stays_in_same_session() -> None:
+    report = analyze_conversation_sessions((_message(0), _message(30 * 60)))
+
+    assert report.session_count == 1
+    assert report.sessions[0].duration_seconds == 30 * 60
+
+
+def test_custom_threshold_controls_session_boundary() -> None:
+    report = analyze_conversation_sessions(
+        (_message(0), _message(60 * 60)),
+        threshold_seconds=60 * 60,
+    )
+
+    assert report.threshold_seconds == 60 * 60
+    assert report.session_count == 1
+
+
+def test_single_message_session_has_zero_duration() -> None:
+    report = analyze_conversation_sessions((_message(0),))
+
+    session = report.sessions[0]
+    assert session.start_timestamp == BASE_TIMESTAMP
+    assert session.end_timestamp == BASE_TIMESTAMP
+    assert session.duration_seconds == 0
+    assert session.message_count == 1
+
+
+def test_invalid_and_zero_timestamps_do_not_split_or_distort_session() -> None:
+    zero_timestamp = _message(0)
+    zero_timestamp = ChatMessage(
+        timestamp=0,
+        sender=zero_timestamp.sender,
+        sender_id=zero_timestamp.sender_id,
+        message_type=zero_timestamp.message_type,
+        text=zero_timestamp.text,
+        platform=zero_timestamp.platform,
+        conversation_id=zero_timestamp.conversation_id,
+        conversation_type=zero_timestamp.conversation_type,
+        is_self=zero_timestamp.is_self,
+    )
+    report = analyze_conversation_sessions(
+        (
+            _message(0),
+            _message(None),
+            zero_timestamp,
+            _message(20 * 60),
+        )
+    )
+
+    assert report.session_count == 1
+    session = report.sessions[0]
+    assert session.message_count == 4
+    assert session.start_timestamp == BASE_TIMESTAMP
+    assert session.end_timestamp == BASE_TIMESTAMP + 20 * 60
+    assert session.duration_seconds == 20 * 60
+
+
+def test_private_sessions_report_self_peer_and_unknown_initiators() -> None:
+    report = analyze_conversation_sessions(
+        (
+            _message(0, is_self=True),
+            _message(31 * 60, is_self=False),
+            _message(62 * 60, is_self=None),
+        )
+    )
+
+    assert tuple(item.initiator for item in report.sessions) == (
+        "self",
+        "peer",
+        "unknown",
+    )
+    stats = report.private_stats
+    assert stats is not None
+    assert stats.self_initiated_count == 1
+    assert stats.peer_initiated_count == 1
+    assert stats.unknown_initiated_count == 1
+    assert stats.self_to_peer_ratio == 1.0
+    assert stats.self_initiated_share == 1 / 3
+    assert stats.peer_initiated_share == 1 / 3
+    assert stats.unknown_initiated_share == 1 / 3
+
+
+def test_private_report_calculates_duration_and_message_aggregates() -> None:
+    report = analyze_conversation_sessions(
+        (
+            _message(0),
+            _message(10 * 60),
+            _message(60 * 60, is_self=False),
+            _message(80 * 60, is_self=True),
+            _message(90 * 60, is_self=False),
+        )
+    )
+
+    assert report.session_count == 2
+    assert report.average_duration_seconds == 20 * 60
+    assert report.median_duration_seconds == 20 * 60
+    assert report.longest_duration_seconds == 30 * 60
+    assert report.average_message_count == 2.5
+    assert report.private_stats is not None
+    assert report.private_stats.self_initiated_count == 1
+    assert report.private_stats.peer_initiated_count == 1
+
+
+def test_private_self_to_peer_ratio_is_none_without_peer_sessions() -> None:
+    report = analyze_conversation_sessions((_message(0, is_self=True),))
+
+    assert report.private_stats is not None
+    assert report.private_stats.self_to_peer_ratio is None
+
+
+def test_group_session_uses_stable_sender_identity_as_initiator() -> None:
+    report = analyze_conversation_sessions(
+        (
+            _message(
+                0,
+                sender="Old Fictional Name",
+                sender_id="stable-fictional-id",
+                conversation_type="group",
+                is_self=None,
+            ),
+            _message(
+                10,
+                sender="New Fictional Name",
+                sender_id="stable-fictional-id",
+                conversation_type="group",
+                is_self=None,
+            ),
+        )
+    )
+
+    assert report.conversation_type == "group"
+    assert report.sessions[0].initiator == "stable-fictional-id"
+    assert report.sessions[0].initiator_sender_key == "stable-fictional-id"
+    assert report.private_stats is None

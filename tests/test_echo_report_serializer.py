@@ -77,6 +77,7 @@ def test_echo_report_converts_to_stable_frontend_json_object() -> None:
             "hourly": [{"label": "09:00-09:59", "value": 3.0}],
             "weekday": [{"label": "周一", "value": 3.0}],
         },
+        "conversation_sessions": None,
         "members": [
             {
                 "speaker_key": "fictional-alice",

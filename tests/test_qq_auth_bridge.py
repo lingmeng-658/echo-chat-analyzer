@@ -123,6 +123,9 @@ def _bridge(
     manager=None,
     window_launcher=None,
     process_registry=None,
+    config_preparer=None,
+    qrcode_path=None,
+    runtime_cleaner=None,
 ):
     if process_registry is None:
         registry_module = importlib.import_module(
@@ -135,6 +138,9 @@ def _bridge(
         manager=manager,
         window_launcher=window_launcher,
         process_registry=process_registry,
+        config_preparer=config_preparer or (lambda: True),
+        qrcode_path=qrcode_path,
+        runtime_cleaner=runtime_cleaner,
     )
 
 
@@ -179,7 +185,7 @@ def test_start_auth_flow_returns_connected_without_starting_anything() -> None:
 # ---------------------------------------------------------- waiting for auth
 
 
-def test_start_auth_flow_starts_runtime_and_opens_login_window() -> None:
+def test_start_auth_flow_opens_login_window_without_pre_starting_runtime() -> None:
     module = _connection_module()
     service = _StubConnectionService(
         _status(available=False, qce_running=False, authenticated=False)
@@ -200,9 +206,131 @@ def test_start_auth_flow_starts_runtime_and_opens_login_window() -> None:
         window_launcher=launcher,
     ).start_auth_flow()
 
-    assert setup.connect_calls == 1
+    assert setup.connect_calls == 0
     assert launcher.calls == 1
     assert snapshot.state is module.ConnectionState.WAITING_AUTH
+
+
+def test_start_auth_flow_does_not_pre_start_qce_server_before_launcher() -> None:
+    module = _connection_module()
+    service = _StubConnectionService(
+        _status(available=False, qce_running=False, authenticated=False)
+    )
+    setup = _StubSetupService(
+        connect_status=_status(
+            available=False,
+            qce_running=True,
+            authenticated=False,
+        ),
+        runtime_status=_runtime_status(),
+    )
+    launcher = _RecordingLauncher()
+
+    snapshot = _bridge(
+        setup_service=setup,
+        connection_service=service,
+        window_launcher=launcher,
+    ).start_auth_flow()
+
+    assert setup.connect_calls == 0
+    assert launcher.calls == 1
+    assert snapshot.state is module.ConnectionState.WAITING_AUTH
+
+
+def test_start_auth_flow_prepares_webui_config_before_launch() -> None:
+    module = _connection_module()
+    service = _StubConnectionService(
+        _status(available=False, qce_running=False, authenticated=False)
+    )
+    setup = _StubSetupService(runtime_status=_runtime_status())
+    launcher = _RecordingLauncher()
+    calls: list[str] = []
+
+    def _preparer() -> bool:
+        calls.append("prepared")
+        return True
+
+    snapshot = _bridge(
+        setup_service=setup,
+        connection_service=service,
+        window_launcher=launcher,
+        config_preparer=_preparer,
+    ).start_auth_flow()
+
+    assert calls == ["prepared"]
+    assert launcher.calls == 1
+    assert snapshot.state is module.ConnectionState.WAITING_AUTH
+
+
+def test_start_auth_flow_rejects_pre_existing_qrcode_until_session_update(
+    tmp_path: Path,
+) -> None:
+    module = _connection_module()
+    qr_path = tmp_path / "cache" / "qrcode.png"
+    qr_path.parent.mkdir()
+    qr_path.write_bytes(b"stale-qr-before-session")
+    setup = _StubSetupService(
+        connect_status=_status(
+            available=False,
+            qce_running=True,
+            authenticated=False,
+        ),
+        runtime_status=_runtime_status(),
+        config=_runtime_config(tmp_path),
+    )
+    service = _StubConnectionService(
+        _status(available=False, qce_running=True, authenticated=False)
+    )
+    bridge = _bridge(
+        setup_service=setup,
+        connection_service=service,
+        window_launcher=_RecordingLauncher(),
+    )
+
+    snapshot = bridge.start_auth_flow()
+
+    assert snapshot.state is module.ConnectionState.WAITING_AUTH
+    assert bridge.is_qrcode_ready() is False
+
+    qr_path.write_bytes(b"fresh-qr-from-this-session")
+    assert bridge.is_qrcode_ready() is True
+
+
+def test_start_auth_flow_logs_qr_baseline_and_acceptance_fingerprints(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    qr_path = tmp_path / "cache" / "qrcode.png"
+    qr_path.parent.mkdir()
+    qr_path.write_bytes(b"stale-qr-before-session")
+    setup = _StubSetupService(
+        connect_status=_status(
+            available=False,
+            qce_running=True,
+            authenticated=False,
+        ),
+        runtime_status=_runtime_status(),
+        config=_runtime_config(tmp_path),
+    )
+    service = _StubConnectionService(
+        _status(available=False, qce_running=True, authenticated=False)
+    )
+    bridge = _bridge(
+        setup_service=setup,
+        connection_service=service,
+        window_launcher=_RecordingLauncher(),
+    )
+
+    with caplog.at_level("INFO", logger="qq_chat_analyzer.desktop.qq_auth_bridge"):
+        bridge.start_auth_flow()
+        assert bridge.is_qrcode_ready() is False
+        qr_path.write_bytes(b"fresh-qr-from-this-session")
+        assert bridge.is_qrcode_ready() is True
+
+    messages = [record.message for record in caplog.records]
+    assert any("qr baseline exists" in message for message in messages)
+    assert any("sha256=" in message for message in messages)
+    assert any("qr accepted" in message for message in messages)
 
 
 def test_start_auth_flow_reports_existing_backend_stages() -> None:
@@ -304,7 +432,122 @@ def test_start_auth_flow_picks_up_login_completed_during_launch() -> None:
     ).start_auth_flow()
 
     assert launcher.calls == 1
-    assert snapshot.state is module.ConnectionState.CONNECTED
+    assert snapshot.state is module.ConnectionState.WAITING_AUTH
+    assert (
+        _bridge(
+            setup_service=setup,
+            connection_service=service,
+            window_launcher=launcher,
+        ).get_snapshot().state
+        is module.ConnectionState.CONNECTED
+    )
+
+
+def test_polling_after_auth_launch_keeps_waiting_until_qce_ready() -> None:
+    module = _connection_module()
+    service = _StubConnectionService(
+        queue=[
+            _status(available=False, qce_running=False),
+            _status(available=False, qce_running=False),
+            _status(available=False, qce_running=False),
+            _status(available=False, qce_running=False),
+            _status(
+                available=True,
+                qce_running=True,
+                authenticated=True,
+                message="QQ \u5df2\u8fde\u63a5\u3002",
+            ),
+        ]
+    )
+    setup = _StubSetupService(
+        runtime_status=_runtime_status("stopped"),
+    )
+    bridge = _bridge(
+        setup_service=setup,
+        connection_service=service,
+        window_launcher=_RecordingLauncher(),
+    )
+
+    bridge.start_auth_flow()
+
+    assert bridge.get_snapshot().state is module.ConnectionState.WAITING_AUTH
+    assert bridge.get_snapshot().state is module.ConnectionState.WAITING_AUTH
+    assert bridge.get_snapshot().state is module.ConnectionState.CONNECTED
+
+
+def test_start_auth_flow_stops_previous_runtime_before_relaunch(
+    tmp_path: Path,
+) -> None:
+    module = _connection_module()
+    events: list[str] = []
+
+    def cleaner(directory: Path) -> None:
+        events.append(f"clean:{directory}")
+
+    def launcher() -> None:
+        events.append("launch")
+
+    setup = _StubSetupService(
+        connect_status=_status(
+            available=False,
+            qce_running=True,
+            authenticated=False,
+        ),
+        runtime_status=_runtime_status(),
+        config=_runtime_config(tmp_path),
+    )
+    service = _StubConnectionService(
+        _status(available=False, qce_running=True, authenticated=False)
+    )
+    bridge = _bridge(
+        setup_service=setup,
+        connection_service=service,
+        window_launcher=launcher,
+        runtime_cleaner=cleaner,
+    )
+
+    snapshot = bridge.start_auth_flow()
+
+    assert snapshot.state is module.ConnectionState.WAITING_AUTH
+    assert events == [f"clean:{tmp_path}", "launch"]
+
+
+def test_start_auth_flow_does_not_clean_runtime_when_reusing_launcher(
+    tmp_path: Path,
+) -> None:
+    module = _connection_module()
+    events: list[str] = []
+
+    def cleaner(directory: Path) -> None:
+        events.append(f"clean:{directory}")
+
+    setup = _StubSetupService(
+        connect_status=_status(
+            available=False,
+            qce_running=True,
+            authenticated=False,
+        ),
+        runtime_status=_runtime_status(),
+        config=_runtime_config(tmp_path),
+    )
+    service = _StubConnectionService(
+        _status(available=False, qce_running=True, authenticated=False)
+    )
+    launcher = _RecordingLauncher()
+    bridge = _bridge(
+        setup_service=setup,
+        connection_service=service,
+        window_launcher=launcher,
+        runtime_cleaner=cleaner,
+    )
+
+    first = bridge.start_auth_flow()
+    second = bridge.start_auth_flow()
+
+    assert first.state is module.ConnectionState.WAITING_AUTH
+    assert second.state is module.ConnectionState.WAITING_AUTH
+    assert launcher.calls == 1
+    assert events == [f"clean:{tmp_path}"]
 
 
 def test_get_snapshot_delegates_to_the_connection_manager() -> None:
@@ -368,7 +611,6 @@ def test_start_auth_flow_logs_the_auth_flow(
 
     assert snapshot.state is module.ConnectionState.WAITING_AUTH
     assert any("start_auth_flow entered" in record.message for record in caplog.records)
-    assert any("connect finished" in record.message for record in caplog.records)
     assert any("login window launched" in record.message for record in caplog.records)
 
 
@@ -411,6 +653,7 @@ def test_default_launcher_opens_the_runtime_login_window(
     config = _runtime_config(tmp_path)
     spawned = {}
     monkeypatch.setattr(bridge.os, "name", "posix")
+    monkeypatch.setenv("ECHO_MODE", "inherited-parent-value")
 
     def _fake_popen(args, **kwargs):
         spawned["args"] = list(args)
@@ -433,7 +676,7 @@ def test_default_launcher_opens_the_runtime_login_window(
     assert spawned["kwargs"]["env"]["NAPCAT_QQ_PATH"] == str(
         (tmp_path / "QQ.exe").resolve()
     )
-    assert spawned["kwargs"]["env"]["ECHO_MODE"] == "1"
+    assert "ECHO_MODE" not in spawned["kwargs"]["env"]
 
 
 def _start_launcher_exit_fixture(tmp_path: Path, *, echo_mode: bool):
@@ -743,6 +986,57 @@ def test_find_qq_script_hides_powershell_console_on_windows(
         str(script),
     ]
     assert calls[0][1]["creationflags"] == 0x08000000
+
+
+def test_runtime_cleaner_targets_bundled_napcat_launcher(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = _bridge_module()
+    monkeypatch.setattr(bridge.os, "name", "nt")
+    monkeypatch.setattr(
+        bridge.subprocess,
+        "CREATE_NO_WINDOW",
+        0x08000000,
+        raising=False,
+    )
+    calls = []
+
+    def _fake_run(command, **options):
+        calls.append((command, options))
+
+    monkeypatch.setattr(bridge.subprocess, "run", _fake_run)
+
+    bridge.terminate_bundled_runtime_sessions(tmp_path)
+
+    assert calls
+    command, options = calls[0]
+    assert command[0] == "powershell"
+    assert "NapCatWinBootMain.exe" in command[-1]
+    assert "taskkill" in command[-1]
+    assert "Wait-Process" in command[-1]
+    assert options["env"]["QCE_RUNTIME_DIR"] == str(
+        (tmp_path / "NapCatWinBootMain.exe").resolve()
+    )
+    assert options["creationflags"] == 0x08000000
+
+
+def test_runtime_cleaner_skips_non_windows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = _bridge_module()
+    monkeypatch.setattr(bridge.os, "name", "posix")
+    calls = []
+    monkeypatch.setattr(
+        bridge.subprocess,
+        "run",
+        lambda *args, **kwargs: calls.append(args),
+    )
+
+    bridge.terminate_bundled_runtime_sessions(tmp_path)
+
+    assert calls == []
 
 
 class _FakeProcess:

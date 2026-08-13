@@ -137,6 +137,7 @@ def test_text_message_maps_to_chat_message() -> None:
             message_id="fictional-wechat-message-001",
             sender_id="wxid_fictional_sender",
             conversation_id=None,
+            is_self=True,
             is_system=False,
             recalled=False,
         )

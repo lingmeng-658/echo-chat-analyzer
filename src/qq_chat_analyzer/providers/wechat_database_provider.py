@@ -278,12 +278,19 @@ class WeChatDatabaseProvider:
             "source": "wechat-db",
             "conversation": {
                 "username": session_id,
+                "session_type": _session_type(session_id),
                 "display_name": (
                     contact_names.get(session_id) or session_id
                 ),
             },
             "messages": resolved_rows,
         }
+        try:
+            self_username = self._resolve_self_username()
+        except Exception:
+            self_username = None
+        if self_username:
+            document["conversation"]["self_username"] = self_username
         destination.write_text(
             json.dumps(document, ensure_ascii=False),
             encoding="utf-8",
@@ -439,6 +446,14 @@ class WeChatDatabaseProvider:
             raise DatabaseNotFound()
         return root
 
+    def _resolve_self_username(self) -> str | None:
+        """Return the account directory name when it is a stable wxid."""
+        root = self._resolve_data_root()
+        candidates = _account_directory_names(root)
+        if len(candidates) == 1:
+            return candidates[0]
+        return None
+
     def _session_db_path(self) -> Path:
         root = self._resolve_data_root()
         for candidate in _iter_db_directories(root):
@@ -575,6 +590,26 @@ def _session_type(username: str) -> str:
     if username.startswith("gh_"):
         return "official"
     return "private"
+
+
+def _account_directory_names(root: Path) -> list[str]:
+    """Return account-style directory names directly under ``root``."""
+    candidates: list[str] = []
+    if _is_account_directory_name(root.name):
+        candidates.append(root.name)
+    try:
+        children = sorted(root.iterdir())
+    except OSError:
+        return candidates
+    for child in children:
+        if child.is_dir() and _is_account_directory_name(child.name):
+            candidates.append(child.name)
+    return candidates
+
+
+def _is_account_directory_name(name: str) -> bool:
+    lowered = name.lower()
+    return lowered.startswith(("wxid_", "wx_"))
 
 
 def _is_conversation_username(username: str) -> bool:

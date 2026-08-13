@@ -12,7 +12,12 @@ from .echo_report_template import (
     ECHO_REPORT_CSS,
     ECHO_REPORT_HTML_SKELETON,
 )
-from .models import ChartPoint, EchoMemberCard, EchoReportView
+from .models import (
+    ChartPoint,
+    EchoConversationSessions,
+    EchoMemberCard,
+    EchoReportView,
+)
 
 
 ECHO_REPORT_SCHEMA_VERSION = "echo-report.v0.1"
@@ -38,7 +43,48 @@ def echo_report_to_dict(view: EchoReportView) -> dict[str, object]:
             "hourly": _points_to_list(view.hourly_activity),
             "weekday": _points_to_list(view.weekday_activity),
         },
+        "conversation_sessions": _conversation_sessions_to_dict(
+            view.conversation_sessions
+        ),
         "members": [_member_to_dict(member) for member in view.members],
+    }
+
+
+def _conversation_sessions_to_dict(
+    sessions: EchoConversationSessions | None,
+) -> dict[str, object] | None:
+    if sessions is None:
+        return None
+    private_initiators = None
+    if sessions.private_self_count is not None:
+        private_initiators = {
+            "self_count": sessions.private_self_count,
+            "peer_count": sessions.private_peer_count,
+            "unknown_count": sessions.private_unknown_count,
+            "self_to_peer_ratio": sessions.private_self_to_peer_ratio,
+            "self_share": sessions.private_self_share,
+            "peer_share": sessions.private_peer_share,
+            "unknown_share": sessions.private_unknown_share,
+        }
+    return {
+        "threshold_seconds": sessions.threshold_seconds,
+        "session_count": sessions.session_count,
+        "average_duration_seconds": sessions.average_duration_seconds,
+        "median_duration_seconds": sessions.median_duration_seconds,
+        "longest_duration_seconds": sessions.longest_duration_seconds,
+        "average_message_count": sessions.average_message_count,
+        "private_initiators": private_initiators,
+        "items": [
+            {
+                "start_timestamp": item.start_timestamp,
+                "end_timestamp": item.end_timestamp,
+                "duration_seconds": item.duration_seconds,
+                "message_count": item.message_count,
+                "initiator": item.initiator,
+                "initiator_sender_key": item.initiator_sender_key,
+            }
+            for item in sessions.items
+        ],
     }
 
 

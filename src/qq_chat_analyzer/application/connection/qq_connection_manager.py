@@ -64,6 +64,7 @@ class QQConnectionManager:
     ) -> None:
         self._setup_service = setup_service
         self._connection_service = connection_service
+        self._auth_waiting = False
 
     # ------------------------------------------------------------ inspection
 
@@ -78,24 +79,38 @@ class QQConnectionManager:
 
         status = self._safe_connection_status()
         if status is None:
+            if self._auth_waiting:
+                return self._waiting_auth_snapshot()
             return self._snapshot(
                 ConnectionState.DISCONNECTED,
                 MESSAGE_DISCONNECTED,
                 HINT_CONNECT,
             )
         snapshot = self._from_connection_status(status)
+        if snapshot.state is ConnectionState.CONNECTED:
+            self._auth_waiting = False
+            return snapshot
+
+        runtime_status = self._safe_runtime_status()
+        if self._auth_waiting and self._runtime_failed(runtime_status):
+            self._auth_waiting = False
+            _LOGGER.info("[qq connection] runtime failed, leaving auth wait")
+            return self._snapshot(
+                ConnectionState.ERROR,
+                MESSAGE_ERROR,
+                HINT_RETRY,
+            )
         if (
             snapshot.state is ConnectionState.DISCONNECTED
-            and self._runtime_started()
+            and (
+                self._auth_waiting
+                or self._runtime_started(runtime_status)
+            )
         ):
             _LOGGER.info(
                 "[qq connection] runtime started, waiting for QQ login"
             )
-            return self._snapshot(
-                ConnectionState.WAITING_AUTH,
-                MESSAGE_WAITING_AUTH,
-                HINT_WAITING_AUTH,
-            )
+            return self._waiting_auth_snapshot()
         return snapshot
 
     # --------------------------------------------------------------- actions
@@ -149,6 +164,14 @@ class QQConnectionManager:
         _LOGGER.info("[qq connection] connect state=%s", snapshot.state.value)
         return snapshot
 
+    def begin_auth_waiting(self) -> None:
+        """Remember that a runtime-owned login window is waiting for auth."""
+        self._auth_waiting = True
+
+    def end_auth_waiting(self) -> None:
+        """Stop treating QCE unavailability as an in-progress login."""
+        self._auth_waiting = False
+
     # ------------------------------------------------------------- internals
 
     def _safe_connection_status(self) -> Any:
@@ -165,19 +188,34 @@ class QQConnectionManager:
             )
             return None
 
-    def _runtime_started(self) -> bool:
-        """Return whether the setup service has already launched the runtime."""
+    def _safe_runtime_status(self) -> Any:
+        """Return the setup service's runtime status without raising."""
         service = self._setup_service
         if service is None:
-            return False
+            return None
         get_status = getattr(service, "get_runtime_status", None)
         if get_status is None:
-            return False
+            return None
         try:
-            runtime_status = get_status()
+            return get_status()
         except Exception:
-            return False
+            return None
+
+    def _runtime_started(self, runtime_status: Any) -> bool:
+        """Return whether the setup service reports a running runtime."""
         return getattr(runtime_status, "state", None) is QQRuntimeState.RUNNING
+
+    def _runtime_failed(self, runtime_status: Any) -> bool:
+        """Return whether the runtime reports an explicit fatal state."""
+        state = getattr(runtime_status, "state", None)
+        return state in (QQRuntimeState.ERROR, QQRuntimeState.UNAVAILABLE)
+
+    def _waiting_auth_snapshot(self) -> ConnectionSnapshot:
+        return self._snapshot(
+            ConnectionState.WAITING_AUTH,
+            MESSAGE_WAITING_AUTH,
+            HINT_WAITING_AUTH,
+        )
 
     def _from_connection_status(self, status: Any) -> ConnectionSnapshot:
         """Map one QQConnectionStatus onto the lifecycle vocabulary.

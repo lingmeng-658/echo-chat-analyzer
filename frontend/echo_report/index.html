@@ -44,17 +44,23 @@
           <span class="toc-leader" aria-hidden="true"></span>
           <span class="toc-page">03</span>
         </a>
-        <a class="toc-row" href="#rhythm">
+        <a class="toc-row" id="session-toc" href="#conversation-sessions" hidden>
           <span class="toc-number">02</span>
-          <span class="toc-copy"><strong>节奏：活跃轨迹</strong><small>消息在时间中的落点</small></span>
+          <span class="toc-copy"><strong>聊天轮次</strong><small>谁先开口，一次聊多久</small></span>
           <span class="toc-leader" aria-hidden="true"></span>
           <span class="toc-page">04</span>
         </a>
-        <a class="toc-row" href="#voices">
+        <a class="toc-row" href="#rhythm">
           <span class="toc-number">03</span>
-          <span class="toc-copy"><strong>声音：成员画像</strong><small>每位成员留下的表达痕迹</small></span>
+          <span class="toc-copy"><strong>节奏：活跃轨迹</strong><small>消息在时间中的落点</small></span>
           <span class="toc-leader" aria-hidden="true"></span>
           <span class="toc-page">05</span>
+        </a>
+        <a class="toc-row" href="#voices">
+          <span class="toc-number">04</span>
+          <span class="toc-copy"><strong>声音：成员画像</strong><small>每位成员留下的表达痕迹</small></span>
+          <span class="toc-leader" aria-hidden="true"></span>
+          <span class="toc-page">06</span>
         </a>
         <div class="toc-row is-future">
           <span class="toc-number">04</span>
@@ -100,9 +106,32 @@
       <span class="page-number">03</span>
     </section>
 
-    <section class="page chapter" id="rhythm" aria-labelledby="rhythm-title">
+    <section class="page chapter session-chapter" id="conversation-sessions" aria-labelledby="sessions-title" hidden>
       <header class="chapter-header">
         <span class="chapter-number">02</span>
+        <div><p class="folio">SESSIONS</p><h2 id="sessions-title">聊天轮次</h2></div>
+      </header>
+      <p class="chapter-intro" id="session-lead"></p>
+
+      <div class="session-ledger">
+        <div class="session-initiators" id="session-private-initiators">
+          <p id="session-self"></p>
+          <p id="session-peer"></p>
+        </div>
+        <p class="session-unknown-note" id="session-unknown-note" hidden></p>
+        <dl class="session-fields">
+          <div><dt>一次会聊多久</dt><dd id="session-median-duration"></dd><small>所有聊天轮次的中位时长</small></div>
+          <div><dt>最长的一次</dt><dd id="session-longest-duration"></dd><small>这段时间里持续最久的一轮</small></div>
+          <div class="wide"><dt>每轮消息</dt><dd id="session-average-messages"></dd><small>平均每轮留下的消息数量</small></div>
+        </dl>
+      </div>
+      <p class="session-threshold-note" id="session-threshold-note"></p>
+      <span class="page-number">04</span>
+    </section>
+
+    <section class="page chapter" id="rhythm" aria-labelledby="rhythm-title">
+      <header class="chapter-header">
+        <span class="chapter-number">03</span>
         <div><p class="folio">RHYTHM</p><h2 id="rhythm-title">节奏</h2></div>
       </header>
       <p class="chapter-intro">消息在一天与一周中的分布，形成这段交流的时间纹理。</p>
@@ -120,18 +149,18 @@
         <figcaption><h3>一周中的活跃轨迹</h3><p>星期顺序保持不变，便于阅读时间节奏。</p></figcaption>
         <div class="weekday-tracks" id="weekday-tracks" role="img" aria-label="星期一到星期日活跃分布"></div>
       </figure>
-      <span class="page-number">04</span>
+      <span class="page-number">05</span>
     </section>
 
     <section class="page chapter" id="voices" aria-labelledby="voices-title">
       <header class="chapter-header">
-        <span class="chapter-number">03</span>
+        <span class="chapter-number">04</span>
         <div><p class="folio">VOICES</p><h2 id="voices-title">声音</h2></div>
       </header>
       <p class="chapter-intro">每个人以不同的频率与时间参与其中，留下各自的表达痕迹。</p>
 
       <div class="member-list" id="member-list"></div>
-      <span class="page-number">05</span>
+      <span class="page-number">06</span>
     </section>
 
     <section class="page future" id="future" aria-labelledby="future-title">
@@ -142,7 +171,7 @@
         <div><span>06</span><h3>AI 尾声</h3><p>基于报告内容形成的回望。</p></div>
       </div>
       <footer class="end-mark"><a href="#cover">回到封面 ↑</a><span>余音 Echo · <b data-current-year>2026</b></span></footer>
-      <span class="page-number">06</span>
+      <span class="page-number">07</span>
     </section>
   </main>
   <script>

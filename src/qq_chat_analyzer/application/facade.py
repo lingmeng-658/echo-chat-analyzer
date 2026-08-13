@@ -13,8 +13,8 @@ Deliberate boundaries:
   collaborator runs and in *what* order.
 * No statistics are recomputed. Numbers travel from the analysis reports into
   the dashboard view untouched.
-* Intermediate export files are an implementation detail. They are created in
-  a temporary directory, consumed, and never surfaced to the caller.
+* Intermediate export files are an implementation detail. Generated Echo HTML
+  is the exception: its exact local path is retained for the desktop caller.
 
 Everything that escapes this layer is either a plain view model or a
 :class:`FacadeError` carrying a stable ``code`` and a user-safe message.
@@ -210,6 +210,7 @@ class AnalysisOutcome:
     source: ChatSource
     session: SessionInfo | None = None
     artifact_directory: Path | None = field(default=None, repr=False)
+    report_path: Path | None = field(default=None, repr=False)
     history_saved: bool | None = None
     history_record_id: str | None = None
     snapshot_id: str | None = None
@@ -267,6 +268,7 @@ class ChatAnalyzerFacade:
         self._presentation_builder = presentation_builder
         self._report_history_manager = report_history_manager
         self._stopwords_directory = stopwords_directory or resources_dir()
+        self._retained_output_directory: TemporaryDirectory | None = None
 
     @property
     def _wechat_connection_service(self) -> Any:
@@ -382,13 +384,13 @@ class ChatAnalyzerFacade:
         return self._require_qq_connection_manager().get_snapshot()
 
     def connect_qq(self) -> ConnectionSnapshot:
-        """Connect QQ without any technical input from the user.
+        """Connect QQ through the single authorization runtime path.
 
-        Runtime detection, startup, and connection probing stay inside the
-        connection manager; the GUI only receives the resulting lifecycle
-        snapshot.
+        Redirected to :meth:`start_qq_auth_flow` so the launcher/NapCat owns
+        the qce-server lifecycle; the connection manager must not pre-start a
+        standalone qce-server that would collide with the NapCat plugin.
         """
-        return self._require_qq_connection_manager().connect()
+        return self.start_qq_auth_flow()
 
     def start_qq_auth_flow(
         self,
@@ -401,6 +403,10 @@ class ChatAnalyzerFacade:
         :meth:`get_qq_connection_snapshot` until it reports ``CONNECTED``.
         """
         return self._require_qq_auth_bridge().start_auth_flow(progress=progress)
+
+    def is_qq_qrcode_ready(self) -> bool:
+        """Return whether the QQ login QR belongs to the current session."""
+        return self._require_qq_auth_bridge().is_qrcode_ready()
 
     def shutdown_qq_runtime(self) -> None:
         """Stop only QQ processes LCA started.
@@ -556,6 +562,9 @@ class ChatAnalyzerFacade:
         path: str | Path,
         config: AnalysisConfig | None = None,
         progress: Callable[[str], None] | None = None,
+        *,
+        speaker_names: Mapping[str, str] | None = None,
+        viewer_speaker_key: str | None = None,
     ) -> AnalysisOutcome:
         """Analyze one already-exported local file or directory."""
         resolved_config = config or AnalysisConfig()
@@ -573,6 +582,9 @@ class ChatAnalyzerFacade:
             source=ChatSource.LOCAL_FILE,
             session=None,
             scope=resolved_scope,
+            speaker_names=speaker_names,
+            conversation_kind="unknown",
+            viewer_speaker_key=viewer_speaker_key,
             progress=progress,
         )
 
@@ -582,6 +594,9 @@ class ChatAnalyzerFacade:
         session_id: str,
         config: AnalysisConfig | None = None,
         progress: Callable[[str], None] | None = None,
+        *,
+        speaker_names: Mapping[str, str] | None = None,
+        viewer_speaker_key: str | None = None,
     ) -> AnalysisOutcome:
         """Export one conversation, analyze it, and return a view.
 
@@ -625,6 +640,11 @@ class ChatAnalyzerFacade:
                 )
             )
             conversation_names = {session_id: session.display_name}
+            conversation_kind = (
+                session.session_type
+                if session.session_type in ("private", "group")
+                else "unknown"
+            )
         else:
             session = SessionInfo(
                 source=chat_source,
@@ -632,6 +652,7 @@ class ChatAnalyzerFacade:
                 display_name=session_id,
             )
             conversation_names = None
+            conversation_kind = "unknown"
 
         with TemporaryDirectory(prefix="chat-analyzer-export-") as scratch:
             scratch_directory = Path(scratch)
@@ -651,7 +672,10 @@ class ChatAnalyzerFacade:
                 source=chat_source,
                 session=session,
                 scope=resolved_scope,
+                speaker_names=speaker_names,
                 conversation_names=conversation_names,
+                conversation_kind=conversation_kind,
+                viewer_speaker_key=viewer_speaker_key,
                 snapshot_id=session_export.snapshot_id,
                 data_acquired_at=session_export.acquired_at,
                 snapshot_reused=session_export.reused_snapshot,
@@ -670,6 +694,8 @@ class ChatAnalyzerFacade:
         scope: AnalysisScope,
         speaker_names: Mapping[str, str] | None = None,
         conversation_names: Mapping[str, str] | None = None,
+        conversation_kind: str = "unknown",
+        viewer_speaker_key: str | None = None,
         snapshot_id: str | None = None,
         data_acquired_at: datetime | None = None,
         snapshot_reused: bool = False,
@@ -678,7 +704,8 @@ class ChatAnalyzerFacade:
         """Run analysis then presentation for one local path."""
         analysis_service = self._require_analysis_service()
 
-        with _output_directory(config) as output_directory:
+        output_directory, temporary_output = _create_output_directory(config)
+        try:
             request = AnalysisRequestDTO(
                 input_path=input_path,
                 output_directory=output_directory,
@@ -688,6 +715,8 @@ class ChatAnalyzerFacade:
                 scope=scope,
                 speaker_names=speaker_names or {},
                 conversation_names=conversation_names or {},
+                conversation_kind=conversation_kind,
+                viewer_speaker_key=viewer_speaker_key,
             )
             with _translated_errors(source):
                 _report_progress(progress, "正在处理消息...")
@@ -697,6 +726,16 @@ class ChatAnalyzerFacade:
             _report_progress(progress, "正在生成报告...")
             view = self._build_view(result)
             report_generated_at = datetime.now(timezone.utc)
+        except Exception:
+            if temporary_output is not None:
+                temporary_output.cleanup()
+            raise
+
+        report_path = _generated_echo_report_path(result, output_directory)
+        if temporary_output is not None and report_path is None:
+            temporary_output.cleanup()
+            temporary_output = None
+        self._replace_retained_output(temporary_output)
 
         history_saved: bool | None = None
         history_record_id: str | None = None
@@ -766,7 +805,10 @@ class ChatAnalyzerFacade:
             result=result,
             source=source,
             session=session,
-            artifact_directory=config.output_directory,
+            artifact_directory=(
+                output_directory if report_path is not None else None
+            ),
+            report_path=report_path,
             history_saved=history_saved,
             history_record_id=history_record_id,
             snapshot_id=snapshot_id,
@@ -775,6 +817,20 @@ class ChatAnalyzerFacade:
         )
         _report_progress(progress, "分析完成")
         return outcome
+
+    def _replace_retained_output(
+        self,
+        temporary_output: TemporaryDirectory | None,
+    ) -> None:
+        """Keep only the latest successful scratch report alive."""
+        previous = self._retained_output_directory
+        self._retained_output_directory = temporary_output
+        if previous is not None and previous is not temporary_output:
+            previous.cleanup()
+
+    def shutdown(self) -> None:
+        """Release transient artifacts retained by this facade."""
+        self._replace_retained_output(None)
 
     def _build_view(self, result: AnalysisResultDTO) -> DashboardView:
         """Hand the reports to the presentation layer without touching them."""
@@ -911,12 +967,17 @@ class ChatAnalyzerFacade:
         """Return the QQ auth bridge, composing it from injected services."""
         if self._qq_auth_bridge is None:
             from .connection import QQAuthBridge
+            from .connection.qq_auth_bridge import (
+                terminate_bundled_runtime_sessions,
+            )
 
             self._qq_auth_bridge = QQAuthBridge(
                 setup_service=self._optional_qq_setup_service(),
                 connection_service=self._optional_qq_connection_service(),
                 manager=self._require_qq_connection_manager(),
                 process_registry=self._require_qq_process_registry(),
+                # Temporary manual A/B: keep the cleaner available but skip it.
+                runtime_cleaner=None,
             )
         return self._qq_auth_bridge
 
@@ -978,17 +1039,34 @@ class ChatAnalyzerFacade:
 # ------------------------------------------------------------------ helpers
 
 
-@contextmanager
-def _output_directory(config: AnalysisConfig) -> Iterator[Path]:
-    """Yield a directory for artifacts, scratch if the caller gave none."""
+def _create_output_directory(
+    config: AnalysisConfig,
+) -> tuple[Path, TemporaryDirectory | None]:
+    """Create an artifact directory and transfer scratch ownership upward."""
     if config.output_directory is not None:
         directory = Path(config.output_directory)
         directory.mkdir(parents=True, exist_ok=True)
-        yield directory
-        return
+        return directory, None
 
-    with TemporaryDirectory(prefix="chat-analyzer-output-") as scratch:
-        yield Path(scratch)
+    scratch = TemporaryDirectory(prefix="chat-analyzer-output-")
+    return Path(scratch.name), scratch
+
+
+def _generated_echo_report_path(
+    result: AnalysisResultDTO,
+    output_directory: Path,
+) -> Path | None:
+    """Resolve the report descriptor produced by this exact analysis run."""
+    for artifact in result.artifacts:
+        if artifact.kind != "echo_report_html":
+            continue
+        candidate = (output_directory / artifact.filename).resolve()
+        try:
+            if candidate.is_file():
+                return candidate
+        except OSError:
+            return None
+    return None
 
 
 @contextmanager

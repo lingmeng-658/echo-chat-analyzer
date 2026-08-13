@@ -27,6 +27,8 @@ def project_legacy_message(message: RichMessage) -> ChatMessage:
         sender_remark=message.sender.remark,
         sender_nickname=message.sender.nickname,
         sender_contextual_name=message.sender.contextual_name,
+        conversation_type=message.conversation_type,
+        is_self=message.is_self,
         recalled=(
             message.recall_state.is_recalled
             if message.recall_state is not None

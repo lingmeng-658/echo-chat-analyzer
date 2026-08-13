@@ -60,7 +60,24 @@ def load_messages(path: str | Path) -> list[Any]:
     return messages if isinstance(messages, list) else []
 
 
-def parse_messages(raw_messages: Iterable[Any]) -> list[ChatMessage]:
+def load_conversation_context(
+    path: str | Path,
+) -> tuple[str | None, str]:
+    """Return reliable (conversation_id, conversation_type) from a file."""
+    if _is_jsonl_path(path):
+        return _chatlab_conversation_context(_iter_chatlab_lines(path))
+
+    payload = _load_json_payload(path)
+    if payload is None:
+        return None, "unknown"
+    return _detailed_conversation_context(payload)
+
+
+def parse_messages(
+    raw_messages: Iterable[Any],
+    conversation_id: str | None = None,
+    conversation_type: str = "unknown",
+) -> list[ChatMessage]:
     """Normalize supported WeChat messages while isolating malformed entries."""
     parsed_messages: list[ChatMessage] = []
 
@@ -70,7 +87,11 @@ def parse_messages(raw_messages: Iterable[Any]) -> list[ChatMessage]:
         return parsed_messages
 
     for raw_message in iterator:
-        parsed_message = _parse_message(raw_message)
+        parsed_message = _parse_message(
+            raw_message,
+            conversation_id=conversation_id,
+            conversation_type=conversation_type,
+        )
         if parsed_message is not None:
             parsed_messages.append(parsed_message)
 
@@ -179,12 +200,20 @@ def _looks_like_wechat_export(payload: Mapping[str, Any]) -> bool:
     return False
 
 
-def _parse_message(raw_message: Any) -> ChatMessage | None:
+def _parse_message(
+    raw_message: Any,
+    conversation_id: str | None = None,
+    conversation_type: str = "unknown",
+) -> ChatMessage | None:
     if not isinstance(raw_message, Mapping):
         return None
 
     if raw_message.get("_type") == _CHATLAB_MESSAGE_LINE:
-        return _parse_chatlab_message(raw_message)
+        return _parse_chatlab_message(
+            raw_message,
+            conversation_id=conversation_id,
+            conversation_type=conversation_type,
+        )
 
     source_type = raw_message.get("type")
     message_type = _NORMALIZED_MESSAGE_TYPES.get(source_type)
@@ -214,12 +243,19 @@ def _parse_message(raw_message: Any) -> ChatMessage | None:
         source_type=source_type,
         message_id=raw_message.get("platformMessageId"),
         sender_id=raw_message.get("senderUsername"),
+        conversation_id=conversation_id,
+        conversation_type=conversation_type,
+        is_self=_is_send_flag(raw_message),
         is_system=False,
         recalled=False,
     )
 
 
-def _parse_chatlab_message(raw_message):
+def _parse_chatlab_message(
+    raw_message,
+    conversation_id: str | None = None,
+    conversation_type: str = "unknown",
+):
     source_type = raw_message.get("type")
     if isinstance(source_type, bool) or not isinstance(source_type, int):
         return None
@@ -251,6 +287,83 @@ def _parse_chatlab_message(raw_message):
         source_type=source_type,
         message_id=raw_message.get("platformMessageId"),
         sender_id=raw_message.get("sender"),
+        conversation_id=conversation_id,
+        conversation_type=conversation_type,
+        is_self=_is_send_flag(raw_message),
         is_system=False,
         recalled=False,
     )
+
+
+def _detailed_conversation_context(
+    payload: Mapping[str, Any],
+) -> tuple[str | None, str]:
+    session = payload.get("session")
+    if not isinstance(session, Mapping):
+        return None, "unknown"
+
+    conversation_id = _first_text(
+        session,
+        "username",
+        "wxid",
+        "sessionId",
+        "conversationId",
+        "id",
+    )
+    session_type = _first_text(session, "type", "sessionType")
+    if isinstance(session.get("isGroup"), bool):
+        session_type = "group" if session["isGroup"] else "private"
+    return conversation_id, _normalize_conversation_type(session_type)
+
+
+def _chatlab_conversation_context(
+    records: list[Mapping[str, Any]],
+) -> tuple[str | None, str]:
+    for record in records:
+        if record.get("_type") != _CHATLAB_HEADER_LINE:
+            continue
+        meta = record.get("meta")
+        if not isinstance(meta, Mapping):
+            continue
+        conversation_id = _first_text(
+            meta,
+            "groupId",
+            "chatId",
+            "sessionId",
+            "conversationId",
+            "id",
+        )
+        session_type = _first_text(meta, "type", "sessionType")
+        if isinstance(meta.get("isGroup"), bool):
+            session_type = "group" if meta["isGroup"] else "private"
+        return conversation_id, _normalize_conversation_type(session_type)
+    return None, "unknown"
+
+
+def _normalize_conversation_type(raw_type: str | None) -> str:
+    if not raw_type:
+        return "unknown"
+    normalized = raw_type.strip().lower()
+    if normalized in {"private", "group"}:
+        return normalized
+    return "unknown"
+
+
+def _first_text(data: Mapping[Any, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _is_send_flag(raw_message: Mapping[Any, Any]) -> bool | None:
+    value = raw_message.get("isSend")
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+    return None

@@ -7,6 +7,13 @@ from .analyzers import (
     MessageLengthAnalyzer,
     UserProfileAnalyzer,
 )
+from .conversation_sessions import (
+    DEFAULT_SESSION_THRESHOLD_SECONDS,
+    ConversationSession,
+    ConversationSessionReport,
+    PrivateSessionStats,
+    analyze_conversation_sessions,
+)
 from .models import (
     ActivityReport,
     AnalysisReports,
@@ -30,7 +37,10 @@ __all__ = [
     "AnalysisReports",
     "ConversationAnalyzer",
     "ConversationReport",
+    "ConversationSession",
+    "ConversationSessionReport",
     "ConversationSummary",
+    "DEFAULT_SESSION_THRESHOLD_SECONDS",
     "HourlyActivity",
     "LengthBucket",
     "MessageCompositionAnalyzer",
@@ -39,9 +49,11 @@ __all__ = [
     "MessageLengthAnalyzer",
     "MessageLengthReport",
     "ProfileWord",
+    "PrivateSessionStats",
     "SpeakerLength",
     "UserProfile",
     "UserProfileAnalyzer",
     "UserProfileReport",
     "WeekdayActivity",
+    "analyze_conversation_sessions",
 ]

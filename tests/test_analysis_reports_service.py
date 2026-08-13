@@ -114,6 +114,8 @@ def test_execute_attaches_every_report_to_the_result(tmp_path: Path) -> None:
     assert reports.message_composition is not None
     assert reports.message_composition.total_count == 3
     assert _text_category_count(reports.message_composition) == 3
+    assert reports.conversation_sessions is not None
+    assert reports.conversation_sessions.session_count == 3
 
 
 def test_reports_stay_out_of_the_result_repr(tmp_path: Path) -> None:

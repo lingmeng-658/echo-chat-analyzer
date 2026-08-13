@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+from .conversation_sessions import ConversationSessionReport
+
 
 UNKNOWN_CONVERSATION_NAME = "\u672a\u77e5\u4f1a\u8bdd"
 
@@ -181,6 +183,7 @@ class AnalysisReports:
     user_profiles: UserProfileReport | None = None
     conversations: ConversationReport | None = None
     message_composition: MessageCompositionReport | None = None
+    conversation_sessions: ConversationSessionReport | None = None
 
 
 @dataclass(frozen=True, slots=True)

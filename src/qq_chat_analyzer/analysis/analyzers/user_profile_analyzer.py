@@ -12,6 +12,7 @@ from ..models import (
     WeekdayActivity,
 )
 from ..peaks import DAYS_PER_WEEK, HOURS_PER_DAY, busiest_index
+from ..identity import stable_sender_key
 from ..timestamps import to_utc_datetime
 from ...analyzer import top_words
 from ...cleaner import clean_text
@@ -40,14 +41,15 @@ class UserProfileAnalyzer:
         stats: dict[str, _SpeakerStats] = {}
 
         for message in messages:
-            speaker_stats = stats.setdefault(message.sender, _SpeakerStats())
+            speaker_key = stable_sender_key(message)
+            speaker_stats = stats.setdefault(speaker_key, _SpeakerStats())
             speaker_stats.add(message)
 
         total_message_count = len(messages)
         speaker_words = _speaker_top_words(sender_tokens, top_words_per_user)
         profiles = [
             UserProfile(
-                speaker=speaker,
+                speaker=speaker_stats.speaker or speaker,
                 speaker_key=speaker_stats.speaker_key or speaker,
                 message_count=speaker_stats.message_count,
                 message_share_percent=_share_percent(
@@ -94,6 +96,7 @@ class _SpeakerStats:
         "weekday_counts",
         "text_lengths",
         "max_length",
+        "speaker",
         "speaker_key",
         "remark",
         "nickname",
@@ -106,6 +109,7 @@ class _SpeakerStats:
         self.weekday_counts = [0] * DAYS_PER_WEEK
         self.text_lengths: list[int] = []
         self.max_length = 0
+        self.speaker: str | None = None
         self.speaker_key: str | None = None
         self.remark: str | None = None
         self.nickname: str | None = None
@@ -113,6 +117,8 @@ class _SpeakerStats:
 
     def add(self, message: ChatMessage) -> None:
         self.message_count += 1
+        if self.speaker is None:
+            self.speaker = message.sender
         if self.speaker_key is None:
             self.speaker_key = _speaker_key(message)
         self.remark = _merge_identity_field(self.remark, message.sender_remark)

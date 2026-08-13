@@ -44,6 +44,8 @@ class AnalysisRequestDTO:
         default=_EMPTY_NAMES,
         repr=False,
     )
+    conversation_kind: str = "unknown"
+    viewer_speaker_key: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)

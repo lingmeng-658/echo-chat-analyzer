@@ -16,6 +16,7 @@ from ..analysis.models import (
     UserProfile,
     UserProfileReport,
 )
+from ..analysis.conversation_sessions import ConversationSessionReport
 from .formatters import (
     format_active_period,
     format_average,
@@ -34,6 +35,8 @@ from .models import (
     ConversationCard,
     DashboardView,
     EchoMemberCard,
+    EchoConversationSession,
+    EchoConversationSessions,
     EchoReportView,
     MetricCard,
     UserCard,
@@ -194,8 +197,51 @@ class EchoReportBuilder:
             hourly_activity=hourly_activity,
             weekday_activity=weekday_activity,
             members=members,
+            conversation_sessions=_build_echo_sessions(
+                reports.conversation_sessions
+            ),
             empty_description="" if has_data else EMPTY_DESCRIPTION,
         )
+
+
+def _build_echo_sessions(
+    report: ConversationSessionReport | None,
+) -> EchoConversationSessions | None:
+    if report is None:
+        return None
+    private = report.private_stats
+    return EchoConversationSessions(
+        threshold_seconds=report.threshold_seconds,
+        session_count=report.session_count,
+        average_duration_seconds=report.average_duration_seconds,
+        median_duration_seconds=report.median_duration_seconds,
+        longest_duration_seconds=report.longest_duration_seconds,
+        average_message_count=report.average_message_count,
+        items=tuple(
+            EchoConversationSession(
+                start_timestamp=session.start_timestamp,
+                end_timestamp=session.end_timestamp,
+                duration_seconds=session.duration_seconds,
+                message_count=session.message_count,
+                initiator=session.initiator,
+                initiator_sender_key=session.initiator_sender_key,
+            )
+            for session in report.sessions
+        ),
+        private_self_count=(private.self_initiated_count if private else None),
+        private_peer_count=(private.peer_initiated_count if private else None),
+        private_unknown_count=(
+            private.unknown_initiated_count if private else None
+        ),
+        private_self_to_peer_ratio=(
+            private.self_to_peer_ratio if private else None
+        ),
+        private_self_share=(private.self_initiated_share if private else None),
+        private_peer_share=(private.peer_initiated_share if private else None),
+        private_unknown_share=(
+            private.unknown_initiated_share if private else None
+        ),
+    )
 
 
 def build_echo_report_view(

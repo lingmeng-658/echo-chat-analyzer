@@ -398,7 +398,7 @@ def _run_qce_analyze(arguments: list[str]) -> int:
 
     try:
         export_path = _build_qce_service().export_only(
-            QQExportImportRequest(group_code=group_code)
+            QQExportImportRequest(group_code=group_code, force_refresh=True)
         )
     except ApplicationServiceError as error:
         return _report_qce_error(error)

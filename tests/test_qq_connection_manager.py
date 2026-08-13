@@ -171,6 +171,105 @@ def test_runtime_started_without_qq_login_maps_to_waiting_auth() -> None:
     assert snapshot.state is module.ConnectionState.WAITING_AUTH
 
 
+def test_auth_waiting_keeps_waiting_when_qce_not_ready() -> None:
+    module = _connection_module()
+    runtime = importlib.import_module(
+        "qq_chat_analyzer.application.runtime"
+    )
+    setup = _StubSetupService(
+        runtime_status=runtime.QQRuntimeStatus(
+            state=runtime.QQRuntimeState.STOPPED,
+            available=False,
+        )
+    )
+    service = _StubConnectionService(
+        _status(available=False, qce_running=False, authenticated=False)
+    )
+    manager = _manager(
+        setup_service=setup,
+        connection_service=service,
+    )
+    manager.begin_auth_waiting()
+
+    snapshot = manager.get_snapshot()
+
+    assert snapshot.state is module.ConnectionState.WAITING_AUTH
+    assert snapshot.message
+    assert snapshot.action_hint
+
+
+def test_auth_waiting_survives_status_probe_failure() -> None:
+    module = _connection_module()
+    runtime = importlib.import_module(
+        "qq_chat_analyzer.application.runtime"
+    )
+    setup = _StubSetupService(
+        runtime_status=runtime.QQRuntimeStatus(
+            state=runtime.QQRuntimeState.STOPPED,
+            available=False,
+        )
+    )
+    service = _StubConnectionService(error=RuntimeError("fictional probe"))
+    manager = _manager(
+        setup_service=setup,
+        connection_service=service,
+    )
+    manager.begin_auth_waiting()
+
+    snapshot = manager.get_snapshot()
+
+    assert snapshot.state is module.ConnectionState.WAITING_AUTH
+
+
+def test_auth_waiting_clears_once_qce_becomes_ready() -> None:
+    module = _connection_module()
+    service = _StubConnectionService(
+        _status(
+            available=True,
+            qce_running=True,
+            authenticated=True,
+            message="QQ \u5df2\u8fde\u63a5\u3002",
+        )
+    )
+    manager = _manager(connection_service=service)
+    manager.begin_auth_waiting()
+
+    assert manager.get_snapshot().state is module.ConnectionState.CONNECTED
+
+    service._status = _status(
+        available=False,
+        qce_running=False,
+        authenticated=False,
+    )
+    assert manager.get_snapshot().state is module.ConnectionState.DISCONNECTED
+
+
+def test_auth_waiting_does_not_hide_runtime_fatal_failure() -> None:
+    module = _connection_module()
+    runtime = importlib.import_module(
+        "qq_chat_analyzer.application.runtime"
+    )
+    setup = _StubSetupService(
+        runtime_status=runtime.QQRuntimeStatus(
+            state=runtime.QQRuntimeState.ERROR,
+            available=False,
+        )
+    )
+    service = _StubConnectionService(
+        _status(available=False, qce_running=False, authenticated=False)
+    )
+    manager = _manager(
+        setup_service=setup,
+        connection_service=service,
+    )
+    manager.begin_auth_waiting()
+
+    snapshot = manager.get_snapshot()
+
+    assert snapshot.state is module.ConnectionState.ERROR
+    assert snapshot.action_hint
+
+
 def test_missing_services_report_an_error_snapshot() -> None:
     module = _connection_module()
 

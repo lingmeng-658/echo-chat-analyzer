@@ -23,3 +23,5 @@ class ChatMessage:
     sender_remark: str | None = None
     sender_nickname: str | None = None
     sender_contextual_name: str | None = None
+    conversation_type: str = "unknown"
+    is_self: bool | None = None

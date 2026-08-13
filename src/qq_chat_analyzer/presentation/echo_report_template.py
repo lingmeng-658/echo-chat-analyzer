@@ -52,17 +52,23 @@ __ECHO_CSS__
           <span class="toc-leader" aria-hidden="true"></span>
           <span class="toc-page">03</span>
         </a>
-        <a class="toc-row" href="#rhythm">
+        <a class="toc-row" id="session-toc" href="#conversation-sessions" hidden>
           <span class="toc-number">02</span>
-          <span class="toc-copy"><strong>节奏：活跃轨迹</strong><small>消息在时间中的落点</small></span>
+          <span class="toc-copy"><strong>聊天轮次</strong><small>谁先开口，一次聊多久</small></span>
           <span class="toc-leader" aria-hidden="true"></span>
           <span class="toc-page">04</span>
         </a>
-        <a class="toc-row" href="#voices">
+        <a class="toc-row" href="#rhythm">
           <span class="toc-number">03</span>
-          <span class="toc-copy"><strong>声音：成员画像</strong><small>每位成员留下的表达痕迹</small></span>
+          <span class="toc-copy"><strong>节奏：活跃轨迹</strong><small>消息在时间中的落点</small></span>
           <span class="toc-leader" aria-hidden="true"></span>
           <span class="toc-page">05</span>
+        </a>
+        <a class="toc-row" href="#voices">
+          <span class="toc-number">04</span>
+          <span class="toc-copy"><strong>声音：成员画像</strong><small>每位成员留下的表达痕迹</small></span>
+          <span class="toc-leader" aria-hidden="true"></span>
+          <span class="toc-page">06</span>
         </a>
         <div class="toc-row is-future">
           <span class="toc-number">04</span>
@@ -108,9 +114,32 @@ __ECHO_CSS__
       <span class="page-number">03</span>
     </section>
 
-    <section class="page chapter" id="rhythm" aria-labelledby="rhythm-title">
+    <section class="page chapter session-chapter" id="conversation-sessions" aria-labelledby="sessions-title" hidden>
       <header class="chapter-header">
         <span class="chapter-number">02</span>
+        <div><p class="folio">SESSIONS</p><h2 id="sessions-title">聊天轮次</h2></div>
+      </header>
+      <p class="chapter-intro" id="session-lead"></p>
+
+      <div class="session-ledger">
+        <div class="session-initiators" id="session-private-initiators">
+          <p id="session-self"></p>
+          <p id="session-peer"></p>
+        </div>
+        <p class="session-unknown-note" id="session-unknown-note" hidden></p>
+        <dl class="session-fields">
+          <div><dt>一次会聊多久</dt><dd id="session-median-duration"></dd><small>所有聊天轮次的中位时长</small></div>
+          <div><dt>最长的一次</dt><dd id="session-longest-duration"></dd><small>这段时间里持续最久的一轮</small></div>
+          <div class="wide"><dt>每轮消息</dt><dd id="session-average-messages"></dd><small>平均每轮留下的消息数量</small></div>
+        </dl>
+      </div>
+      <p class="session-threshold-note" id="session-threshold-note"></p>
+      <span class="page-number">04</span>
+    </section>
+
+    <section class="page chapter" id="rhythm" aria-labelledby="rhythm-title">
+      <header class="chapter-header">
+        <span class="chapter-number">03</span>
         <div><p class="folio">RHYTHM</p><h2 id="rhythm-title">节奏</h2></div>
       </header>
       <p class="chapter-intro">消息在一天与一周中的分布，形成这段交流的时间纹理。</p>
@@ -128,18 +157,18 @@ __ECHO_CSS__
         <figcaption><h3>一周中的活跃轨迹</h3><p>星期顺序保持不变，便于阅读时间节奏。</p></figcaption>
         <div class="weekday-tracks" id="weekday-tracks" role="img" aria-label="星期一到星期日活跃分布"></div>
       </figure>
-      <span class="page-number">04</span>
+      <span class="page-number">05</span>
     </section>
 
     <section class="page chapter" id="voices" aria-labelledby="voices-title">
       <header class="chapter-header">
-        <span class="chapter-number">03</span>
+        <span class="chapter-number">04</span>
         <div><p class="folio">VOICES</p><h2 id="voices-title">声音</h2></div>
       </header>
       <p class="chapter-intro">每个人以不同的频率与时间参与其中，留下各自的表达痕迹。</p>
 
       <div class="member-list" id="member-list"></div>
-      <span class="page-number">05</span>
+      <span class="page-number">06</span>
     </section>
 
     <section class="page future" id="future" aria-labelledby="future-title">
@@ -150,7 +179,7 @@ __ECHO_CSS__
         <div><span>06</span><h3>AI 尾声</h3><p>基于报告内容形成的回望。</p></div>
       </div>
       <footer class="end-mark"><a href="#cover">回到封面 ↑</a><span>余音 Echo · <b data-current-year>2026</b></span></footer>
-      <span class="page-number">06</span>
+      <span class="page-number">07</span>
     </section>
   </main>
   <script>
@@ -236,6 +265,21 @@ h1, h2, h3, p { margin-top: 0; }
 .archive-fields dd { margin: 18px 0 7px; font-size: 29px; }
 .archive-fields small { color: var(--faint); }
 
+.session-ledger { border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
+.session-initiators { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid var(--rule); }
+.session-initiators p { min-height: 128px; margin: 0; padding: 38px 34px 30px 0; font: 28px/1.55 var(--serif); }
+.session-initiators p + p { padding-right: 0; padding-left: 34px; border-left: 1px solid var(--rule); }
+.session-fields { display: grid; grid-template-columns: 1fr 1fr; margin: 0; }
+.session-fields div { min-height: 150px; padding: 28px 0; }
+.session-fields div:nth-child(odd) { padding-right: 34px; border-right: 1px solid var(--rule); }
+.session-fields div:nth-child(even) { padding-left: 34px; }
+.session-fields .wide { grid-column: 1 / -1; padding-right: 0; border-top: 1px solid var(--rule); border-right: 0; }
+.session-fields dt { color: var(--muted); font-size: 12px; letter-spacing: .08em; }
+.session-fields dd { margin: 18px 0 7px; font-size: 25px; }
+.session-fields small, .session-unknown-note, .session-threshold-note { color: var(--faint); font-size: 12px; }
+.session-unknown-note { margin: 0; padding: 16px 0; border-bottom: 1px solid var(--rule); }
+.session-threshold-note { margin: 24px 0 0; line-height: 1.8; }
+
 .figure-block { margin: 0 0 72px; }
 .figure-block figcaption { display: flex; align-items: baseline; justify-content: space-between; gap: 24px; margin-bottom: 26px; }
 .figure-block h3 { margin: 0; font-size: 21px; font-weight: 500; }
@@ -292,6 +336,10 @@ h1, h2, h3, p { margin-top: 0; }
   .archive-fields { grid-template-columns: 1fr; }
   .archive-fields div, .archive-fields div:nth-child(odd), .archive-fields div:nth-child(even) { padding: 24px 0; border-right: 0; border-bottom: 1px solid var(--rule); }
   .archive-fields .wide { grid-column: auto; }
+  .session-initiators, .session-fields { grid-template-columns: 1fr; }
+  .session-initiators p, .session-initiators p + p { min-height: auto; padding: 24px 0; border-left: 0; border-bottom: 1px solid var(--rule); }
+  .session-fields div, .session-fields div:nth-child(odd), .session-fields div:nth-child(even) { padding: 24px 0; border-right: 0; border-bottom: 1px solid var(--rule); }
+  .session-fields .wide { grid-column: auto; }
   .member-entry dl { grid-template-columns: 1fr 1fr; margin-left: 0; }
   .member-rhythm { margin-left: 0; }
   .future-list > div { grid-template-columns: 34px 1fr; }
@@ -348,6 +396,39 @@ document.documentElement.classList.add("js-ready");
     return (Number(value) || 0).toFixed(1);
   }
 
+  function finiteNumber(value) {
+    if (value === null || value === "" || typeof value === "boolean") {
+      return null;
+    }
+    var number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function formatSessionDuration(value) {
+    var seconds = finiteNumber(value);
+    if (seconds === null || seconds < 0) {
+      return "时长未知";
+    }
+    var totalMinutes = Math.round(seconds / 60);
+    if (totalMinutes < 60) {
+      return String(totalMinutes) + " 分钟";
+    }
+    var hours = Math.floor(totalMinutes / 60);
+    var minutes = totalMinutes % 60;
+    return (
+      String(hours) + " 小时" +
+      (minutes ? " " + String(minutes) + " 分钟" : "")
+    );
+  }
+
+  function formatSessionMessages(value) {
+    var count = finiteNumber(value);
+    if (count === null || count < 0) {
+      return "消息数未知";
+    }
+    return Number.isInteger(count) ? String(count) : count.toFixed(1);
+  }
+
   document.querySelectorAll("[data-current-year]").forEach(function (element) {
     element.textContent = String(new Date().getFullYear());
   });
@@ -381,6 +462,112 @@ document.documentElement.classList.add("js-ready");
     );
     if (!hasData && emptyDescription) {
       setText("overview-intro", emptyDescription);
+    }
+  }
+
+  var sessions = data && data.conversation_sessions;
+  var sessionsToc = document.getElementById("session-toc");
+  var sessionsChapter = document.getElementById("conversation-sessions");
+  var sessionCount = sessions ? finiteNumber(sessions.session_count) : null;
+  var hasSessions = Boolean(
+    sessions && sessionCount !== null && sessionCount > 0
+  );
+  if (sessionsChapter) {
+    sessionsChapter.hidden = !hasSessions;
+  }
+  if (sessionsToc) {
+    sessionsToc.hidden = !hasSessions;
+  }
+  if (hasSessions) {
+    var conversationKind = conversation && conversation.kind;
+    var isPrivate = conversationKind === "private";
+    var isGroup = conversationKind === "group";
+    setText(
+      "session-lead",
+      isPrivate
+        ? "过去这段时间，你们一共聊起了 " + formatCount(sessionCount) + " 轮"
+        : isGroup
+          ? "过去这段时间，群里一共聊起了 " + formatCount(sessionCount) + " 轮"
+          : "过去这段时间，一共聊起了 " + formatCount(sessionCount) + " 轮"
+    );
+    setText(
+      "session-median-duration",
+      "通常一次会聊约 " +
+        formatSessionDuration(sessions.median_duration_seconds)
+    );
+    setText(
+      "session-longest-duration",
+      "最长的一次持续 " +
+        formatSessionDuration(sessions.longest_duration_seconds)
+    );
+    setText(
+      "session-average-messages",
+      "平均每轮约 " +
+        formatSessionMessages(sessions.average_message_count) +
+        " 条消息"
+    );
+
+    var thresholdSeconds = finiteNumber(sessions.threshold_seconds);
+    var thresholdMinutes =
+      thresholdSeconds !== null && thresholdSeconds > 0
+        ? Math.round(thresholdSeconds / 60)
+        : 30;
+    setText(
+      "session-threshold-note",
+      "相隔超过 " +
+        String(thresholdMinutes) +
+        " 分钟未继续交流，会被视为一段新的聊天。"
+    );
+
+    var privateBlock = document.getElementById("session-private-initiators");
+    var unknownNote = document.getElementById("session-unknown-note");
+    var initiators = isPrivate ? sessions.private_initiators : null;
+    var selfShare = initiators ? finiteNumber(initiators.self_share) : null;
+    var peerShare = initiators ? finiteNumber(initiators.peer_share) : null;
+    var selfCount = initiators ? finiteNumber(initiators.self_count) : null;
+    var peerCount = initiators ? finiteNumber(initiators.peer_count) : null;
+    var unknownCount = initiators
+      ? finiteNumber(initiators.unknown_count)
+      : null;
+    var hasKnownInitiators = Boolean(
+      isPrivate &&
+      selfShare !== null &&
+      peerShare !== null &&
+      selfCount !== null &&
+      peerCount !== null &&
+      selfCount + peerCount > 0
+    );
+    if (privateBlock) {
+      privateBlock.hidden = !hasKnownInitiators;
+    }
+    setText(
+      "session-self",
+      hasKnownInitiators
+        ? "你先开口 " +
+            formatPercent(selfShare * 100) +
+            "（" +
+            formatCount(selfCount) +
+            " 次）"
+        : ""
+    );
+    setText(
+      "session-peer",
+      hasKnownInitiators
+        ? "对方先开口 " +
+            formatPercent(peerShare * 100) +
+            "（" +
+            formatCount(peerCount) +
+            " 次）"
+        : ""
+    );
+    if (unknownNote) {
+      unknownNote.hidden = !(isPrivate && unknownCount > 0);
+      unknownNote.textContent =
+        isPrivate && unknownCount > 0
+          ? "有 " +
+            formatCount(unknownCount) +
+            " 轮暂时无法判断谁先开口。"
+          : "";
     }
   }
 
@@ -473,7 +660,7 @@ document.documentElement.classList.add("js-ready");
       var name = document.createElement("h3");
       name.textContent = member.display_name || "成员";
       var subtitle = document.createElement("p");
-      subtitle.textContent = member.speaker_key || "成员标识";
+      subtitle.textContent = "本地聊天成员";
       nameBlock.appendChild(name);
       nameBlock.appendChild(subtitle);
       header.appendChild(number);

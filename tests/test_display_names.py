@@ -144,11 +144,11 @@ def test_speaker_key_is_stable_when_display_name_changes() -> None:
         ]
     )
 
-    assert {profile.speaker_key for profile in report.profiles} == {"10001"}
-    assert {profile.speaker for profile in report.profiles} == {
-        "Alice",
-        "Alice2",
-    }
+    assert len(report.profiles) == 1
+    profile = report.profiles[0]
+    assert profile.speaker == "Alice"
+    assert profile.speaker_key == "10001"
+    assert profile.message_count == 2
 
 
 def test_profile_carries_qq_identity_fields() -> None:

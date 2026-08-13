@@ -276,7 +276,12 @@ class WeChatCliProvider:
             if count == 0 and not output_path.exists():
                 raise SessionNotFound()
             raw_rows = wechat_cli_adapter.load_messages(output_path)
-            return tuple(wechat_cli_adapter.parse_messages(raw_rows))
+            return tuple(
+                wechat_cli_adapter.parse_messages(
+                    raw_rows,
+                    conversation_id=session_id,
+                )
+            )
 
     # ---------------------------------------------------------------- internals
 

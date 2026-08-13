@@ -34,6 +34,39 @@ document.documentElement.classList.add("js-ready");
     return (Number(value) || 0).toFixed(1);
   }
 
+  function finiteNumber(value) {
+    if (value === null || value === "" || typeof value === "boolean") {
+      return null;
+    }
+    var number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function formatSessionDuration(value) {
+    var seconds = finiteNumber(value);
+    if (seconds === null || seconds < 0) {
+      return "时长未知";
+    }
+    var totalMinutes = Math.round(seconds / 60);
+    if (totalMinutes < 60) {
+      return String(totalMinutes) + " 分钟";
+    }
+    var hours = Math.floor(totalMinutes / 60);
+    var minutes = totalMinutes % 60;
+    return (
+      String(hours) + " 小时" +
+      (minutes ? " " + String(minutes) + " 分钟" : "")
+    );
+  }
+
+  function formatSessionMessages(value) {
+    var count = finiteNumber(value);
+    if (count === null || count < 0) {
+      return "消息数未知";
+    }
+    return Number.isInteger(count) ? String(count) : count.toFixed(1);
+  }
+
   document.querySelectorAll("[data-current-year]").forEach(function (element) {
     element.textContent = String(new Date().getFullYear());
   });
@@ -67,6 +100,112 @@ document.documentElement.classList.add("js-ready");
     );
     if (!hasData && emptyDescription) {
       setText("overview-intro", emptyDescription);
+    }
+  }
+
+  var sessions = data && data.conversation_sessions;
+  var sessionsToc = document.getElementById("session-toc");
+  var sessionsChapter = document.getElementById("conversation-sessions");
+  var sessionCount = sessions ? finiteNumber(sessions.session_count) : null;
+  var hasSessions = Boolean(
+    sessions && sessionCount !== null && sessionCount > 0
+  );
+  if (sessionsChapter) {
+    sessionsChapter.hidden = !hasSessions;
+  }
+  if (sessionsToc) {
+    sessionsToc.hidden = !hasSessions;
+  }
+  if (hasSessions) {
+    var conversationKind = conversation && conversation.kind;
+    var isPrivate = conversationKind === "private";
+    var isGroup = conversationKind === "group";
+    setText(
+      "session-lead",
+      isPrivate
+        ? "过去这段时间，你们一共聊起了 " + formatCount(sessionCount) + " 轮"
+        : isGroup
+          ? "过去这段时间，群里一共聊起了 " + formatCount(sessionCount) + " 轮"
+          : "过去这段时间，一共聊起了 " + formatCount(sessionCount) + " 轮"
+    );
+    setText(
+      "session-median-duration",
+      "通常一次会聊约 " +
+        formatSessionDuration(sessions.median_duration_seconds)
+    );
+    setText(
+      "session-longest-duration",
+      "最长的一次持续 " +
+        formatSessionDuration(sessions.longest_duration_seconds)
+    );
+    setText(
+      "session-average-messages",
+      "平均每轮约 " +
+        formatSessionMessages(sessions.average_message_count) +
+        " 条消息"
+    );
+
+    var thresholdSeconds = finiteNumber(sessions.threshold_seconds);
+    var thresholdMinutes =
+      thresholdSeconds !== null && thresholdSeconds > 0
+        ? Math.round(thresholdSeconds / 60)
+        : 30;
+    setText(
+      "session-threshold-note",
+      "相隔超过 " +
+        String(thresholdMinutes) +
+        " 分钟未继续交流，会被视为一段新的聊天。"
+    );
+
+    var privateBlock = document.getElementById("session-private-initiators");
+    var unknownNote = document.getElementById("session-unknown-note");
+    var initiators = isPrivate ? sessions.private_initiators : null;
+    var selfShare = initiators ? finiteNumber(initiators.self_share) : null;
+    var peerShare = initiators ? finiteNumber(initiators.peer_share) : null;
+    var selfCount = initiators ? finiteNumber(initiators.self_count) : null;
+    var peerCount = initiators ? finiteNumber(initiators.peer_count) : null;
+    var unknownCount = initiators
+      ? finiteNumber(initiators.unknown_count)
+      : null;
+    var hasKnownInitiators = Boolean(
+      isPrivate &&
+      selfShare !== null &&
+      peerShare !== null &&
+      selfCount !== null &&
+      peerCount !== null &&
+      selfCount + peerCount > 0
+    );
+    if (privateBlock) {
+      privateBlock.hidden = !hasKnownInitiators;
+    }
+    setText(
+      "session-self",
+      hasKnownInitiators
+        ? "你先开口 " +
+            formatPercent(selfShare * 100) +
+            "（" +
+            formatCount(selfCount) +
+            " 次）"
+        : ""
+    );
+    setText(
+      "session-peer",
+      hasKnownInitiators
+        ? "对方先开口 " +
+            formatPercent(peerShare * 100) +
+            "（" +
+            formatCount(peerCount) +
+            " 次）"
+        : ""
+    );
+    if (unknownNote) {
+      unknownNote.hidden = !(isPrivate && unknownCount > 0);
+      unknownNote.textContent =
+        isPrivate && unknownCount > 0
+          ? "有 " +
+            formatCount(unknownCount) +
+            " 轮暂时无法判断谁先开口。"
+          : "";
     }
   }
 
@@ -159,7 +298,7 @@ document.documentElement.classList.add("js-ready");
       var name = document.createElement("h3");
       name.textContent = member.display_name || "成员";
       var subtitle = document.createElement("p");
-      subtitle.textContent = member.speaker_key || "成员标识";
+      subtitle.textContent = "本地聊天成员";
       nameBlock.appendChild(name);
       nameBlock.appendChild(subtitle);
       header.appendChild(number);

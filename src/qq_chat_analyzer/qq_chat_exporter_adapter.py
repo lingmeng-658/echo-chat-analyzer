@@ -66,14 +66,68 @@ def qce_conversation_id(payload: Mapping[str, Any] | None) -> str | None:
     )
 
 
+def qce_conversation_type(payload: Mapping[str, Any] | None) -> str:
+    """Return private/group/unknown from the QCE chat info block."""
+    if not isinstance(payload, Mapping):
+        return "unknown"
+    chat_info = payload.get("chatInfo")
+    if not isinstance(chat_info, Mapping):
+        return "unknown"
+
+    chat_type = chat_info.get("chatType")
+    if isinstance(chat_type, int) and not isinstance(chat_type, bool):
+        if chat_type == 1:
+            return "private"
+        if chat_type == 2:
+            return "group"
+        return "unknown"
+
+    for key in ("type", "sessionType", "conversationType"):
+        raw_type = chat_info.get(key)
+        if isinstance(raw_type, str):
+            normalized = _normalize_conversation_type(raw_type)
+            if normalized != "unknown":
+                return normalized
+    return "unknown"
+
+
+def qce_self_identity(payload: Mapping[str, Any] | None) -> str | None:
+    """Return the QCE export's reliable self stable ID, when present."""
+    if not isinstance(payload, Mapping):
+        return None
+    chat_info = payload.get("chatInfo")
+    if not isinstance(chat_info, Mapping):
+        return None
+    return _first_identifier(
+        chat_info,
+        "selfUid",
+        "self_uid",
+        "selfUin",
+        "self_uin",
+    )
+
+
+def _normalize_conversation_type(raw_type: str) -> str:
+    normalized = raw_type.strip().lower()
+    if normalized in {"private", "friend", "c2c"}:
+        return "private"
+    if normalized in {"group", "chatroom"}:
+        return "group"
+    return "unknown"
+
+
 def parse_qce_messages(
     raw_messages: Iterable[Any],
     conversation_id: str | None = None,
+    conversation_type: str = "unknown",
+    self_identity: str | None = None,
 ) -> tuple[list[ChatMessage], tuple[str, ...]]:
     """Project QCE rich messages for the existing analysis pipeline."""
     rich_messages, warnings = parse_qce_rich_messages(
         raw_messages,
         conversation_id=conversation_id,
+        conversation_type=conversation_type,
+        self_identity=self_identity,
     )
     return project_legacy_messages(rich_messages), warnings
 
@@ -81,6 +135,8 @@ def parse_qce_messages(
 def parse_qce_rich_messages(
     raw_messages: Iterable[Any],
     conversation_id: str | None = None,
+    conversation_type: str = "unknown",
+    self_identity: str | None = None,
 ) -> tuple[list[RichMessage], tuple[str, ...]]:
     """Convert QCE messages to P0 source-neutral semantic facts."""
     parsed_messages: list[RichMessage] = []
@@ -95,6 +151,8 @@ def parse_qce_rich_messages(
         parsed_message = _parse_rich_message(
             raw_message,
             conversation_id=conversation_id,
+            conversation_type=conversation_type,
+            self_identity=self_identity,
         )
         if parsed_message is not None:
             parsed_messages.append(parsed_message)
@@ -121,6 +179,8 @@ def _is_qce_payload(payload: dict[str, Any] | None) -> bool:
 def _parse_rich_message(
     raw_message: Any,
     conversation_id: str | None,
+    conversation_type: str,
+    self_identity: str | None,
 ) -> RichMessage | None:
     if not isinstance(raw_message, Mapping):
         return None
@@ -151,20 +211,31 @@ def _parse_rich_message(
         if isinstance(recalled, bool)
         else None
     )
+    identity_id = _stringify_identifier(
+        sender_data.get("uid") or sender_data.get("uin")
+    )
+    is_self = None
+    if isinstance(self_identity, str) and self_identity.strip():
+        normalized_self = self_identity.strip()
+        uid_value = _stringify_identifier(sender_data.get("uid"))
+        uin_value = _stringify_identifier(sender_data.get("uin"))
+        if identity_id or uid_value or uin_value:
+            is_self = normalized_self in {identity_id, uid_value, uin_value}
+
     return RichMessage(
         message_id=_stringify_identifier(raw_message.get("id")),
         source="qq",
         source_type="qce-json",
         conversation_id=conversation_id,
+        conversation_type=conversation_type,
         sender=SenderIdentity(
-            identity_id=_stringify_identifier(
-                sender_data.get("uid") or sender_data.get("uin")
-            ),
+            identity_id=identity_id,
             display_name=_resolve_sender_name(sender_data),
             remark=_first_text(sender_data, "remark"),
             nickname=_first_text(sender_data, "nickname", "name"),
             contextual_name=_first_text(sender_data, "groupCard"),
         ),
+        is_self=is_self,
         timestamp=timestamp,
         message_type=message_type,
         contents=(TextContent(text=text),),

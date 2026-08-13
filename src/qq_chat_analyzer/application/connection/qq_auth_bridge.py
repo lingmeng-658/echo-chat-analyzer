@@ -15,19 +15,29 @@ the existing provider health/data check, so no new state machine is needed.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import subprocess
 import threading
+import time
+from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from .models import ConnectionSnapshot, ConnectionState
-from .qq_connection_manager import QQConnectionManager, SOURCE_QQ
+from .qq_connection_manager import (
+    HINT_WAITING_AUTH,
+    MESSAGE_WAITING_AUTH,
+    QQConnectionManager,
+    SOURCE_QQ,
+)
 from ..qq_process_registry import (
     QQProcessRegistry,
     default_qq_process_registry,
 )
+from ..qq_webui_config import disable_qce_auto_open_browser
 
 
 _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.qq_auth_bridge")
@@ -86,12 +96,21 @@ class QQAuthBridge:
         manager: Any = None,
         window_launcher: Callable[[], None] | None = None,
         process_registry: QQProcessRegistry | None = None,
+        config_preparer: Callable[[], bool] | None = None,
+        qrcode_path: Path | None = None,
+        runtime_cleaner: Callable[[Path], None] | None = None,
     ) -> None:
         self._setup_service = setup_service
         self._connection_service = connection_service
         self._manager = manager
         self._window_launcher = window_launcher
+        self._config_preparer = config_preparer or disable_qce_auto_open_browser
+        self._qrcode_path = qrcode_path
+        self._runtime_cleaner = runtime_cleaner
         self._auth_launch_started = False
+        self._qr_baseline: tuple[str, int, int] | None = None
+        self._qr_session_started_at: float | None = None
+        self._qr_ready_logged = False
         self._process_registry = (
             process_registry or default_qq_process_registry()
         )
@@ -100,13 +119,12 @@ class QQAuthBridge:
         self,
         progress: Callable[[str], None] | None = None,
     ) -> ConnectionSnapshot:
-        """Start QQ authorization and return the immediate lifecycle state.
+        """Launch QQ authorization and return the immediate lifecycle state.
 
         When QQ data is already usable this returns ``CONNECTED`` without
-        touching the runtime. Otherwise the runtime is started through the
-        existing setup service and the runtime's own login window is opened.
-        The call never blocks waiting for the user; later probes detect the
-        authorization result.
+        touching the runtime. Otherwise the runtime's own login window is
+        opened; the launcher owns NapCat and the QCE server, so no qce-server
+        is pre-started here. Later probes detect the authorization result.
         """
         _report_progress(progress, PROGRESS_CHECKING)
         manager = self._manager_instance()
@@ -124,54 +142,86 @@ class QQAuthBridge:
         if self._setup_service is None:
             return self._error_snapshot(MESSAGE_ERROR, HINT_RETRY)
 
+        if snapshot.state in (
+            ConnectionState.INITIALIZING,
+            ConnectionState.STARTING,
+        ):
+            return snapshot
+
         try:
             _report_progress(progress, PROGRESS_STARTING)
-            snapshot = manager.connect()
+            self._config_preparer()
+            _report_progress(progress, PROGRESS_LOADING_NAPCAT)
+            if not self._auth_launch_started:
+                self._clean_stale_runtime()
+                self._remember_qr_baseline()
+            manager.begin_auth_waiting()
+            _LOGGER.info("[qq auth] opening login window")
+            self._launch_window()
         except Exception as error:
+            manager.end_auth_waiting()
             _LOGGER.warning(
-                "[qq auth] connect failed error=%s",
+                "[qq auth] login window launch failed error=%s",
                 type(error).__name__,
             )
             return self._error_snapshot(
                 _public_message(error, MESSAGE_ERROR),
                 HINT_RETRY,
             )
-        _LOGGER.info(
-            "[qq auth] connect finished state=%s",
-            _state_value(snapshot.state),
-        )
-
-        if snapshot.state is ConnectionState.WAITING_AUTH:
-            try:
-                _report_progress(progress, PROGRESS_LOADING_NAPCAT)
-                _LOGGER.info("[qq auth] opening login window")
-                self._launch_window()
-            except Exception as error:
-                _LOGGER.warning(
-                    "[qq auth] login window launch failed error=%s",
-                    type(error).__name__,
-                )
-                return self._error_snapshot(
-                    _public_message(error, MESSAGE_ERROR),
-                    HINT_RETRY,
-                )
-            _LOGGER.info("[qq auth] login window launched")
-            _report_progress(progress, PROGRESS_WAITING_LOGIN)
+        _LOGGER.info("[qq auth] login window launched")
+        _report_progress(progress, PROGRESS_WAITING_LOGIN)
 
         latest = manager.get_snapshot()
         if latest.state is ConnectionState.CONNECTED:
+            manager.end_auth_waiting()
             _report_progress(progress, PROGRESS_CONNECTED)
             return latest
-        if snapshot.state in (
-            ConnectionState.CONNECTED,
-            ConnectionState.WAITING_AUTH,
-        ):
-            return snapshot
-        return latest
+        if latest.state is ConnectionState.ERROR:
+            manager.end_auth_waiting()
+            return latest
+        return replace(
+            latest,
+            state=ConnectionState.WAITING_AUTH,
+            message=MESSAGE_WAITING_AUTH,
+            action_hint=HINT_WAITING_AUTH,
+        )
 
     def get_snapshot(self) -> ConnectionSnapshot:
         """Return the current lifecycle snapshot for continued detection."""
         return self._manager_instance().get_snapshot()
+
+    def is_qrcode_ready(self) -> bool:
+        """Return whether the QR cache belongs to the current auth session.
+
+        A fresh auth flow records the QR cache state before launching NapCat.
+        Until the file changes, any pre-existing ``qrcode.png`` is treated as
+        stale and must not be shown to the user.
+        """
+        path = self._qrcode_cache_path()
+        if path is None:
+            return False
+        fingerprint = _qr_fingerprint(path)
+        if fingerprint is None:
+            self._qr_ready_logged = False
+            return False
+        fresh = (
+            self._qr_baseline is None
+            or fingerprint != self._qr_baseline
+        )
+        if fresh:
+            if self._qr_baseline is not None and not self._qr_ready_logged:
+                _LOGGER.info(
+                    "[qq auth] qr accepted path=%s %s",
+                    path,
+                    _qr_fingerprint_text(
+                        fingerprint,
+                        elapsed_since=self._qr_session_started_at,
+                    ),
+                )
+                self._qr_ready_logged = True
+        else:
+            self._qr_ready_logged = False
+        return fresh
 
     # ---------------------------------------------------------------- internals
 
@@ -203,6 +253,73 @@ class QQAuthBridge:
         pid = getattr(process, "pid", None)
         if pid is not None:
             self._process_registry.record(pid)
+
+    def _remember_qr_baseline(self) -> None:
+        """Record the QR cache state that predates this auth session."""
+        self._qr_session_started_at = time.monotonic()
+        self._qr_ready_logged = False
+        path = self._qrcode_cache_path()
+        self._qr_baseline = _qr_fingerprint(path)
+        if path is None:
+            _LOGGER.info("[qq auth] qr baseline unavailable")
+            return
+        if self._qr_baseline is None:
+            _LOGGER.info("[qq auth] qr baseline missing path=%s", path)
+            return
+        _LOGGER.info(
+            "[qq auth] qr baseline exists path=%s %s",
+            path,
+            _qr_fingerprint_text(self._qr_baseline),
+        )
+
+    def _clean_stale_runtime(self) -> None:
+        """Stop old Echo-launched runtime sessions before a fresh launch."""
+        if self._runtime_cleaner is None:
+            return
+        config = self._environment_config()
+        if config is None:
+            return
+        directory = _path_value(getattr(config, "runtime_directory", None))
+        if directory is None:
+            return
+        _LOGGER.info(
+            "[qq auth] stopping stale runtime sessions dir=%s",
+            directory,
+        )
+        try:
+            self._runtime_cleaner(directory)
+        except Exception as error:
+            _LOGGER.warning(
+                "[qq auth] stale runtime cleanup failed error=%s",
+                type(error).__name__,
+            )
+
+    def _qrcode_cache_path(self) -> Path | None:
+        """Resolve the bundled runtime's QR cache path when available."""
+        if self._qrcode_path is not None:
+            return Path(self._qrcode_path)
+        config = self._environment_config()
+        if config is None:
+            return None
+        directory = _path_value(getattr(config, "runtime_directory", None))
+        if directory is None:
+            return None
+        return directory / "cache" / "qrcode.png"
+
+    def _environment_config(self) -> Any:
+        if self._setup_service is None:
+            return None
+        getter = getattr(self._setup_service, "get_environment_config", None)
+        if getter is None:
+            return None
+        try:
+            return getter()
+        except Exception:
+            _LOGGER.debug(
+                "[qq auth] environment config unavailable",
+                exc_info=True,
+            )
+            return None
 
     @staticmethod
     def _error_snapshot(message: str, action_hint: str) -> ConnectionSnapshot:
@@ -337,6 +454,59 @@ def _detect_qq_path_with_script(script: Path) -> Path | None:
     return None
 
 
+def terminate_bundled_runtime_sessions(runtime_directory: Path) -> None:
+    """Stop NapCat boot launchers started from one Echo runtime directory.
+
+    A new QQ login session must not share the QR cache with an old session.
+    The launcher starts ``NapCatWinBootMain.exe`` from the runtime directory,
+    and that process owns the QQ process tree, so terminating it also stops
+    the old QQ/NapCat session that would otherwise keep writing ``qrcode.png``.
+    """
+    if os.name != "nt":
+        return
+    target = (runtime_directory / "NapCatWinBootMain.exe").resolve()
+    script = r"""
+$ErrorActionPreference = "SilentlyContinue"
+$target = $env:QCE_RUNTIME_DIR
+Get-CimInstance Win32_Process -Filter "Name='NapCatWinBootMain.exe'" | ForEach-Object {
+    $exe = $_.ExecutablePath
+    if ($exe -and [IO.Path]::GetFullPath($exe) -eq [IO.Path]::GetFullPath($target)) {
+        $process = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue
+        taskkill /PID $_.ProcessId /T /F | Out-Null
+        if ($process) {
+            $process | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
+        }
+    }
+}
+"""
+    options = {
+        "capture_output": True,
+        "text": True,
+        "timeout": 10,
+        "check": False,
+        "env": {**os.environ, "QCE_RUNTIME_DIR": str(target)},
+    }
+    if os.name == "nt":
+        options["creationflags"] = subprocess.CREATE_NO_WINDOW
+    try:
+        subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ],
+            **options,
+        )
+    except (OSError, subprocess.SubprocessError):
+        _LOGGER.warning(
+            "[qq auth] stale runtime cleanup command failed",
+            exc_info=True,
+        )
+
+
 def _launch_auth_window(
     runtime_directory: Path,
     launcher: Path,
@@ -360,13 +530,12 @@ def _launch_auth_window(
         runtime_directory,
         qq_path,
     )
+    environment = os.environ.copy()
+    environment.pop("ECHO_MODE", None)
+    environment["NAPCAT_QQ_PATH"] = str(qq_path.resolve())
     launch_options = {
         "cwd": str(runtime_directory),
-        "env": {
-            **os.environ,
-            "ECHO_MODE": "1",
-            "NAPCAT_QQ_PATH": str(qq_path.resolve()),
-        },
+        "env": environment,
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.PIPE,
         "stderr": subprocess.PIPE,
@@ -481,9 +650,39 @@ def _config_summary(config: Any) -> str:
     )
 
 
+def _qr_fingerprint(path: Path | None) -> tuple[str, int, int] | None:
+    """Return a stable identity for the QR file, or None when unreadable."""
+    if path is None:
+        return None
+    try:
+        stat = path.stat()
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+    return (digest, stat.st_mtime_ns, stat.st_size)
+
+
+def _qr_fingerprint_text(
+    fingerprint: tuple[str, int, int],
+    *,
+    elapsed_since: float | None = None,
+) -> str:
+    digest, mtime_ns, size = fingerprint
+    mtime = datetime.fromtimestamp(mtime_ns / 1_000_000_000, tz=timezone.utc)
+    text = (
+        f"mtime={mtime.isoformat()} mtime_ns={mtime_ns} "
+        f"size={size} sha256={digest}"
+    )
+    if elapsed_since is not None:
+        elapsed_ms = int((time.monotonic() - elapsed_since) * 1000)
+        text += f" elapsed_ms={elapsed_ms}"
+    return text
+
+
 __all__ = [
     "QQAuthBridge",
     "QQAuthWindowUnavailable",
     "default_auth_window_launcher",
     "resolve_qq_install_path",
+    "terminate_bundled_runtime_sessions",
 ]

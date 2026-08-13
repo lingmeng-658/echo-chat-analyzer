@@ -7,6 +7,7 @@ from ..analysis.models import (
     MessageLengthReport,
     UserProfileReport,
 )
+from ..analysis.conversation_sessions import ConversationSessionReport
 from .analysis_service import AnalysisApplicationService
 from .connection import (
     ConnectionSnapshot,
@@ -141,6 +142,7 @@ __all__ = [
     "ConnectionSnapshot",
     "ConnectionState",
     "ConversationReport",
+    "ConversationSessionReport",
     "ExportConfig",
     "ExportTaskManager",
     "ExportTaskState",

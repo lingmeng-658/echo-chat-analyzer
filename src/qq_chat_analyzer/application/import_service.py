@@ -15,6 +15,8 @@ from ..qq_chat_exporter_adapter import (
     load_qce_json,
     parse_qce_messages,
     qce_conversation_id,
+    qce_conversation_type,
+    qce_self_identity,
 )
 from ..wechat_cli_adapter import (
     is_cli_export as is_wechat_cli_export,
@@ -29,6 +31,7 @@ from ..wechat_db_adapter import (
 )
 from ..wechat_parser import (
     is_wechat_export,
+    load_conversation_context as load_wechat_conversation_context,
     load_messages as load_wechat_messages,
     parse_messages as parse_wechat_messages,
 )
@@ -215,6 +218,8 @@ def _import_qce_file(
     parsed_messages, parse_warnings = parse_qce_messages(
         raw_messages,
         conversation_id=qce_conversation_id(payload),
+        conversation_type=qce_conversation_type(payload),
+        self_identity=qce_self_identity(payload),
     )
     warnings = (
         *parse_warnings,
@@ -236,7 +241,16 @@ def _import_wechat_file(
         return _import_wechat_db_file(input_file)
 
     raw_messages = load_wechat_messages(input_file)
-    parsed_messages = tuple(parse_wechat_messages(raw_messages))
+    conversation_id, conversation_type = load_wechat_conversation_context(
+        input_file
+    )
+    parsed_messages = tuple(
+        parse_wechat_messages(
+            raw_messages,
+            conversation_id=conversation_id,
+            conversation_type=conversation_type,
+        )
+    )
     if not raw_messages and not parsed_messages:
         cli_rows = load_wechat_cli_messages(input_file)
         if cli_rows:

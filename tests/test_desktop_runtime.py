@@ -64,6 +64,37 @@ def test_configure_logging_creates_file_handler(
     )
 
 
+def test_desktop_log_is_written_as_utf8(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _desktop_runtime()
+    local = tmp_path / "Local"
+    local.mkdir(parents=True)
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    logger = logging.getLogger(module.LOGGER_NAME)
+    original_handlers = logger.handlers[:]
+    original_level = logger.level
+    try:
+        logger.handlers.clear()
+        logger.setLevel(logging.INFO)
+        module.configure_logging()
+        logger.info("正在加载 NapCat...")
+        for handler in logger.handlers:
+            handler.flush()
+
+        log_path = local / "LocalChatAnalyzer" / "logs" / "desktop.log"
+        text = log_path.read_bytes().decode("utf-8")
+        assert "正在加载 NapCat..." in text
+        assert "姝ｅ湪鍔犺浇" not in text
+    finally:
+        for handler in logger.handlers:
+            if handler not in original_handlers:
+                handler.close()
+        logger.handlers[:] = original_handlers
+        logger.setLevel(original_level)
+
+
 def test_wechat_database_provider_diagnostics_are_written_to_desktop_log(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

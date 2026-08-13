@@ -73,14 +73,22 @@ def load_messages(path: str | Path) -> list[Any]:
     if conversation_id is None:
         return messages
 
+    conversation_type = _conversation_type_from_payload(payload)
+    self_username = _self_username(payload)
     rows: list[Any] = []
     for row in messages:
         if isinstance(row, Mapping) and "username" not in row:
             merged = dict(row)
             merged["username"] = conversation_id
-            rows.append(merged)
-        else:
-            rows.append(row)
+            row = merged
+        if isinstance(row, Mapping):
+            if conversation_type and "conversation_type" not in row:
+                row = dict(row)
+                row["conversation_type"] = conversation_type
+            if self_username and "self_username" not in row:
+                row = dict(row)
+                row["self_username"] = self_username
+        rows.append(row)
     return rows
 
 
@@ -136,16 +144,22 @@ def parse_rich_message(raw_message: Any) -> RichMessage | None:
     if sender_id is None:
         return None
     sender = _clean_string(raw_message.get("sender_name")) or sender_id
+    self_username = _clean_string(raw_message.get("self_username"))
+    is_self = None
+    if self_username is not None:
+        is_self = sender_id == self_username
 
     return RichMessage(
         message_id=_stringify_id(raw_message.get("server_id"))
         or _stringify_id(raw_message.get("local_id")),
         source=WECHAT_PLATFORM,
         conversation_id=_clean_string(raw_message.get("username")),
+        conversation_type=_conversation_type(raw_message),
         sender=SenderIdentity(
             identity_id=sender_id,
             display_name=sender,
         ),
+        is_self=is_self,
         timestamp=timestamp,
         message_type=message_type,
         contents=(TextContent(text=text),),
@@ -181,6 +195,47 @@ def _conversation_id(payload: Mapping[str, Any]) -> str | None:
     if not isinstance(conversation, Mapping):
         return None
     return _clean_string(conversation.get("username"))
+
+
+def _conversation_type_from_payload(payload: Mapping[str, Any]) -> str:
+    conversation = payload.get("conversation")
+    if not isinstance(conversation, Mapping):
+        return "unknown"
+    session_type = conversation.get("session_type")
+    if isinstance(session_type, str):
+        normalized = _normalize_conversation_type(session_type)
+        if normalized != "unknown":
+            return normalized
+    return "unknown"
+
+
+def _self_username(payload: Mapping[str, Any]) -> str | None:
+    conversation = payload.get("conversation")
+    if not isinstance(conversation, Mapping):
+        return None
+    return _clean_string(conversation.get("self_username"))
+
+
+def _conversation_type(raw_message: Mapping[str, Any]) -> str:
+    explicit = raw_message.get("conversation_type")
+    if isinstance(explicit, str):
+        normalized = _normalize_conversation_type(explicit)
+        if normalized != "unknown":
+            return normalized
+
+    username = _clean_string(raw_message.get("username"))
+    if not username:
+        return "unknown"
+    if username.endswith("@chatroom"):
+        return "group"
+    return "private"
+
+
+def _normalize_conversation_type(raw_type: str) -> str:
+    normalized = raw_type.strip().lower()
+    if normalized in {"private", "group"}:
+        return normalized
+    return "unknown"
 
 
 def _load_json_object(path: str | Path) -> Mapping[str, Any] | None:

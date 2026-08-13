@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
+from ..identity import stable_sender_key
 from ..models import ConversationReport, ConversationSummary
 from ..timestamps import to_epoch_seconds
 from ...message import ChatMessage
@@ -57,7 +58,7 @@ class _ConversationStats:
 
     def add(self, message: ChatMessage) -> None:
         self.message_count += 1
-        self.speakers.add(message.sender)
+        self.speakers.add(stable_sender_key(message))
 
         epoch_seconds = to_epoch_seconds(message.timestamp)
         if epoch_seconds is None:

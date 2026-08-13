@@ -570,6 +570,58 @@ def test_export_session_json_resolves_sender_display_names(
     assert payload["messages"][0]["sender_name"] == "\u5907\u6ce8\u540d"
 
 
+def test_export_session_json_writes_self_username_from_account_dir(
+    tmp_path: Path,
+) -> None:
+    table = message_table_name(FICTIONAL_SESSION)
+
+    def runner(command, timeout, environment):
+        sql = command[command.index("--sql") + 1]
+        if "FROM contact" in sql:
+            return _FakeCompleted(stdout=_helper_result([]))
+        if "sqlite_master" in sql:
+            return _FakeCompleted(stdout=_helper_result([{"name": table}]))
+        return _FakeCompleted(stdout=_helper_result([_db_row()]))
+
+    provider = _provider(tmp_path, runner)
+    output = tmp_path / "out" / "session.json"
+
+    provider.export_session_json(FICTIONAL_SESSION, output)
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["conversation"]["self_username"] == "wxid_owner"
+
+
+def test_exported_self_username_marks_db_messages(tmp_path: Path) -> None:
+    table = message_table_name(FICTIONAL_SESSION)
+
+    def runner(command, timeout, environment):
+        sql = command[command.index("--sql") + 1]
+        if "FROM contact" in sql:
+            return _FakeCompleted(stdout=_helper_result([]))
+        if "sqlite_master" in sql:
+            return _FakeCompleted(stdout=_helper_result([{"name": table}]))
+        return _FakeCompleted(
+            stdout=_helper_result(
+                [
+                    _db_row(user_name="wxid_owner", message_content="mine"),
+                    _db_row(
+                        user_name="wxid_fictional_sender",
+                        message_content="theirs",
+                    ),
+                ]
+            )
+        )
+
+    provider = _provider(tmp_path, runner)
+    output = tmp_path / "out" / "session.json"
+    provider.export_session_json(FICTIONAL_SESSION, output)
+
+    outcome = ImportService().execute(ImportRequest(input_path=output))
+
+    assert [message.is_self for message in outcome.messages] == [True, False]
+
+
 def test_time_window_is_pushed_into_the_query(tmp_path: Path) -> None:
     table = message_table_name(FICTIONAL_SESSION)
     seen_sql: list[str] = []

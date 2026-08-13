@@ -74,3 +74,5 @@ class RichMessage:
     recall_state: RecallState | None = None
     recall_event: RecallEvent | None = None
     is_system: bool = False
+    conversation_type: str = "unknown"
+    is_self: bool | None = None

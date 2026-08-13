@@ -172,6 +172,12 @@ Adapter 与 Parser 属于**同一层的两种形态**：
 `ChatMessage` 是 `frozen=True, slots=True`，**视为冻结契约**。
 新增展示需求不通过扩展它来满足（见 5.4 名称注入）。
 
+2026-08 人工批准一次向后兼容的最小扩展：`conversation_type`
+（`private` / `group` / `unknown`）与 `is_self`（`True` / `False` / `None`）
+作为跨平台分析所需的最小 identity semantics 进入 `ChatMessage`；
+`None` 表示数据源无法可靠判断本人，展示层仍通过名称注入与
+`resolved_display_name` 解析，不复制平台身份规则。
+
 ### 4.4 Application
 
 应用层含四类组件，职责各不相同。

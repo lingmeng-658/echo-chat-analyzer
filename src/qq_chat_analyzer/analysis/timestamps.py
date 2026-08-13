@@ -45,7 +45,7 @@ def to_utc_datetime(timestamp: int | float | str | None) -> datetime | None:
 def _normalize_numeric(value: float) -> int | None:
     if value != value or value in (float("inf"), float("-inf")):
         return None
-    if value < 0:
+    if value <= 0:
         return None
     if value >= _SECOND_BOUNDS[1]:
         value /= _MILLISECOND_DIVISOR

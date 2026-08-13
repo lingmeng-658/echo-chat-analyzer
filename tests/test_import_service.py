@@ -428,9 +428,16 @@ def test_wechat_import_reuses_existing_wechat_parser_functions(
         calls.append("load_wechat")
         return raw_messages
 
-    def fake_parse(raw: object) -> list[ChatMessage]:
+    def fake_parse(
+        raw: object,
+        *,
+        conversation_id: str | None = None,
+        conversation_type: str = "unknown",
+    ) -> list[ChatMessage]:
         calls.append("parse_wechat")
         assert raw is raw_messages
+        assert conversation_id is None
+        assert conversation_type == "unknown"
         return parsed
 
     def unexpected_detect(_: Path) -> bool:

@@ -72,7 +72,11 @@ def load_messages(path: str | Path) -> list[Any]:
     return payload
 
 
-def parse_messages(raw_messages: Iterable[Any]) -> list[ChatMessage]:
+def parse_messages(
+    raw_messages: Iterable[Any],
+    conversation_id: str | None = None,
+    conversation_type: str = "unknown",
+) -> list[ChatMessage]:
     """Normalize supported CLI rows, isolating malformed entries."""
     parsed_messages: list[ChatMessage] = []
 
@@ -82,14 +86,22 @@ def parse_messages(raw_messages: Iterable[Any]) -> list[ChatMessage]:
         return parsed_messages
 
     for raw_message in iterator:
-        parsed_message = parse_message(raw_message)
+        parsed_message = parse_message(
+            raw_message,
+            conversation_id=conversation_id,
+            conversation_type=conversation_type,
+        )
         if parsed_message is not None:
             parsed_messages.append(parsed_message)
 
     return parsed_messages
 
 
-def parse_message(raw_message: Any) -> ChatMessage | None:
+def parse_message(
+    raw_message: Any,
+    conversation_id: str | None = None,
+    conversation_type: str = "unknown",
+) -> ChatMessage | None:
     """Convert a single CLI row into a ChatMessage, or ``None`` if unusable."""
     if not isinstance(raw_message, Mapping):
         return None
@@ -115,6 +127,18 @@ def parse_message(raw_message: Any) -> ChatMessage | None:
     sender = sender_id or _sender_from_direction(direction)
     if sender is None:
         return None
+    resolved_conversation_id = _clean_string(
+        raw_message.get("sessionId")
+        or raw_message.get("conversationId")
+        or raw_message.get("session_id")
+        or raw_message.get("conversation_id")
+    ) or conversation_id
+    resolved_conversation_type = _normalize_conversation_type(
+        raw_message.get("sessionType")
+        or raw_message.get("conversationType")
+        or conversation_type
+    )
+    is_self = _is_self_from_direction(direction)
 
     return ChatMessage(
         timestamp=timestamp,
@@ -125,6 +149,9 @@ def parse_message(raw_message: Any) -> ChatMessage | None:
         source_type=source_type,
         message_id=_stringify_message_id(raw_message.get("serverId")),
         sender_id=sender_id,
+        conversation_id=resolved_conversation_id,
+        conversation_type=resolved_conversation_type,
+        is_self=is_self,
         is_system=False,
         recalled=False,
     )
@@ -148,6 +175,30 @@ def _sender_from_direction(direction: Any) -> str | None:
     if direction == _DIRECTION_IN:
         return _INCOMING_SENDER
     return None
+
+
+def _is_self_from_direction(direction: Any) -> bool | None:
+    if direction == _DIRECTION_OUT:
+        return True
+    if direction == _DIRECTION_IN:
+        return False
+    return None
+
+
+def _normalize_conversation_type(raw_type: Any) -> str:
+    if not isinstance(raw_type, str):
+        return "unknown"
+    normalized = raw_type.strip().lower()
+    if normalized in {"private", "group"}:
+        return normalized
+    return "unknown"
+
+
+def _clean_string(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
 
 
 def _stringify_message_id(value: Any) -> str | None:

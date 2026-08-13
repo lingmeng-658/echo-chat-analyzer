@@ -219,6 +219,9 @@ class StubFacade:
             raise self._connect_qq_error
         return self._qq_snapshot()
 
+    def is_qq_qrcode_ready(self):
+        return True
+
     def get_qq_connection_snapshot(self):
         self.get_qq_connection_snapshot_calls.append(1)
         if self._connection_error is not None:
@@ -413,10 +416,12 @@ class _StubOutcome:
         *,
         history_saved=None,
         data_acquired_at=None,
+        report_path=None,
     ):
         self.view = view
         self.history_saved = history_saved
         self.data_acquired_at = data_acquired_at
+        self.report_path = report_path
 
 
 def _analysis_page(
@@ -542,6 +547,59 @@ def test_main_window_builds_both_pages(qt_app, sources) -> None:
     assert window.stack.count() == 3
     assert window.windowTitle() != ""
     assert window.stack.currentIndex() == 0
+
+
+def test_main_window_has_no_status_bar(qt_app, sources) -> None:
+    from PySide6.QtWidgets import QStatusBar
+
+    window = _main_window(qt_app, StubFacade(sources=sources))
+
+    assert window.findChild(QStatusBar) is None
+
+
+def test_page_has_no_bottom_hint_label(qt_app, sources) -> None:
+    page = _analysis_page(qt_app, StubFacade(sources=sources))
+
+    assert not hasattr(page, "_hint_label")
+
+
+def test_status_area_is_moved_to_header_row(qt_app, sources) -> None:
+    window = _main_window(qt_app, StubFacade(sources=sources))
+    status = window.analysis_page._status_label
+    layout = window.centralWidget().layout()
+    header = layout.itemAt(0).layout()
+
+    assert window._title_label.text() == "余音 Echo"
+    assert header is not None
+    assert header.itemAt(header.count() - 1).widget() is status
+    page_widgets = [
+        window.analysis_page.layout().itemAt(i).widget()
+        for i in range(window.analysis_page.layout().count())
+    ]
+    assert status not in page_widgets
+    assert not hasattr(window, "_top_status_label")
+
+
+def test_qq_and_wechat_share_one_moved_status_area(qt_app, sources) -> None:
+    window = _main_window(qt_app, StubFacade(sources=sources))
+    status = window.analysis_page._status_label
+
+    window.show_status("等待 QQ 登录")
+    assert status.text() == "等待 QQ 登录"
+    window.show_status("等待微信登录")
+    assert status.text() == "等待微信登录"
+    assert window.analysis_page._status_label is status
+
+
+def test_top_status_follows_status_changed_without_bottom_duplicate(
+    qt_app,
+    sources,
+) -> None:
+    window = _main_window(qt_app, StubFacade(sources=sources))
+
+    window.show_status("等待 QQ 登录")
+
+    assert window.analysis_page._status_label.text() == "等待 QQ 登录"
 
 
 def test_main_window_uses_echo_brand_icon(qt_app, sources) -> None:
@@ -868,9 +926,6 @@ def test_selecting_wechat_without_ready_status_does_not_load_sessions(
     assert page._status_label.toolTip() == (
         "\u8bf7\u767b\u5f55\u5fae\u4fe1\u6216\u914d\u7f6e\u6570\u636e\u76ee\u5f55\u3002"
     )
-    assert page._hint_label.text() == (
-        "\u8bf7\u767b\u5f55\u5fae\u4fe1\u6216\u914d\u7f6e\u6570\u636e\u76ee\u5f55\u3002"
-    )
     assert page._analyze_button.isEnabled() is False
 
 
@@ -991,7 +1046,6 @@ def test_wechat_connect_progress_keeps_unified_status(qt_app) -> None:
     page._handle_wechat_connect_progress("\u6b63\u5728\u7b49\u5f85\u5fae\u4fe1\u767b\u5f55...")
 
     assert page._status_label.text() == "\u7b49\u5f85\u5fae\u4fe1\u767b\u5f55"
-    assert page._hint_label.text() == "\u6b63\u5728\u7b49\u5f85\u5fae\u4fe1\u767b\u5f55..."
     assert received == ["\u6b63\u5728\u8fde\u63a5\u5fae\u4fe1..."]
 
 
@@ -1002,7 +1056,6 @@ def test_wechat_connect_progress_shows_database_read_stage(qt_app) -> None:
     page._handle_wechat_connect_progress("\u6b63\u5728\u8bfb\u53d6\u5fae\u4fe1\u6570\u636e\u5e93...")
 
     assert page._status_label.text() == "\u6b63\u5728\u8bfb\u53d6\u5fae\u4fe1\u6570\u636e\u5e93..."
-    assert page._hint_label.text() == "\u6b63\u5728\u8bfb\u53d6\u5fae\u4fe1\u6570\u636e\u5e93..."
 
 
 def test_wechat_connect_failure_surfaces_a_user_message(qt_app) -> None:
@@ -1032,7 +1085,7 @@ def test_wechat_key_failure_does_not_claim_echo_needs_reinstall(qt_app) -> None:
         "Key \u83b7\u53d6\u8d85\u65f6\uff0c\u8bf7\u5728\u5fae\u4fe1\u767b\u5f55\u65f6\u91cd\u8bd5\u3002",
     )
 
-    visible = page._status_label.text() + page._hint_label.text()
+    visible = page._status_label.text()
     assert "Key \u83b7\u53d6\u5931\u8d25" in visible
     assert "\u91cd\u65b0\u5b89\u88c5" not in visible
 
@@ -1046,7 +1099,7 @@ def test_wechat_hook_failure_keeps_the_classified_reason(qt_app) -> None:
         "\u5fae\u4fe1 Hook \u5931\u8d25\uff0c\u5f53\u524d\u5fae\u4fe1\u8fdb\u7a0b\u53ef\u80fd\u4e0d\u517c\u5bb9\u3002",
     )
 
-    assert "Hook \u5931\u8d25" in page._hint_label.text()
+    assert "Hook \u5931\u8d25" in (page._status_label.toolTip() or "")
     assert "\u83b7\u53d6\u6743\u9650\u65f6\u5931\u8d25" in page._status_label.text()
 
 
@@ -1081,7 +1134,6 @@ def test_selecting_qq_without_ready_status_does_not_load_sessions(
     assert facade.list_sessions_calls == []
     assert page._session_list.count() == 1
     assert "暂无会话" in page._session_list.item(0).text()
-    assert page._hint_label.text() == "\u8bf7\u5148\u8fde\u63a5 QQ\u3002"
 
 
 def test_clicking_qq_source_button_checks_status_without_opening_dialog(
@@ -1183,7 +1235,45 @@ def test_qq_connect_hides_backend_terms_behind_user_stage(qt_app, sources) -> No
 
     assert "正在启动QQ连接环境" in page._status_label.text()
     assert "NapCat" not in page._status_label.text()
-    assert "权限确认窗口" in page._hint_label.text()
+    assert "权限确认窗口" in page._qq_login_guide_label.text()
+
+
+def test_qq_connect_progress_does_not_duplicate_footer_status(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    executor = _DeferredExecutor()
+    page = _analysis_page(qt_app, StubFacade(sources=sources), executor=executor)
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+    emitted = []
+    page.status_changed.connect(emitted.append)
+
+    page._qq_connect_button.click()
+    executor.progress("正在加载 NapCat...")
+
+    assert "正在启动QQ连接环境" in page._status_label.text()
+    assert "正在启动QQ连接环境" in emitted
+    assert not hasattr(page, "_hint_label")
+
+
+def test_qq_connect_progress_updates_top_status(qt_app, sources) -> None:
+    module = _facade_module()
+    executor = _DeferredExecutor()
+    window = _main_window(
+        qt_app,
+        StubFacade(sources=sources),
+        executor=executor,
+    )
+    page = window.analysis_page
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+
+    page._qq_connect_button.click()
+    executor.progress("正在加载 NapCat...")
+
+    assert "正在启动QQ连接环境" in page._status_label.text()
 
 
 @pytest.mark.parametrize(
@@ -1401,9 +1491,9 @@ def test_qq_connect_failure_shows_user_safe_message(
     assert "QQ \u8fde\u63a5\u5931\u8d25" in page._status_label.text()
     assert (
         "\u65e0\u6cd5\u8fde\u63a5 QQ \u6570\u636e\u6e90"
-        in page._hint_label.text()
+        in (page._status_label.toolTip() or "")
     )
-    assert "Traceback" not in page._hint_label.text()
+    assert "Traceback" not in (page._status_label.toolTip() or "")
     assert facade.list_sessions_calls == []
 
 
@@ -1440,7 +1530,7 @@ def test_qq_connect_unavailable_status_is_not_silent(qt_app, sources) -> None:
     assert facade.start_qq_auth_flow_calls == [1]
     assert "\u65e0\u6cd5\u8fde\u63a5 QQ" in page._status_label.text()
     assert "QQ \u6570\u636e\u6e90\u6682\u4e0d\u53ef\u7528" in (
-        page._hint_label.text()
+        page._status_label.toolTip() or ""
     )
 
 
@@ -1527,7 +1617,6 @@ def test_wechat_connection_error_blocks_session_loading_without_leaks(
     assert received == []
     assert page._status_label.text() == "\u65e0\u6cd5\u786e\u8ba4\u8fde\u63a5\u72b6\u6001\u3002"
     assert "raw provider failure" not in page._status_label.text()
-    assert "raw provider failure" not in page._hint_label.text()
 
 
 def test_wechat_unconfigured_keeps_advanced_setup_hidden(qt_app) -> None:
@@ -1877,9 +1966,9 @@ def test_wechat_setup_failure_shows_user_prompt(qt_app) -> None:
     _drain(page)
 
     assert "\u5fae\u4fe1\u73af\u5883\u8bbe\u7f6e\u4fdd\u5b58\u5931\u8d25" in (
-        page._hint_label.text()
+        page._status_label.toolTip() or ""
     )
-    assert "Traceback" not in page._hint_label.text()
+    assert "Traceback" not in (page._status_label.toolTip() or "")
 
 
 def test_analysis_page_lists_sources_from_the_facade(qt_app, sources) -> None:
@@ -1995,7 +2084,95 @@ def test_empty_session_list_is_reported(qt_app, sources) -> None:
 
     assert page._session_list.count() == 1
     assert "没有找到可分析的聊天记录" in page._session_list.item(0).text()
-    assert page._hint_label.text() != ""
+
+
+def test_session_count_shows_in_session_box_for_qq(qt_app, sources) -> None:
+    module = _facade_module()
+    page = _analysis_page(
+        qt_app,
+        StubFacade(
+            sources=sources,
+            sessions=[
+                _session(module.ChatSource.QQ, "10001", "\u865a\u6784\u7fa4 A"),
+                _session(module.ChatSource.QQ, "10002", "\u865a\u6784\u7fa4 B"),
+                _session(module.ChatSource.QQ, "10003", "\u865a\u6784\u7fa4 C"),
+            ],
+        ),
+    )
+
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+
+    assert "\u4f1a\u8bdd\u5217\u8868\uff083\uff09" in page._session_box.title()
+
+
+def test_session_count_shows_in_session_box_for_wechat(qt_app, sources) -> None:
+    module = _facade_module()
+    page = _analysis_page(
+        qt_app,
+        StubFacade(
+            sources=sources,
+            sessions=[
+                _session(module.ChatSource.WECHAT, "wxid_a", "\u865a\u6784\u5bf9\u8bdd A"),
+                _session(module.ChatSource.WECHAT, "wxid_b", "\u865a\u6784\u5bf9\u8bdd B"),
+            ],
+        ),
+    )
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+
+    assert "\u4f1a\u8bdd\u5217\u8868\uff082\uff09" in page._session_box.title()
+
+
+def test_session_count_resets_to_zero_for_empty_and_refresh(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    page = _analysis_page(qt_app, StubFacade(sources=sources))
+
+    page._populate_sessions(
+        [
+            _session(module.ChatSource.QQ, "10001", "\u865a\u6784\u7fa4 A"),
+            _session(module.ChatSource.QQ, "10002", "\u865a\u6784\u7fa4 B"),
+        ]
+    )
+    assert "\u4f1a\u8bdd\u5217\u8868\uff082\uff09" in page._session_box.title()
+
+    page._populate_sessions([])
+    assert "\u4f1a\u8bdd\u5217\u8868\uff080\uff09" in page._session_box.title()
+
+    page._populate_sessions(
+        [_session(module.ChatSource.QQ, "10003", "\u865a\u6784\u7fa4 C")]
+    )
+    assert "\u4f1a\u8bdd\u5217\u8868\uff081\uff09" in page._session_box.title()
+
+
+def test_session_count_appears_only_in_session_box(qt_app, sources) -> None:
+    from PySide6.QtWidgets import QLabel
+
+    module = _facade_module()
+    page = _analysis_page(
+        qt_app,
+        StubFacade(
+            sources=sources,
+            sessions=[
+                _session(module.ChatSource.QQ, "10001", "\u865a\u6784\u7fa4 A"),
+                _session(module.ChatSource.QQ, "10002", "\u865a\u6784\u7fa4 B"),
+            ],
+        ),
+    )
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+
+    assert "\u4f1a\u8bdd\u5217\u8868\uff082\uff09" in page._session_box.title()
+    label_texts = [
+        label.text()
+        for label in page.findChildren(QLabel)
+        if label.text()
+    ]
+    assert all("\u4e2a\u4f1a\u8bdd" not in text for text in label_texts)
 
 
 def test_session_search_filters_display_names(qt_app) -> None:
@@ -2135,6 +2312,127 @@ def test_analyze_button_stays_disabled_until_a_session_is_chosen(
     page._session_list.setCurrentRow(0)
 
     assert page._analyze_button.isEnabled() is True
+
+
+def test_analysis_controls_hidden_until_sessions_are_loaded(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    page = _analysis_page(
+        qt_app,
+        StubFacade(
+            sources=sources,
+            sessions=[],
+            connection_status=_connection_status(
+                available=False,
+                qce_running=False,
+                authenticated=False,
+                message="QQ \u672a\u8fde\u63a5\u3002",
+                action_hint="\u8bf7\u5148\u8fde\u63a5 QQ\u3002",
+            ),
+        ),
+    )
+
+    assert page._analysis_range_box.isVisibleTo(page) is False
+    assert page._analyze_button.isVisibleTo(page) is False
+
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+
+    assert page._analysis_range_box.isVisibleTo(page) is False
+    assert page._analyze_button.isVisibleTo(page) is False
+
+
+def test_analysis_controls_visible_after_qq_sessions_load(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    page = _analysis_page(
+        qt_app,
+        StubFacade(
+            sources=sources,
+            sessions=[_session(module.ChatSource.QQ, "10001", "\u865a\u6784\u7fa4")],
+        ),
+    )
+
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+
+    assert page._analysis_range_box.isVisibleTo(page) is True
+    assert page._analyze_button.isVisibleTo(page) is True
+
+
+def test_analysis_controls_visible_after_wechat_sessions_load(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    page = _analysis_page(
+        qt_app,
+        StubFacade(
+            sources=sources,
+            sessions=[
+                _session(module.ChatSource.WECHAT, "wxid_a", "\u865a\u6784\u5bf9\u8bdd")
+            ],
+        ),
+    )
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+
+    assert page._analysis_range_box.isVisibleTo(page) is True
+    assert page._analyze_button.isVisibleTo(page) is True
+
+
+def test_analysis_controls_hidden_after_connection_failure(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    page = _analysis_page(
+        qt_app,
+        StubFacade(
+            sources=sources,
+            sessions=[_session(module.ChatSource.QQ, "10001", "\u865a\u6784\u7fa4")],
+        ),
+    )
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+
+    assert page._analysis_range_box.isVisibleTo(page) is True
+
+    page._show_disconnected_session_placeholder(module.ChatSource.QQ)
+
+    assert page._analysis_range_box.isVisibleTo(page) is False
+    assert page._analyze_button.isVisibleTo(page) is False
+
+
+def test_analysis_controls_hidden_when_switching_source(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    page = _analysis_page(
+        qt_app,
+        StubFacade(
+            sources=sources,
+            sessions=[_session(module.ChatSource.QQ, "10001", "\u865a\u6784\u7fa4")],
+        ),
+    )
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+
+    assert page._analysis_range_box.isVisibleTo(page) is True
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+
+    page._show_unconnected_session_placeholder()
+
+    assert page._analysis_range_box.isVisibleTo(page) is False
+    assert page._analyze_button.isVisibleTo(page) is False
 
 
 def test_start_analysis_calls_analyze_session(qt_app, sources) -> None:
@@ -2375,7 +2673,6 @@ def test_scope_errors_show_the_reason_and_restore_analysis_controls(
     _drain(page)
 
     assert failures == [(code, message)]
-    assert page._hint_label.text() == message
     assert page._analysis_running is False
     assert page._analyze_button.isEnabled() is True
 
@@ -2463,6 +2760,90 @@ def test_show_outcome_accepts_a_bare_view(qt_app, sources) -> None:
     assert window.stack.currentIndex() == 2
 
 
+def test_successful_outcome_exposes_echo_report_entry(
+    qt_app,
+    sources,
+    tmp_path,
+) -> None:
+    report_path = tmp_path / "echo-report.html"
+    report_path.write_text("<html>fictional report</html>", encoding="utf-8")
+    window = _main_window(qt_app, StubFacade(sources=sources))
+
+    window.show_outcome(
+        _StubOutcome(_dashboard_view(), report_path=report_path)
+    )
+
+    assert window._open_echo_button.isVisibleTo(window)
+    assert window._open_echo_button.isEnabled()
+
+
+def test_echo_entry_opens_the_latest_outcome_report_path(
+    qt_app,
+    sources,
+    tmp_path,
+) -> None:
+    first_path = tmp_path / "first-report.html"
+    second_path = tmp_path / "second-report.html"
+    first_path.write_text("<html>first</html>", encoding="utf-8")
+    second_path.write_text("<html>second</html>", encoding="utf-8")
+    opened: list[Path] = []
+    window = _main_window(qt_app, StubFacade(sources=sources))
+    window._report_opener = lambda path: opened.append(path) or True
+
+    window.show_outcome(_StubOutcome(_dashboard_view(), report_path=first_path))
+    window.show_outcome(_StubOutcome(_dashboard_view(), report_path=second_path))
+    window._open_echo_button.click()
+
+    assert opened == [second_path.resolve()]
+
+
+def test_default_echo_opener_uses_a_local_file_url(
+    qt_app,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    module = importlib.import_module("qq_chat_analyzer.gui.main_window")
+    report_path = (tmp_path / "echo-report.html").resolve()
+    report_path.write_text("<html>fictional report</html>", encoding="utf-8")
+    opened_urls = []
+    monkeypatch.setattr(
+        module.QDesktopServices,
+        "openUrl",
+        lambda url: opened_urls.append(url) or True,
+    )
+
+    assert module._open_report_path(report_path) is True
+    assert len(opened_urls) == 1
+    assert opened_urls[0].isLocalFile()
+    assert Path(opened_urls[0].toLocalFile()) == report_path
+
+
+def test_missing_report_and_failed_analysis_leave_echo_entry_unavailable(
+    qt_app,
+    sources,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    report_path = tmp_path / "echo-report.html"
+    report_path.write_text("<html>fictional report</html>", encoding="utf-8")
+    window = _main_window(qt_app, StubFacade(sources=sources))
+    window.show_outcome(_StubOutcome(_dashboard_view(), report_path=report_path))
+
+    window.show_processing_page()
+    module = importlib.import_module("qq_chat_analyzer.gui.main_window")
+    monkeypatch.setattr(module.QMessageBox, "warning", lambda *_args: None)
+    window.show_error("fictional_failure", "虚构分析失败")
+
+    assert not window._open_echo_button.isVisibleTo(window)
+    assert not window._open_echo_button.isEnabled()
+
+    report_path.unlink()
+    window.show_outcome(_StubOutcome(_dashboard_view(), report_path=report_path))
+
+    assert not window._open_echo_button.isVisibleTo(window)
+    assert not window._open_echo_button.isEnabled()
+
+
 @pytest.mark.parametrize(
     ("history_saved", "expected_status"),
     [
@@ -2485,7 +2866,7 @@ def test_show_outcome_reports_history_save_status_after_rendering(
 
     assert window.stack.currentIndex() == 2
     assert window.dashboard_page._user_table.rowCount() == 1
-    assert window.statusBar().currentMessage() == expected_status
+    assert window.analysis_page._status_label.text() == expected_status
 
 
 def test_show_outcome_appends_snapshot_acquisition_time_to_existing_status(
@@ -2509,7 +2890,7 @@ def test_show_outcome_appends_snapshot_acquisition_time_to_existing_status(
         )
     )
 
-    assert window.statusBar().currentMessage() == (
+    assert window.analysis_page._status_label.text() == (
         "\u5206\u6790\u5df2\u4fdd\u5b58"
         " \u00b7 \u6570\u636e\u83b7\u53d6\u65f6\u95f4\uff1a"
         "2026-08-11 12:30+00:00"
@@ -2683,7 +3064,9 @@ def test_failed_analysis_returns_to_selection_and_releases_lock(
     assert window.stack.currentIndex() == 0
     assert window.analysis_page._analysis_running is False
     assert window.analysis_page._analyze_button.isEnabled() is True
-    assert "\u865a\u6784\u5206\u6790\u5931\u8d25" in window.analysis_page._hint_label.text()
+    assert "\u865a\u6784\u5206\u6790\u5931\u8d25" in (
+        window.analysis_page._status_label.text()
+    )
 
 
 # -------------------------------------------------------------------- errors
@@ -2714,7 +3097,6 @@ def test_facade_errors_surface_as_public_messages(qt_app, sources) -> None:
     assert received == [
         ("wechat_export_unavailable", "\u5fae\u4fe1\u5bfc\u51fa\u4e0d\u53ef\u7528\u3002")
     ]
-    assert page._hint_label.text() == "\u5fae\u4fe1\u5bfc\u51fa\u4e0d\u53ef\u7528\u3002"
 
 
 def test_unexpected_errors_never_leak_a_traceback(qt_app, sources) -> None:
@@ -2923,6 +3305,17 @@ class _ConnectWaitingAuthFacade(_SnapshotFacade):
         return self._connect_snapshot
 
 
+class _GatedQRFacade(_ConnectWaitingAuthFacade):
+    """Simulate a fresh auth session that gates the QR file until it changes."""
+
+    def __init__(self, status_snapshot, connect_snapshot, **kwargs):
+        super().__init__(status_snapshot, connect_snapshot, **kwargs)
+        self.qr_ready = False
+
+    def is_qq_qrcode_ready(self):
+        return self.qr_ready
+
+
 def _qq_page_in_state(qt_app, sources, snapshot):
     module = _facade_module()
     facade = _SnapshotFacade(snapshot, sources=sources)
@@ -3033,7 +3426,7 @@ def test_qq_status_text_is_not_duplicated_in_status_bar(
     page.select_source(module.ChatSource.QQ)
     _drain(page)
 
-    assert page._hint_label.text() == action_hint
+    assert not hasattr(page, "_hint_label")
     assert received == [message]
     assert action_hint not in received
 
@@ -3065,7 +3458,6 @@ def test_qq_session_count_is_not_duplicated_in_status_bar(
     page.select_source(module.ChatSource.QQ)
     _drain(page)
 
-    assert page._hint_label.text() == "\u5171 1 \u4e2a\u4f1a\u8bdd\u3002"
     assert "\u5171 1 \u4e2a\u4f1a\u8bdd\u3002" not in received
 
 
@@ -3263,6 +3655,36 @@ def test_waiting_auth_state_shows_the_qrcode_png(
     assert page._qq_qrcode_label.isVisibleTo(page) is True
     assert page._qq_qrcode_label.pixmap() is not None
     assert page._qq_qrcode_label.pixmap().isNull() is False
+
+
+def test_waiting_auth_hides_stale_qrcode_until_session_file_is_fresh(
+    qt_app,
+    sources,
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    qr_path = tmp_path / "qrcode.png"
+    _write_qrcode_png(qr_path)
+    facade = _GatedQRFacade(
+        _qq_snapshot("waiting_auth"),
+        _qq_snapshot("waiting_auth"),
+        sources=sources,
+    )
+    page = _analysis_page(qt_app, facade, qq_qrcode_path=qr_path)
+    _drain(page)
+
+    page._source_buttons[module.ChatSource.QQ].click()
+    _drain(page)
+
+    assert page._qq_qrcode_label.isVisibleTo(page) is False
+
+    _write_qrcode_png(qr_path)
+    facade.qr_ready = True
+    page._poll_qq_status()
+    _drain(page)
+
+    assert page._qq_qrcode_label.isVisibleTo(page) is True
+    assert page._qq_qrcode_label.pixmap() is not None
 
 
 def test_waiting_auth_without_qrcode_keeps_it_hidden(
@@ -3584,7 +4006,6 @@ def test_return_to_source_selection_clears_connection_view(qt_app, sources) -> N
     assert page._session_list.item(0).text() == (
         "暂无会话\n连接数据源后，这里会显示聊天记录"
     )
-    assert page._hint_label.text() == "请先选择数据来源。"
     assert page._source_buttons[module.ChatSource.WECHAT].isEnabled() is False
 
 

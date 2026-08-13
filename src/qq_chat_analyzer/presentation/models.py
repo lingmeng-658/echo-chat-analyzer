@@ -124,6 +124,38 @@ class EchoMemberCard:
 
 
 @dataclass(frozen=True, slots=True)
+class EchoConversationSession:
+    """Display-neutral session detail carried to Echo serialization."""
+
+    start_timestamp: int | None
+    end_timestamp: int | None
+    duration_seconds: int
+    message_count: int
+    initiator: str
+    initiator_sender_key: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EchoConversationSessions:
+    """Session aggregate payload prepared for Echo."""
+
+    threshold_seconds: int
+    session_count: int
+    average_duration_seconds: float
+    median_duration_seconds: float
+    longest_duration_seconds: int
+    average_message_count: float
+    items: tuple[EchoConversationSession, ...] = ()
+    private_self_count: int | None = None
+    private_peer_count: int | None = None
+    private_unknown_count: int | None = None
+    private_self_to_peer_ratio: float | None = None
+    private_self_share: float | None = None
+    private_peer_share: float | None = None
+    private_unknown_share: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class EchoReportView:
     """Display-only payload for Echo Report v0.1 Phase A."""
 
@@ -137,4 +169,5 @@ class EchoReportView:
     hourly_activity: tuple[ChartPoint, ...] = ()
     weekday_activity: tuple[ChartPoint, ...] = ()
     members: tuple[EchoMemberCard, ...] = ()
+    conversation_sessions: EchoConversationSessions | None = None
     empty_description: str = ""

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from ..identity import stable_sender_key
 from ..models import LengthBucket, MessageLengthReport, SpeakerLength
 from ...cleaner import clean_text
 from ...message import ChatMessage
@@ -25,13 +26,16 @@ class MessageLengthAnalyzer:
         """Return length statistics for every message carrying text."""
         lengths: list[int] = []
         speaker_lengths: dict[str, list[int]] = {}
+        speaker_names: dict[str, str] = {}
 
         for message in messages:
             length = len(clean_text(message.text))
             if length == 0:
                 continue
             lengths.append(length)
-            speaker_lengths.setdefault(message.sender, []).append(length)
+            speaker_key = stable_sender_key(message)
+            speaker_names.setdefault(speaker_key, message.sender)
+            speaker_lengths.setdefault(speaker_key, []).append(length)
 
         return MessageLengthReport(
             message_count=len(lengths),
@@ -40,7 +44,7 @@ class MessageLengthAnalyzer:
             buckets=_build_buckets(lengths),
             speaker_lengths=tuple(
                 SpeakerLength(
-                    speaker=speaker,
+                    speaker=speaker_names[speaker],
                     message_count=len(speaker_values),
                     average_length=_average(speaker_values),
                     max_length=max(speaker_values),

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
+from ..analysis.identity import stable_sender_key
+from ..analysis.conversation_sessions import analyze_conversation_sessions
 from ..analysis.analyzers import (
     ActivityAnalyzer,
     ConversationAnalyzer,
@@ -55,6 +58,8 @@ from .import_service import ImportService
 from .scope_filter import AnalysisScopeMode, filter_messages
 
 
+_LOGGER = logging.getLogger("qq_chat_analyzer.desktop.identity")
+
 _ARTIFACT_FILENAMES = {
     "word_frequency_csv": "word_frequency.csv",
     "wordcloud": "wordcloud.png",
@@ -82,6 +87,7 @@ class AnalysisApplicationService:
         outcome = ImportService().execute(
             ImportRequest(input_path=request.input_path)
         )
+        _log_identity_diagnostics(outcome.messages)
         processed_message_count = outcome.processed_message_count
         parsed_messages = list(outcome.messages)
         scoped_messages = filter_messages(parsed_messages, request.scope)
@@ -136,16 +142,28 @@ class AnalysisApplicationService:
             speaker_names=request.speaker_names,
             conversation_names=request.conversation_names,
         )
+        speaker_display_names = _speaker_display_names(reports)
         word_sender_counts = count_word_speakers(analyzed.sender_tokens)
-        speaker_summaries = top_word_speaker_summary(word_sender_counts)
+        speaker_summaries = _display_speaker_summaries(
+            top_word_speaker_summary(word_sender_counts),
+            speaker_display_names,
+        )
         speaker_frequency_rows = [
-            (summary.word, sender, count)
+            (
+                summary.word,
+                speaker_display_names.get(sender, sender),
+                count,
+            )
             for summary in speaker_summaries
             for sender, count in sorted(
                 word_sender_counts[summary.word].items(),
                 key=lambda item: -item[1],
             )
         ]
+        viewer_speaker_key = _viewer_speaker_key(
+            kept_messages,
+            request.viewer_speaker_key,
+        )
 
         try:
             _export_artifacts(
@@ -154,6 +172,7 @@ class AnalysisApplicationService:
                 speaker_summaries,
                 speaker_frequency_rows,
                 reports,
+                viewer_speaker_key=viewer_speaker_key,
             )
         except (OSError, ValueError):
             raise ArtifactGenerationFailed() from None
@@ -200,6 +219,7 @@ def _build_reports(
             conversation_names=conversation_names,
         ),
         message_composition=MessageCompositionAnalyzer().analyze(messages),
+        conversation_sessions=analyze_conversation_sessions(messages),
     )
 
 
@@ -230,12 +250,92 @@ def _analyze_kept_messages(
         message_tokens = tokenize(cleaned_text, str(stopwords_path))
         tokens.extend(message_tokens)
         if message_tokens:
-            sender_tokens.append((message.sender, message_tokens))
+            sender_tokens.append((stable_sender_key(message), message_tokens))
 
     return _AnalyzedMessages(
         valid_text_count=valid_text_count,
         tokens=tokens,
         sender_tokens=sender_tokens,
+    )
+
+
+def _speaker_display_names(reports: AnalysisReports) -> dict[str, str]:
+    """Map stable speaker keys to resolved display names for artifacts."""
+    if reports.user_profiles is None:
+        return {}
+    return {
+        profile.speaker_key or profile.speaker: profile.resolved_display_name
+        for profile in reports.user_profiles.profiles
+    }
+
+
+def _display_speaker_summaries(
+    summaries: list[WordSpeakerSummary],
+    speaker_display_names: Mapping[str, str],
+) -> list[WordSpeakerSummary]:
+    """Translate stable speaker keys into display names in summaries."""
+    if not speaker_display_names:
+        return summaries
+    return [
+        replace(
+            summary,
+            top_speaker=speaker_display_names.get(
+                summary.top_speaker,
+                summary.top_speaker,
+            ),
+        )
+        for summary in summaries
+    ]
+
+
+def _viewer_speaker_key(
+    messages: list[ChatMessage],
+    explicit: str | None,
+) -> str | None:
+    """Resolve the Echo viewer key only from reliable self markers."""
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.strip()
+    for message in messages:
+        if message.is_self is True:
+            return stable_sender_key(message)
+    return None
+
+
+def _log_identity_diagnostics(messages: list[ChatMessage]) -> None:
+    """Log anonymized identity acceptance state for one imported source."""
+    if not messages:
+        return
+    source = messages[0].platform or "unknown"
+    conversation_type = next(
+        (
+            message.conversation_type
+            for message in messages
+            if message.conversation_type in ("private", "group")
+        ),
+        "unknown",
+    )
+    self_resolved = any(
+        message.is_self is True or message.is_self is False
+        for message in messages
+    )
+    resolved_senders = sum(
+        1
+        for message in messages
+        if isinstance(message.sender_id, str) and message.sender_id.strip()
+    )
+    if resolved_senders == len(messages):
+        sender_coverage = "resolved"
+    elif resolved_senders:
+        sender_coverage = "partial"
+    else:
+        sender_coverage = "unknown"
+    _LOGGER.info(
+        "[identity] source=%s conversation_type=%s "
+        "self_identity=%s sender_identity_coverage=%s",
+        source,
+        conversation_type,
+        "resolved" if self_resolved else "unknown",
+        sender_coverage,
     )
 
 
@@ -245,6 +345,8 @@ def _export_artifacts(
     speaker_summaries: list[WordSpeakerSummary],
     speaker_frequency_rows: list[tuple[str, str, int]],
     reports: AnalysisReports,
+    *,
+    viewer_speaker_key: str | None,
 ) -> None:
     output_directory = request.output_directory
     export_word_frequency_csv(
@@ -279,10 +381,18 @@ def _export_artifacts(
         request.font_path,
     )
     export_echo_report_json(
-        build_echo_report_view(reports),
+        build_echo_report_view(
+            reports,
+            viewer_speaker_key=viewer_speaker_key,
+            conversation_kind=request.conversation_kind,
+        ),
         str(output_directory / _ARTIFACT_FILENAMES["echo_report_json"]),
     )
     export_echo_report_html(
-        build_echo_report_view(reports),
+        build_echo_report_view(
+            reports,
+            viewer_speaker_key=viewer_speaker_key,
+            conversation_kind=request.conversation_kind,
+        ),
         str(output_directory / _ARTIFACT_FILENAMES["echo_report_html"]),
     )
