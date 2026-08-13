@@ -155,6 +155,16 @@ def test_execute_routes_wechat_detailed_json_through_existing_pipeline(
         "generate_wordcloud",
         record_chart,
     )
+    monkeypatch.setattr(
+        service_module,
+        "export_echo_report_json",
+        record_export,
+    )
+    monkeypatch.setattr(
+        service_module,
+        "export_echo_report_html",
+        record_export,
+    )
 
     result = service_module.AnalysisApplicationService().execute(
         _request(application, tmp_path, input_path)
@@ -173,6 +183,8 @@ def test_execute_routes_wechat_detailed_json_through_existing_pipeline(
         ("word_speaker_summary_csv", "word_speaker_summary.csv"),
         ("word_speaker_frequency_csv", "word_speaker_frequency.csv"),
         ("word_top_speakers_chart", "word_top_speakers.png"),
+        ("echo_report_json", "echo-report.json"),
+        ("echo_report_html", "echo-report.html"),
     }
     assert set(generated_filenames) == {
         "word_frequency.csv",
@@ -180,4 +192,6 @@ def test_execute_routes_wechat_detailed_json_through_existing_pipeline(
         "word_speaker_summary.csv",
         "word_speaker_frequency.csv",
         "word_top_speakers.png",
+        "echo-report.json",
+        "echo-report.html",
     }

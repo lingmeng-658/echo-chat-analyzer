@@ -117,6 +117,16 @@ def test_execute_returns_completed_privacy_safe_result_without_cli_output(
         "generate_wordcloud",
         record_chart,
     )
+    monkeypatch.setattr(
+        service_module,
+        "export_echo_report_json",
+        record_export,
+    )
+    monkeypatch.setattr(
+        service_module,
+        "export_echo_report_html",
+        record_export,
+    )
 
     tokenizer_module = importlib.import_module("qq_chat_analyzer.tokenizer")
     tokenizer_module.tokenize("warmup")
@@ -136,6 +146,13 @@ def test_execute_returns_completed_privacy_safe_result_without_cli_output(
     assert result.status is application.AnalysisStatus.COMPLETED
     assert result.processed_message_count == 2
     assert result.valid_text_count == 2
+    assert result.diagnostic_counts == application.AnalysisDiagnosticCounts(
+        raw_message_count=2,
+        imported_message_count=2,
+        scope_message_count=2,
+        filtered_message_count=2,
+        analyzed_message_count=2,
+    )
     assert result.top_words[0] == application.WordFrequencyDTO(
         word="Python",
         count=3,
@@ -146,6 +163,8 @@ def test_execute_returns_completed_privacy_safe_result_without_cli_output(
         ("word_speaker_summary_csv", "word_speaker_summary.csv"),
         ("word_speaker_frequency_csv", "word_speaker_frequency.csv"),
         ("word_top_speakers_chart", "word_top_speakers.png"),
+        ("echo_report_json", "echo-report.json"),
+        ("echo_report_html", "echo-report.html"),
     }
     assert set(generated_filenames) == {
         "word_frequency.csv",
@@ -153,6 +172,8 @@ def test_execute_returns_completed_privacy_safe_result_without_cli_output(
         "word_speaker_summary.csv",
         "word_speaker_frequency.csv",
         "word_top_speakers.png",
+        "echo-report.json",
+        "echo-report.html",
     }
     assert captured.out == ""
     assert captured.err == ""
@@ -187,6 +208,13 @@ def test_execute_returns_no_valid_text_without_exporting(
         status=application.AnalysisStatus.NO_VALID_TEXT,
         processed_message_count=1,
         valid_text_count=0,
+        diagnostic_counts=application.AnalysisDiagnosticCounts(
+            raw_message_count=1,
+            imported_message_count=0,
+            scope_message_count=0,
+            filtered_message_count=0,
+            analyzed_message_count=0,
+        ),
     )
     assert not request.output_directory.exists()
 
@@ -221,6 +249,13 @@ def test_execute_returns_no_tokens_without_exporting(
         status=application.AnalysisStatus.NO_TOKENS,
         processed_message_count=1,
         valid_text_count=1,
+        diagnostic_counts=application.AnalysisDiagnosticCounts(
+            raw_message_count=1,
+            imported_message_count=1,
+            scope_message_count=1,
+            filtered_message_count=1,
+            analyzed_message_count=1,
+        ),
     )
     assert not request.output_directory.exists()
 

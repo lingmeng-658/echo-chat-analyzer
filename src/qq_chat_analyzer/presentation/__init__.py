@@ -21,6 +21,7 @@ from .formatters import (
 from .echo_serializer import (
     ECHO_REPORT_SCHEMA_VERSION,
     echo_report_to_dict,
+    export_echo_report_html,
     export_echo_report_json,
 )
 from .models import (
@@ -54,6 +55,7 @@ __all__ = [
     "build_dashboard_view",
     "build_echo_report_view",
     "echo_report_to_dict",
+    "export_echo_report_html",
     "export_echo_report_json",
     "format_active_period",
     "format_average",

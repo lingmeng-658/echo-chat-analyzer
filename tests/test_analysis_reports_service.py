@@ -228,3 +228,102 @@ def test_execute_with_no_messages_keeps_empty_reports_bundle(
     assert result.status is not application.AnalysisStatus.COMPLETED
     assert result.reports == application.AnalysisReports()
     assert result.reports.message_composition is None
+
+
+def test_execute_generates_echo_report_json_artifact(tmp_path: Path) -> None:
+    application = _application_module()
+    input_path = tmp_path / "fictional-chat.json"
+    output_directory = tmp_path / "private-output"
+    output_directory.mkdir()
+    _write_fictional_chat(
+        input_path,
+        [
+            _raw_message(1704099600, "Fictional-Alice", "Python 数据分析 很有趣"),
+            _raw_message(1704103200, "Fictional-Alice", "Python 项目 讨论"),
+            _raw_message(1704106800, "Fictional-Bob", "Python 项目 讨论 很好"),
+        ],
+    )
+
+    result = application.AnalysisApplicationService().execute(
+        _request(application, tmp_path, input_path)
+    )
+
+    assert result.status is application.AnalysisStatus.COMPLETED
+    assert ("echo_report_json", "echo-report.json") in {
+        (artifact.kind, artifact.filename) for artifact in result.artifacts
+    }
+    report_path = output_directory / "echo-report.json"
+    assert report_path.is_file()
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == "echo-report.v0.1"
+
+
+def test_execute_generates_echo_report_html_artifact(tmp_path: Path) -> None:
+    application = _application_module()
+    input_path = tmp_path / "fictional-chat.json"
+    output_directory = tmp_path / "private-output"
+    output_directory.mkdir()
+    _write_fictional_chat(
+        input_path,
+        [
+            _raw_message(1704099600, "Fictional-Alice", "Python 数据分析 很有趣"),
+            _raw_message(1704103200, "Fictional-Alice", "Python 项目 讨论"),
+            _raw_message(1704106800, "Fictional-Bob", "Python 项目 讨论 很好"),
+        ],
+    )
+
+    result = application.AnalysisApplicationService().execute(
+        _request(application, tmp_path, input_path)
+    )
+
+    assert result.status is application.AnalysisStatus.COMPLETED
+    artifact_pairs = {
+        (artifact.kind, artifact.filename) for artifact in result.artifacts
+    }
+    assert ("echo_report_html", "echo-report.html") in artifact_pairs
+    assert ("echo_report_json", "echo-report.json") in artifact_pairs
+    html_path = output_directory / "echo-report.html"
+    json_path = output_directory / "echo-report.json"
+    assert html_path.is_file()
+    assert json_path.is_file()
+    html = html_path.read_text(encoding="utf-8")
+    assert "window.ECHO_DATA" in html
+    assert "Fictional-Alice" in html
+    assert "fetch(" not in html
+    assert "assets/branding" not in html
+    assert "frontend/echo_report" not in html
+
+
+def test_echo_report_json_fields_are_correct(tmp_path: Path) -> None:
+    application = _application_module()
+    input_path = tmp_path / "fictional-chat.json"
+    output_directory = tmp_path / "private-output"
+    output_directory.mkdir()
+    _write_fictional_chat(
+        input_path,
+        [
+            _raw_message(1704099600, "Fictional-Alice", "Python 数据分析 很有趣"),
+            _raw_message(1704103200, "Fictional-Alice", "Python 项目 讨论"),
+            _raw_message(1704106800, "Fictional-Bob", "Python 项目 讨论 很好"),
+        ],
+    )
+
+    result = application.AnalysisApplicationService().execute(
+        _request(application, tmp_path, input_path)
+    )
+    assert result.status is application.AnalysisStatus.COMPLETED
+    payload = json.loads(
+        (output_directory / "echo-report.json").read_text(encoding="utf-8")
+    )
+
+    assert payload["overview"]["total_message_count"] == 3
+    assert payload["overview"]["participant_count"] == 2
+    assert payload["conversation"]["name"]
+    assert len(payload["activity"]["hourly"]) == 24
+    assert len(payload["activity"]["weekday"]) == 7
+    assert len(payload["members"]) == 2
+    for member in payload["members"]:
+        assert member["display_name"]
+        assert member["message_count"] >= 1
+        assert member["average_length"] >= 0
+        assert member["active_period"] is not None

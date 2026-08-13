@@ -29,6 +29,11 @@ from ..exporters import (
     generate_wordcloud,
 )
 from ..message import ChatMessage
+from ..presentation import (
+    build_echo_report_view,
+    export_echo_report_html,
+    export_echo_report_json,
+)
 from ..smart_profile import run_smart_profile
 from ..tokenizer import tokenize
 from .dto import (
@@ -56,6 +61,8 @@ _ARTIFACT_FILENAMES = {
     "word_speaker_summary_csv": "word_speaker_summary.csv",
     "word_speaker_frequency_csv": "word_speaker_frequency.csv",
     "word_top_speakers_chart": "word_top_speakers.png",
+    "echo_report_json": "echo-report.json",
+    "echo_report_html": "echo-report.html",
 }
 
 
@@ -146,6 +153,7 @@ class AnalysisApplicationService:
                 ranked_words,
                 speaker_summaries,
                 speaker_frequency_rows,
+                reports,
             )
         except (OSError, ValueError):
             raise ArtifactGenerationFailed() from None
@@ -236,6 +244,7 @@ def _export_artifacts(
     ranked_words: list[tuple[str, int]],
     speaker_summaries: list[WordSpeakerSummary],
     speaker_frequency_rows: list[tuple[str, str, int]],
+    reports: AnalysisReports,
 ) -> None:
     output_directory = request.output_directory
     export_word_frequency_csv(
@@ -268,4 +277,12 @@ def _export_artifacts(
         ranked_words,
         str(output_directory / _ARTIFACT_FILENAMES["wordcloud"]),
         request.font_path,
+    )
+    export_echo_report_json(
+        build_echo_report_view(reports),
+        str(output_directory / _ARTIFACT_FILENAMES["echo_report_json"]),
+    )
+    export_echo_report_html(
+        build_echo_report_view(reports),
+        str(output_directory / _ARTIFACT_FILENAMES["echo_report_html"]),
     )
