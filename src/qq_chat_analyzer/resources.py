@@ -23,6 +23,7 @@ WECHAT_WCDB_CLI_FILE_NAME = "wcdb_cli.exe"
 WECHAT_WCDB_DLL_FILE_NAME = "WCDB.dll"
 WECHAT_WX_KEY_DLL_FILE_NAME = "wx_key.dll"
 WECHAT_LOGIN_GUIDE_FILE_NAME = "wechat_login_guide.png"
+ECHO_ICON_RELATIVE_PATH = "assets/branding/echo/echo_icon.ico"
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -116,6 +117,11 @@ def default_wechat_login_guide_path() -> Path:
     return resource_path(WECHAT_LOGIN_GUIDE_FILE_NAME)
 
 
+def default_echo_icon_path() -> Path:
+    """Return the bundled Echo brand icon used by the desktop window."""
+    return resource_path(ECHO_ICON_RELATIVE_PATH)
+
+
 def user_data_dir() -> Path:
     """Return the user-writable application data directory, creating it."""
     local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
@@ -151,6 +157,7 @@ __all__ = [
     "default_qq_runtime_directory",
     "default_qq_static_directory",
     "default_wechat_runtime_directory",
+    "default_echo_icon_path",
     "default_wechat_login_guide_path",
     "default_wechat_wcdb_cli_path",
     "default_wechat_wcdb_dll_path",

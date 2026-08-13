@@ -17,7 +17,13 @@ resources = (
     project_root / "stopwords_culture.txt",
     project_root / "wechat_login_guide.png",
 )
+echo_icon = project_root / "assets/branding/echo/echo_icon.ico"
+echo_favicon = project_root / "assets/branding/echo/echo_icon_32.png"
+echo_report_logo = project_root / "assets/branding/echo/echo_wordmark_with_slogan.png"
 datas = [(str(path), ".") for path in resources]
+datas.append((str(echo_icon), "assets/branding/echo"))
+datas.append((str(echo_favicon), "assets/branding/echo"))
+datas.append((str(echo_report_logo), "assets/branding/echo"))
 
 
 a = Analysis(
@@ -48,6 +54,7 @@ exe = EXE(
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
+    icon=str(echo_icon),
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

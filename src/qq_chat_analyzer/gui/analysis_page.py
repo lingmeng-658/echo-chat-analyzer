@@ -165,12 +165,10 @@ _WECHAT_GUIDE_STATUS = (
     "如需查看微信数据目录，完成后请退出微信账号，返回登录界面。"
 )
 _WECHAT_GUIDE_KEY = (
-    "等待微信登录<br><br>"
-    "<span style='color:#c2410c;font-weight:600'>"
-    "请保持微信停留在登录界面，不要点击进入微信"
-    "</span><br>"
-    "不要进入聊天页面、切换账号或关闭微信。<br>"
-    "登录成功后，余音会自动继续。<br>"
+    "等待微信登录\n\n"
+    "请保持微信停留在登录界面，不要点击进入微信\n"
+    "不要进入聊天页面、切换账号或关闭微信。\n"
+    "登录成功后，余音会自动继续。\n"
     "聊天数据仅在本机读取，不上传、不保存额外副本。"
 )
 _WECHAT_GUIDE_DIRECTORY_MISSING = (
@@ -297,12 +295,13 @@ class AnalysisPage(QWidget):
         self._wechat_guide_image_label.setAlignment(
             Qt.AlignmentFlag.AlignCenter
         )
+        self._wechat_guide_image_label.setMaximumWidth(
+            _WECHAT_GUIDE_IMAGE_WIDTH
+        )
         self._wechat_guide_image_label.setVisible(False)
-        layout.addWidget(self._wechat_guide_image_label)
 
         self._wechat_guide_label = QLabel("")
-        self._wechat_guide_label.setWordWrap(False)
-        self._wechat_guide_label.setMinimumWidth(480)
+        self._wechat_guide_label.setWordWrap(True)
         self._wechat_guide_label.setSizePolicy(
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Preferred,
@@ -312,7 +311,40 @@ class AnalysisPage(QWidget):
             "padding: 10px; border-radius: 6px; "
             "background: palette(alternate-base);"
         )
-        layout.addWidget(self._wechat_guide_label)
+
+        self._wechat_guide_key_label = QLabel("")
+        self._wechat_guide_key_label.setWordWrap(True)
+        self._wechat_guide_key_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        self._wechat_guide_key_label.setVisible(False)
+        self._wechat_guide_key_label.setStyleSheet(
+            "padding: 10px; border-radius: 6px; "
+            "background: palette(alternate-base); "
+            "color: #c2410c; font-weight: 600;"
+        )
+
+        self._wechat_guide_text_column = QVBoxLayout()
+        self._wechat_guide_text_column.setSpacing(8)
+        self._wechat_guide_text_column.addWidget(
+            self._wechat_guide_label, stretch=1
+        )
+        self._wechat_guide_text_column.addWidget(
+            self._wechat_guide_key_label, stretch=1
+        )
+
+        self._wechat_guide_row = QHBoxLayout()
+        self._wechat_guide_row.setSpacing(12)
+        self._wechat_guide_row.addWidget(
+            self._wechat_guide_image_label,
+            stretch=0,
+            alignment=Qt.AlignmentFlag.AlignTop,
+        )
+        self._wechat_guide_row.addLayout(
+            self._wechat_guide_text_column, stretch=1
+        )
+        layout.addLayout(self._wechat_guide_row)
 
         self._qq_connect_button = QPushButton(_QQ_CONNECT_LABEL)
         self._qq_connect_button.setVisible(False)
@@ -481,8 +513,7 @@ class AnalysisPage(QWidget):
         if source == ChatSource.WECHAT:
             self._show_wechat_guide()
         else:
-            self._wechat_guide_label.clear()
-            self._hide_wechat_guide_image()
+            self._hide_wechat_guide()
         self._qq_connect_button.setVisible(source == ChatSource.QQ)
         self._qq_connect_button.setEnabled(True)
         self._qq_connect_button.setToolTip("")
@@ -547,9 +578,7 @@ class AnalysisPage(QWidget):
         self._wechat_connect_button.setText(_WECHAT_CONNECT_LABEL)
         self._wechat_connect_button.setVisible(False)
         self._wechat_setup_button.setVisible(False)
-        self._wechat_guide_label.clear()
-        self._wechat_guide_label.setVisible(False)
-        self._hide_wechat_guide_image()
+        self._hide_wechat_guide()
         self._hide_qq_qrcode()
         self._hide_qq_login_guide()
         self._set_session_controls_ready(False)
@@ -620,8 +649,7 @@ class AnalysisPage(QWidget):
         if source == ChatSource.WECHAT:
             self._wechat_setup_button.setVisible(False)
             if available:
-                self._wechat_guide_label.setVisible(False)
-                self._hide_wechat_guide_image()
+                self._hide_wechat_guide()
             else:
                 self._show_wechat_guide()
             self._wechat_connect_button.setText(_WECHAT_CONNECT_LABEL)
@@ -663,12 +691,14 @@ class AnalysisPage(QWidget):
         *,
         include_directory_help: bool = False,
     ) -> None:
-        """Render the first-time WeChat connection guide."""
-        parts = [_WECHAT_GUIDE_STATUS, _WECHAT_GUIDE_KEY]
+        """Render the first-time WeChat connection guide with plain-text labels."""
+        status_parts = [_WECHAT_GUIDE_STATUS]
         if include_directory_help:
-            parts.append(_WECHAT_GUIDE_DIRECTORY_MISSING)
-        self._wechat_guide_label.setText("<br><br>".join(parts))
+            status_parts.append(_WECHAT_GUIDE_DIRECTORY_MISSING)
+        self._wechat_guide_label.setText("\n\n".join(status_parts))
         self._wechat_guide_label.setVisible(True)
+        self._wechat_guide_key_label.setText(_WECHAT_GUIDE_KEY)
+        self._wechat_guide_key_label.setVisible(True)
 
         self._refresh_wechat_guide_image()
 
@@ -696,6 +726,13 @@ class AnalysisPage(QWidget):
     def _hide_wechat_guide_image(self) -> None:
         self._wechat_guide_image_label.clear()
         self._wechat_guide_image_label.setVisible(False)
+
+    def _hide_wechat_guide(self) -> None:
+        self._wechat_guide_label.clear()
+        self._wechat_guide_label.setVisible(False)
+        self._wechat_guide_key_label.clear()
+        self._wechat_guide_key_label.setVisible(False)
+        self._hide_wechat_guide_image()
 
     def _handle_source_status_error(
         self,
@@ -1293,8 +1330,7 @@ class AnalysisPage(QWidget):
         self._status_label.setText(_CONNECTED_PREFIX + _WECHAT_STATUS_CONNECTED)
         self._status_label.setToolTip("")
         self._status_label.setVisible(True)
-        self._wechat_guide_label.setVisible(False)
-        self._hide_wechat_guide_image()
+        self._hide_wechat_guide()
         self._wechat_connect_button.setVisible(False)
 
     def _handle_wechat_session_error(self, code: str, message: str) -> None:

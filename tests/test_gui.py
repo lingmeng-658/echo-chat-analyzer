@@ -544,6 +544,12 @@ def test_main_window_builds_both_pages(qt_app, sources) -> None:
     assert window.stack.currentIndex() == 0
 
 
+def test_main_window_uses_echo_brand_icon(qt_app, sources) -> None:
+    window = _main_window(qt_app, StubFacade(sources=sources))
+
+    assert window.windowIcon().isNull() is False
+
+
 def test_main_window_close_cleans_up_qq_runtime(qt_app, sources) -> None:
     facade = StubFacade(sources=sources)
     window = _main_window(qt_app, facade)
@@ -1698,32 +1704,38 @@ def test_wechat_guide_shows_status_confirmation(qt_app) -> None:
     _drain(page)
 
     assert page._wechat_guide_label.isVisibleTo(page) is True
+    assert page._wechat_guide_key_label.isVisibleTo(page) is True
+    assert "正在准备微信连接" in page._wechat_guide_label.text()
     assert "请保持微信停留在登录界面，不要点击进入微信" in (
-        page._wechat_guide_label.text()
+        page._wechat_guide_key_label.text()
     )
-    assert "不要进入聊天页面" in page._wechat_guide_label.text()
-    assert "\u4e0d\u4e0a\u4f20" in page._wechat_guide_label.text()
-    assert "\u4e0d\u4fdd\u5b58" in page._wechat_guide_label.text()
-    assert "LCA" not in page._wechat_guide_label.text()
+    assert "不要进入聊天页面" in page._wechat_guide_key_label.text()
+    assert "\u4e0d\u4e0a\u4f20" in page._wechat_guide_key_label.text()
+    assert "\u4e0d\u4fdd\u5b58" in page._wechat_guide_key_label.text()
+    assert "LCA" not in page._wechat_guide_key_label.text()
 
 
-def test_wechat_critical_login_hint_uses_layout_instead_of_word_wrap(
+def test_wechat_critical_login_hint_is_plain_text_with_wrap(
     qt_app,
 ) -> None:
     page = _analysis_page(
         qt_app,
         StubFacade(sources=_wechat_available_sources()),
     )
+    module = importlib.import_module("qq_chat_analyzer.gui.analysis_page")
 
-    assert page._wechat_guide_label.wordWrap() is False
+    assert page._wechat_guide_label.wordWrap() is True
+    assert page._wechat_guide_key_label.wordWrap() is True
     assert page._wechat_guide_label.sizePolicy().horizontalPolicy() == (
         QSizePolicy.Policy.Expanding
     )
-    assert "请保持微信停留在登录界面，不要点击进入微信" in (
-        importlib.import_module(
-            "qq_chat_analyzer.gui.analysis_page"
-        )._WECHAT_GUIDE_KEY
+    assert page._wechat_guide_key_label.sizePolicy().horizontalPolicy() == (
+        QSizePolicy.Policy.Expanding
     )
+    key_text = module._WECHAT_GUIDE_KEY
+    assert "请保持微信停留在登录界面，不要点击进入微信" in key_text
+    assert "<br>" not in key_text
+    assert "<span" not in key_text
 
 
 def test_wechat_auto_detected_root_continues_connect(qt_app) -> None:
@@ -3607,7 +3619,7 @@ def test_wechat_guide_image_load_failure_is_safe(qt_app, tmp_path: Path) -> None
 
     assert page._wechat_guide_image_label.isVisibleTo(page) is False
     assert "请保持微信停留在登录界面，不要点击进入微信" in (
-        page._wechat_guide_label.text()
+        page._wechat_guide_key_label.text()
     )
 
 
@@ -3636,6 +3648,117 @@ def test_wechat_waiting_page_shows_bundled_guide_image(qt_app) -> None:
 
     assert page._wechat_guide_image_label.isVisibleTo(page) is True
     assert page._wechat_guide_image_label.pixmap().isNull() is False
+
+def test_wechat_guide_text_has_no_html_tags(qt_app) -> None:
+    module = _facade_module()
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        connection_status=_wechat_connection_status(
+            available=False,
+            data_found=False,
+            db_key_available=False,
+            runtime_available=False,
+            message="微信尚未连接",
+            action_hint="请开始微信连接流程。",
+        ),
+    )
+    page = _analysis_page(qt_app, facade)
+    page.show()
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+
+    texts = [
+        page._wechat_guide_label.text(),
+        page._wechat_guide_key_label.text(),
+    ]
+    for text in texts:
+        assert "<br" not in text
+        assert "<span" not in text
+        assert ">" not in text
+    assert "正在准备微信连接" in texts[0]
+    assert "等待微信登录" in texts[1]
+    assert (
+        "请保持微信停留在登录界面，不要点击进入微信"
+        in texts[1]
+    )
+
+
+def test_wechat_guide_uses_horizontal_layout(qt_app) -> None:
+    from PySide6.QtWidgets import QHBoxLayout
+
+    module = _facade_module()
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        connection_status=_wechat_connection_status(
+            available=False,
+            data_found=False,
+            db_key_available=False,
+            runtime_available=False,
+            message="微信尚未连接",
+            action_hint="请开始微信连接流程。",
+        ),
+    )
+    page = _analysis_page(
+        qt_app,
+        facade,
+        wechat_guide_image_path=PROJECT_ROOT / "wechat_login_guide.png",
+    )
+    page.show()
+    page.resize(900, 700)
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+
+    assert isinstance(page._wechat_guide_row, QHBoxLayout)
+    assert page._wechat_guide_row.indexOf(page._wechat_guide_image_label) >= 0
+    image_left = page._wechat_guide_image_label.x()
+    guide_left = page._wechat_guide_label.x()
+    assert image_left < guide_left
+    assert page._wechat_guide_image_label.width() <= 160
+    assert (
+        page._wechat_guide_label.width()
+        > page._wechat_guide_image_label.width()
+    )
+
+
+def test_wechat_guide_image_keeps_aspect_ratio(qt_app) -> None:
+    from PySide6.QtGui import QPixmap
+
+    module = _facade_module()
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        connection_status=_wechat_connection_status(
+            available=False,
+            data_found=False,
+            db_key_available=False,
+            runtime_available=False,
+            message="微信尚未连接",
+            action_hint="请开始微信连接流程。",
+        ),
+    )
+    page = _analysis_page(
+        qt_app,
+        facade,
+        wechat_guide_image_path=PROJECT_ROOT / "wechat_login_guide.png",
+    )
+    page.show()
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+
+    pixmap = page._wechat_guide_image_label.pixmap()
+    assert pixmap is not None
+    assert pixmap.isNull() is False
+    width = pixmap.width()
+    height = pixmap.height()
+    assert width > 0 and height > 0
+    original = QPixmap(str(PROJECT_ROOT / "wechat_login_guide.png"))
+    original_ratio = original.width() / original.height()
+    scaled_ratio = width / height
+    assert abs(original_ratio - scaled_ratio) < 0.01
+
+
 
 
 def test_connection_failure_offers_restart_instead_of_reconnect(

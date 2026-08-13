@@ -135,6 +135,36 @@ def test_wechat_login_guide_path_uses_bundled_resource_directory(
     )
 
 
+def test_default_echo_icon_path_resolves_in_dev(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _fresh_module(monkeypatch)
+    if hasattr(module.sys, "_MEIPASS"):
+        monkeypatch.delattr(module.sys, "_MEIPASS")
+
+    assert module.default_echo_icon_path() == (
+        PROJECT_ROOT / "assets/branding/echo/echo_icon.ico"
+    )
+    assert module.default_echo_icon_path().is_file()
+
+
+def test_default_echo_icon_path_resolves_in_bundled_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _fresh_module(monkeypatch)
+    fake_bundle = PROJECT_ROOT / ".tmp-resources-bundle"
+    monkeypatch.setattr(
+        module.sys,
+        "_MEIPASS",
+        str(fake_bundle),
+        raising=False,
+    )
+
+    assert module.default_echo_icon_path() == (
+        fake_bundle / "assets/branding/echo/echo_icon.ico"
+    )
+
+
 def test_bundled_runtime_dir_points_at_project_runtime_in_dev(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

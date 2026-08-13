@@ -6,6 +6,7 @@ import threading
 from datetime import datetime
 from typing import Any
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..resources import default_echo_icon_path
 from .analysis_page import AnalysisPage
 from .dashboard_page import DashboardPage
 
@@ -44,6 +46,7 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(WINDOW_TITLE)
+        self.setWindowIcon(QIcon(str(default_echo_icon_path())))
         self._facade = facade
 
         container = QWidget()
