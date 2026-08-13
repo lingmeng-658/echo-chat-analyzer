@@ -34,6 +34,10 @@ WECHAT_PROCESS_NAME = "Weixin.exe"
 HELPER_FILE_NAME = "wx_key_helper.cjs"
 _MAX_RETAINED_ERROR_LINES = 20
 _KEY_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
+# Process-local bridge for the manual WCDB diagnostic runner: the freshly
+# obtained key is exposed to child processes for the lifetime of this process
+# only (never persisted, never logged, never printed).
+KEY_ENVIRONMENT_VARIABLE = "ECHO_WX_DB_KEY"
 _ELAPSED_PATTERN = re.compile(r"elapsed=(\d+)s")
 _COMPONENTS_READY_MESSAGE = (
     "\u5fae\u4fe1\u8fde\u63a5\u7ec4\u4ef6\u5df2\u51c6\u5907\u5b8c\u6210\uff0c"
@@ -121,6 +125,7 @@ class WeChatKeyService:
             "[wechat] start acquire key thread=%s",
             threading.current_thread().name,
         )
+        _clear_key_environment()
         if not self._dll_path.is_file():
             raise WeChatKeyUnavailable(
                 "\u4f59\u97f3\u7684\u5fae\u4fe1\u8fde\u63a5\u7ec4\u4ef6"
@@ -130,7 +135,9 @@ class WeChatKeyService:
             )
 
         if not self._legacy_injected:
-            return self._acquire_with_helper(timeout, progress)
+            key = self._acquire_with_helper(timeout, progress)
+            _expose_key_to_environment(key)
+            return key
 
         pids = self._process_finder()
         if not pids:
@@ -160,6 +167,7 @@ class WeChatKeyService:
             try:
                 key = self._poll_key(api, deadline)
                 if key:
+                    _expose_key_to_environment(key)
                     return key
             finally:
                 try:
@@ -452,6 +460,18 @@ class WeChatKeyService:
         if isinstance(value, bytes):
             return value.decode("utf-8", errors="replace").strip()
         return str(value or "").strip()
+
+
+def _expose_key_to_environment(key: str) -> None:
+    """Share the just-acquired key with child processes (for example the
+    WCDB diagnostic runner) for the lifetime of this process only."""
+    os.environ[KEY_ENVIRONMENT_VARIABLE] = key
+
+
+def _clear_key_environment() -> None:
+    """Drop any previously exposed key so a failed acquisition never
+    leaves a stale key behind for child processes."""
+    os.environ.pop(KEY_ENVIRONMENT_VARIABLE, None)
 
 
 def _helper_timeout_message() -> str:

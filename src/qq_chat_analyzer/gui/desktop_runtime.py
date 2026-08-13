@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ..logging_config import attach_desktop_diagnostic_handlers
 from ..resources import user_data_dir
 
 
@@ -42,15 +43,15 @@ def log_directory() -> Path:
 def configure_logging() -> logging.Logger:
     """Configure a minimal file logger and return the desktop logger."""
     logger = logging.getLogger(LOGGER_NAME)
-    if logger.handlers:
-        return logger
     logger.setLevel(logging.INFO)
-    handler = logging.FileHandler(
-        log_directory() / LOG_FILENAME,
-        encoding="utf-8",
-    )
-    handler.setFormatter(logging.Formatter(LOG_FORMAT))
-    logger.addHandler(handler)
+    if not logger.handlers:
+        handler = logging.FileHandler(
+            log_directory() / LOG_FILENAME,
+            encoding="utf-8",
+        )
+        handler.setFormatter(logging.Formatter(LOG_FORMAT))
+        logger.addHandler(handler)
+    attach_desktop_diagnostic_handlers(logger.handlers)
     return logger
 
 
@@ -93,4 +94,3 @@ def log_startup(version: str) -> None:
         sys.platform,
         datetime.now().isoformat(timespec="seconds"),
     )
-

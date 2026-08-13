@@ -28,6 +28,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
+from .wechat_wcdb_diagnostic import maybe_launch_wcdb_diagnostic
 
 
 DEFAULT_TIMEOUT_SECONDS = 180
@@ -163,6 +164,7 @@ class WeChatDatabaseProvider:
         wcdb_dll_path: str | Path | None = None,
         timeout: int = DEFAULT_TIMEOUT_SECONDS,
         runner: Callable[..., Any] | None = None,
+        diagnostic_spawner: Callable[..., Any] | None = None,
     ) -> None:
         self._data_root = Path(data_root) if data_root is not None else None
         self._db_key = db_key
@@ -174,12 +176,14 @@ class WeChatDatabaseProvider:
         )
         self._timeout = timeout
         self._runner = runner or _run_subprocess
+        self._diagnostic_spawner = diagnostic_spawner
 
     # ---------------------------------------------------------------- listing
 
     def list_sessions(self, limit: int = DEFAULT_SESSION_LIMIT) -> list[WeChatSession]:
         """List conversations found in ``session.db``."""
         session_db = self._session_db_path()
+        self._maybe_launch_wcdb_diagnostic(session_db)
         sql = (
             "SELECT username, summary, last_timestamp "
             f"FROM {_SESSION_TABLE} ORDER BY last_timestamp DESC"
@@ -217,6 +221,25 @@ class WeChatDatabaseProvider:
                 )
             )
         return sessions
+
+    def _maybe_launch_wcdb_diagnostic(self, session_db: Path) -> None:
+        """Start the standalone WCDB diagnostic runner when the env gate is on.
+
+        Fire-and-forget and fully isolated: any failure (missing key, missing
+        script, subprocess error) is swallowed so the WeChat connection flow
+        and its return values are never disturbed. The DbKey is only passed
+        through the child environment.
+        """
+        try:
+            key = self._resolve_key()
+        except Exception:
+            return
+        try:
+            maybe_launch_wcdb_diagnostic(
+                session_db, key, runner=self._diagnostic_spawner
+            )
+        except Exception:
+            _LOGGER.debug("wcdb diagnostic launch skipped", exc_info=True)
 
     # -------------------------------------------------------------- exporting
 

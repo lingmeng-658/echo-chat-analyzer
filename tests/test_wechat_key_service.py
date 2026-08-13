@@ -7,7 +7,9 @@ by a fake adapter and a fake process finder.
 from __future__ import annotations
 
 import importlib
+import logging
 import io
+import os
 import sys
 import time
 from pathlib import Path
@@ -681,3 +683,59 @@ def test_streaming_and_injected_runner_share_invocation(tmp_path: Path):
     assert command[command.index("--timeout-ms") + 1] == "600000"
     assert options["cwd"] == str(tmp_path)
     assert options["env"]["NODE_PATH"] == str(tmp_path / "node_modules")
+# ------------------------------------------------------------------ key bridge
+
+@pytest.fixture(autouse=True)
+def _clean_key_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never let ECHO_WX_DB_KEY leak between tests."""
+    monkeypatch.delenv(_module().KEY_ENVIRONMENT_VARIABLE, raising=False)
+
+
+def test_acquire_exposes_key_to_process_environment(tmp_path: Path) -> None:
+    key = "ab12" * 16
+    service = _service(tmp_path, api=_FakeHookApi(key=key), pids=[1000])
+    assert service.acquire() == key
+    assert os.environ.get(_module().KEY_ENVIRONMENT_VARIABLE) == key
+
+
+def test_acquire_logs_never_contain_the_key(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    key = "cd34" * 16
+    caplog.set_level(
+        logging.INFO,
+        logger="qq_chat_analyzer.application.wechat_key_service",
+    )
+    service = _service(tmp_path, api=_FakeHookApi(key=key), pids=[1000])
+    service.acquire()
+    assert key not in caplog.text
+
+
+def test_acquire_failure_does_not_expose_key(tmp_path: Path) -> None:
+    module = _module()
+    service = _service(tmp_path, api=_FakeHookApi(key=None), pids=[])
+    with pytest.raises(module.WeChatKeyUnavailable):
+        service.acquire()
+    assert module.KEY_ENVIRONMENT_VARIABLE not in os.environ
+
+
+def test_acquire_failure_clears_stale_key(tmp_path: Path) -> None:
+    module = _module()
+    os.environ[module.KEY_ENVIRONMENT_VARIABLE] = "00" * 32
+    service = _service(tmp_path, api=_FakeHookApi(key=None, hook_ok=False), pids=[1000])
+    with pytest.raises(module.WeChatKeyUnavailable):
+        service.acquire()
+    assert module.KEY_ENVIRONMENT_VARIABLE not in os.environ
+
+
+def test_acquire_repeated_uses_newest_key(tmp_path: Path) -> None:
+    module = _module()
+    first = "ef56" * 16
+    second = "7890" * 16
+    service = _service(tmp_path, api=_FakeHookApi(key=first), pids=[1000])
+    assert service.acquire() == first
+    assert os.environ.get(module.KEY_ENVIRONMENT_VARIABLE) == first
+
+    service = _service(tmp_path, api=_FakeHookApi(key=second), pids=[1000])
+    assert service.acquire() == second
+    assert os.environ.get(module.KEY_ENVIRONMENT_VARIABLE) == second

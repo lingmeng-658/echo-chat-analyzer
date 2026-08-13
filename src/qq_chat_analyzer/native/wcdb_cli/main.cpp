@@ -1,91 +1,133 @@
 // Read-only WCDB query helper for WeChat 4.x databases.
 //
-// Loads the same WCDB.dll that WeChat uses, opens a database with a raw
-// 32-byte key (64 hex chars), and prints one JSON document to stdout:
+// This build links against the official Tencent WCDB v2.1.15 headers and the
+// WCDB.dll import library, so no WCDB C++ object layout is hand-mirrored.
 //
-//   {"ok": true, "columns": [...], "rows": [...], "row_count": N, ...}
-//   {"ok": false, "error": "...", "stage": "..."}
+// Migration note:
+// - The previous implementation resolved WCDB's private C++ ABI through
+//   GetProcAddress and hand-mirrored layouts (UnsafeStringView, UnsafeData,
+//   RecyclableHandle, std::shared_ptr) with guessed stack buffers, which can
+//   crash with 0xC0000005 during real session reads.
+// - Database construction, cipher configuration, the open check and handle
+//   acquisition now use the public WCDB::Database / WCDB::Handle API. The
+//   InnerDatabase object is created inside WCDB.dll (never on the caller
+//   stack), so no private layout is assumed.
+// - The public API has no raw-SQL entry in v2.1.15: StatementOperation::
+//   prepare() only accepts winq Statement objects and no SQL-text parser is
+//   exposed, while wcdb_cli must run arbitrary --sql text supplied by Python.
+//   The shared InnerHandle is therefore reached through the public core API
+//   (CommonCore::getOrCreateDatabase) solely to prepare the raw SQL text.
+//
+// stdout contract (unchanged):
+//   {"ok":true,"columns":[...],"rows":[...],"row_count":N,"truncated":bool,"db":"..."}
+//   {"ok":false,"stage":"...","error":"..."}
 //
 // The key is only kept in memory and is never printed or written to disk.
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
+#include "CoreConst.h"
+#include "CommonCore.hpp"
+#include "Database.hpp"
+#include "Handle.hpp"
+#include "InnerDatabase.hpp"
+#include "InnerHandle.hpp"
+#include "Path.hpp"
+#include "RecyclableHandle.hpp"
+#include "StringView.hpp"
+#include "UnsafeData.hpp"
+
 namespace {
 
-const char* kGetVersionSymbol = "?getVersion@Database@WCDB@@SA?BVStringView@2@XZ";
+const char* g_stage = "startup";
 
-const char* kUnsafeStringViewCtor = "??0UnsafeStringView@WCDB@@QEAA@PEBD@Z";
-const char* kUnsafeStringViewDtor = "??1UnsafeStringView@WCDB@@QEAA@XZ";
-const char* kInnerDatabaseCtor = "??0InnerDatabase@WCDB@@QEAA@AEBVUnsafeStringView@1@@Z";
-const char* kInnerDatabaseDtor = "??1InnerDatabase@WCDB@@UEAA@XZ";
-const char* kSetReadOnly = "?setReadOnly@InnerDatabase@WCDB@@QEAAXXZ";
-const char* kCanOpen = "?canOpen@InnerDatabase@WCDB@@QEAA_NXZ";
-const char* kUnsafeDataImmutable = "?immutable@UnsafeData@WCDB@@SA?BV12@PEBE_K@Z";
-const char* kUnsafeDataDtor = "??1UnsafeData@WCDB@@UEAA@XZ";
-const char* kMakeSharedCipherConfig =
-    "??$make_shared@VCipherConfig@WCDB@@AEBVUnsafeData@2@AEAHAEAW4CipherVersion@Database@2@@std@@"
-    "YA?AV?$shared_ptr@VCipherConfig@WCDB@@@0@AEBVUnsafeData@WCDB@@AEAHAEAW4CipherVersion@Database@3@@Z";
-const char* kSharedPtrCipherConfigDtor = "??1?$shared_ptr@VCipherConfig@WCDB@@@std@@QEAA@XZ";
-const char* kSetConfig =
-    "?setConfig@InnerDatabase@WCDB@@QEAAXAEBVUnsafeStringView@2@AEBV?$shared_ptr@VConfig@WCDB@@@std@@H@Z";
-const char* kGetHandle = "?getHandle@InnerDatabase@WCDB@@QEAA?AVRecyclableHandle@2@_N0@Z";
-const char* kRecyclableGet = "?get@RecyclableHandle@WCDB@@QEBAPEAVInnerHandle@2@XZ";
-const char* kRecyclableDtor = "??1RecyclableHandle@WCDB@@UEAA@XZ";
-const char* kPrepare = "?prepare@InnerHandle@WCDB@@QEAA_NAEBVUnsafeStringView@2@@Z";
-const char* kStep = "?step@InnerHandle@WCDB@@QEAA_NXZ";
-const char* kDone = "?done@InnerHandle@WCDB@@QEAA_NXZ";
-const char* kGetInteger = "?getInteger@InnerHandle@WCDB@@QEAA_JH@Z";
-const char* kGetDouble = "?getDouble@InnerHandle@WCDB@@QEAANH@Z";
-const char* kGetNumberOfColumns = "?getNumberOfColumns@InnerHandle@WCDB@@QEAAHXZ";
-const char* kGetText = "?getText@InnerHandle@WCDB@@QEAA?AVUnsafeStringView@2@H@Z";
-const char* kGetColumnName = "?getColumnName@InnerHandle@WCDB@@QEAA?BVUnsafeStringView@2@H@Z";
-const char* kGetColumnType = "?getColumnType@InnerHandle@WCDB@@QEAA?AW4ColumnType@Syntax@2@H@Z";
-const char* kGetBlob = "?getBLOB@InnerHandle@WCDB@@QEAA?AVUnsafeData@2@H@Z";
+void SetStage(const char* stage) {
+  g_stage = stage;
+  std::fprintf(stderr, "[wcdb-debug] %s\n", stage);
+  std::fflush(stderr);
+}
+
+void PrintHostInfo() {
+  struct OsVersionInfo {
+    DWORD size;
+    DWORD major;
+    DWORD minor;
+    DWORD build;
+    DWORD platform;
+    WCHAR csd[128];
+  };
+  using RtlGetVersionFn = LONG(WINAPI*)(OsVersionInfo*);
+  std::string windows = "unknown";
+  HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+  if (ntdll != nullptr) {
+    auto fn = reinterpret_cast<RtlGetVersionFn>(GetProcAddress(ntdll, "RtlGetVersion"));
+    if (fn != nullptr) {
+      OsVersionInfo info = {};
+      info.size = sizeof(info);
+      if (fn(&info) == 0) {
+        char buffer[64];
+        std::snprintf(buffer, sizeof(buffer), "%lu.%lu.%lu", info.major, info.minor, info.build);
+        windows = buffer;
+      }
+    }
+  }
+  SYSTEM_INFO si = {};
+  GetNativeSystemInfo(&si);
+  const char* host_arch = "unknown";
+  switch (si.wProcessorArchitecture) {
+    case PROCESSOR_ARCHITECTURE_AMD64:
+      host_arch = "x64";
+      break;
+    case PROCESSOR_ARCHITECTURE_INTEL:
+      host_arch = "x86";
+      break;
+    case PROCESSOR_ARCHITECTURE_ARM64:
+      host_arch = "arm64";
+      break;
+    default:
+      break;
+  }
+  const char* process_arch = sizeof(void*) == 8 ? "x64" : "x86";
+  std::fprintf(stderr,
+               "[wcdb-debug] host windows=%s host_arch=%s process_arch=%s pointer_bits=%zu\n",
+               windows.c_str(), host_arch, process_arch, sizeof(void*) * 8);
+  std::fflush(stderr);
+}
+
+LONG WINAPI NativeExceptionFilter(EXCEPTION_POINTERS* info) {
+  const DWORD code = info != nullptr && info->ExceptionRecord != nullptr
+                         ? info->ExceptionRecord->ExceptionCode
+                         : 0;
+  const void* address =
+      info != nullptr && info->ExceptionRecord != nullptr
+          ? info->ExceptionRecord->ExceptionAddress
+          : nullptr;
+  std::fprintf(stderr, "[wcdb-debug] native exception code=0x%08lX address=0x%p stage=%s\n",
+               code, address, g_stage);
+  std::fflush(stderr);
+  std::printf(
+      "{\"ok\":false,\"stage\":\"%s\",\"error\":\"native exception\","
+      "\"exception_code\":\"0x%08lX\",\"exception_address\":\"0x%p\",\"crashed\":true}\n",
+      g_stage, code, address);
+  std::fflush(stdout);
+  return EXCEPTION_EXECUTE_HANDLER;
+}
+
 const char* kSchemaSql = "SELECT name, type, sql FROM sqlite_master ORDER BY type, name";
-
-using UnsafeStringViewCtorFn = void (*)(void*, const char*);
-using UnsafeStringViewDtorFn = void (*)(void*);
-using InnerDatabaseCtorFn = void (*)(void*, const void*);
-using InnerDatabaseDtorFn = void (*)(void*);
-using SetReadOnlyFn = void (*)(void*);
-using CanOpenFn = bool (*)(void*);
-using UnsafeDataImmutableFn = void (*)(void*, const unsigned char*, size_t);
-using UnsafeDataDtorFn = void (*)(void*);
-using MakeSharedCipherConfigFn = void (*)(void*, const void*, int*, int*);
-using SharedPtrDtorFn = void (*)(void*);
-using SetConfigFn = void (*)(void*, const void*, const void*, int);
-using GetHandleFn = void (*)(void*, void*, bool, bool);
-using RecyclableGetFn = void* (*)(void*);
-using RecyclableDtorFn = void (*)(void*);
-using PrepareFn = bool (*)(void*, const void*);
-using StepFn = bool (*)(void*);
-using DoneFn = bool (*)(void*);
-using GetIntegerFn = int64_t (*)(void*, int);
-using GetDoubleFn = double (*)(void*, int);
-using GetNumberOfColumnsFn = int (*)(void*);
-using GetTextFn = void* (*)(void*, void*, int);
-using GetColumnNameFn = void* (*)(void*, void*, int);
-using GetColumnTypeFn = int (*)(void*, int);
-using GetBlobFn = void* (*)(void*, void*, int);
-
-struct StringViewData {
-  const char* data;
-  size_t length;
-};
-
-struct BlobViewData {
-  uintptr_t vtable;
-  const unsigned char* data;
-  size_t length;
-};
 
 struct QueryOptions {
   std::string wcdb_path;
@@ -125,28 +167,6 @@ bool ParseHexKey(const std::string& hex, unsigned char out[32]) {
     out[i] = static_cast<unsigned char>((high << 4) | low);
   }
   return true;
-}
-
-bool IsReadableRegion(const void* ptr, size_t need) {
-  if (ptr == nullptr) {
-    return false;
-  }
-  MEMORY_BASIC_INFORMATION mbi{};
-  if (!VirtualQuery(ptr, &mbi, sizeof(mbi))) {
-    return false;
-  }
-  if (mbi.State != MEM_COMMIT) {
-    return false;
-  }
-  const DWORD ok = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
-                   PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
-  if ((mbi.Protect & ok) == 0) {
-    return false;
-  }
-  const uintptr_t start = reinterpret_cast<uintptr_t>(ptr);
-  const uintptr_t region_end =
-      reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
-  return start + need <= region_end;
 }
 
 std::string JsonEscape(const std::string& input) {
@@ -222,192 +242,72 @@ std::wstring WideFromUtf8(const std::string& utf8) {
   return out;
 }
 
-class CleanupGuard {
- public:
-  void Add(std::function<void()> action) {
-    actions_.push_back(std::move(action));
-  }
-
-  void RunAll() {
-    for (auto it = actions_.rbegin(); it != actions_.rend(); ++it) {
-      try {
-        (*it)();
-      } catch (...) {
-        // Destructor cleanup is best effort; the query result is already
-        // finalised by the time this runs.
-      }
-    }
-    actions_.clear();
-  }
-
-  ~CleanupGuard() {
-    RunAll();
-  }
-
- private:
-  std::vector<std::function<void()>> actions_;
-};
-
-struct NativeSymbols {
-  HMODULE module = nullptr;
-  UnsafeStringViewCtorFn usv_ctor = nullptr;
-  UnsafeStringViewDtorFn usv_dtor = nullptr;
-  InnerDatabaseCtorFn db_ctor = nullptr;
-  InnerDatabaseDtorFn db_dtor = nullptr;
-  SetReadOnlyFn set_read_only = nullptr;
-  CanOpenFn can_open = nullptr;
-  UnsafeDataImmutableFn data_immutable = nullptr;
-  UnsafeDataDtorFn data_dtor = nullptr;
-  MakeSharedCipherConfigFn make_shared_config = nullptr;
-  SharedPtrDtorFn shared_ptr_dtor = nullptr;
-  SetConfigFn set_config = nullptr;
-  GetHandleFn get_handle = nullptr;
-  RecyclableGetFn recyclable_get = nullptr;
-  RecyclableDtorFn recyclable_dtor = nullptr;
-  PrepareFn prepare = nullptr;
-  StepFn step = nullptr;
-  DoneFn done = nullptr;
-  GetIntegerFn get_integer = nullptr;
-  GetDoubleFn get_double = nullptr;
-  GetNumberOfColumnsFn get_number_of_columns = nullptr;
-  GetTextFn get_text = nullptr;
-  GetColumnNameFn get_column_name = nullptr;
-  GetColumnTypeFn get_column_type = nullptr;
-  GetBlobFn get_blob = nullptr;
-};
-
-FARPROC Resolve(HMODULE module, const char* name) {
-  return GetProcAddress(module, name);
-}
-
-bool LoadSymbols(NativeSymbols* symbols) {
-  auto* s = symbols;
-  s->usv_ctor = reinterpret_cast<UnsafeStringViewCtorFn>(Resolve(s->module, kUnsafeStringViewCtor));
-  s->usv_dtor = reinterpret_cast<UnsafeStringViewDtorFn>(Resolve(s->module, kUnsafeStringViewDtor));
-  s->db_ctor = reinterpret_cast<InnerDatabaseCtorFn>(Resolve(s->module, kInnerDatabaseCtor));
-  s->db_dtor = reinterpret_cast<InnerDatabaseDtorFn>(Resolve(s->module, kInnerDatabaseDtor));
-  s->set_read_only = reinterpret_cast<SetReadOnlyFn>(Resolve(s->module, kSetReadOnly));
-  s->can_open = reinterpret_cast<CanOpenFn>(Resolve(s->module, kCanOpen));
-  s->data_immutable = reinterpret_cast<UnsafeDataImmutableFn>(Resolve(s->module, kUnsafeDataImmutable));
-  s->data_dtor = reinterpret_cast<UnsafeDataDtorFn>(Resolve(s->module, kUnsafeDataDtor));
-  s->make_shared_config =
-      reinterpret_cast<MakeSharedCipherConfigFn>(Resolve(s->module, kMakeSharedCipherConfig));
-  s->shared_ptr_dtor =
-      reinterpret_cast<SharedPtrDtorFn>(Resolve(s->module, kSharedPtrCipherConfigDtor));
-  s->set_config = reinterpret_cast<SetConfigFn>(Resolve(s->module, kSetConfig));
-  s->get_handle = reinterpret_cast<GetHandleFn>(Resolve(s->module, kGetHandle));
-  s->recyclable_get = reinterpret_cast<RecyclableGetFn>(Resolve(s->module, kRecyclableGet));
-  s->recyclable_dtor = reinterpret_cast<RecyclableDtorFn>(Resolve(s->module, kRecyclableDtor));
-  s->prepare = reinterpret_cast<PrepareFn>(Resolve(s->module, kPrepare));
-  s->step = reinterpret_cast<StepFn>(Resolve(s->module, kStep));
-  s->done = reinterpret_cast<DoneFn>(Resolve(s->module, kDone));
-  s->get_integer = reinterpret_cast<GetIntegerFn>(Resolve(s->module, kGetInteger));
-  s->get_double = reinterpret_cast<GetDoubleFn>(Resolve(s->module, kGetDouble));
-  s->get_number_of_columns =
-      reinterpret_cast<GetNumberOfColumnsFn>(Resolve(s->module, kGetNumberOfColumns));
-  s->get_text = reinterpret_cast<GetTextFn>(Resolve(s->module, kGetText));
-  s->get_column_name = reinterpret_cast<GetColumnNameFn>(Resolve(s->module, kGetColumnName));
-  s->get_column_type = reinterpret_cast<GetColumnTypeFn>(Resolve(s->module, kGetColumnType));
-  s->get_blob = reinterpret_cast<GetBlobFn>(Resolve(s->module, kGetBlob));
-
-  return s->usv_ctor && s->usv_dtor && s->db_ctor && s->db_dtor && s->set_read_only &&
-         s->can_open && s->data_immutable && s->data_dtor && s->make_shared_config &&
-         s->shared_ptr_dtor && s->set_config && s->get_handle && s->recyclable_get &&
-         s->recyclable_dtor && s->prepare && s->step && s->done && s->get_integer &&
-         s->get_double && s->get_number_of_columns && s->get_text && s->get_column_name &&
-         s->get_column_type && s->get_blob;
-}
-
-std::string ReadStringView(const unsigned char* buffer) {
-  const uint64_t* qwords = reinterpret_cast<const uint64_t*>(buffer);
-  const char* data = reinterpret_cast<const char*>(static_cast<uintptr_t>(qwords[0]));
-  const size_t length = static_cast<size_t>(qwords[1]);
-  if (data == nullptr || length == 0) {
-    return "";
-  }
-  const size_t safe_length = IsReadableRegion(data, length) ? length : 0;
-  if (safe_length == 0) {
-    return "";
-  }
-  return std::string(data, safe_length);
-}
-
-bool AppendColumnValue(
-    std::string* out,
-    const NativeSymbols& symbols,
-    void* inner_handle,
-    int index) {
-  const int column_type = symbols.get_column_type(inner_handle, index);
+// Appends the JSON value of one result column to |out|. Column types follow
+// WCDB::Syntax::ColumnType: Null=0, Integer=1, Float=2, Text=3, BLOB=4.
+bool AppendColumnValue(std::string* out, WCDB::Handle* handle, int index) {
+  const int column_type = static_cast<int>(handle->getType(index));
   switch (column_type) {
     case 1: {  // INTEGER
-      const int64_t value = symbols.get_integer(inner_handle, index);
+      const int64_t value = handle->getInteger(index);
       out->append(std::to_string(value));
       return true;
     }
     case 2: {  // FLOAT
-      const double value = symbols.get_double(inner_handle, index);
+      const double value = handle->getDouble(index);
       char buffer[40];
       std::snprintf(buffer, sizeof(buffer), "%.17g", value);
       out->append(buffer);
       return true;
     }
     case 3: {  // TEXT
-      alignas(16) unsigned char text_buffer[0x40] = {};
-      symbols.get_text(inner_handle, text_buffer, index);
-      const std::string text = ReadStringView(text_buffer);
+      const WCDB::UnsafeStringView text = handle->getText(index);
+      // Copy immediately: the view is only valid until the next step.
+      const std::string value(text.data(), text.length());
       out->append("\"");
-      out->append(JsonEscape(text));
+      out->append(JsonEscape(value));
       out->append("\"");
       return true;
     }
     case 4: {  // BLOB
-      alignas(16) unsigned char blob_buffer[0x80] = {};
-      symbols.get_blob(inner_handle, blob_buffer, index);
-      const uint64_t* qwords = reinterpret_cast<const uint64_t*>(blob_buffer);
-      const unsigned char* data =
-          reinterpret_cast<const unsigned char*>(static_cast<uintptr_t>(qwords[1]));
-      const size_t length = static_cast<size_t>(qwords[2]);
-      if (data == nullptr || length == 0) {
-        out->append("\"\"");
-        return true;
-      }
-      const size_t safe_length = IsReadableRegion(data, length) ? length : 0;
+      const WCDB::UnsafeData blob = handle->getBLOB(index);
       out->append("\"");
-      out->append(HexEncode(data, safe_length));
+      out->append(HexEncode(blob.buffer(), blob.size()));
       out->append("\"");
       return true;
     }
-    case 5:  // NULL
-    default:
+    default:  // NULL or unknown
       out->append("null");
       return true;
   }
 }
 
 int RunQuery(const QueryOptions& options) {
+  SetStage("loading dll");
   DebugPrint(options, "load WCDB.dll");
   std::wstring wcdb_wide = WideFromUtf8(options.wcdb_path);
-  NativeSymbols symbols;
-  symbols.module = LoadLibraryW(wcdb_wide.c_str());
-  if (symbols.module == nullptr) {
+  HMODULE module = LoadLibraryW(wcdb_wide.c_str());
+  if (module == nullptr) {
+    std::fprintf(stderr, "[wcdb-debug] load dll failed error=%lu stage=%s\n", GetLastError(),
+                 g_stage);
+    std::fflush(stderr);
     std::printf("{\"ok\":false,\"stage\":\"load\",\"error\":\"LoadLibraryW failed: %lu\"}\n",
                 GetLastError());
     return 1;
   }
-
-  CleanupGuard cleanup;
-  cleanup.Add([&symbols]() {
-    if (symbols.module != nullptr) {
-      FreeLibrary(symbols.module);
-      symbols.module = nullptr;
+  std::fprintf(stderr, "[wcdb-debug] dll loaded path=%s\n", options.wcdb_path.c_str());
+  std::fflush(stderr);
+  struct ModuleGuard {
+    HMODULE* module;
+    ~ModuleGuard() {
+      if (*module != nullptr) {
+        FreeLibrary(*module);
+        *module = nullptr;
+      }
     }
-  });
+  } module_guard{&module};
 
-  if (!LoadSymbols(&symbols)) {
-    std::printf("{\"ok\":false,\"stage\":\"symbols\",\"error\":\"missing WCDB exports\"}\n");
-    return 1;
-  }
-  DebugPrint(options, "symbols loaded");
+  SetStage("symbols loaded");
+  DebugPrint(options, "import-lib symbols available");
 
   unsigned char key_bytes[32] = {};
   if (!options.no_cipher) {
@@ -421,79 +321,68 @@ int RunQuery(const QueryOptions& options) {
     return 1;
   }
 
-  alignas(16) unsigned char path_buffer[0x40] = {};
-  alignas(16) unsigned char db_buffer[0x2000] = {};
-  alignas(16) unsigned char data_buffer[0x40] = {};
-  alignas(16) unsigned char config_buffer[0x40] = {};
-  alignas(16) unsigned char name_buffer[0x40] = {};
-  // RecyclableHandle is a by-value return object whose constructor writes up
-  // to offset 0x68. Keep a generous slot so getHandle cannot spill into the
-  // adjacent SQL string-view buffer.
-  alignas(16) unsigned char recyclable_buffer[0x100] = {};
-  alignas(16) unsigned char sql_buffer[0x40] = {};
-
   try {
-    DebugPrint(options, "construct path");
-    symbols.usv_ctor(path_buffer, options.db_path.c_str());
-    cleanup.Add([&]() { symbols.usv_dtor(path_buffer); });
-
+    SetStage("create database object");
     DebugPrint(options, "construct database");
-    symbols.db_ctor(db_buffer, path_buffer);
-    cleanup.Add([&]() { symbols.db_dtor(db_buffer); });
+    // Public API: the InnerDatabase object is created inside WCDB.dll and is
+    // never constructed on the caller stack, removing the private-layout hazard
+    // of the previous direct `WCDB::InnerDatabase db(...)` construction.
+    WCDB::Database db(WCDB::UnsafeStringView(options.db_path.c_str()), /*readOnly=*/true);
 
-    DebugPrint(options, "set read-only");
-    symbols.set_read_only(db_buffer);
-
+    SetStage("configure cipher");
     if (!options.no_cipher) {
-      DebugPrint(options, "build cipher config");
-      symbols.data_immutable(data_buffer, key_bytes, sizeof(key_bytes));
-      cleanup.Add([&]() { symbols.data_dtor(data_buffer); });
+      DebugPrint(options, "set cipher key");
+      const WCDB::UnsafeData key =
+          WCDB::UnsafeData::immutable(key_bytes, sizeof(key_bytes));
+      db.setCipherKey(key, options.page_size,
+                      static_cast<WCDB::Database::CipherVersion>(options.cipher_version));
+    }
 
-      int page_size = options.page_size;
-      int cipher_version = options.cipher_version;
-      symbols.make_shared_config(config_buffer, data_buffer, &page_size, &cipher_version);
-      cleanup.Add([&]() { symbols.shared_ptr_dtor(config_buffer); });
-
-      symbols.usv_ctor(name_buffer, "com.Tencent.WCDB.Config.Cipher");
-      cleanup.Add([&]() { symbols.usv_dtor(name_buffer); });
-
-      DebugPrint(options, "apply cipher config");
-      symbols.set_config(db_buffer, name_buffer, config_buffer, 0x80000000);
+    SetStage("open database");
+    DebugPrint(options, "open database");
+    if (!db.canOpen()) {
+      std::printf("{\"ok\":false,\"stage\":\"open\",\"error\":\"canOpen failed\"}\n");
+      return 1;
     }
 
     DebugPrint(options, "get handle");
-    symbols.get_handle(db_buffer, recyclable_buffer, false, false);
-    cleanup.Add([&]() { symbols.recyclable_dtor(recyclable_buffer); });
+    WCDB::Handle handle = db.getHandle();
 
-    DebugPrint(options, "recyclable get");
-    void* inner_handle = symbols.recyclable_get(recyclable_buffer);
+    // Raw SQL prepare is not exposed on the public Handle (StatementOperation::
+    // prepare() only accepts winq Statement objects and no SQL-text parser is
+    // provided in v2.1.15), so the shared InnerHandle is reached through the
+    // public core API solely to prepare the arbitrary SQL text supplied by
+    // Python. getOrCreateDatabase returns the same InnerDatabase instance that
+    // `db` wraps (same normalized path); no database object is constructed on
+    // the caller stack here.
+    SetStage("prepare statement");
+    DebugPrint(options, "prepare");
+    WCDB::RecyclableDatabase database_holder = WCDB::CommonCore::shared().getOrCreateDatabase(
+        WCDB::Path::normalize(WCDB::UnsafeStringView(options.db_path.c_str())));
+    WCDB::RecyclableHandle recyclable = database_holder.get()->getHandle(false, false);
+    WCDB::InnerHandle* inner_handle = recyclable.get();
     if (inner_handle == nullptr) {
       std::printf(
-          "{\"ok\":false,\"stage\":\"open\",\"error\":\"RecyclableHandle::get returned null\"}\n");
+          "{\"ok\":false,\"stage\":\"prepare\",\"error\":\"inner handle is null\"}\n");
       return 1;
     }
-
-    DebugPrint(options, "construct sql");
-    symbols.usv_ctor(sql_buffer, options.sql.c_str());
-    cleanup.Add([&]() { symbols.usv_dtor(sql_buffer); });
-
-    DebugPrint(options, "prepare");
-    if (!symbols.prepare(inner_handle, sql_buffer)) {
+    if (!inner_handle->prepare(WCDB::UnsafeStringView(options.sql.c_str()))) {
       std::printf("{\"ok\":false,\"stage\":\"prepare\",\"error\":\"prepare failed\"}\n");
       return 1;
     }
+    SetStage("bind arguments");
+    DebugPrint(options, "no bind arguments (literal SQL)");
 
     DebugPrint(options, "read columns");
     std::vector<std::string> columns;
-    const int column_count = symbols.get_number_of_columns(inner_handle);
+    const int column_count = handle.getNumberOfColumns();
     for (int index = 0; index < column_count; ++index) {
-      alignas(16) unsigned char column_buffer[0x40] = {};
-      symbols.get_column_name(inner_handle, column_buffer, index);
-      const std::string name = ReadStringView(column_buffer);
-      if (name.empty()) {
+      const WCDB::UnsafeStringView name = handle.getColumnName(index);
+      const std::string name_copy(name.data(), name.length());
+      if (name_copy.empty()) {
         break;
       }
-      columns.push_back(name);
+      columns.push_back(name_copy);
     }
 
     std::string out = "{\"ok\":true,\"columns\":[";
@@ -507,15 +396,16 @@ int RunQuery(const QueryOptions& options) {
     }
     out += "],\"rows\":[";
 
+    SetStage("execute step");
     DebugPrint(options, "step rows");
     bool first_row = true;
     int row_count = 0;
     int max_rows = options.limit > 0 ? options.limit : 100000;
     while (row_count < max_rows) {
-      if (!symbols.step(inner_handle)) {
+      if (!handle.step()) {
         break;
       }
-      if (symbols.done(inner_handle)) {
+      if (handle.done()) {
         break;
       }
       if (options.debug && row_count < 5) {
@@ -538,7 +428,7 @@ int RunQuery(const QueryOptions& options) {
           std::fprintf(stderr, "[wcdb_cli]   column %zu\n", i);
           std::fflush(stderr);
         }
-        if (!AppendColumnValue(&out, symbols, inner_handle, static_cast<int>(i))) {
+        if (!AppendColumnValue(&out, &handle, static_cast<int>(i))) {
           out += "null";
         }
       }
@@ -547,8 +437,9 @@ int RunQuery(const QueryOptions& options) {
     }
 
     const bool truncated = options.limit > 0 && row_count >= options.limit;
+    SetStage("finalize");
     DebugPrint(options, "done");
-    symbols.done(inner_handle);
+    handle.invalidate();
 
     out += "],\"row_count\":";
     out += std::to_string(row_count);
@@ -556,14 +447,17 @@ int RunQuery(const QueryOptions& options) {
     out += ",\"db\":\"";
     out += JsonEscape(options.db_path);
     out += "\"}";
+    SetStage("export result");
     DebugPrint(options, "print result");
     std::printf("%s\n", out.c_str());
   } catch (...) {
-    std::printf("{\"ok\":false,\"stage\":\"query\",\"error\":\"unexpected C++ exception\"}\n");
+    std::fprintf(stderr, "[wcdb-debug] unexpected C++ exception stage=%s\n", g_stage);
+    std::fflush(stderr);
+    std::printf("{\"ok\":false,\"stage\":\"%s\",\"error\":\"unexpected C++ exception\"}\n",
+                g_stage);
     return 1;
   }
 
-  cleanup.RunAll();
   return 0;
 }
 
@@ -594,6 +488,10 @@ int ParsePositiveInt(const std::string& value, int fallback) {
 }  // namespace
 
 int wmain(int argc, wchar_t** wargv) {
+  SetUnhandledExceptionFilter(NativeExceptionFilter);
+  SetStage("startup");
+  PrintHostInfo();
+
   std::vector<std::string> args;
   args.reserve(static_cast<size_t>(argc));
   for (int i = 0; i < argc; ++i) {

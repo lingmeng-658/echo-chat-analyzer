@@ -64,6 +64,49 @@ def test_configure_logging_creates_file_handler(
     )
 
 
+def test_wechat_database_provider_diagnostics_are_written_to_desktop_log(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _desktop_runtime()
+    local = tmp_path / "Local"
+    local.mkdir(parents=True)
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    desktop_logger = logging.getLogger(module.LOGGER_NAME)
+    provider_logger = logging.getLogger(
+        "qq_chat_analyzer.providers.wechat_database_provider"
+    )
+    original_desktop_handlers = desktop_logger.handlers[:]
+    original_provider_handlers = provider_logger.handlers[:]
+    original_provider_level = provider_logger.level
+    try:
+        desktop_logger.handlers.clear()
+        provider_logger.handlers.clear()
+
+        module.configure_logging()
+        module.configure_logging()
+        provider_logger.info(
+            "[wechat db] query failed wcdb_stage=open error_type=RuntimeError"
+        )
+        for handler in provider_logger.handlers:
+            handler.flush()
+
+        log_text = (
+            local / "LocalChatAnalyzer" / "logs" / "desktop.log"
+        ).read_text(encoding="utf-8")
+        assert log_text.count("[wechat db] query failed") == 1
+        assert "wcdb_stage=open" in log_text
+    finally:
+        for handler in desktop_logger.handlers + provider_logger.handlers:
+            if handler not in (
+                original_desktop_handlers + original_provider_handlers
+            ):
+                handler.close()
+        desktop_logger.handlers[:] = original_desktop_handlers
+        provider_logger.handlers[:] = original_provider_handlers
+        provider_logger.setLevel(original_provider_level)
+
+
 def test_uncaught_exception_is_logged_without_leaking(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

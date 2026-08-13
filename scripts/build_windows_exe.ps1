@@ -83,6 +83,18 @@ try {
         }
     }
 
+    # Ship the WeChat WCDB diagnostic runner so test machines do not have to
+    # copy it manually. The frozen app looks for scripts/run_wechat_wcdb_diagnostic.ps1.
+    $DiagnosticRunnerSource = Join-Path $ProjectRoot "scripts\run_wechat_wcdb_diagnostic.ps1"
+    if (-not (Test-Path -LiteralPath $DiagnosticRunnerSource)) {
+        throw "Required diagnostic runner is missing: scripts\run_wechat_wcdb_diagnostic.ps1"
+    }
+    $PortableScripts = Join-Path $PortableDirectory "scripts"
+    New-Item -ItemType Directory -Force -Path $PortableScripts | Out-Null
+    Copy-Item -LiteralPath $DiagnosticRunnerSource -Destination (
+        Join-Path $PortableScripts "run_wechat_wcdb_diagnostic.ps1"
+    )
+
     Write-Output "Build complete: $PortableDirectory"
 }
 finally {
