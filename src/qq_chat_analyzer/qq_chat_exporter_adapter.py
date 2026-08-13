@@ -161,6 +161,9 @@ def _parse_rich_message(
                 sender_data.get("uid") or sender_data.get("uin")
             ),
             display_name=_resolve_sender_name(sender_data),
+            remark=_first_text(sender_data, "remark"),
+            nickname=_first_text(sender_data, "nickname", "name"),
+            contextual_name=_first_text(sender_data, "groupCard"),
         ),
         timestamp=timestamp,
         message_type=message_type,

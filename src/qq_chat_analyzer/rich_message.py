@@ -11,6 +11,9 @@ class SenderIdentity:
 
     identity_id: str | None
     display_name: str
+    remark: str | None = None
+    nickname: str | None = None
+    contextual_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -20,3 +20,6 @@ class ChatMessage:
     conversation_id: str | None = None
     is_system: bool = False
     recalled: bool = False
+    sender_remark: str | None = None
+    sender_nickname: str | None = None
+    sender_contextual_name: str | None = None

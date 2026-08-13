@@ -81,6 +81,10 @@ def test_echo_report_converts_to_stable_frontend_json_object() -> None:
             {
                 "speaker_key": "fictional-alice",
                 "display_name": "虚构 Alice",
+                "primary_name": None,
+                "secondary_name": None,
+                "remark": None,
+                "contextual_name": None,
                 "is_viewer": True,
                 "message_count": 2,
                 "message_share_percent": 66.67,
@@ -97,6 +101,37 @@ def test_echo_report_converts_to_stable_frontend_json_object() -> None:
             },
         ],
     }
+
+
+def test_echo_member_serializes_identity_skeleton() -> None:
+    member = EchoMemberCard(
+        speaker_key="10001",
+        display_name="Alice",
+        primary_name="Alice",
+        is_viewer=False,
+        message_count=1,
+        message_share_percent=100.0,
+        average_length=3.0,
+        max_length=3,
+        active_period="",
+    )
+
+    payload = echo_report_to_dict(
+        EchoReportView(
+            title="Echo Report",
+            has_data=True,
+            members=(member,),
+        )
+    )
+    serialized = payload["members"][0]
+
+    assert serialized["speaker_key"] == "10001"
+    assert serialized["primary_name"] == "Alice"
+    assert serialized["display_name"] == "Alice"
+    assert serialized["secondary_name"] is None
+    assert serialized["remark"] is None
+    assert serialized["contextual_name"] is None
+    assert serialized["is_viewer"] is False
 
 
 def test_echo_report_json_file_preserves_viewer_highlight(tmp_path: Path) -> None:

@@ -43,6 +43,10 @@ def _message(
     text: str = "hello",
     timestamp: int = 1704099600,
     conversation_id: str | None = None,
+    sender_id: str | None = None,
+    sender_remark: str | None = None,
+    sender_nickname: str | None = None,
+    sender_contextual_name: str | None = None,
 ):
     message_module = importlib.import_module("qq_chat_analyzer.message")
     return message_module.ChatMessage(
@@ -51,6 +55,10 @@ def _message(
         message_type="text",
         text=text,
         conversation_id=conversation_id,
+        sender_id=sender_id,
+        sender_remark=sender_remark,
+        sender_nickname=sender_nickname,
+        sender_contextual_name=sender_contextual_name,
     )
 
 
@@ -102,6 +110,85 @@ def test_blank_display_names_are_ignored() -> None:
     )
 
     assert report.profiles[0].resolved_display_name == "wxid_a"
+
+
+def test_profile_carries_stable_sender_id_as_speaker_key() -> None:
+    report = _user_profile_analyzer().analyze(
+        [_message("Alice", sender_id="10001")]
+    )
+
+    profile = report.profiles[0]
+    assert profile.speaker == "Alice"
+    assert profile.speaker_key == "10001"
+
+
+def test_profile_speaker_key_falls_back_to_sender_when_sender_id_missing() -> None:
+    report = _user_profile_analyzer().analyze([_message("Alice")])
+
+    assert report.profiles[0].speaker_key == "Alice"
+
+
+def test_blank_sender_id_falls_back_to_sender() -> None:
+    report = _user_profile_analyzer().analyze(
+        [_message("Alice", sender_id="   ")]
+    )
+
+    assert report.profiles[0].speaker_key == "Alice"
+
+
+def test_speaker_key_is_stable_when_display_name_changes() -> None:
+    report = _user_profile_analyzer().analyze(
+        [
+            _message("Alice", sender_id="10001"),
+            _message("Alice2", sender_id="10001"),
+        ]
+    )
+
+    assert {profile.speaker_key for profile in report.profiles} == {"10001"}
+    assert {profile.speaker for profile in report.profiles} == {
+        "Alice",
+        "Alice2",
+    }
+
+
+def test_profile_carries_qq_identity_fields() -> None:
+    report = _user_profile_analyzer().analyze(
+        [
+            _message(
+                "Alice",
+                sender_id="10001",
+                sender_remark="老王",
+                sender_nickname="Nickname",
+                sender_contextual_name="达拉崩吧",
+            )
+        ]
+    )
+
+    profile = report.profiles[0]
+    assert profile.speaker_key == "10001"
+    assert profile.remark == "老王"
+    assert profile.nickname == "Nickname"
+    assert profile.contextual_name == "达拉崩吧"
+
+
+def test_profile_identity_fields_prefer_first_non_empty_value() -> None:
+    report = _user_profile_analyzer().analyze(
+        [
+            _message("Alice", sender_id="10001"),
+            _message(
+                "Alice",
+                sender_id="10001",
+                sender_remark="老王",
+                sender_nickname="Nickname",
+                sender_contextual_name="达拉崩吧",
+            ),
+        ]
+    )
+
+    profile = report.profiles[0]
+    assert profile.remark == "老王"
+    assert profile.nickname == "Nickname"
+    assert profile.contextual_name == "达拉崩吧"
 
 
 def test_conversation_uses_the_injected_display_name() -> None:

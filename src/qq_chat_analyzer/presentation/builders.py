@@ -166,7 +166,7 @@ class EchoReportBuilder:
             for entry in (activity.weekday_counts if activity else ())
         )
         members = tuple(
-            _build_echo_member(profile, viewer_speaker_key)
+            _build_echo_member(profile, viewer_speaker_key, conversation_kind)
             for profile in (profiles.profiles if profiles else ())
         )
         total_message_count = activity.total_message_count if activity else 0
@@ -217,13 +217,26 @@ def build_echo_report_view(
 def _build_echo_member(
     profile: UserProfile,
     viewer_speaker_key: str | None,
+    conversation_kind: str = "unknown",
 ) -> EchoMemberCard:
+    speaker_key = profile.speaker_key or profile.speaker
+    primary_name, secondary_name, contextual_name = resolve_member_names(
+        remark=profile.remark,
+        contextual_name=profile.contextual_name,
+        nickname=profile.nickname,
+        safe_display_fallback=profile.resolved_display_name,
+        conversation_kind=conversation_kind,
+    )
     return EchoMemberCard(
-        speaker_key=profile.speaker,
-        display_name=profile.resolved_display_name,
+        speaker_key=speaker_key,
+        display_name=primary_name,
+        primary_name=primary_name,
+        secondary_name=secondary_name,
+        remark=profile.remark,
+        contextual_name=contextual_name,
         is_viewer=(
             viewer_speaker_key is not None
-            and profile.speaker == viewer_speaker_key
+            and speaker_key == viewer_speaker_key
         ),
         message_count=profile.message_count,
         message_share_percent=profile.message_share_percent,
@@ -246,6 +259,38 @@ def _build_echo_member(
         ),
         top_words=tuple(word.word for word in profile.top_words),
     )
+
+
+def resolve_member_names(
+    *,
+    remark: str | None,
+    contextual_name: str | None,
+    nickname: str | None,
+    safe_display_fallback: str,
+    conversation_kind: str = "unknown",
+) -> tuple[str, str | None, str | None]:
+    """Resolve primary/secondary display names in the Python report layer."""
+    if conversation_kind == "private":
+        contextual = _first_non_empty(nickname, contextual_name)
+    else:
+        contextual = _first_non_empty(contextual_name, nickname)
+
+    primary = (
+        _first_non_empty(remark, contextual, safe_display_fallback)
+        or safe_display_fallback
+    )
+    secondary = None
+    if remark and contextual:
+        if contextual.strip().casefold() != primary.strip().casefold():
+            secondary = contextual
+    return primary, secondary, contextual
+
+
+def _first_non_empty(*values: str | None) -> str | None:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 def _build_summary_metrics(

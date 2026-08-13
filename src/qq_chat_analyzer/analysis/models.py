@@ -118,6 +118,10 @@ class UserProfile:
     display_name: str | None = None
     hourly_counts: tuple[HourlyActivity, ...] = ()
     weekday_counts: tuple[WeekdayActivity, ...] = ()
+    speaker_key: str | None = None
+    remark: str | None = None
+    nickname: str | None = None
+    contextual_name: str | None = None
 
     @property
     def resolved_display_name(self) -> str:

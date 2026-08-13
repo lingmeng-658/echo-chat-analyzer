@@ -175,6 +175,61 @@ def test_parse_qce_rich_messages_maps_p0_message_relations_and_recall() -> None:
     assert message.recall_event is None
 
 
+def test_parse_qce_rich_messages_preserves_qq_identity_fields() -> None:
+    sender = {
+        "uid": "user-1001",
+        "uin": "1001",
+        "name": "Nick Name",
+        "nickname": "Nickname",
+        "remark": "老王",
+        "groupCard": "达拉崩吧",
+    }
+
+    messages, warnings = parse_qce_rich_messages(
+        [_qce_message(sender=sender)]
+    )
+
+    assert warnings == ()
+    identity = messages[0].sender
+    assert identity.identity_id == "user-1001"
+    assert identity.remark == "老王"
+    assert identity.nickname == "Nickname"
+    assert identity.contextual_name == "达拉崩吧"
+
+
+def test_parse_qce_rich_messages_uses_name_as_nickname_fallback() -> None:
+    sender = {"uid": "user-1001", "name": "Nick Name"}
+
+    messages, warnings = parse_qce_rich_messages(
+        [_qce_message(sender=sender)]
+    )
+
+    assert warnings == ()
+    identity = messages[0].sender
+    assert identity.nickname == "Nick Name"
+    assert identity.contextual_name is None
+    assert identity.remark is None
+
+
+def test_parse_qce_messages_projects_identity_fields_into_chat_message() -> None:
+    sender = {
+        "uid": "user-1001",
+        "uin": "1001",
+        "nickname": "Nickname",
+        "remark": "老王",
+        "groupCard": "达拉崩吧",
+    }
+
+    messages, warnings = parse_qce_messages([_qce_message(sender=sender)])
+
+    assert warnings == ()
+    message = messages[0]
+    assert message.sender_id == "user-1001"
+    assert message.sender_remark == "老王"
+    assert message.sender_nickname == "Nickname"
+    assert message.sender_contextual_name == "达拉崩吧"
+
+
 def test_parse_qce_messages_preserves_metadata_flags() -> None:
     raw_messages = [
         _qce_message(

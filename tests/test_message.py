@@ -111,3 +111,24 @@ def test_chat_message_new_fields_have_defaults() -> None:
     assert message.conversation_id is None
     assert message.is_system is False
     assert message.recalled is False
+    assert message.sender_remark is None
+    assert message.sender_nickname is None
+    assert message.sender_contextual_name is None
+
+
+def test_chat_message_preserves_qq_identity_fields() -> None:
+    ChatMessage = _chat_message_class()
+    message = ChatMessage(
+        timestamp=1,
+        sender="Alice",
+        message_type="text",
+        text="Hello",
+        sender_id="10001",
+        sender_remark="老王",
+        sender_nickname="Nickname",
+        sender_contextual_name="达拉崩吧",
+    )
+
+    assert message.sender_remark == "老王"
+    assert message.sender_nickname == "Nickname"
+    assert message.sender_contextual_name == "达拉崩吧"

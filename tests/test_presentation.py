@@ -143,6 +143,17 @@ def _full_reports():
     )
 
 
+def _profile_report(profile):
+    models = _analysis_models()
+    return models.AnalysisReports(
+        user_profiles=models.UserProfileReport(
+            total_message_count=profile.message_count,
+            speaker_count=1,
+            profiles=(profile,),
+        )
+    )
+
+
 def _chart_by_key(view, key: str):
     for chart in view.charts:
         if chart.key == key:
@@ -205,6 +216,211 @@ def test_echo_report_builder_never_guesses_viewer_identity() -> None:
     view = presentation.build_echo_report_view(_full_reports())
 
     assert all(not member.is_viewer for member in view.members)
+
+
+def test_echo_member_builder_carries_stable_identity_skeleton() -> None:
+    presentation = _presentation()
+    models = _analysis_models()
+    message_module = importlib.import_module("qq_chat_analyzer.message")
+    analyzer_module = importlib.import_module(
+        "qq_chat_analyzer.analysis.analyzers.user_profile_analyzer"
+    )
+    report = analyzer_module.UserProfileAnalyzer().analyze(
+        [
+            message_module.ChatMessage(
+                timestamp=1704099600,
+                sender="Alice",
+                message_type="text",
+                text="hello",
+                sender_id="10001",
+            )
+        ]
+    )
+
+    view = presentation.build_echo_report_view(
+        models.AnalysisReports(user_profiles=report)
+    )
+    member = view.members[0]
+
+    assert member.speaker_key == "10001"
+    assert member.primary_name == "Alice"
+    assert member.display_name == "Alice"
+    assert member.secondary_name is None
+    assert member.remark is None
+    assert member.contextual_name is None
+    assert member.is_viewer is False
+
+
+def test_echo_member_resolves_group_remark_and_group_card() -> None:
+    presentation = _presentation()
+    models = _analysis_models()
+    profile = models.UserProfile(
+        speaker="Alice",
+        speaker_key="10001",
+        display_name="Alice",
+        message_count=1,
+        message_share_percent=100.0,
+        average_length=3.0,
+        max_length=3,
+        remark="老王",
+        nickname="Nickname",
+        contextual_name="达拉崩吧",
+    )
+
+    member = presentation.build_echo_report_view(
+        _profile_report(profile),
+        conversation_kind="group",
+    ).members[0]
+
+    assert member.speaker_key == "10001"
+    assert member.primary_name == "老王"
+    assert member.secondary_name == "达拉崩吧"
+    assert member.remark == "老王"
+    assert member.contextual_name == "达拉崩吧"
+
+
+def test_echo_member_group_card_becomes_primary_without_remark() -> None:
+    presentation = _presentation()
+    models = _analysis_models()
+    profile = models.UserProfile(
+        speaker="Alice",
+        speaker_key="10001",
+        display_name="Alice",
+        message_count=1,
+        message_share_percent=100.0,
+        average_length=3.0,
+        max_length=3,
+        contextual_name="达拉崩吧",
+    )
+
+    member = presentation.build_echo_report_view(
+        _profile_report(profile),
+        conversation_kind="group",
+    ).members[0]
+
+    assert member.primary_name == "达拉崩吧"
+    assert member.secondary_name is None
+
+
+def test_echo_member_deduplicates_identical_remark_and_contextual_name() -> None:
+    presentation = _presentation()
+    models = _analysis_models()
+    profile = models.UserProfile(
+        speaker="Alice",
+        speaker_key="10001",
+        display_name="Alice",
+        message_count=1,
+        message_share_percent=100.0,
+        average_length=3.0,
+        max_length=3,
+        remark="老王",
+        contextual_name="老王",
+    )
+
+    member = presentation.build_echo_report_view(
+        _profile_report(profile),
+        conversation_kind="group",
+    ).members[0]
+
+    assert member.primary_name == "老王"
+    assert member.secondary_name is None
+
+
+def test_echo_member_resolves_private_remark_and_nickname() -> None:
+    presentation = _presentation()
+    models = _analysis_models()
+    profile = models.UserProfile(
+        speaker="Alice",
+        speaker_key="10001",
+        display_name="Alice",
+        message_count=1,
+        message_share_percent=100.0,
+        average_length=3.0,
+        max_length=3,
+        remark="张三",
+        nickname="ZhangSan",
+    )
+
+    member = presentation.build_echo_report_view(
+        _profile_report(profile),
+        conversation_kind="private",
+    ).members[0]
+
+    assert member.primary_name == "张三"
+    assert member.secondary_name == "ZhangSan"
+    assert member.contextual_name == "ZhangSan"
+
+
+def test_echo_member_never_uses_internal_id_when_name_exists() -> None:
+    presentation = _presentation()
+    models = _analysis_models()
+    profile = models.UserProfile(
+        speaker="123456789",
+        speaker_key="123456789",
+        display_name="123456789",
+        message_count=1,
+        message_share_percent=100.0,
+        average_length=3.0,
+        max_length=3,
+        remark="老王",
+    )
+
+    member = presentation.build_echo_report_view(
+        _profile_report(profile)
+    ).members[0]
+
+    assert member.primary_name == "老王"
+    assert member.speaker_key == "123456789"
+
+
+def test_echo_member_keeps_old_fallback_behavior() -> None:
+    presentation = _presentation()
+    models = _analysis_models()
+    profile = models.UserProfile(
+        speaker="Alice",
+        speaker_key="10001",
+        display_name="Alice",
+        message_count=1,
+        message_share_percent=100.0,
+        average_length=3.0,
+        max_length=3,
+    )
+
+    member = presentation.build_echo_report_view(
+        _profile_report(profile)
+    ).members[0]
+
+    assert member.speaker_key == "10001"
+    assert member.primary_name == "Alice"
+    assert member.display_name == "Alice"
+    assert member.secondary_name is None
+    assert member.remark is None
+    assert member.contextual_name is None
+
+
+def test_echo_member_unknown_kind_uses_contextual_or_nickname_safely() -> None:
+    presentation = _presentation()
+    models = _analysis_models()
+    profile = models.UserProfile(
+        speaker="Alice",
+        speaker_key="10001",
+        display_name="Alice",
+        message_count=1,
+        message_share_percent=100.0,
+        average_length=3.0,
+        max_length=3,
+        remark="老王",
+        nickname="Nickname",
+        contextual_name="达拉崩吧",
+    )
+
+    member = presentation.build_echo_report_view(
+        _profile_report(profile)
+    ).members[0]
+
+    assert member.primary_name == "老王"
+    assert member.secondary_name == "达拉崩吧"
+    assert member.contextual_name == "达拉崩吧"
 
 
 def test_echo_member_card_carries_member_activity_without_recalculation() -> None:

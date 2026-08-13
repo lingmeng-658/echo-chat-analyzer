@@ -117,6 +117,10 @@ class EchoMemberCard:
     hourly_activity: tuple[ChartPoint, ...] = ()
     weekday_activity: tuple[ChartPoint, ...] = ()
     top_words: tuple[str, ...] = ()
+    primary_name: str | None = None
+    secondary_name: str | None = None
+    remark: str | None = None
+    contextual_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

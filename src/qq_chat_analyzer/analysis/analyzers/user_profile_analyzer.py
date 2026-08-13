@@ -48,6 +48,7 @@ class UserProfileAnalyzer:
         profiles = [
             UserProfile(
                 speaker=speaker,
+                speaker_key=speaker_stats.speaker_key or speaker,
                 message_count=speaker_stats.message_count,
                 message_share_percent=_share_percent(
                     speaker_stats.message_count,
@@ -69,6 +70,9 @@ class UserProfileAnalyzer:
                         speaker_stats.weekday_counts
                     )
                 ),
+                remark=speaker_stats.remark,
+                nickname=speaker_stats.nickname,
+                contextual_name=speaker_stats.contextual_name,
             )
             for speaker, speaker_stats in stats.items()
         ]
@@ -90,6 +94,10 @@ class _SpeakerStats:
         "weekday_counts",
         "text_lengths",
         "max_length",
+        "speaker_key",
+        "remark",
+        "nickname",
+        "contextual_name",
     )
 
     def __init__(self) -> None:
@@ -98,9 +106,24 @@ class _SpeakerStats:
         self.weekday_counts = [0] * DAYS_PER_WEEK
         self.text_lengths: list[int] = []
         self.max_length = 0
+        self.speaker_key: str | None = None
+        self.remark: str | None = None
+        self.nickname: str | None = None
+        self.contextual_name: str | None = None
 
     def add(self, message: ChatMessage) -> None:
         self.message_count += 1
+        if self.speaker_key is None:
+            self.speaker_key = _speaker_key(message)
+        self.remark = _merge_identity_field(self.remark, message.sender_remark)
+        self.nickname = _merge_identity_field(
+            self.nickname,
+            message.sender_nickname,
+        )
+        self.contextual_name = _merge_identity_field(
+            self.contextual_name,
+            message.sender_contextual_name,
+        )
 
         length = len(clean_text(message.text))
         if length > 0:
@@ -122,6 +145,23 @@ def _share_percent(count: int, total: int) -> float:
     if total <= 0:
         return 0.0
     return round(count / total * 100, 2)
+
+
+def _speaker_key(message: ChatMessage) -> str:
+    """Return the stable identity key, preferring the source sender id."""
+    sender_id = message.sender_id
+    if isinstance(sender_id, str) and sender_id.strip():
+        return sender_id.strip()
+    return message.sender
+
+
+def _merge_identity_field(current: str | None, candidate: str | None) -> str | None:
+    """Keep the first non-empty identity value seen for one profile."""
+    if isinstance(candidate, str) and candidate.strip():
+        value = candidate.strip()
+        if not current:
+            return value
+    return current
 
 
 def _speaker_top_words(

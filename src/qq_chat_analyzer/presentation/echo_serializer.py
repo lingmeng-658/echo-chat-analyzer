@@ -64,6 +64,10 @@ def _member_to_dict(member: EchoMemberCard) -> dict[str, object]:
     return {
         "speaker_key": member.speaker_key,
         "display_name": member.display_name,
+        "primary_name": member.primary_name,
+        "secondary_name": member.secondary_name,
+        "remark": member.remark,
+        "contextual_name": member.contextual_name,
         "is_viewer": member.is_viewer,
         "message_count": member.message_count,
         "message_share_percent": member.message_share_percent,
