@@ -1183,7 +1183,7 @@ def test_qq_connect_hides_backend_terms_behind_user_stage(qt_app, sources) -> No
 
     assert "正在启动QQ连接环境" in page._status_label.text()
     assert "NapCat" not in page._status_label.text()
-    assert "不要手动打开QQ" in page._hint_label.text()
+    assert "权限确认窗口" in page._hint_label.text()
 
 
 @pytest.mark.parametrize(
@@ -1705,13 +1705,19 @@ def test_wechat_guide_shows_status_confirmation(qt_app) -> None:
 
     assert page._wechat_guide_label.isVisibleTo(page) is True
     assert page._wechat_guide_key_label.isVisibleTo(page) is True
+    assert page._wechat_guide_note_label.isVisibleTo(page) is True
     assert "正在准备微信连接" in page._wechat_guide_label.text()
+    assert "请确保微信电脑版已安装" not in page._wechat_guide_label.text()
+    assert "如需查看微信数据目录" not in page._wechat_guide_label.text()
     assert "请保持微信停留在登录界面，不要点击进入微信" in (
         page._wechat_guide_key_label.text()
     )
     assert "不要进入聊天页面" in page._wechat_guide_key_label.text()
-    assert "\u4e0d\u4e0a\u4f20" in page._wechat_guide_key_label.text()
-    assert "\u4e0d\u4fdd\u5b58" in page._wechat_guide_key_label.text()
+    assert "\u4e0d\u4e0a\u4f20" not in page._wechat_guide_key_label.text()
+    assert "\u4e0d\u4fdd\u5b58" not in page._wechat_guide_key_label.text()
+    assert "等待微信登录" in page._wechat_guide_note_label.text()
+    assert "\u4e0d\u4e0a\u4f20" in page._wechat_guide_note_label.text()
+    assert "\u4e0d\u4fdd\u5b58" in page._wechat_guide_note_label.text()
     assert "LCA" not in page._wechat_guide_key_label.text()
 
 
@@ -1726,16 +1732,26 @@ def test_wechat_critical_login_hint_is_plain_text_with_wrap(
 
     assert page._wechat_guide_label.wordWrap() is True
     assert page._wechat_guide_key_label.wordWrap() is True
+    assert page._wechat_guide_note_label.wordWrap() is True
     assert page._wechat_guide_label.sizePolicy().horizontalPolicy() == (
         QSizePolicy.Policy.Expanding
     )
     assert page._wechat_guide_key_label.sizePolicy().horizontalPolicy() == (
         QSizePolicy.Policy.Expanding
     )
-    key_text = module._WECHAT_GUIDE_KEY
-    assert "请保持微信停留在登录界面，不要点击进入微信" in key_text
-    assert "<br>" not in key_text
-    assert "<span" not in key_text
+    assert page._wechat_guide_note_label.sizePolicy().horizontalPolicy() == (
+        QSizePolicy.Policy.Expanding
+    )
+    warning_text = module._WECHAT_GUIDE_WARNING
+    assert "请保持微信停留在登录界面，不要点击进入微信" in warning_text
+    assert "登录成功后，余音会自动继续" in warning_text
+    assert "<br>" not in warning_text
+    assert "<span" not in warning_text
+    note_text = module._WECHAT_GUIDE_NOTE
+    assert "\u4e0d\u4e0a\u4f20" in note_text
+    assert "\u4e0d\u4fdd\u5b58" in note_text
+    assert "<br>" not in note_text
+    assert "<span" not in note_text
 
 
 def test_wechat_auto_detected_root_continues_connect(qt_app) -> None:
@@ -3126,7 +3142,8 @@ def test_waiting_auth_state_shows_login_guide(qt_app, sources) -> None:
     text = page._qq_login_guide_label.text()
     assert "等待QQ登录" in text
     assert "请扫码登录QQ" in text
-    assert "不要手动启动QQ" in text
+    assert "QQ主窗口可能不会正常显示" in text
+    assert "不要手动启动QQ" not in text
     lowered = text.lower()
     for forbidden in ("QCE", "NapCat", "API", "token", "runtime"):
         assert forbidden.lower() not in lowered
@@ -3154,6 +3171,26 @@ def test_error_state_shows_a_user_safe_message(qt_app, sources) -> None:
     assert "\u65e0\u6cd5\u8fde\u63a5 QQ\u3002" in page._status_label.text()
     assert page._qq_connect_button.isEnabled() is True
     assert page._qq_connect_button.text() == "重新开始"
+
+
+def test_qq_error_status_label_uses_error_color(qt_app, sources) -> None:
+    page = _qq_page_in_state(
+        qt_app,
+        sources,
+        _qq_snapshot("error", message="无法连接 QQ。"),
+    )
+
+    assert "#c2410c" in page._status_label.styleSheet()
+
+
+def test_qq_connected_status_label_uses_normal_style(qt_app, sources) -> None:
+    page = _qq_page_in_state(
+        qt_app,
+        sources,
+        _qq_snapshot("connected"),
+    )
+
+    assert "#c2410c" not in page._status_label.styleSheet()
 
 
 def test_connected_state_loads_sessions(qt_app, sources) -> None:
@@ -3574,7 +3611,7 @@ def test_return_to_source_selection_cancels_without_stopping_qq(
     assert page._status_label.text() == ""
 
 
-def test_qq_connect_shows_first_run_permission_and_privacy_hint(
+def test_qq_connect_shows_first_run_permission_hint(
     qt_app,
     sources,
 ) -> None:
@@ -3590,8 +3627,7 @@ def test_qq_connect_shows_first_run_permission_and_privacy_hint(
     assert "权限确认窗口" in text
     assert "内置的 QQ 数据读取组件" in text
     assert "请允许它运行" in text
-    assert "仅在本机处理" in text
-    assert "不会上传" in text
+    assert "仅在本机处理" not in text
 
 
 def test_wechat_guide_image_load_failure_is_safe(qt_app, tmp_path: Path) -> None:
@@ -3671,17 +3707,19 @@ def test_wechat_guide_text_has_no_html_tags(qt_app) -> None:
     texts = [
         page._wechat_guide_label.text(),
         page._wechat_guide_key_label.text(),
+        page._wechat_guide_note_label.text(),
     ]
     for text in texts:
         assert "<br" not in text
         assert "<span" not in text
         assert ">" not in text
     assert "正在准备微信连接" in texts[0]
-    assert "等待微信登录" in texts[1]
+    assert "等待微信登录" in texts[2]
     assert (
         "请保持微信停留在登录界面，不要点击进入微信"
         in texts[1]
     )
+    assert "\u4e0d\u4e0a\u4f20" in texts[2]
 
 
 def test_wechat_guide_uses_horizontal_layout(qt_app) -> None:

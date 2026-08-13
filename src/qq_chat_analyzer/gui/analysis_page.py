@@ -107,20 +107,25 @@ _QQ_CONNECT_PREPARE = "\u6b63\u5728\u81ea\u52a8\u8fde\u63a5 QQ\uff0c\u8bf7\u7a0d
 _QQ_CONNECT_FAILED = "QQ \u8fde\u63a5\u5931\u8d25"
 _QQ_CONNECT_MIN_DISPLAY_MS = 500
 _QQ_STATUS_POLL_INTERVAL_MS = 2000
+_QQ_STATUS_STYLE_BASE = (
+    "padding: 8px 10px; border-radius: 6px; "
+    "background: palette(alternate-base);"
+)
+_QQ_STATUS_ERROR_STYLE = (
+    "padding: 8px 10px; border-radius: 6px; "
+    "background: palette(alternate-base); "
+    "color: #c2410c; font-weight: 600;"
+)
 _QQ_QRCODE_SIZE = 240
 _QQ_QRCODE_RELATIVE_PATH = Path("cache") / "qrcode.png"
 _QQ_LOGIN_GUIDE = (
     "等待QQ登录\n\n请扫码登录QQ。\n"
-    "QQ主窗口可能不会正常显示，这是正常现象。\n\n"
-    "不要手动启动QQ，也不要关闭连接窗口。\n"
-    "登录成功后，余音会自动继续。"
+    "QQ主窗口可能不会正常显示，这是正常现象。"
 )
 _QQ_STARTING_GUIDE = (
     "首次连接 QQ 时，系统可能弹出权限确认窗口。\n\n"
     "这是 Echo 内置的 QQ 数据读取组件，用于分析你的聊天记录，"
-    "请允许它运行。\n"
-    "聊天数据仅在本机处理，不会上传。\n\n"
-    "请不要手动打开QQ。余音会自动启动QQ环境，随后提示扫码登录。"
+    "请允许它运行。"
 )
 _QQ_STATE_DISCONNECTED = "disconnected"
 _QQ_STATE_INITIALIZING = "initializing"
@@ -161,14 +166,17 @@ _WECHAT_CONNECT_RETRY_HINT = (
     "请保持微信电脑版打开，在余音中重新点击连接，并按提示完成微信登录。"
 )
 _WECHAT_GUIDE_STATUS = (
-    "正在准备微信连接\n\n请确保微信电脑版已安装。\n"
-    "如需查看微信数据目录，完成后请退出微信账号，返回登录界面。"
+    "正在准备微信连接"
 )
 _WECHAT_GUIDE_KEY = (
-    "等待微信登录\n\n"
+    "等待微信登录"
+)
+_WECHAT_GUIDE_WARNING = (
     "请保持微信停留在登录界面，不要点击进入微信\n"
     "不要进入聊天页面、切换账号或关闭微信。\n"
-    "登录成功后，余音会自动继续。\n"
+    "登录成功后，余音会自动继续。"
+)
+_WECHAT_GUIDE_NOTE = (
     "聊天数据仅在本机读取，不上传、不保存额外副本。"
 )
 _WECHAT_GUIDE_DIRECTORY_MISSING = (
@@ -273,10 +281,7 @@ class AnalysisPage(QWidget):
         self._status_label = QLabel("")
         self._status_label.setWordWrap(True)
         self._status_label.setVisible(False)
-        self._status_label.setStyleSheet(
-            "padding: 8px 10px; border-radius: 6px; "
-            "background: palette(alternate-base);"
-        )
+        self._status_label.setStyleSheet(_QQ_STATUS_STYLE_BASE)
         layout.addWidget(self._status_label)
 
         self._wechat_connect_button = QPushButton(_WECHAT_CONNECT_LABEL)
@@ -325,10 +330,25 @@ class AnalysisPage(QWidget):
             "color: #c2410c; font-weight: 600;"
         )
 
+        self._wechat_guide_note_label = QLabel("")
+        self._wechat_guide_note_label.setWordWrap(True)
+        self._wechat_guide_note_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        self._wechat_guide_note_label.setVisible(False)
+        self._wechat_guide_note_label.setStyleSheet(
+            "padding: 10px; border-radius: 6px; "
+            "background: palette(alternate-base);"
+        )
+
         self._wechat_guide_text_column = QVBoxLayout()
         self._wechat_guide_text_column.setSpacing(8)
         self._wechat_guide_text_column.addWidget(
             self._wechat_guide_label, stretch=1
+        )
+        self._wechat_guide_text_column.addWidget(
+            self._wechat_guide_note_label, stretch=1
         )
         self._wechat_guide_text_column.addWidget(
             self._wechat_guide_key_label, stretch=1
@@ -569,6 +589,7 @@ class AnalysisPage(QWidget):
         self._session_list.clear()
         self._session_box.setVisible(False)
         self._status_label.clear()
+        self._status_label.setStyleSheet(_QQ_STATUS_STYLE_BASE)
         self._status_label.setToolTip("")
         self._status_label.setVisible(False)
         self._file_button.setVisible(False)
@@ -655,6 +676,7 @@ class AnalysisPage(QWidget):
             self._wechat_connect_button.setText(_WECHAT_CONNECT_LABEL)
             self._wechat_connect_button.setVisible(not available)
         elif source == ChatSource.QQ:
+            self._status_label.setStyleSheet(_QQ_STATUS_STYLE_BASE)
             self._qq_connect_button.setText(_QQ_CONNECT_LABEL)
             self._qq_connect_button.setVisible(not available)
             self._qq_connect_button.setEnabled(True)
@@ -697,7 +719,11 @@ class AnalysisPage(QWidget):
             status_parts.append(_WECHAT_GUIDE_DIRECTORY_MISSING)
         self._wechat_guide_label.setText("\n\n".join(status_parts))
         self._wechat_guide_label.setVisible(True)
-        self._wechat_guide_key_label.setText(_WECHAT_GUIDE_KEY)
+        self._wechat_guide_note_label.setText(
+            f"{_WECHAT_GUIDE_KEY}\n\n{_WECHAT_GUIDE_NOTE}"
+        )
+        self._wechat_guide_note_label.setVisible(True)
+        self._wechat_guide_key_label.setText(_WECHAT_GUIDE_WARNING)
         self._wechat_guide_key_label.setVisible(True)
 
         self._refresh_wechat_guide_image()
@@ -730,6 +756,8 @@ class AnalysisPage(QWidget):
     def _hide_wechat_guide(self) -> None:
         self._wechat_guide_label.clear()
         self._wechat_guide_label.setVisible(False)
+        self._wechat_guide_note_label.clear()
+        self._wechat_guide_note_label.setVisible(False)
         self._wechat_guide_key_label.clear()
         self._wechat_guide_key_label.setVisible(False)
         self._hide_wechat_guide_image()
@@ -760,6 +788,7 @@ class AnalysisPage(QWidget):
     def refresh_qq_status(self, *, load_sessions_on_ready: bool = False) -> None:
         """Ask the connection manager, through the facade, for QQ state."""
         self._status_label.setVisible(True)
+        self._status_label.setStyleSheet(_QQ_STATUS_STYLE_BASE)
         self._status_label.setText(_QQ_STATUS_CHECKING)
         self._status_label.setToolTip("")
         self._show_session_placeholder(_SESSION_CONNECTING_TITLE)
@@ -793,6 +822,11 @@ class AnalysisPage(QWidget):
         message = _snapshot_message(snapshot)
         action_hint = _snapshot_hint(snapshot)
         self._last_qq_status_message = message
+        self._status_label.setStyleSheet(
+            _QQ_STATUS_ERROR_STYLE
+            if state == _QQ_STATE_ERROR
+            else _QQ_STATUS_STYLE_BASE
+        )
 
         self._status_label.setText(f"{_snapshot_prefix(snapshot)}{message}")
         self._status_label.setToolTip(action_hint)
@@ -1009,6 +1043,7 @@ class AnalysisPage(QWidget):
         self._show_qq_error(_qq_error_title(code), message)
 
     def _show_qq_error(self, title: str, message: str) -> None:
+        self._status_label.setStyleSheet(_QQ_STATUS_ERROR_STYLE)
         self._status_label.setText(_DISCONNECTED_PREFIX + title)
         self._status_label.setToolTip(message)
         self._status_label.setVisible(True)
