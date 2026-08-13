@@ -45,6 +45,7 @@ from .qq_connection_service import (
 from .qq_environment_config import QQEnvironmentConfig
 from .qq_export_import_service import QQExportImportRequest
 from .qq_setup_service import QQSetupStatus
+from .report_history import InputIdentitySummary
 from .wechat_connection_service import WeChatConnectionStatus
 from .wechat_environment_config import WeChatEnvironmentConfig
 from .wechat_export_import_service import WeChatExportImportRequest
@@ -701,6 +702,7 @@ class ChatAnalyzerFacade:
         history_record_id: str | None = None
         if self._report_history_manager is not None:
             try:
+                diagnostic_counts = getattr(result, "diagnostic_counts", None)
                 history_record = self._report_history_manager.save_analysis(
                     source=source.value,
                     session_name=(
@@ -715,6 +717,40 @@ class ChatAnalyzerFacade:
                     scope_end=scope.end_date,
                     report_generated_at=report_generated_at,
                     snapshot_id=snapshot_id,
+                    session_type=(
+                        session.session_type if session is not None else None
+                    ),
+                    input_identity_summary=_input_identity_summary(
+                        source,
+                        session,
+                        snapshot_id=snapshot_id,
+                        snapshot_reused=snapshot_reused,
+                    ),
+                    raw_message_count=getattr(
+                        diagnostic_counts,
+                        "raw_message_count",
+                        None,
+                    ),
+                    imported_message_count=getattr(
+                        diagnostic_counts,
+                        "imported_message_count",
+                        None,
+                    ),
+                    scope_message_count=getattr(
+                        diagnostic_counts,
+                        "scope_message_count",
+                        None,
+                    ),
+                    filtered_message_count=getattr(
+                        diagnostic_counts,
+                        "filtered_message_count",
+                        None,
+                    ),
+                    analyzed_message_count=getattr(
+                        diagnostic_counts,
+                        "analyzed_message_count",
+                        None,
+                    ),
                 )
             except Exception:
                 _LOGGER.exception(
@@ -1023,6 +1059,30 @@ def _coerce_source(source: Any) -> ChatSource:
         return ChatSource(source)
     except (ValueError, TypeError):
         raise UnknownChatSource(source) from None
+
+
+def _input_identity_summary(
+    source: ChatSource,
+    session: SessionInfo | None,
+    *,
+    snapshot_id: str | None,
+    snapshot_reused: bool,
+) -> InputIdentitySummary | None:
+    """Describe acquisition state without repeating input identity."""
+    if session is None:
+        return None
+    if snapshot_id is not None:
+        capture_mode = "snapshot"
+    elif source is ChatSource.QQ:
+        capture_mode = "provider_export"
+    elif source is ChatSource.WECHAT:
+        capture_mode = "live_database"
+    else:
+        return None
+    return InputIdentitySummary(
+        snapshot_reused=snapshot_reused,
+        capture_mode=capture_mode,
+    )
 
 
 def _to_session_info(source: ChatSource, raw_session: Any) -> SessionInfo:

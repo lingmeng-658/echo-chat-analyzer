@@ -307,6 +307,13 @@ def _result(message_count: int = 2):
         status=dto.AnalysisStatus.COMPLETED,
         processed_message_count=message_count,
         valid_text_count=message_count,
+        diagnostic_counts=dto.AnalysisDiagnosticCounts(
+            raw_message_count=message_count + 4,
+            imported_message_count=message_count + 2,
+            scope_message_count=message_count,
+            filtered_message_count=message_count - 1,
+            analyzed_message_count=message_count - 1,
+        ),
         top_words=(dto.WordFrequencyDTO(word="deck", count=3),),
         reports=_reports(message_count),
     )
@@ -1315,13 +1322,27 @@ def test_successful_qq_analysis_links_history_to_snapshot(tmp_path: Path) -> Non
         tmp_path / "snapshot-history.jsonl"
     )
     facade = _facade(
-        qq_service=_SnapshotQQService(acquisition=acquisition),
+        qq_service=_SnapshotQQService(
+            acquisition=acquisition,
+            groups=[_FakeQQGroup("fictional-session", "Fictional Group")],
+        ),
         report_history_manager=history_manager,
     )
 
     facade.analyze_session(module.ChatSource.QQ, "fictional-session")
 
-    assert history_manager.list_records()[0].snapshot_id == snapshot_id
+    record = history_manager.list_records()[0]
+    assert record.snapshot_id == snapshot_id
+    assert record.session_type == "group"
+    assert record.input_identity_summary == history_module.InputIdentitySummary(
+        snapshot_reused=False,
+        capture_mode="snapshot",
+    )
+    assert record.raw_message_count == 6
+    assert record.imported_message_count == 4
+    assert record.scope_message_count == 2
+    assert record.filtered_message_count == 1
+    assert record.analyzed_message_count == 1
 
 
 def test_successful_wechat_analysis_saves_history_metadata(
@@ -1356,6 +1377,16 @@ def test_successful_wechat_analysis_saves_history_metadata(
     assert record.scope_start is None
     assert record.scope_end is None
     assert record.snapshot_id is None
+    assert record.session_type == "friend"
+    assert record.input_identity_summary == history_module.InputIdentitySummary(
+        snapshot_reused=False,
+        capture_mode="live_database",
+    )
+    assert record.raw_message_count == 12
+    assert record.imported_message_count == 10
+    assert record.scope_message_count == 8
+    assert record.filtered_message_count == 7
+    assert record.analyzed_message_count == 7
     assert outcome.result is result
     assert outcome.history_saved is True
 

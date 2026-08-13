@@ -133,3 +133,15 @@ def test_analysis_result_uses_immutable_nested_dtos() -> None:
     assert not hasattr(result, "__dict__")
     with pytest.raises(dataclasses.FrozenInstanceError):
         word.count = 4
+
+
+def test_analysis_result_diagnostic_counts_are_optional() -> None:
+    application = _application_module()
+
+    result = application.AnalysisResultDTO(
+        status=application.AnalysisStatus.NO_TOKENS,
+        processed_message_count=1,
+        valid_text_count=1,
+    )
+
+    assert result.diagnostic_counts is None

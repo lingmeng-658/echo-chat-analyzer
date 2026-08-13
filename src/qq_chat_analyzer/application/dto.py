@@ -63,12 +63,24 @@ class ArtifactDTO:
 
 
 @dataclass(frozen=True, slots=True)
+class AnalysisDiagnosticCounts:
+    """Privacy-safe message counts captured at analysis stage boundaries."""
+
+    raw_message_count: int | None = None
+    imported_message_count: int | None = None
+    scope_message_count: int | None = None
+    filtered_message_count: int | None = None
+    analyzed_message_count: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class AnalysisResultDTO:
     """Privacy-safe result returned by the analysis use case."""
 
     status: AnalysisStatus
     processed_message_count: int
     valid_text_count: int
+    diagnostic_counts: AnalysisDiagnosticCounts | None = None
     top_words: tuple[WordFrequencyDTO, ...] = ()
     artifacts: tuple[ArtifactDTO, ...] = ()
     reports: AnalysisReports = field(

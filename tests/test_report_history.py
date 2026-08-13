@@ -7,6 +7,7 @@ from datetime import date, datetime, timezone
 import pytest
 
 from qq_chat_analyzer.application.report_history import (
+    InputIdentitySummary,
     ReportHistoryManager,
     ReportHistoryWriteError,
 )
@@ -31,6 +32,13 @@ def _save_record(
         tzinfo=timezone.utc,
     ),
     snapshot_id: str | None = None,
+    session_type: str | None = None,
+    input_identity_summary: InputIdentitySummary | None = None,
+    raw_message_count: int | None = None,
+    imported_message_count: int | None = None,
+    scope_message_count: int | None = None,
+    filtered_message_count: int | None = None,
+    analyzed_message_count: int | None = None,
 ):
     return manager.save_analysis(
         source=source,
@@ -42,6 +50,13 @@ def _save_record(
         scope_end=scope_end,
         report_generated_at=report_generated_at,
         snapshot_id=snapshot_id,
+        session_type=session_type,
+        input_identity_summary=input_identity_summary,
+        raw_message_count=raw_message_count,
+        imported_message_count=imported_message_count,
+        scope_message_count=scope_message_count,
+        filtered_message_count=filtered_message_count,
+        analyzed_message_count=analyzed_message_count,
     )
 
 
@@ -137,6 +152,13 @@ def test_jsonl_serialization_uses_metadata_allowlist_only(tmp_path):
         "scope_end",
         "report_generated_at",
         "snapshot_id",
+        "session_type",
+        "input_identity_summary",
+        "raw_message_count",
+        "imported_message_count",
+        "scope_message_count",
+        "filtered_message_count",
+        "analyzed_message_count",
     }
     serialized = history_path.read_text(encoding="utf-8").lower()
     for forbidden in (
@@ -172,6 +194,34 @@ def test_new_history_record_persists_optional_snapshot_id(tmp_path):
     assert manager.list_records()[0].snapshot_id == saved.snapshot_id
 
 
+def test_new_history_record_persists_diagnostic_metadata(tmp_path):
+    manager = ReportHistoryManager(tmp_path / "history.jsonl")
+    summary = InputIdentitySummary(
+        snapshot_reused=True,
+        capture_mode="snapshot",
+    )
+
+    saved = _save_record(
+        manager,
+        session_type="group",
+        input_identity_summary=summary,
+        raw_message_count=166,
+        imported_message_count=109,
+        scope_message_count=100,
+        filtered_message_count=95,
+        analyzed_message_count=95,
+    )
+
+    assert saved.session_type == "group"
+    assert saved.input_identity_summary == summary
+    assert saved.raw_message_count == 166
+    assert saved.imported_message_count == 109
+    assert saved.scope_message_count == 100
+    assert saved.filtered_message_count == 95
+    assert saved.analyzed_message_count == 95
+    assert manager.list_records() == (saved,)
+
+
 def test_legacy_history_row_without_snapshot_id_remains_readable(tmp_path):
     history_path = tmp_path / "history.jsonl"
     history_path.write_text(
@@ -198,6 +248,41 @@ def test_legacy_history_row_without_snapshot_id_remains_readable(tmp_path):
     assert len(records) == 1
     assert records[0].analysis_id == "legacy-analysis"
     assert records[0].snapshot_id is None
+    assert records[0].session_type is None
+    assert records[0].input_identity_summary is None
+    assert records[0].raw_message_count is None
+    assert records[0].imported_message_count is None
+    assert records[0].scope_message_count is None
+    assert records[0].filtered_message_count is None
+    assert records[0].analyzed_message_count is None
+
+
+@pytest.mark.parametrize("invalid_count", [-1, True])
+def test_invalid_diagnostic_count_refuses_append(tmp_path, invalid_count):
+    history_path = tmp_path / "history.jsonl"
+    manager = ReportHistoryManager(history_path)
+
+    with pytest.raises(ReportHistoryWriteError):
+        _save_record(manager, raw_message_count=invalid_count)
+
+    assert not history_path.exists()
+
+
+@pytest.mark.parametrize("capture_mode", ["file", "", "snapshot/path"])
+def test_invalid_capture_mode_refuses_append(tmp_path, capture_mode):
+    history_path = tmp_path / "history.jsonl"
+    manager = ReportHistoryManager(history_path)
+
+    with pytest.raises(ReportHistoryWriteError):
+        _save_record(
+            manager,
+            input_identity_summary=InputIdentitySummary(
+                snapshot_reused=False,
+                capture_mode=capture_mode,
+            ),
+        )
+
+    assert not history_path.exists()
 
 
 def test_malformed_json_returns_empty_history_and_logs_warning(

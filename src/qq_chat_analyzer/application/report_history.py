@@ -26,11 +26,30 @@ _LEGACY_RECORD_KEYS = {
     "scope_end",
     "report_generated_at",
 }
-_RECORD_KEYS = _LEGACY_RECORD_KEYS | {"snapshot_id"}
+_SNAPSHOT_RECORD_KEYS = _LEGACY_RECORD_KEYS | {"snapshot_id"}
+_DIAGNOSTIC_KEYS = {
+    "session_type",
+    "input_identity_summary",
+    "raw_message_count",
+    "imported_message_count",
+    "scope_message_count",
+    "filtered_message_count",
+    "analyzed_message_count",
+}
+_RECORD_KEYS = _SNAPSHOT_RECORD_KEYS | _DIAGNOSTIC_KEYS
+_CAPTURE_MODES = frozenset({"snapshot", "provider_export", "live_database"})
 
 
 class _HistoryFileError(ValueError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class InputIdentitySummary:
+    """Non-identifying state describing how analysis input was acquired."""
+
+    snapshot_reused: bool
+    capture_mode: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +69,13 @@ class AnalysisHistoryRecord:
         default_factory=lambda: datetime.now(timezone.utc),
     )
     snapshot_id: str | None = None
+    session_type: str | None = None
+    input_identity_summary: InputIdentitySummary | None = None
+    raw_message_count: int | None = None
+    imported_message_count: int | None = None
+    scope_message_count: int | None = None
+    filtered_message_count: int | None = None
+    analyzed_message_count: int | None = None
 
 
 class ReportHistoryWriteError(RuntimeError):
@@ -74,6 +100,13 @@ class ReportHistoryManager:
         scope_end: date | None,
         report_generated_at: datetime,
         snapshot_id: str | None = None,
+        session_type: str | None = None,
+        input_identity_summary: InputIdentitySummary | None = None,
+        raw_message_count: int | None = None,
+        imported_message_count: int | None = None,
+        scope_message_count: int | None = None,
+        filtered_message_count: int | None = None,
+        analyzed_message_count: int | None = None,
     ) -> AnalysisHistoryRecord:
         """Create and append one metadata-only history record."""
         record = AnalysisHistoryRecord(
@@ -88,6 +121,13 @@ class ReportHistoryManager:
             scope_end=scope_end,
             report_generated_at=report_generated_at,
             snapshot_id=snapshot_id,
+            session_type=session_type,
+            input_identity_summary=input_identity_summary,
+            raw_message_count=raw_message_count,
+            imported_message_count=imported_message_count,
+            scope_message_count=scope_message_count,
+            filtered_message_count=filtered_message_count,
+            analyzed_message_count=analyzed_message_count,
         )
         try:
             payload = _record_to_payload(record)
@@ -174,12 +214,27 @@ def _record_to_payload(record: AnalysisHistoryRecord) -> dict[str, object]:
         ),
         "report_generated_at": record.report_generated_at.isoformat(),
         "snapshot_id": record.snapshot_id,
+        "session_type": record.session_type,
+        "input_identity_summary": (
+            {
+                "snapshot_reused": record.input_identity_summary.snapshot_reused,
+                "capture_mode": record.input_identity_summary.capture_mode,
+            }
+            if record.input_identity_summary is not None
+            else None
+        ),
+        "raw_message_count": record.raw_message_count,
+        "imported_message_count": record.imported_message_count,
+        "scope_message_count": record.scope_message_count,
+        "filtered_message_count": record.filtered_message_count,
+        "analyzed_message_count": record.analyzed_message_count,
     }
 
 
 def _record_from_payload(payload: dict[str, object]) -> AnalysisHistoryRecord:
     if not isinstance(payload, dict) or set(payload) not in (
         _LEGACY_RECORD_KEYS,
+        _SNAPSHOT_RECORD_KEYS,
         _RECORD_KEYS,
     ):
         raise _HistoryFileError("Unexpected history record fields.")
@@ -199,6 +254,17 @@ def _record_from_payload(payload: dict[str, object]) -> AnalysisHistoryRecord:
     ):
         raise _HistoryFileError("Invalid history message count.")
 
+    diagnostic_counts = {
+        key: _optional_count(payload.get(key))
+        for key in (
+            "raw_message_count",
+            "imported_message_count",
+            "scope_message_count",
+            "filtered_message_count",
+            "analyzed_message_count",
+        )
+    }
+
     return AnalysisHistoryRecord(
         analysis_id=_required_string(payload["analysis_id"]),
         created_at=_aware_datetime(payload["created_at"]),
@@ -211,6 +277,11 @@ def _record_from_payload(payload: dict[str, object]) -> AnalysisHistoryRecord:
         scope_end=scope_end,
         report_generated_at=_aware_datetime(payload["report_generated_at"]),
         snapshot_id=_optional_string(payload.get("snapshot_id")),
+        session_type=_optional_string(payload.get("session_type")),
+        input_identity_summary=_identity_summary(
+            payload.get("input_identity_summary")
+        ),
+        **diagnostic_counts,
     )
 
 
@@ -242,6 +313,29 @@ def _optional_string(value: object) -> str | None:
     return value
 
 
+def _optional_count(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise _HistoryFileError("Invalid diagnostic message count.")
+    return value
+
+
+def _identity_summary(value: object) -> InputIdentitySummary | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {
+        "snapshot_reused",
+        "capture_mode",
+    }:
+        raise _HistoryFileError("Invalid input identity summary.")
+    snapshot_reused = value["snapshot_reused"]
+    capture_mode = value["capture_mode"]
+    if not isinstance(snapshot_reused, bool) or capture_mode not in _CAPTURE_MODES:
+        raise _HistoryFileError("Invalid input identity summary.")
+    return InputIdentitySummary(snapshot_reused, capture_mode)
+
+
 def _optional_date(value: object) -> date | None:
     if value is None:
         return None
@@ -267,6 +361,7 @@ def _aware_datetime(value: object) -> datetime:
 
 __all__ = [
     "AnalysisHistoryRecord",
+    "InputIdentitySummary",
     "ReportHistoryManager",
     "ReportHistoryWriteError",
 ]

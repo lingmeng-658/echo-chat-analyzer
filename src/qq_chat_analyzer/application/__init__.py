@@ -25,6 +25,7 @@ from .chat_data_snapshot import (
     SnapshotValidation,
 )
 from .dto import (
+    AnalysisDiagnosticCounts,
     AnalysisRequestDTO,
     AnalysisResultDTO,
     AnalysisStatus,
@@ -119,6 +120,7 @@ __all__ = [
     "ActivityReport",
     "AnalysisApplicationService",
     "AnalysisConfig",
+    "AnalysisDiagnosticCounts",
     "AnalysisHistoryRecord",
     "AnalysisOutcome",
     "AnalysisReports",
