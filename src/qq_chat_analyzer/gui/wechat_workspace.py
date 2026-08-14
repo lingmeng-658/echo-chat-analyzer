@@ -20,6 +20,12 @@ from PySide6.QtWidgets import (
 from ..application.facade import ChatSource, WeChatEnvironmentConfig
 from ..resources import default_wechat_login_guide_path
 from .session_analysis_panel import SessionAnalysisPanel
+from .theme import (
+    GUIDE_STYLE,
+    GUIDE_STYLE_EMPHASIS,
+    STATUS_STYLE_BASE,
+    STATUS_STYLE_ERROR,
+)
 from .wechat_setup_dialog import WeChatSetupDialog
 from .workers import submit
 
@@ -78,15 +84,6 @@ _WECHAT_GUIDE_IMAGE_WIDTH = 160
 _WECHAT_GUIDE_IMAGE_HEIGHT = 220
 _CONNECTED_PREFIX = "\U0001F7E2 "
 _DISCONNECTED_PREFIX = "\U0001F534 "
-_STATUS_STYLE_BASE = (
-    "padding: 8px 10px; border-radius: 6px; "
-    "background: palette(alternate-base);"
-)
-_STATUS_STYLE_ERROR = (
-    "padding: 8px 10px; border-radius: 6px; "
-    "background: palette(alternate-base); "
-    "color: #c2410c; font-weight: 600;"
-)
 _CONNECTION_STATUS_LOADING = "正在检测 {source} 连接状态..."
 _SESSION_CONNECTING_TITLE = "正在连接数据源..."
 _SESSION_READING_TITLE = "正在读取聊天数据..."
@@ -126,7 +123,7 @@ class WeChatWorkspace(QWidget):
         self._status_label = QLabel("")
         self._status_label.setWordWrap(True)
         self._status_label.setVisible(False)
-        self._status_label.setStyleSheet(_STATUS_STYLE_BASE)
+        self._status_label.setStyleSheet(STATUS_STYLE_BASE)
         main_layout.addWidget(self._status_label)
 
         self._wechat_connect_button = QPushButton(_WECHAT_CONNECT_LABEL)
@@ -163,10 +160,7 @@ class WeChatWorkspace(QWidget):
             QSizePolicy.Policy.Preferred,
         )
         self._wechat_guide_label.setVisible(False)
-        self._wechat_guide_label.setStyleSheet(
-            "padding: 10px; border-radius: 6px; "
-            "background: palette(alternate-base);"
-        )
+        self._wechat_guide_label.setStyleSheet(GUIDE_STYLE)
 
         self._wechat_guide_key_label = QLabel("")
         self._wechat_guide_key_label.setWordWrap(True)
@@ -175,11 +169,7 @@ class WeChatWorkspace(QWidget):
             QSizePolicy.Policy.Preferred,
         )
         self._wechat_guide_key_label.setVisible(False)
-        self._wechat_guide_key_label.setStyleSheet(
-            "padding: 10px; border-radius: 6px; "
-            "background: palette(alternate-base); "
-            "color: #c2410c; font-weight: 600;"
-        )
+        self._wechat_guide_key_label.setStyleSheet(GUIDE_STYLE_EMPHASIS)
 
         self._wechat_guide_note_label = QLabel("")
         self._wechat_guide_note_label.setWordWrap(True)
@@ -188,10 +178,7 @@ class WeChatWorkspace(QWidget):
             QSizePolicy.Policy.Preferred,
         )
         self._wechat_guide_note_label.setVisible(False)
-        self._wechat_guide_note_label.setStyleSheet(
-            "padding: 10px; border-radius: 6px; "
-            "background: palette(alternate-base);"
-        )
+        self._wechat_guide_note_label.setStyleSheet(GUIDE_STYLE)
 
         self._wechat_guide_text_column = QVBoxLayout()
         self._wechat_guide_text_column.setSpacing(8)

@@ -28,6 +28,7 @@ from .dashboard_page import DashboardPage
 from .home_page import HomePage
 from .local_data_page import LocalDataPage
 from .qq_workspace import QQWorkspace
+from .theme import WINDOW_TITLE_STYLE
 from .wechat_workspace import WeChatWorkspace
 
 
@@ -92,7 +93,7 @@ class MainWindow(QMainWindow):
         self._home_button.setVisible(False)
         header_layout.addWidget(self._home_button)
         self._title_label = QLabel(WINDOW_TITLE)
-        self._title_label.setStyleSheet("font-size: 18px; font-weight: bold;")
+        self._title_label.setStyleSheet(WINDOW_TITLE_STYLE)
         header_layout.addWidget(self._title_label)
         header_layout.addStretch(1)
         header_layout.addWidget(self.analysis_page._status_label)

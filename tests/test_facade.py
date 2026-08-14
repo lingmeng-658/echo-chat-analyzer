@@ -2407,6 +2407,14 @@ class _StubSnapshotManager:
             snapshot=removed,
         )
 
+    def remove_all_payloads(self):
+        removed = 0
+        for snapshot in list(self._snapshots):
+            validation = self.remove_payload(snapshot.id)
+            if validation.snapshot is not None:
+                removed += 1
+        return removed
+
 
 def test_facade_lists_snapshots_through_the_application_boundary() -> None:
     module = _facade_module()
@@ -2463,6 +2471,38 @@ def test_facade_remove_missing_snapshot_returns_none_without_error() -> None:
     facade = _facade(snapshot_manager=_StubSnapshotManager())
 
     assert facade.remove_snapshot("missing") is None
+
+
+def test_facade_removes_all_snapshot_payloads() -> None:
+    first = _snapshot("snap-1", size=10)
+    second = _snapshot("snap-2", size=20)
+    manager = _StubSnapshotManager(
+        snapshots=[first, second],
+        validations={
+            first.id: _validation(first),
+            second.id: _validation(second),
+        },
+    )
+    facade = _facade(snapshot_manager=manager)
+
+    assert facade.remove_all_snapshots() == 2
+    assert manager.remove_calls == ["snap-1", "snap-2"]
+
+
+def test_facade_remove_all_snapshot_errors_become_facade_error() -> None:
+    module = _facade_module()
+    snapshot = _snapshot("snap-1", size=10)
+    manager = _StubSnapshotManager(
+        snapshots=[snapshot],
+        errors={"remove": RuntimeError("boom")},
+    )
+    facade = _facade(snapshot_manager=manager)
+
+    with pytest.raises(module.FacadeError) as captured:
+        facade.remove_all_snapshots()
+
+    assert captured.value.code == "snapshot_clear_failed"
+    assert captured.value.public_message
 
 
 def test_facade_reports_available_snapshot_storage_usage() -> None:

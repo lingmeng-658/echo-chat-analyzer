@@ -110,6 +110,7 @@ class StubFacade:
         snapshot_storage_usage=0,
         snapshot_error=None,
         remove_snapshot_error=None,
+        remove_all_snapshots_error=None,
         clear_history_error=None,
     ):
         self._sources = tuple(sources)
@@ -133,6 +134,7 @@ class StubFacade:
         self._snapshot_storage_usage = snapshot_storage_usage
         self._snapshot_error = snapshot_error
         self._remove_snapshot_error = remove_snapshot_error
+        self._remove_all_snapshots_error = remove_all_snapshots_error
         self._clear_history_error = clear_history_error
         self.list_sessions_calls: list[object] = []
         self.get_connection_status_calls: list[object] = []
@@ -162,6 +164,7 @@ class StubFacade:
         self.list_snapshots_calls: list[tuple] = []
         self.validate_snapshot_calls: list[object] = []
         self.remove_snapshot_calls: list[object] = []
+        self.remove_all_snapshots_calls: list[object] = []
         self.get_snapshot_storage_usage_calls: list[object] = []
 
     def list_analysis_history(self):
@@ -232,6 +235,14 @@ class StubFacade:
         ]
         self._snapshot_storage_usage = 0
         return removed
+
+    def remove_all_snapshots(self):
+        self.remove_all_snapshots_calls.append(1)
+        if self._remove_all_snapshots_error is not None:
+            raise self._remove_all_snapshots_error
+        self._snapshots = []
+        self._snapshot_storage_usage = 0
+        return 0
 
     def get_snapshot_storage_usage(self):
         self.get_snapshot_storage_usage_calls.append(1)
@@ -5597,6 +5608,163 @@ def test_local_data_delete_failure_shows_public_message(
 
     assert window.local_data_page._status_label.text() == "删除快照失败，请重试。"
     assert window.local_data_page._snapshot_table.rowCount() == 1
+
+
+def test_local_data_snapshot_table_supports_multi_select(
+    qt_app,
+    sources,
+) -> None:
+    from PySide6.QtWidgets import QAbstractItemView
+
+    window = _main_window(
+        qt_app,
+        StubFacade(
+            sources=sources,
+            snapshots=[_gui_snapshot("snap-1"), _gui_snapshot("snap-2")],
+        ),
+    )
+    window.show_local_data_page()
+    _drain(window)
+
+    assert (
+        window.local_data_page._snapshot_table.selectionMode()
+        is QAbstractItemView.SelectionMode.ExtendedSelection
+    )
+
+
+def test_local_data_delete_selected_removes_multiple_snapshots(
+    qt_app,
+    sources,
+) -> None:
+    from PySide6.QtCore import QItemSelection, QItemSelectionModel
+
+    facade = StubFacade(
+        sources=sources,
+        snapshots=[_gui_snapshot("snap-1"), _gui_snapshot("snap-2")],
+    )
+    window = _main_window(qt_app, facade)
+    window.local_data_page._confirm_delete = lambda: True
+    window.show_local_data_page()
+    _drain(window)
+
+    table = window.local_data_page._snapshot_table
+    model = table.model()
+    selection = QItemSelection(
+        model.index(0, 0),
+        model.index(1, table.columnCount() - 1),
+    )
+    table.selectionModel().select(
+        selection,
+        QItemSelectionModel.SelectionFlag.Select
+        | QItemSelectionModel.SelectionFlag.Rows,
+    )
+    window.local_data_page._delete_snapshot_button.click()
+    _drain(window)
+
+    assert facade.remove_snapshot_calls == ["snap-1", "snap-2"]
+    assert window.local_data_page._snapshot_table.rowCount() == 0
+
+
+def test_local_data_delete_all_button_is_visible(
+    qt_app,
+    sources,
+) -> None:
+    window = _main_window(
+        qt_app,
+        StubFacade(
+            sources=sources,
+            snapshots=[_gui_snapshot("snap-1")],
+        ),
+    )
+    window.show_local_data_page()
+    _drain(window)
+
+    assert window.local_data_page._delete_all_snapshot_button.text() == "删除全部快照"
+    assert window.local_data_page._delete_all_snapshot_button.isVisibleTo(window)
+
+
+def test_clear_snapshots_confirmation_dialog_has_expected_copy(
+    qt_app,
+) -> None:
+    page_module = importlib.import_module("qq_chat_analyzer.gui.local_data_page")
+    dialog = page_module._clear_snapshots_confirmation_dialog()
+
+    assert dialog.windowTitle() == "确认删除"
+    assert "确定删除全部数据快照吗？" in dialog.text()
+    assert "删除后将无法恢复。" in dialog.text()
+    buttons = {button.text(): button for button in dialog.buttons()}
+    assert "删除" in buttons
+    assert "取消" in buttons
+
+
+def test_local_data_delete_all_cancel_does_not_remove(
+    qt_app,
+    sources,
+) -> None:
+    facade = StubFacade(
+        sources=sources,
+        snapshots=[_gui_snapshot("snap-1"), _gui_snapshot("snap-2")],
+    )
+    window = _main_window(qt_app, facade)
+    window.local_data_page._confirm_clear_snapshots = lambda: False
+    window.show_local_data_page()
+    _drain(window)
+
+    window.local_data_page._delete_all_snapshot_button.click()
+    _drain(window)
+
+    assert facade.remove_all_snapshots_calls == []
+    assert window.local_data_page._snapshot_table.rowCount() == 2
+
+
+def test_local_data_delete_all_confirms_and_refreshes(
+    qt_app,
+    sources,
+) -> None:
+    facade = StubFacade(
+        sources=sources,
+        snapshots=[_gui_snapshot("snap-1"), _gui_snapshot("snap-2")],
+        snapshot_storage_usage=4096,
+    )
+    window = _main_window(qt_app, facade)
+    window.local_data_page._confirm_clear_snapshots = lambda: True
+    window.show_local_data_page()
+    _drain(window)
+    assert window.local_data_page._snapshot_table.rowCount() == 2
+
+    window.local_data_page._delete_all_snapshot_button.click()
+    _drain(window)
+
+    assert facade.remove_all_snapshots_calls == [1]
+    assert window.local_data_page._snapshot_table.rowCount() == 0
+    assert window.local_data_page._snapshot_empty_label.isVisibleTo(window) is True
+    assert "0 B" in window.local_data_page._usage_label.text()
+    assert len(facade.list_snapshots_calls) >= 2
+
+
+def test_local_data_delete_all_failure_shows_public_message(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    facade = StubFacade(
+        sources=sources,
+        snapshots=[_gui_snapshot("snap-1"), _gui_snapshot("snap-2")],
+        remove_all_snapshots_error=module.FacadeError(
+            code="snapshot_clear_failed",
+            public_message="删除全部快照失败，请重试。",
+        ),
+    )
+    window = _main_window(qt_app, facade)
+    window.local_data_page._confirm_clear_snapshots = lambda: True
+    window.show_local_data_page()
+    _drain(window)
+
+    window.local_data_page._delete_all_snapshot_button.click()
+    _drain(window)
+
+    assert window.local_data_page._status_label.text() == "删除全部快照失败，请重试。"
+    assert window.local_data_page._snapshot_table.rowCount() == 2
 
 
 def test_local_data_history_scope_uses_user_facing_labels(

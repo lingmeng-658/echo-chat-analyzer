@@ -655,6 +655,16 @@ class ChatAnalyzerFacade:
             ) from exc
         return getattr(validation, "snapshot", None)
 
+    def remove_all_snapshots(self) -> int:
+        """Remove payloads for every snapshot and return the count."""
+        try:
+            return int(self._snapshot_manager.remove_all_payloads())
+        except Exception as exc:
+            raise FacadeError(
+                code="snapshot_clear_failed",
+                public_message="快照全部删除失败。",
+            ) from exc
+
     def get_snapshot_storage_usage(self) -> int:
         """Return total bytes of currently available snapshot payloads."""
         try:

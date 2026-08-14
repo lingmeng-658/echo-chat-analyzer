@@ -19,6 +19,11 @@ from PySide6.QtWidgets import (
 from ..application.facade import ChatSource
 from ..resources import default_qq_runtime_directory
 from .session_analysis_panel import SessionAnalysisPanel
+from .theme import (
+    GUIDE_STYLE,
+    STATUS_STYLE_BASE,
+    STATUS_STYLE_ERROR,
+)
 from .workers import submit
 
 
@@ -38,15 +43,6 @@ _QQ_STATUS_POLL_INTERVAL_MS = 2000
 _QQ_WAITING_AUTH_TIMEOUT_MS = 120_000
 _QQ_AUTH_TIMEOUT_TITLE = "QQ登录等待超时"
 _QQ_AUTH_TIMEOUT_HINT = "扫码时间过长，请取消后重新连接。"
-_QQ_STATUS_STYLE_BASE = (
-    "padding: 8px 10px; border-radius: 6px; "
-    "background: palette(alternate-base);"
-)
-_QQ_STATUS_ERROR_STYLE = (
-    "padding: 8px 10px; border-radius: 6px; "
-    "background: palette(alternate-base); "
-    "color: #c2410c; font-weight: 600;"
-)
 _QQ_QRCODE_SIZE = 240
 _QQ_QRCODE_RELATIVE_PATH = Path("cache") / "qrcode.png"
 _QQ_LOGIN_GUIDE = (
@@ -120,7 +116,7 @@ class QQWorkspace(QWidget):
         self._status_label = QLabel("")
         self._status_label.setWordWrap(True)
         self._status_label.setVisible(False)
-        self._status_label.setStyleSheet(_QQ_STATUS_STYLE_BASE)
+        self._status_label.setStyleSheet(STATUS_STYLE_BASE)
         main_layout.addWidget(self._status_label)
 
         self._qq_connect_button = QPushButton(_QQ_CONNECT_LABEL)
@@ -146,10 +142,7 @@ class QQWorkspace(QWidget):
         self._qq_login_guide_label = QLabel("")
         self._qq_login_guide_label.setWordWrap(True)
         self._qq_login_guide_label.setVisible(False)
-        self._qq_login_guide_label.setStyleSheet(
-            "padding: 10px; border-radius: 6px; "
-            "background: palette(alternate-base);"
-        )
+        self._qq_login_guide_label.setStyleSheet(GUIDE_STYLE)
         main_layout.addWidget(self._qq_login_guide_label)
 
         self.session_panel = SessionAnalysisPanel()
@@ -190,7 +183,7 @@ class QQWorkspace(QWidget):
     def refresh_qq_status(self, *, load_sessions_on_ready: bool = False) -> None:
         """Ask the connection manager, through the facade, for QQ state."""
         self._status_label.setVisible(True)
-        self._status_label.setStyleSheet(_QQ_STATUS_STYLE_BASE)
+        self._status_label.setStyleSheet(STATUS_STYLE_BASE)
         self._status_label.setText(_QQ_STATUS_CHECKING)
         self._status_label.setToolTip("")
         self.session_panel.show_connecting_placeholder()
@@ -240,9 +233,9 @@ class QQWorkspace(QWidget):
             self._qq_waiting_auth_since = None
         self._last_qq_status_message = message
         self._status_label.setStyleSheet(
-            _QQ_STATUS_ERROR_STYLE
+            STATUS_STYLE_ERROR
             if state == _QQ_STATE_ERROR
-            else _QQ_STATUS_STYLE_BASE
+            else STATUS_STYLE_BASE
         )
 
         self._status_label.setText(f"{_snapshot_prefix(snapshot)}{message}")
@@ -316,7 +309,7 @@ class QQWorkspace(QWidget):
         self._stop_qq_status_polling()
         self._hide_qq_qrcode()
         self._hide_qq_login_guide()
-        self._status_label.setStyleSheet(_QQ_STATUS_ERROR_STYLE)
+        self._status_label.setStyleSheet(STATUS_STYLE_ERROR)
         self._status_label.setText(_DISCONNECTED_PREFIX + _QQ_AUTH_TIMEOUT_TITLE)
         self._status_label.setToolTip(_QQ_AUTH_TIMEOUT_HINT)
         self._status_label.setVisible(True)
@@ -461,7 +454,7 @@ class QQWorkspace(QWidget):
         self._show_qq_error(_qq_error_title(code), message)
 
     def _show_qq_error(self, title: str, message: str) -> None:
-        self._status_label.setStyleSheet(_QQ_STATUS_ERROR_STYLE)
+        self._status_label.setStyleSheet(STATUS_STYLE_ERROR)
         self._status_label.setText(_DISCONNECTED_PREFIX + title)
         self._status_label.setToolTip(message)
         self._status_label.setVisible(True)

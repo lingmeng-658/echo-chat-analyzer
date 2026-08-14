@@ -47,6 +47,13 @@ from ..resources import (
     default_wechat_login_guide_path,
 )
 from .workers import submit
+from .theme import (
+    GUIDE_STYLE,
+    GUIDE_STYLE_EMPHASIS,
+    SESSION_LIST_STYLE,
+    STATUS_STYLE_BASE,
+    STATUS_STYLE_ERROR,
+)
 from .wechat_setup_dialog import WeChatSetupDialog
 
 
@@ -107,15 +114,6 @@ _QQ_CONNECT_PREPARE = "\u6b63\u5728\u81ea\u52a8\u8fde\u63a5 QQ\uff0c\u8bf7\u7a0d
 _QQ_CONNECT_FAILED = "QQ \u8fde\u63a5\u5931\u8d25"
 _QQ_CONNECT_MIN_DISPLAY_MS = 500
 _QQ_STATUS_POLL_INTERVAL_MS = 2000
-_QQ_STATUS_STYLE_BASE = (
-    "padding: 8px 10px; border-radius: 6px; "
-    "background: palette(alternate-base);"
-)
-_QQ_STATUS_ERROR_STYLE = (
-    "padding: 8px 10px; border-radius: 6px; "
-    "background: palette(alternate-base); "
-    "color: #c2410c; font-weight: 600;"
-)
 _QQ_QRCODE_SIZE = 240
 _QQ_QRCODE_RELATIVE_PATH = Path("cache") / "qrcode.png"
 _QQ_LOGIN_GUIDE = (
@@ -281,7 +279,7 @@ class AnalysisPage(QWidget):
         self._status_label = QLabel("")
         self._status_label.setWordWrap(True)
         self._status_label.setVisible(False)
-        self._status_label.setStyleSheet(_QQ_STATUS_STYLE_BASE)
+        self._status_label.setStyleSheet(STATUS_STYLE_BASE)
 
         self._wechat_connect_button = QPushButton(_WECHAT_CONNECT_LABEL)
         self._wechat_connect_button.setVisible(False)
@@ -311,10 +309,7 @@ class AnalysisPage(QWidget):
             QSizePolicy.Policy.Preferred,
         )
         self._wechat_guide_label.setVisible(False)
-        self._wechat_guide_label.setStyleSheet(
-            "padding: 10px; border-radius: 6px; "
-            "background: palette(alternate-base);"
-        )
+        self._wechat_guide_label.setStyleSheet(GUIDE_STYLE)
 
         self._wechat_guide_key_label = QLabel("")
         self._wechat_guide_key_label.setWordWrap(True)
@@ -323,11 +318,7 @@ class AnalysisPage(QWidget):
             QSizePolicy.Policy.Preferred,
         )
         self._wechat_guide_key_label.setVisible(False)
-        self._wechat_guide_key_label.setStyleSheet(
-            "padding: 10px; border-radius: 6px; "
-            "background: palette(alternate-base); "
-            "color: #c2410c; font-weight: 600;"
-        )
+        self._wechat_guide_key_label.setStyleSheet(GUIDE_STYLE_EMPHASIS)
 
         self._wechat_guide_note_label = QLabel("")
         self._wechat_guide_note_label.setWordWrap(True)
@@ -336,10 +327,7 @@ class AnalysisPage(QWidget):
             QSizePolicy.Policy.Preferred,
         )
         self._wechat_guide_note_label.setVisible(False)
-        self._wechat_guide_note_label.setStyleSheet(
-            "padding: 10px; border-radius: 6px; "
-            "background: palette(alternate-base);"
-        )
+        self._wechat_guide_note_label.setStyleSheet(GUIDE_STYLE)
 
         self._wechat_guide_text_column = QVBoxLayout()
         self._wechat_guide_text_column.setSpacing(8)
@@ -379,10 +367,7 @@ class AnalysisPage(QWidget):
         self._qq_login_guide_label = QLabel("")
         self._qq_login_guide_label.setWordWrap(True)
         self._qq_login_guide_label.setVisible(False)
-        self._qq_login_guide_label.setStyleSheet(
-            "padding: 10px; border-radius: 6px; "
-            "background: palette(alternate-base);"
-        )
+        self._qq_login_guide_label.setStyleSheet(GUIDE_STYLE)
         layout.addWidget(self._qq_login_guide_label)
 
         self._file_button = QPushButton("\u9009\u62e9\u6587\u4ef6...")
@@ -413,6 +398,7 @@ class AnalysisPage(QWidget):
         session_layout.addLayout(sort_row)
 
         self._session_list = QListWidget()
+        self._session_list.setStyleSheet(SESSION_LIST_STYLE)
         self._session_list.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection
         )
@@ -584,7 +570,7 @@ class AnalysisPage(QWidget):
         self._session_list.clear()
         self._session_box.setVisible(False)
         self._status_label.clear()
-        self._status_label.setStyleSheet(_QQ_STATUS_STYLE_BASE)
+        self._status_label.setStyleSheet(STATUS_STYLE_BASE)
         self._status_label.setToolTip("")
         self._status_label.setVisible(False)
         self._file_button.setVisible(False)
@@ -670,7 +656,7 @@ class AnalysisPage(QWidget):
             self._wechat_connect_button.setText(_WECHAT_CONNECT_LABEL)
             self._wechat_connect_button.setVisible(not available)
         elif source == ChatSource.QQ:
-            self._status_label.setStyleSheet(_QQ_STATUS_STYLE_BASE)
+            self._status_label.setStyleSheet(STATUS_STYLE_BASE)
             self._qq_connect_button.setText(_QQ_CONNECT_LABEL)
             self._qq_connect_button.setVisible(not available)
             self._qq_connect_button.setEnabled(True)
@@ -779,7 +765,7 @@ class AnalysisPage(QWidget):
     def refresh_qq_status(self, *, load_sessions_on_ready: bool = False) -> None:
         """Ask the connection manager, through the facade, for QQ state."""
         self._status_label.setVisible(True)
-        self._status_label.setStyleSheet(_QQ_STATUS_STYLE_BASE)
+        self._status_label.setStyleSheet(STATUS_STYLE_BASE)
         self._status_label.setText(_QQ_STATUS_CHECKING)
         self._status_label.setToolTip("")
         self._show_session_placeholder(_SESSION_CONNECTING_TITLE)
@@ -814,9 +800,9 @@ class AnalysisPage(QWidget):
         action_hint = _snapshot_hint(snapshot)
         self._last_qq_status_message = message
         self._status_label.setStyleSheet(
-            _QQ_STATUS_ERROR_STYLE
+            STATUS_STYLE_ERROR
             if state == _QQ_STATE_ERROR
-            else _QQ_STATUS_STYLE_BASE
+            else STATUS_STYLE_BASE
         )
 
         self._status_label.setText(f"{_snapshot_prefix(snapshot)}{message}")
@@ -1042,7 +1028,7 @@ class AnalysisPage(QWidget):
         self._show_qq_error(_qq_error_title(code), message)
 
     def _show_qq_error(self, title: str, message: str) -> None:
-        self._status_label.setStyleSheet(_QQ_STATUS_ERROR_STYLE)
+        self._status_label.setStyleSheet(STATUS_STYLE_ERROR)
         self._status_label.setText(_DISCONNECTED_PREFIX + title)
         self._status_label.setToolTip(message)
         self._status_label.setVisible(True)

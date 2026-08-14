@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .theme import HOME_SUBTITLE_STYLE, HOME_TITLE_STYLE
+
 
 class HomePage(QWidget):
     """Landing page offering QQ, WeChat, and local data management."""
@@ -27,12 +29,12 @@ class HomePage(QWidget):
         layout.setSpacing(16)
 
         title = QLabel("\u4f59\u97f3 Echo")
-        title.setStyleSheet("font-size: 24px; font-weight: bold;")
+        title.setStyleSheet(HOME_TITLE_STYLE)
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
 
         subtitle = QLabel("\u9009\u62e9\u804a\u5929\u6765\u6e90\u5f00\u59cb\u5206\u6790")
-        subtitle.setStyleSheet("font-size: 14px; color: #666;")
+        subtitle.setStyleSheet(HOME_SUBTITLE_STYLE)
         subtitle.setAlignment(Qt.AlignCenter)
         layout.addWidget(subtitle)
 

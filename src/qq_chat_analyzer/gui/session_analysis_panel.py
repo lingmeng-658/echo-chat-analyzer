@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..application.facade import AnalysisConfig, AnalysisScopeMode, ChatSource
+from .theme import SESSION_LIST_STYLE
 from .workers import submit
 
 
@@ -109,6 +110,7 @@ class SessionAnalysisPanel(QWidget):
         session_layout.addLayout(sort_row)
 
         self._session_list = QListWidget()
+        self._session_list.setStyleSheet(SESSION_LIST_STYLE)
         self._session_list.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection
         )
