@@ -153,6 +153,7 @@ class EchoConversationSession:
     duration_seconds: int
     message_count: int
     initiator: str
+    participant_count: int = 1
     initiator_sender_key: str | None = None
 
 
@@ -179,6 +180,14 @@ class EchoConversationSessions:
     group_top_initiator_name: str | None = None
     group_top_initiator_count: int | None = None
     group_top_initiator_share: float | None = None
+    viewer_identity_reliable: bool = False
+    start_hour_distribution: tuple[ChartPoint, ...] = ()
+    peak_start_hour: int | None = None
+    session_character: str | None = None
+    loudest_most_messages: EchoConversationSession | None = None
+    loudest_longest_duration: EchoConversationSession | None = None
+    loudest_most_participants: EchoConversationSession | None = None
+    loudest_densest: EchoConversationSession | None = None
 
 
 @dataclass(frozen=True, slots=True)

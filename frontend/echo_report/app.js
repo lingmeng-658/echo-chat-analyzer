@@ -19,6 +19,13 @@ document.documentElement.classList.add("js-ready");
     }
   }
 
+  function setHidden(id, hidden) {
+    var node = document.getElementById(id);
+    if (node) {
+      node.hidden = Boolean(hidden);
+    }
+  }
+
   function formatCount(value) {
     return String(Number(value) || 0).replace(
       /\B(?=(\d{3})+(?!\d))/g,
@@ -27,7 +34,7 @@ document.documentElement.classList.add("js-ready");
   }
 
   function formatPercent(value) {
-    return (Number(value) || 0).toFixed(1) + "%";
+    return ((Number(value) || 0) * 100).toFixed(1) + "%";
   }
 
   function formatAverage(value) {
@@ -116,7 +123,7 @@ document.documentElement.classList.add("js-ready");
   if (sessionsToc) {
     sessionsToc.hidden = !hasSessions;
   }
-  if (hasSessions) {
+    if (hasSessions) {
     var conversationKind = conversation && conversation.kind;
     var isPrivate = conversationKind === "private";
     var isGroup = conversationKind === "group";
@@ -128,137 +135,174 @@ document.documentElement.classList.add("js-ready");
           ? "过去这段时间，群里一共聊起了 " + formatCount(sessionCount) + " 轮"
           : "过去这段时间，一共聊起了 " + formatCount(sessionCount) + " 轮"
     );
-    setText(
-      "session-median-duration",
-      "通常一次会聊约 " +
-        formatSessionDuration(sessions.median_duration_seconds)
-    );
-    setText(
-      "session-longest-duration",
-      "最长的一次持续 " +
-        formatSessionDuration(sessions.longest_duration_seconds)
-    );
-    setText(
-      "session-average-messages",
-      "平均每轮约 " +
-        formatSessionMessages(sessions.average_message_count) +
-        " 条消息"
-    );
 
-    var thresholdSeconds = finiteNumber(sessions.threshold_seconds);
-    var thresholdMinutes =
-      thresholdSeconds !== null && thresholdSeconds > 0
-        ? Math.round(thresholdSeconds / 60)
-        : 30;
-    setText(
-      "session-threshold-note",
-      "相隔超过 " +
-        String(thresholdMinutes) +
-        " 分钟未继续交流，会被视为一段新的聊天。"
-    );
-
-    var privateBlock = document.getElementById("session-private-initiators");
-    var unknownNote = document.getElementById("session-unknown-note");
-    var initiators = isPrivate ? sessions.private_initiators : null;
-    var selfShare = initiators ? finiteNumber(initiators.self_share) : null;
-    var peerShare = initiators ? finiteNumber(initiators.peer_share) : null;
-    var selfCount = initiators ? finiteNumber(initiators.self_count) : null;
-    var peerCount = initiators ? finiteNumber(initiators.peer_count) : null;
-    var unknownCount = initiators
-      ? finiteNumber(initiators.unknown_count)
-      : null;
-    var hasKnownInitiators = Boolean(
-      isPrivate &&
-      selfShare !== null &&
-      peerShare !== null &&
-      selfCount !== null &&
-      peerCount !== null &&
-      selfCount + peerCount > 0
-    );
-    if (privateBlock) {
-      privateBlock.hidden = !hasKnownInitiators;
-    }
-    setText(
-      "session-self",
-      hasKnownInitiators
-        ? "你先开口 " +
-            formatPercent(selfShare * 100) +
-            "（" +
-            formatCount(selfCount) +
-            " 次）"
-        : ""
-    );
-    setText(
-      "session-peer",
-      hasKnownInitiators
-        ? "对方先开口 " +
-            formatPercent(peerShare * 100) +
-            "（" +
-            formatCount(peerCount) +
-            " 次）"
-        : ""
-    );
-    if (unknownNote) {
-      unknownNote.hidden = !(isPrivate && unknownCount > 0);
-      unknownNote.textContent =
-        isPrivate && unknownCount > 0
-          ? "有 " +
-            formatCount(unknownCount) +
-            " 轮暂时无法判断谁先开口。"
-          : "";
+    // Viewer identity (secondary text, group only)
+    var groupInitiators = sessions.group_initiators;
+    var viewerIdentityReliable = sessions.viewer_identity_reliable;
+    if (isGroup && viewerIdentityReliable && groupInitiators) {
+      var selfCount = finiteNumber(groupInitiators.self_count);
+      var selfShare = finiteNumber(groupInitiators.self_share);
+      if (selfCount !== null && selfShare !== null) {
+        setText(
+          "session-viewer-identity",
+          "你发起了 " + formatCount(selfCount) + " 轮，占 " + formatPercent(selfShare)
+        );
+        setHidden("session-viewer-identity", false);
+      }
+    } else {
+      setHidden("session-viewer-identity", true);
     }
 
-    var groupBlock = document.getElementById("session-group-initiators");
-    var groupInitiators = isGroup ? sessions.group_initiators : null;
-    var groupSelfCount = groupInitiators
-      ? finiteNumber(groupInitiators.self_count)
-      : null;
-    var groupSelfShare = groupInitiators
-      ? finiteNumber(groupInitiators.self_share)
-      : null;
-    var topMember = groupInitiators && groupInitiators.top_member;
-    var topMemberName =
-      topMember && typeof topMember.display_name === "string"
-        ? topMember.display_name.trim()
-        : "";
-    var topMemberCount = topMember ? finiteNumber(topMember.count) : null;
-    var topMemberShare = topMember ? finiteNumber(topMember.share) : null;
-    var hasGroupSelf = Boolean(
-      isGroup && groupSelfCount !== null && groupSelfShare !== null
-    );
-    var hasTopMember = Boolean(
-      isGroup &&
-      topMemberName &&
-      topMemberCount !== null &&
-      topMemberShare !== null
-    );
-    if (groupBlock) {
-      groupBlock.hidden = !(hasGroupSelf || hasTopMember);
+    // === Private mode: old layout ===
+    if (isPrivate) {
+      // Show private initiators
+      var privateBlock = document.getElementById("session-private-initiators");
+      var unknownNote = document.getElementById("session-unknown-note");
+      var initiators = sessions.private_initiators;
+      var selfShare = initiators ? finiteNumber(initiators.self_share) : null;
+      var peerShare = initiators ? finiteNumber(initiators.peer_share) : null;
+      var selfCount = initiators ? finiteNumber(initiators.self_count) : null;
+      var peerCount = initiators ? finiteNumber(initiators.peer_count) : null;
+      var unknownCount = initiators ? finiteNumber(initiators.unknown_count) : null;
+      var hasKnownInitiators = Boolean(selfShare !== null && peerShare !== null && (selfShare > 0 || peerShare > 0));
+      if (privateBlock) {
+        privateBlock.hidden = !hasKnownInitiators;
+      }
+      if (hasKnownInitiators) {
+        setText("session-self", "你先开口 " + formatPercent(selfShare) + "（" + formatCount(selfCount) + " 次）");
+        setText("session-peer", "对方先开口 " + formatPercent(peerShare) + "（" + formatCount(peerCount) + " 次）");
+      }
+      if (unknownNote) {
+        if (unknownCount !== null && unknownCount > 0) {
+          unknownNote.hidden = false;
+          unknownNote.textContent = "有 " + formatCount(unknownCount) + " 轮暂时无法判断谁先开口。";
+        } else {
+          unknownNote.hidden = true;
+        }
+      }
+
+      // Old KPI fields for private
+      setText("session-median-duration-old", "通常一次会聊约 " + formatSessionDuration(sessions.median_duration_seconds));
+      setText("session-longest-duration", "最长的一次持续 " + formatSessionDuration(sessions.longest_duration_seconds));
+      setText("session-average-messages-old", "平均每轮约 " + formatSessionMessages(sessions.average_message_count) + " 条消息");
+
+      // Hide group 5-section narrative
+      setHidden("session-beat", true);
+      setHidden("session-movement", true);
+      setHidden("session-highnotes", true);
+      setHidden("session-rest", true);
     }
-    setText(
-      "session-group-self",
-      hasGroupSelf
-        ? "你发起了 " +
-            formatCount(groupSelfCount) +
-            " 轮，占 " +
-            formatPercent(groupSelfShare * 100)
-        : ""
-    );
-    setText(
-      "session-group-top",
-      hasTopMember
-        ? "最常发起聊天：" +
-            topMemberName +
-            "（" +
-            formatCount(topMemberCount) +
-            " 轮，" +
-            formatPercent(topMemberShare * 100) +
-            "）"
-        : ""
-    );
+
+    // === Group mode: 5-section narrative ===
+    if (isGroup) {
+      // Hide old private layout
+      var privateBlock = document.getElementById("session-private-initiators");
+      if (privateBlock) privateBlock.hidden = true;
+      var unknownNote = document.getElementById("session-unknown-note");
+      if (unknownNote) unknownNote.hidden = true;
+      var oldFields = document.getElementById("session-fields-old");
+      if (oldFields) oldFields.hidden = true;
+
+      // 谁来起拍
+      setHidden("session-beat", false);
+      if (groupInitiators && groupInitiators.top_member) {
+        var topMember = groupInitiators.top_member;
+        setText("session-group-top",
+          "最常发起聊天：" + topMember.display_name +
+          "（" + formatCount(topMember.count) + " 轮，" + formatPercent(topMember.share) + "）"
+        );
+      } else {
+        setText("session-group-top", "");
+      }
+      var peakHour = finiteNumber(sessions.peak_start_hour);
+      if (peakHour !== null) {
+        setText("session-peak-hour", "聊天最容易从 " + String(peakHour) + ":00 左右开始");
+        setHidden("session-peak-hour", false);
+      } else {
+        setHidden("session-peak-hour", true);
+      }
+
+      // 一段乐句
+      setHidden("session-movement", false);
+      setText("session-median-duration", "约 " + formatSessionDuration(sessions.median_duration_seconds));
+      setText("session-average-messages", "约 " + formatSessionMessages(sessions.average_message_count) + " 条");
+      var charText = sessions.session_character;
+      if (charText) {
+        setText("session-character", charText);
+        setHidden("session-character", false);
+      } else {
+        setHidden("session-character", true);
+      }
+
+      // 聊天里的几个高音
+      setHidden("session-highnotes", false);
+      renderLoudest("session-loudest-messages", sessions.loudest_most_messages,
+        function (s) {
+          return formatSessionMessages(s.message_count) + " 条消息 · " + formatSessionDuration(s.duration_seconds);
+        });
+      renderLoudest("session-loudest-duration", sessions.loudest_longest_duration,
+        function (s) {
+          return formatSessionDuration(s.duration_seconds) + " · " + formatSessionMessages(s.message_count) + " 条消息";
+        });
+      renderLoudest("session-loudest-participants", sessions.loudest_most_participants,
+        function (s) {
+          return String(s.participant_count) + " 人参与 · " + formatSessionMessages(s.message_count) + " 条消息";
+        });
+      renderLoudest("session-loudest-densest", sessions.loudest_densest,
+        function (s) {
+          return formatSessionMessages(s.message_count) + " 条消息 · " + formatSessionDuration(s.duration_seconds);
+        });
+
+      // 休止
+      setHidden("session-rest", false);
+      var thresholdSeconds = finiteNumber(sessions.threshold_seconds);
+      var thresholdMinutes = thresholdSeconds !== null && thresholdSeconds > 0 ? Math.round(thresholdSeconds / 60) : 30;
+      setText("session-threshold-note",
+        "超过 " + String(thresholdMinutes) + " 分钟未继续交流，会视作下一轮聊天。"
+      );
+    }
   }
 
-  var hourly = (data && data.activity && data.activity.hourly) || [];
+  function formatTimestamp(ts) {
+    if (ts === null || ts === undefined || ts === "") {
+      return null;
+    }
+    var d = new Date(Number(ts) * 1000);
+    if (isNaN(d.getTime())) return null;
+    var y = String(d.getFullYear()).slice(-2);
+    var m = String(d.getMonth() + 1);
+    var day = String(d.getDate());
+    var hh = String(d.getHours()).padStart(2, "0");
+    var mm = String(d.getMinutes()).padStart(2, "0");
+    return y + "/" + m + "/" + day + " \u00b7 " + hh + ":" + mm;
+  }
+
+    function renderLoudest(containerId, session, formatFn) {
+    var container = document.getElementById(containerId);
+    if (!container) return;
+    if (session && session.message_count > 0) {
+      container.hidden = false;
+      var textId = containerId + "-text";
+      var textNode = document.getElementById(textId);
+      if (textNode) {
+        textNode.textContent = formatFn(session);
+      }
+      // Set time anchor
+      var timeId = containerId + "-time";
+      var timeNode = document.getElementById(timeId);
+      if (timeNode) {
+        var ts = formatTimestamp(session.start_timestamp);
+        if (ts) {
+          timeNode.textContent = ts;
+          timeNode.hidden = false;
+        } else {
+          timeNode.hidden = true;
+        }
+      }
+    } else {
+      container.hidden = true;
+    }
+  }  var hourly = (data && data.activity && data.activity.hourly) || [];
   var busiestBlock = document.getElementById("busiest-hour");
   if (busiestBlock) {
     var peak = null;

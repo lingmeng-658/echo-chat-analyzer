@@ -112,48 +112,69 @@
         <div><p class="folio">SESSIONS</p><h2 id="sessions-title">聊天轮次</h2></div>
       </header>
       <p class="chapter-intro" id="session-lead"></p>
+      <p class="session-viewer-identity" id="session-viewer-identity" hidden></p>
 
-      <div class="session-ledger">
-        <div class="session-initiators" id="session-private-initiators">
-          <p id="session-self"></p>
-          <p id="session-peer"></p>
-        </div>
-        <div class="session-initiators" id="session-group-initiators" hidden>
-          <p id="session-group-self"></p>
-          <p id="session-group-top"></p>
-        </div>
-        <p class="session-unknown-note" id="session-unknown-note" hidden></p>
-        <dl class="session-fields">
-          <div><dt>一次会聊多久</dt><dd id="session-median-duration"></dd><small>所有聊天轮次的中位时长</small></div>
-          <div><dt>最长的一次</dt><dd id="session-longest-duration"></dd><small>这段时间里持续最久的一轮</small></div>
-          <div class="wide"><dt>每轮消息</dt><dd id="session-average-messages"></dd><small>平均每轮留下的消息数量</small></div>
-        </dl>
+      <!-- Private initiators (private only) -->
+      <div class="session-initiators" id="session-private-initiators" hidden>
+        <p id="session-self"></p>
+        <p id="session-peer"></p>
       </div>
-      <p class="session-threshold-note" id="session-threshold-note"></p>
-      <span class="page-number">04</span>
-    </section>
+      <p class="session-unknown-note" id="session-unknown-note" hidden></p>
+      <dl class="session-fields" id="session-fields-old">
+        <div><dt>一次会聊多久</dt><dd id="session-median-duration-old"></dd><small>所有聊天轮次的中位时长</small></div>
+        <div><dt>最长的一次</dt><dd id="session-longest-duration"></dd><small>这段时间里持续最久的一轮</small></div>
+        <div class="wide"><dt>每轮消息</dt><dd id="session-average-messages-old"></dd><small>平均每轮留下的消息数量</small></div>
+      </dl>
 
-    <section class="page chapter" id="rhythm" aria-labelledby="rhythm-title">
-      <header class="chapter-header">
-        <span class="chapter-number">03</span>
-        <div><p class="folio">RHYTHM</p><h2 id="rhythm-title">节奏</h2></div>
-      </header>
-      <p class="chapter-intro">消息在一天与一周中的分布，形成这段交流的时间纹理。</p>
+      <!-- 谁来起拍 -->
+      <div class="session-movement" id="session-beat" hidden>
+        <h3 class="movement-heading"><span class="movement-icon" aria-hidden="true"></span>谁来起拍</h3>
+        <p class="session-beat-lead" id="session-group-top"></p>
+        <p class="peak-hour-note" id="session-peak-hour" hidden></p>
+      </div>
 
-      <figure class="figure-block">
-        <figcaption><h3>一天中的活跃轨迹</h3><p>每一格代表一个小时，深浅仅表示消息数量。</p></figcaption>
-        <div class="hourly-track" role="img" aria-label="全天二十四小时活跃分布">
-          <div class="staff-grid" aria-hidden="true"></div>
-          <div class="hour-bars" id="hour-bars" aria-hidden="true"></div>
-          <div class="hour-labels"><span>00</span><span>06</span><span>12</span><span>18</span><span>23</span></div>
+      <!-- 一段乐句 -->
+      <div class="session-movement" id="session-movement" hidden>
+        <h3 class="movement-heading"><span class="movement-icon" aria-hidden="true"></span>一段乐句</h3>
+        <dl class="session-fields">
+          <div><dt>通常会聊多久</dt><dd id="session-median-duration"></dd><small>所有聊天轮次的中位时长</small></div>
+          <div><dt>平均每轮消息</dt><dd id="session-average-messages"></dd><small>平均每轮留下的消息数量</small></div>
+        </dl>
+        <p class="session-character" id="session-character" hidden></p>
+      </div>
+
+      <!-- 聊天里的几个高音 -->
+      <div class="session-movement" id="session-highnotes" hidden>
+        <h3 class="movement-heading"><span class="movement-icon" aria-hidden="true"></span>聊天里的几个高音</h3>
+        <div class="highnote-grid">
+          <div class="highnote-card" id="session-loudest-messages" hidden>
+            <span class="highnote-badge"><span class="highnote-note" aria-hidden="true">♪</span>话最多</span>
+            <span class="highnote-stat" id="session-loudest-messages-text"></span>
+            <span class="highnote-time" id="session-loudest-messages-time"></span>
+          </div>
+          <div class="highnote-card" id="session-loudest-duration" hidden>
+            <span class="highnote-badge"><span class="highnote-note" aria-hidden="true">𝅝</span>聊最久</span>
+            <span class="highnote-stat" id="session-loudest-duration-text"></span>
+            <span class="highnote-time" id="session-loudest-duration-time"></span>
+          </div>
+          <div class="highnote-card" id="session-loudest-participants" hidden>
+            <span class="highnote-badge"><span class="highnote-note" aria-hidden="true">♫</span>最热闹</span>
+            <span class="highnote-stat" id="session-loudest-participants-text"></span>
+            <span class="highnote-time" id="session-loudest-participants-time"></span>
+          </div>
+          <div class="highnote-card" id="session-loudest-densest" hidden>
+            <span class="highnote-badge"><span class="highnote-note" aria-hidden="true">♬</span>接得最紧</span>
+            <span class="highnote-stat" id="session-loudest-densest-text"></span>
+            <span class="highnote-time" id="session-loudest-densest-time"></span>
+          </div>
         </div>
-      </figure>
+      </div>
 
-      <figure class="figure-block weekday-figure">
-        <figcaption><h3>一周中的活跃轨迹</h3><p>星期顺序保持不变，便于阅读时间节奏。</p></figcaption>
-        <div class="weekday-tracks" id="weekday-tracks" role="img" aria-label="星期一到星期日活跃分布"></div>
-      </figure>
-      <span class="page-number">05</span>
+      <!-- 休止 -->
+      <p class="session-rest-note" id="session-rest" hidden>
+        <span class="session-rest-symbol" aria-hidden="true">𝄽</span> 休止 · <span id="session-threshold-note"></span>
+      </p>
+      <span class="page-number">04</span>
     </section>
 
     <section class="page chapter" id="voices" aria-labelledby="voices-title">

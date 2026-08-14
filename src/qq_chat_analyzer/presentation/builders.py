@@ -28,6 +28,9 @@ from .formatters import (
     format_percent,
     format_weekday,
 )
+from ..analysis.conversation_sessions import (
+    ConversationSession,
+)
 from .models import (
     ChartData,
     ChartKind,
@@ -357,6 +360,7 @@ def _build_echo_sessions(
                 end_timestamp=session.end_timestamp,
                 duration_seconds=session.duration_seconds,
                 message_count=session.message_count,
+                participant_count=session.participant_count,
                 initiator=session.initiator,
                 initiator_sender_key=session.initiator_sender_key,
             )
@@ -390,7 +394,67 @@ def _build_echo_sessions(
             if group is not None and top_member is not None
             else None
         ),
+        viewer_identity_reliable=(
+            group is not None and group.self_initiated_count is not None
+        ),
+        start_hour_distribution=tuple(
+            ChartPoint(
+                label=f"{h.hour:02d}:00-{h.hour:02d}:59",
+                value=float(h.count),
+            )
+            for h in report.start_hour_counts
+        ),
+        peak_start_hour=report.peak_start_hour,
+        session_character=_session_character_label(report.session_character),
+        loudest_most_messages=(
+            _session_to_echo(report.sessions[report.loudest_most_messages])
+            if report.loudest_most_messages is not None
+            else None
+        ),
+        loudest_longest_duration=(
+            _session_to_echo(report.sessions[report.loudest_longest_duration])
+            if report.loudest_longest_duration is not None
+            else None
+        ),
+        loudest_most_participants=(
+            _session_to_echo(report.sessions[report.loudest_most_participants])
+            if report.loudest_most_participants is not None
+            else None
+        ),
+        loudest_densest=(
+            _session_to_echo(report.sessions[report.loudest_densest])
+            if report.loudest_densest is not None
+            else None
+        ),
     )
+
+
+
+def _session_to_echo(session: ConversationSession) -> EchoConversationSession:
+    """Convert a core ConversationSession to an EchoConversationSession."""
+    return EchoConversationSession(
+        start_timestamp=session.start_timestamp,
+        end_timestamp=session.end_timestamp,
+        duration_seconds=session.duration_seconds,
+        message_count=session.message_count,
+        participant_count=session.participant_count,
+        initiator=session.initiator,
+        initiator_sender_key=session.initiator_sender_key,
+    )
+
+
+_SESSION_CHARACTER_LABELS: dict[str, str] = {
+    "quick_and_brief": "来得快，也散得快",
+    "long_running": "一旦聊开，就会聊很久",
+    "mixed": "有长有短，节奏不一",
+}
+
+
+def _session_character_label(key: str | None) -> str | None:
+    """Map a core session character key to its Chinese label."""
+    if key is None:
+        return None
+    return _SESSION_CHARACTER_LABELS.get(key, key)
 
 
 def build_echo_report_view(

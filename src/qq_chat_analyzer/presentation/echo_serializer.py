@@ -122,11 +122,39 @@ def _conversation_sessions_to_dict(
                 "end_timestamp": item.end_timestamp,
                 "duration_seconds": item.duration_seconds,
                 "message_count": item.message_count,
+                "participant_count": item.participant_count,
                 "initiator": item.initiator,
                 "initiator_sender_key": item.initiator_sender_key,
             }
             for item in sessions.items
         ],
+        "viewer_identity_reliable": sessions.viewer_identity_reliable,
+        "start_hour_distribution": [
+            {"label": p.label, "value": p.value}
+            for p in sessions.start_hour_distribution
+        ],
+        "peak_start_hour": sessions.peak_start_hour,
+        "session_character": sessions.session_character,
+        "loudest_most_messages": _session_to_dict(sessions.loudest_most_messages),
+        "loudest_longest_duration": _session_to_dict(sessions.loudest_longest_duration),
+        "loudest_most_participants": _session_to_dict(sessions.loudest_most_participants),
+        "loudest_densest": _session_to_dict(sessions.loudest_densest),
+    }
+
+
+
+def _session_to_dict(session: EchoConversationSession | None) -> dict[str, object] | None:
+    """Convert an EchoConversationSession to a dict, or None."""
+    if session is None:
+        return None
+    return {
+        "start_timestamp": session.start_timestamp,
+        "end_timestamp": session.end_timestamp,
+        "duration_seconds": session.duration_seconds,
+        "message_count": session.message_count,
+        "participant_count": session.participant_count,
+        "initiator": session.initiator,
+        "initiator_sender_key": session.initiator_sender_key,
     }
 
 
