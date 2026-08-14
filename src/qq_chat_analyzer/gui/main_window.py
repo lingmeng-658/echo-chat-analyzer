@@ -251,12 +251,7 @@ class MainWindow(QMainWindow):
             self.processing_status_label.setText(message)
 
     def show_outcome(self, outcome: Any) -> None:
-        """Render a finished analysis and switch to the dashboard."""
-        view = getattr(outcome, "view", outcome)
-        self.dashboard_page.render_view(view)
-        self.stack.setCurrentIndex(DASHBOARD_PAGE_INDEX)
-        self._home_button.setVisible(True)
-        self._back_button.setVisible(True)
+        """Finish one analysis, open Echo, and return to the active workspace."""
         self._set_echo_report_path(getattr(outcome, "report_path", None))
         history_saved = getattr(outcome, "history_saved", None)
         if history_saved is True:
@@ -275,6 +270,20 @@ class MainWindow(QMainWindow):
                 f"{data_acquired_at.isoformat(sep=' ', timespec='minutes')}"
             )
         self.analysis_page._status_label.setText(status_message)
+        if self._current_report_path is not None:
+            self.open_echo_report()
+        self._return_to_workspace_after_success()
+
+    def _return_to_workspace_after_success(self) -> None:
+        """Return to the active workspace without clearing the Echo entry."""
+        self._home_button.setVisible(True)
+        self._back_button.setVisible(False)
+        if self._active_source == "qq":
+            self.stack.setCurrentIndex(QQ_WORKSPACE_INDEX)
+        elif self._active_source == "wechat":
+            self.stack.setCurrentIndex(WECHAT_WORKSPACE_INDEX)
+        else:
+            self.stack.setCurrentIndex(ANALYSIS_PAGE_INDEX)
 
     # ---------------------------------------------------------------- echo report
 

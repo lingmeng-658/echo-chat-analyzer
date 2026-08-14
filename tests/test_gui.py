@@ -2829,16 +2829,24 @@ def test_dashboard_rerender_replaces_previous_content(qt_app) -> None:
     assert page._metrics_layout.count() == 1
 
 
-def test_successful_analysis_switches_to_the_dashboard(
+def test_successful_analysis_no_longer_switches_to_the_dashboard(
     qt_app,
     sources,
+    tmp_path,
 ) -> None:
+    """A successful legacy analysis opens Echo and never lands on Dashboard."""
+    from qq_chat_analyzer.gui.main_window import (
+        ANALYSIS_PAGE_INDEX,
+        DASHBOARD_PAGE_INDEX,
+    )
     module = _facade_module()
-    view = _dashboard_view()
+    report_path = tmp_path / "echo-report.html"
+    report_path.write_text("<html>fictional report</html>", encoding="utf-8")
+    opened: list[Path] = []
     facade = StubFacade(
         sources=sources,
-        sessions=[_session(module.ChatSource.QQ, "10001", "\u865a\u6784\u7fa4")],
-        outcome=_StubOutcome(view),
+        sessions=[_session(module.ChatSource.QQ, "10001", "虚构群")],
+        outcome=_StubOutcome(_dashboard_view(), report_path=report_path),
         qq_setup_status=_qq_setup_status(
             configured=True,
             runtime_available=True,
@@ -2846,6 +2854,7 @@ def test_successful_analysis_switches_to_the_dashboard(
         qq_runtime_status=_qq_runtime_status(state="running"),
     )
     window = _main_window(qt_app, facade)
+    window._report_opener = lambda path: opened.append(path) or True
     window.analysis_page.select_source(module.ChatSource.QQ)
     _drain(window.analysis_page)
     window.analysis_page._session_list.setCurrentRow(0)
@@ -2853,36 +2862,50 @@ def test_successful_analysis_switches_to_the_dashboard(
     window.analysis_page.start_analysis()
     _drain(window.analysis_page)
 
-    assert window.stack.currentIndex() == 4
-    assert window.dashboard_page._user_table.rowCount() == 1
+    assert window.stack.currentIndex() == ANALYSIS_PAGE_INDEX
+    assert window.stack.currentIndex() != DASHBOARD_PAGE_INDEX
+    assert opened == [report_path.resolve()]
 
 
-def test_show_outcome_accepts_a_bare_view(qt_app, sources) -> None:
+def test_show_outcome_without_report_path_stays_recoverable(
+    qt_app,
+    sources,
+) -> None:
+    """Success without a report path never crashes and avoids Dashboard."""
+    from qq_chat_analyzer.gui.main_window import DASHBOARD_PAGE_INDEX
+
     window = _main_window(qt_app, StubFacade(sources=sources))
 
     window.show_outcome(_dashboard_view())
 
-    assert window.stack.currentIndex() == 4
+    assert window.stack.currentIndex() != DASHBOARD_PAGE_INDEX
+    assert window.analysis_page._status_label.text() == "分析完成"
+    assert not window._open_echo_button.isVisibleTo(window)
 
 
-def test_successful_outcome_exposes_echo_report_entry(
+def test_successful_outcome_saves_report_and_opens_echo(
     qt_app,
     sources,
     tmp_path,
 ) -> None:
+    """MainWindow keeps the report path and reuses the existing opener."""
     report_path = tmp_path / "echo-report.html"
     report_path.write_text("<html>fictional report</html>", encoding="utf-8")
+    opened: list[Path] = []
     window = _main_window(qt_app, StubFacade(sources=sources))
+    window._report_opener = lambda path: opened.append(path) or True
 
     window.show_outcome(
         _StubOutcome(_dashboard_view(), report_path=report_path)
     )
 
+    assert window._current_report_path == report_path.resolve()
     assert window._open_echo_button.isVisibleTo(window)
     assert window._open_echo_button.isEnabled()
+    assert opened == [report_path.resolve()]
 
 
-def test_echo_entry_opens_the_latest_outcome_report_path(
+def test_echo_entry_reopens_the_latest_outcome_report_path(
     qt_app,
     sources,
     tmp_path,
@@ -2897,9 +2920,14 @@ def test_echo_entry_opens_the_latest_outcome_report_path(
 
     window.show_outcome(_StubOutcome(_dashboard_view(), report_path=first_path))
     window.show_outcome(_StubOutcome(_dashboard_view(), report_path=second_path))
+    assert opened == [first_path.resolve(), second_path.resolve()]
     window._open_echo_button.click()
 
-    assert opened == [second_path.resolve()]
+    assert opened == [
+        first_path.resolve(),
+        second_path.resolve(),
+        second_path.resolve(),
+    ]
 
 
 def test_default_echo_opener_uses_windows_file_association(
@@ -2954,6 +2982,7 @@ def test_missing_report_and_failed_analysis_leave_echo_entry_unavailable(
     report_path = tmp_path / "echo-report.html"
     report_path.write_text("<html>fictional report</html>", encoding="utf-8")
     window = _main_window(qt_app, StubFacade(sources=sources))
+    window._report_opener = lambda path: True
     window.show_outcome(_StubOutcome(_dashboard_view(), report_path=report_path))
 
     window.show_processing_page()
@@ -2971,6 +3000,34 @@ def test_missing_report_and_failed_analysis_leave_echo_entry_unavailable(
     assert not window._open_echo_button.isEnabled()
 
 
+def test_echo_open_failure_is_recoverable_and_does_not_crash(
+    qt_app,
+    sources,
+    tmp_path,
+) -> None:
+    from qq_chat_analyzer.gui.main_window import QQ_WORKSPACE_INDEX
+
+    report_path = tmp_path / "echo-report.html"
+    report_path.write_text("<html>fictional report</html>", encoding="utf-8")
+
+    def _failing_opener(path):
+        raise OSError("fictional open failure")
+
+    window = _main_window(qt_app, StubFacade(sources=sources))
+    window._report_opener = _failing_opener
+    window.navigate_to_qq()
+    _drain(window)
+
+    window.show_outcome(
+        _StubOutcome(_dashboard_view(), report_path=report_path)
+    )
+
+    assert window._current_report_path == report_path.resolve()
+    assert "无法打开" in window.analysis_page._status_label.text()
+    assert window._open_echo_button.isVisibleTo(window)
+    assert window.stack.currentIndex() == QQ_WORKSPACE_INDEX
+
+
 @pytest.mark.parametrize(
     ("history_saved", "expected_status"),
     [
@@ -2979,20 +3036,21 @@ def test_missing_report_and_failed_analysis_leave_echo_entry_unavailable(
         (None, "分析完成"),
     ],
 )
-def test_show_outcome_reports_history_save_status_after_rendering(
+def test_show_outcome_reports_history_save_status_after_success(
     qt_app,
     sources,
     history_saved,
     expected_status,
 ) -> None:
+    from qq_chat_analyzer.gui.main_window import DASHBOARD_PAGE_INDEX
+
     window = _main_window(qt_app, StubFacade(sources=sources))
 
     window.show_outcome(
         _StubOutcome(_dashboard_view(), history_saved=history_saved)
     )
 
-    assert window.stack.currentIndex() == 4
-    assert window.dashboard_page._user_table.rowCount() == 1
+    assert window.stack.currentIndex() != DASHBOARD_PAGE_INDEX
     assert window.analysis_page._status_label.text() == expected_status
 
 
@@ -3018,11 +3076,10 @@ def test_show_outcome_appends_snapshot_acquisition_time_to_existing_status(
     )
 
     assert window.analysis_page._status_label.text() == (
-        "\u5206\u6790\u5df2\u4fdd\u5b58"
-        " \u00b7 \u6570\u636e\u83b7\u53d6\u65f6\u95f4\uff1a"
+        "分析已保存"
+        " · 数据获取时间："
         "2026-08-11 12:30+00:00"
     )
-
 
 def test_analysis_enters_processing_page_and_rejects_second_start(
     qt_app,
@@ -4521,9 +4578,12 @@ def test_processing_page_still_works_after_navigation_change(qt_app, sources) ->
     assert window.stack.currentIndex() == PROCESSING_PAGE_INDEX
 
 
-def test_dashboard_page_still_works_after_navigation_change(qt_app, sources) -> None:
-    """A successful outcome still switches to DashboardPage."""
-    from qq_chat_analyzer.gui.main_window import DASHBOARD_PAGE_INDEX
+def test_dashboard_page_remains_available_outside_success_path(qt_app, sources) -> None:
+    """DashboardPage stays instantiable but is no longer the success page."""
+    from qq_chat_analyzer.gui.main_window import (
+        ANALYSIS_PAGE_INDEX,
+        DASHBOARD_PAGE_INDEX,
+    )
     module = _facade_module()
     view = _dashboard_view()
     facade = StubFacade(
@@ -4539,7 +4599,9 @@ def test_dashboard_page_still_works_after_navigation_change(qt_app, sources) -> 
     window.analysis_page._session_list.setCurrentRow(0)
     window.analysis_page.start_analysis()
     _drain(window.analysis_page)
-    assert window.stack.currentIndex() == DASHBOARD_PAGE_INDEX
+    assert window.stack.currentIndex() == ANALYSIS_PAGE_INDEX
+    assert window.stack.currentIndex() != DASHBOARD_PAGE_INDEX
+    assert window.dashboard_page is not None
 
 # ----------------------------------------------------------------
 
@@ -4777,7 +4839,7 @@ def test_session_panel_selection_requests_message_range(qt_app, sources) -> None
 
 
 def test_qq_workspace_full_chain_connect_sessions_analyze(
-    qt_app, sources
+    qt_app, sources, tmp_path
 ) -> None:
     """QQ workspace keeps the GUI-2 connect -> sessions -> analyze chain."""
     from qq_chat_analyzer.gui.main_window import (
@@ -4796,15 +4858,19 @@ def test_qq_workspace_full_chain_connect_sessions_analyze(
         available=True, qce_running=True, authenticated=True,
         version="4.1.0", message="已连接", action_hint="",
     )
+    report_path = tmp_path / "echo-qq.html"
+    report_path.write_text("<html>fictional report</html>", encoding="utf-8")
+    opened: list[Path] = []
     facade = StubFacade(
         sources=sources,
         sessions=[_session(module.ChatSource.QQ, "q1", "QQ群1", 100)],
-        outcome=_StubOutcome(_dashboard_view()),
+        outcome=_StubOutcome(_dashboard_view(), report_path=report_path),
         connection_status=disconnected,
         connection_status_after_connect=connected,
     )
     executor = _DeferredExecutor()
     window = _main_window(qt_app, facade, executor=executor)
+    window._report_opener = lambda path: opened.append(path) or True
     window.navigate_to_qq()
     _drain(window)
 
@@ -4848,12 +4914,15 @@ def test_qq_workspace_full_chain_connect_sessions_analyze(
     assert config.scope_mode is module.AnalysisScopeMode.CUSTOM
     assert config.start_time == "2024-01-01"
     assert config.end_time == "2024-12-31"
-    executor.succeed(_StubOutcome(_dashboard_view()))
-    assert window.stack.currentIndex() == DASHBOARD_PAGE_INDEX
+    executor.succeed(_StubOutcome(_dashboard_view(), report_path=report_path))
+    assert window.stack.currentIndex() == QQ_WORKSPACE_INDEX
+    assert window.stack.currentIndex() != DASHBOARD_PAGE_INDEX
+    assert opened == [report_path.resolve()]
+    assert window._open_echo_button.isVisibleTo(window)
 
 
 def test_wechat_workspace_full_chain_connect_sessions_analyze(
-    qt_app, sources
+    qt_app, sources, tmp_path
 ) -> None:
     """WeChat workspace keeps the GUI-2 connect -> sessions -> analyze chain."""
     from qq_chat_analyzer.gui.main_window import (
@@ -4870,16 +4939,20 @@ def test_wechat_workspace_full_chain_connect_sessions_analyze(
         available=True, data_found=True, db_key_available=True,
         runtime_available=True, message="微信已连接", action_hint="",
     )
+    report_path = tmp_path / "echo-wechat.html"
+    report_path.write_text("<html>fictional report</html>", encoding="utf-8")
+    opened: list[Path] = []
     facade = StubFacade(
         sources=sources,
         sessions=[_session(module.ChatSource.WECHAT, "wx1", "测试会话1", 10)],
-        outcome=_StubOutcome(_dashboard_view()),
+        outcome=_StubOutcome(_dashboard_view(), report_path=report_path),
         connection_status=disconnected,
         connection_status_after_connect=connected,
         data_roots=["D:/fictional_wechat"],
     )
     executor = _DeferredExecutor()
     window = _main_window(qt_app, facade, executor=executor)
+    window._report_opener = lambda path: opened.append(path) or True
     window.navigate_to_wechat()
     _drain(window)
 
@@ -4919,8 +4992,11 @@ def test_wechat_workspace_full_chain_connect_sessions_analyze(
     assert source == module.ChatSource.WECHAT
     assert session_id == "wx1"
     assert config.scope_mode is module.AnalysisScopeMode.ALL
-    executor.succeed(_StubOutcome(_dashboard_view()))
-    assert window.stack.currentIndex() == DASHBOARD_PAGE_INDEX
+    executor.succeed(_StubOutcome(_dashboard_view(), report_path=report_path))
+    assert window.stack.currentIndex() == WECHAT_WORKSPACE_INDEX
+    assert window.stack.currentIndex() != DASHBOARD_PAGE_INDEX
+    assert opened == [report_path.resolve()]
+    assert window._open_echo_button.isVisibleTo(window)
 
 
 def test_workspace_analysis_failure_returns_to_workspace(
@@ -4941,6 +5017,7 @@ def test_workspace_analysis_failure_returns_to_workspace(
     )
     executor = _DeferredExecutor()
     window = _main_window(qt_app, facade, executor=executor)
+    window._report_opener = lambda path: opened.append(path) or True
     window.navigate_to_qq()
     _drain(window)
     executor.operation()
@@ -4970,6 +5047,7 @@ def test_workspace_cancel_analysis_returns_to_workspace(
     )
     executor = _DeferredExecutor()
     window = _main_window(qt_app, facade, executor=executor)
+    window._report_opener = lambda path: opened.append(path) or True
     window.navigate_to_qq()
     _drain(window)
     executor.operation()
