@@ -21,7 +21,7 @@ from .models import (
 )
 
 
-ECHO_REPORT_SCHEMA_VERSION = "echo-report.v0.2"
+ECHO_REPORT_SCHEMA_VERSION = "echo-report.v0.3"
 
 
 def echo_report_to_dict(view: EchoReportView) -> dict[str, object]:
@@ -52,7 +52,58 @@ def echo_report_to_dict(view: EchoReportView) -> dict[str, object]:
             view.conversation_sessions
         ),
         "language_profile": _language_profile_to_dict(view.language_profile),
+        "expression_culture": _expression_culture_to_dict(
+            view.expression_culture
+        ),
         "members": [_member_to_dict(member) for member in view.members],
+    }
+
+
+def _expression_culture_to_dict(
+    culture: object | None,
+) -> dict[str, object] | None:
+    if culture is None:
+        return None
+    return {
+        "available": culture.available,
+        "expression_message_count": culture.expression_message_count,
+        "expression_only_message_count": (
+            culture.expression_only_message_count
+        ),
+        "expression_only_rate": culture.expression_only_rate,
+        "unique_expression_count": culture.unique_expression_count,
+        "top_expressions": [
+            _expression_item_to_dict(item)
+            for item in culture.top_expressions
+        ],
+        "members": [
+            {
+                "speaker_key": member.speaker_key,
+                "display_name": member.display_name,
+                "expression_occurrence_count": (
+                    member.expression_occurrence_count
+                ),
+                "expression_message_count": member.expression_message_count,
+                "expression_share_percent": member.expression_share_percent,
+                "expression_only_message_count": (
+                    member.expression_only_message_count
+                ),
+                "top_expressions": [
+                    _expression_item_to_dict(item)
+                    for item in member.top_expressions
+                ],
+            }
+            for member in culture.members
+        ],
+        "unavailable_reason": culture.unavailable_reason,
+    }
+
+
+def _expression_item_to_dict(item: object) -> dict[str, object]:
+    return {
+        "display_text": item.display_text,
+        "count": item.count,
+        "kind": item.kind,
     }
 
 

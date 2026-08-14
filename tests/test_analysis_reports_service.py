@@ -38,6 +38,47 @@ def _raw_message(
     }
 
 
+def _write_qce_chat(path: Path) -> None:
+    payload = {
+        "chatInfo": {
+            "groupCode": "fictional-expression-group",
+            "name": "Fictional Expression Group",
+            "type": "group",
+        },
+        "messages": [
+            {
+                "id": "fictional-expression-1",
+                "timestamp": 1704099600,
+                "sender": {"uid": "u-1", "uin": "1", "name": "Fictional Alice"},
+                "type": "text",
+                "content": {
+                    "text": "今天 😀 开心",
+                    "elements": [
+                        {"type": "face", "data": {"id": "1", "name": "[笑]"}}
+                    ],
+                },
+                "recalled": False,
+                "system": False,
+            },
+            {
+                "id": "fictional-expression-2",
+                "timestamp": 1704099660,
+                "sender": {"uid": "u-2", "uin": "2", "name": "Fictional Bob"},
+                "type": "text",
+                "content": {
+                    "text": "",
+                    "elements": [
+                        {"type": "face", "data": {"id": "2", "name": "[赞]"}}
+                    ],
+                },
+                "recalled": False,
+                "system": False,
+            },
+        ],
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
 def _request(application, tmp_path: Path, input_path: Path):
     stopwords_path = tmp_path / "private-stopwords.txt"
     stopwords_path.write_text("", encoding="utf-8")
@@ -354,7 +395,38 @@ def test_execute_generates_echo_report_json_artifact(tmp_path: Path) -> None:
     report_path = output_directory / "echo-report.json"
     assert report_path.is_file()
     payload = json.loads(report_path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == "echo-report.v0.2"
+    assert payload["schema_version"] == "echo-report.v0.3"
+
+
+def test_expression_report_reaches_echo_pipeline_from_qce(
+    tmp_path: Path,
+) -> None:
+    application = _application_module()
+    input_path = tmp_path / "fictional-expression-chat.json"
+    output_directory = tmp_path / "private-output"
+    output_directory.mkdir()
+    _write_qce_chat(input_path)
+
+    result = application.AnalysisApplicationService().execute(
+        _request(application, tmp_path, input_path)
+    )
+
+    assert result.status is application.AnalysisStatus.COMPLETED
+    expression = result.reports.expression
+    assert expression is not None
+    assert expression.expression_message_count == 2
+    assert expression.expression_only_message_count == 1
+    assert expression.unique_expression_count == 3
+    assert {item.expression_key for item in expression.top_expressions} == {
+        "😀",
+        "1",
+        "2",
+    }
+    payload = json.loads(
+        (output_directory / "echo-report.json").read_text(encoding="utf-8")
+    )
+    assert payload["expression_culture"] is not None
+    assert payload["expression_culture"]["expression_message_count"] == 2
 
 
 def test_execute_generates_echo_report_html_artifact(tmp_path: Path) -> None:

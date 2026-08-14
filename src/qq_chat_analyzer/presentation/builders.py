@@ -13,6 +13,8 @@ from ..analysis.models import (
     AnalysisReports,
     ConversationReport,
     DistinctiveWordAvailability,
+    ExpressionReport,
+    ExpressionUsage,
     MessageLengthReport,
     UserProfile,
     UserProfileReport,
@@ -39,6 +41,9 @@ from .models import (
     ConversationCard,
     DashboardView,
     EchoMemberCard,
+    EchoExpressionCulture,
+    EchoExpressionItem,
+    EchoMemberExpression,
     EchoLanguageMember,
     EchoLanguageProfile,
     EchoConversationSession,
@@ -222,6 +227,10 @@ class EchoReportBuilder:
                 members=members,
                 conversation_kind=conversation_kind,
                 viewer_speaker_key=viewer_speaker_key,
+            ),
+            expression_culture=_build_echo_expression_culture(
+                reports.expression,
+                members=members,
             ),
             empty_description="" if has_data else EMPTY_DESCRIPTION,
             active_days=(reports.activity.active_days if reports.activity else 0),
@@ -562,6 +571,60 @@ def _build_echo_sessions(
         ),
     )
 
+
+
+def _build_echo_expression_culture(
+    report: ExpressionReport | None,
+    *,
+    members: tuple[EchoMemberCard, ...] = (),
+) -> EchoExpressionCulture | None:
+    """Map the core expression report into the Echo expression chapter."""
+    if report is None or report.expression_message_count <= 0:
+        return None
+    member_by_key = {member.speaker_key: member for member in members}
+    culture_members = tuple(
+        EchoMemberExpression(
+            speaker_key=member.speaker_key,
+            display_name=(
+                member_by_key[member.speaker_key].display_name
+                if member.speaker_key in member_by_key
+                else member.speaker_key
+            ),
+            expression_occurrence_count=member.expression_occurrence_count,
+            expression_message_count=member.expression_message_count,
+            expression_share_percent=member.expression_share_percent,
+            expression_only_message_count=member.expression_only_message_count,
+            top_expressions=tuple(
+                _to_echo_expression_item(item)
+                for item in member.top_expressions
+            ),
+        )
+        for member in report.members
+    )
+    return EchoExpressionCulture(
+        available=bool(culture_members),
+        expression_message_count=report.expression_message_count,
+        expression_only_message_count=report.expression_only_message_count,
+        expression_only_rate=report.expression_only_rate,
+        unique_expression_count=report.unique_expression_count,
+        top_expressions=tuple(
+            _to_echo_expression_item(item)
+            for item in report.top_expressions
+        ),
+        members=culture_members,
+        unavailable_reason=(
+            "" if culture_members else "暂无可展示的表达文化。"
+        ),
+    )
+
+
+def _to_echo_expression_item(item: ExpressionUsage) -> EchoExpressionItem:
+    return EchoExpressionItem(
+        expression_key=item.expression_key,
+        display_text=item.display_text,
+        count=item.count,
+        kind=item.kind,
+    )
 
 
 def _session_to_echo(session: ConversationSession) -> EchoConversationSession:

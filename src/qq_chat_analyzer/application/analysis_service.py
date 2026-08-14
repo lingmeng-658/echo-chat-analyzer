@@ -13,6 +13,7 @@ from ..analysis.analyzers import (
     ActivityAnalyzer,
     ConversationAnalyzer,
     DistinctiveWordAnalyzer,
+    ExpressionAnalyzer,
     MessageCompositionAnalyzer,
     MessageLengthAnalyzer,
     PrivateLanguageAnalyzer,
@@ -34,6 +35,7 @@ from ..exporters import (
     generate_wordcloud,
 )
 from ..message import ChatMessage
+from ..rich_message import RichMessage
 from ..presentation import (
     build_echo_report_view,
     export_echo_report_html,
@@ -148,6 +150,7 @@ class AnalysisApplicationService:
             speaker_names=request.speaker_names,
             conversation_names=request.conversation_names,
             conversation_type=conversation_type,
+            rich_messages=outcome.rich_messages,
         )
         speaker_display_names = _speaker_display_names(reports)
         word_sender_counts = count_word_speakers(analyzed.sender_tokens)
@@ -208,6 +211,7 @@ def _build_reports(
     speaker_names: Mapping[str, str] | None = None,
     conversation_names: Mapping[str, str] | None = None,
     conversation_type: str = "unknown",
+    rich_messages: tuple[RichMessage, ...] = (),
 ) -> AnalysisReports:
     """Run every extended analyzer over the messages kept for analysis.
 
@@ -236,6 +240,10 @@ def _build_reports(
         private_language=PrivateLanguageAnalyzer().analyze(
             sender_tokens,
             conversation_type=conversation_type,
+        ),
+        expression=ExpressionAnalyzer().analyze(
+            messages,
+            rich_messages=rich_messages,
         ),
     )
 

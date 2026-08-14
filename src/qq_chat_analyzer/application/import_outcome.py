@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..message import ChatMessage
+from ..rich_message import RichMessage
 from .import_result import ImportResult
 
 
@@ -15,3 +16,4 @@ class ImportOutcome:
     result: ImportResult
     processed_message_count: int
     messages: tuple[ChatMessage, ...]
+    rich_messages: tuple[RichMessage, ...] = ()

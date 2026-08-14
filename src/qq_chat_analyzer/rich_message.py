@@ -24,6 +24,15 @@ class TextContent:
 
 
 @dataclass(frozen=True, slots=True)
+class ExpressionContent:
+    """One source-neutral expression occurrence in a message."""
+
+    expression_kind: str
+    expression_key: str
+    display_text: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ReplyRelation:
     """Relation from the current message to the replied-to message."""
 
@@ -54,7 +63,7 @@ class RecallEvent:
     timestamp: int | float | str | None = None
 
 
-RichContent = TextContent
+RichContent = TextContent | ExpressionContent
 MessageRelation = ReplyRelation | MentionRelation
 
 

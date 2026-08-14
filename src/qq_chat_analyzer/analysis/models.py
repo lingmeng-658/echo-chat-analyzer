@@ -272,6 +272,7 @@ class AnalysisReports:
     conversation_sessions: ConversationSessionReport | None = None
     distinctive_words: DistinctiveWordReport | None = None
     private_language: PrivateLanguageReport | None = None
+    expression: ExpressionReport | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -288,3 +289,39 @@ class MessageCompositionReport:
 
     total_count: int
     categories: tuple[MessageCompositionCategory, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ExpressionUsage:
+    """One ranked expression occurrence with its display label."""
+
+    expression_key: str
+    display_text: str
+    count: int
+    kind: str
+
+
+@dataclass(frozen=True, slots=True)
+class MemberExpressionUsage:
+    """Expression frequency and composition for one stable speaker."""
+
+    speaker_key: str
+    expression_occurrence_count: int
+    expression_message_count: int
+    expression_share_percent: float
+    expression_only_message_count: int
+    top_expressions: tuple[ExpressionUsage, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ExpressionReport:
+    """Frequency and composition of expressions in one analysis run."""
+
+    expression_message_count: int
+    expression_only_message_count: int
+    expression_only_rate: float
+    unique_expression_count: int
+    expression_occurrence_count: int = 0
+    total_message_count: int = 0
+    top_expressions: tuple[ExpressionUsage, ...] = ()
+    members: tuple[MemberExpressionUsage, ...] = ()

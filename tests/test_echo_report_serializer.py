@@ -17,9 +17,12 @@ from qq_chat_analyzer.presentation import (  # noqa: E402
     ChartPoint,
     EchoConversationSession,
     EchoConversationSessions,
+    EchoExpressionCulture,
     EchoExpressionHabits,
+    EchoExpressionItem,
     EchoLanguageMember,
     EchoLanguageProfile,
+    EchoMemberExpression,
     EchoMemberCard,
     EchoReportView,
     EchoSharedWord,
@@ -79,7 +82,7 @@ def test_echo_report_converts_to_stable_frontend_json_object() -> None:
     payload = echo_report_to_dict(_echo_view())
 
     assert payload == {
-        "schema_version": "echo-report.v0.2",
+        "schema_version": "echo-report.v0.3",
         "title": "余音 Echo",
         "conversation": {
             "kind": "group",
@@ -116,6 +119,7 @@ def test_echo_report_converts_to_stable_frontend_json_object() -> None:
                 },
             ],
         },
+        "expression_culture": None,
         "members": [
             {
                 "speaker_key": "fictional-alice",
@@ -202,6 +206,7 @@ def test_empty_echo_report_serializes_with_stable_empty_collections() -> None:
     }
     assert payload["activity"] == {"hourly": [], "weekday": []}
     assert payload["language_profile"] is None
+    assert payload["expression_culture"] is None
     assert payload["members"] == []
 
 
@@ -216,7 +221,7 @@ def test_export_echo_report_json_creates_parent_directories(
 
     assert result_path.is_file()
     payload = json.loads(result_path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == "echo-report.v0.2"
+    assert payload["schema_version"] == "echo-report.v0.3"
 
 
 def test_language_profile_serializer_hides_log_odds_internal_statistics() -> None:
@@ -318,6 +323,65 @@ def test_empty_echo_report_html_still_generates_self_contained_file(
     assert "data:image/png;base64," in html
     assert "fetch(" not in html
 
+
+def test_expression_culture_serializes_display_ready_fields_only() -> None:
+    culture = EchoExpressionCulture(
+        available=True,
+        expression_message_count=9,
+        expression_only_message_count=2,
+        expression_only_rate=0.22,
+        unique_expression_count=4,
+        top_expressions=(
+            EchoExpressionItem(
+                expression_key="😀",
+                display_text="😀",
+                count=5,
+                kind="unicode",
+            ),
+            EchoExpressionItem(
+                expression_key="358",
+                display_text="/骰子",
+                count=2,
+                kind="platform_face",
+            ),
+        ),
+        members=(
+            EchoMemberExpression(
+                speaker_key="fictional-alice",
+                display_name="虚构 Alice",
+                expression_occurrence_count=5,
+                expression_message_count=4,
+                expression_share_percent=55.6,
+                expression_only_message_count=1,
+                top_expressions=(
+                    EchoExpressionItem(
+                        expression_key="😀",
+                        display_text="😀",
+                        count=4,
+                        kind="unicode",
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    payload = echo_report_to_dict(
+        EchoReportView(
+            title="Echo Report",
+            has_data=True,
+            expression_culture=culture,
+        )
+    )
+    data = payload["expression_culture"]
+
+    assert data["expression_message_count"] == 9
+    assert data["expression_only_rate"] == 0.22
+    assert data["top_expressions"][0]["display_text"] == "😀"
+    assert data["top_expressions"][1]["kind"] == "platform_face"
+    assert data["members"][0]["display_name"] == "虚构 Alice"
+    serialized = json.dumps(data, ensure_ascii=False)
+    assert "expression_key" not in serialized
+    assert "face_type" not in serialized
 
 
 def test_echo_report_html_inlines_current_brand_assets(tmp_path: Path) -> None:

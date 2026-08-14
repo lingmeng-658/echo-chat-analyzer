@@ -242,7 +242,7 @@ Facade 在后续阶段接入。
 | --- | --- |
 | 负责 | 全部统计与分析算法，输入 `ChatMessage`，输出报告模型 |
 | 不负责 | 文件读写、数据获取、格式化展示、平台判断 |
-| 可依赖 | `message.py`、标准库、算法类第三方库 |
+| 可依赖 | `message.py`、`rich_message.py`（P0 source-neutral 旁路输入）、标准库、算法类第三方库 |
 | 禁止依赖 | `application/`、`presentation/`、`gui/`、`providers/`、adapters、parsers |
 
 核心分两代，并存且互不干扰：
@@ -255,6 +255,11 @@ Facade 在后续阶段接入。
 `ChatMessage.timestamp`、`conversation_type`、`is_self` 与稳定发送者身份。
 Session 切分、initiator 判定和汇总统计必须在核心完成；
 Presentation 与 Echo 只消费结果，不得重新计算。
+
+**Rich 能力（Expression v1）** 可选消费 `rich_message.py` 中的 source-neutral
+content part（如 `ExpressionContent`），作为 `ChatMessage` legacy 文本投影之外
+的旁路输入。`ImportOutcome.rich_messages` 只在来源 adapter 已支持 Rich 语义时
+填充；Analysis 仍不得出现平台字段或来源分支。
 
 **禁止在核心中出现平台分支。** 不得出现 QQ、微信、`wxid`、`chatroom` 之类判断。
 唯一例外是 `analysis/models.py` 中对内部标识可展示性的判定，
@@ -360,6 +365,10 @@ CLI 与 GUI 是同层的两个交互适配器，共享同一套应用服务，
 理由：把来源差异挡在核心之外，新增来源不改核心。
 
 违例信号：平台专用模型进入 `analysis/`；为了展示需求去改 `ChatMessage` 字段。
+
+Rich 能力阶段允许 `ImportOutcome` 额外携带 `rich_messages` 作为旁路通道，
+供 Analysis Core 可选消费；`ChatMessage` 仍是 legacy text projection 的稳定入口，
+禁止用 Rich 数据反向补全 `ChatMessage`，也禁止平台字段进入 `analysis/`。
 
 ### 5.3 来源与分析隔离
 
@@ -499,6 +508,9 @@ GUI 只装配控件、转发事件、展示状态。
 3. 在 `AnalysisReports` 新增字段，给默认值以保证向后兼容。
 4. 在 `AnalysisApplicationService._build_reports()` 接线。
 5. 若需展示，再到 `presentation/` 增加对应视图模型与构建逻辑。
+
+需要 Rich 语义的新分析器（如 Expression v1）可额外接收 `ImportOutcome.rich_messages`
+中的 source-neutral `RichMessage`；该通道默认空元组，旧分析器不感知。
 
 **不许**把新统计塞进 `analyzer.py`；
 **不许**在 analyzer 内读文件、分词或访问网络。

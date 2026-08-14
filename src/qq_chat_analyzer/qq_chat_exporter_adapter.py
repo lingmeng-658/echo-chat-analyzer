@@ -10,8 +10,10 @@ from typing import Any
 from .legacy_projection import project_legacy_messages
 from .message import ChatMessage
 from .rich_message import (
+    ExpressionContent,
     MentionRelation,
     MessageRelation,
+    RichContent,
     RecallState,
     ReplyRelation,
     RichMessage,
@@ -208,8 +210,13 @@ def _parse_rich_message(
         return None
 
     text = content.get("text")
-    if not isinstance(text, str):
+    expression_contents = _extract_expression_contents(content)
+    if not isinstance(text, str) and not expression_contents:
         return None
+    contents: list[RichContent] = []
+    if isinstance(text, str) and text:
+        contents.append(TextContent(text=text))
+    contents.extend(expression_contents)
 
     recalled = raw_message.get("recalled")
     recall_state = (
@@ -244,7 +251,7 @@ def _parse_rich_message(
         is_self=is_self,
         timestamp=timestamp,
         message_type=message_type,
-        contents=(TextContent(text=text),),
+        contents=tuple(contents),
         relations=_extract_relations(content),
         recall_state=recall_state,
         is_system=bool(raw_message.get("system", False)),
@@ -309,6 +316,45 @@ def _extract_relations(content: Mapping[Any, Any]) -> tuple[MessageRelation, ...
                     )
                 )
     return tuple(relations)
+
+
+def _extract_expression_contents(
+    content: Mapping[Any, Any],
+) -> tuple[ExpressionContent, ...]:
+    """Extract source-neutral expression content from QCE face elements."""
+    expressions: list[ExpressionContent] = []
+    elements = content.get("elements")
+    if isinstance(elements, list):
+        for element in elements:
+            if not isinstance(element, Mapping):
+                continue
+            if element.get("type") != "face" and element.get("elementType") != 6:
+                continue
+            expression = _face_expression(element)
+            if expression is not None:
+                expressions.append(expression)
+    return tuple(expressions)
+
+
+def _face_expression(element: Mapping[Any, Any]) -> ExpressionContent | None:
+    block = element.get("data")
+    if not isinstance(block, Mapping):
+        block = element.get("faceElement")
+    if not isinstance(block, Mapping):
+        return None
+    face_id = (
+        _stringify_identifier(block.get("id"))
+        or _stringify_identifier(block.get("faceIndex"))
+        or _first_text(block, "id", "faceId")
+    )
+    if face_id is None:
+        return None
+    face_name = _first_text(block, "name", "faceText")
+    return ExpressionContent(
+        expression_kind="platform_face",
+        expression_key=face_id,
+        display_text=face_name or f"[QQ表情 {face_id}]",
+    )
 
 
 def _reply_target(element: Mapping[Any, Any]) -> str | None:
