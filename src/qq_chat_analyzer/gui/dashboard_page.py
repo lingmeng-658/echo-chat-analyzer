@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .theme import DASHBOARD_TITLE_STYLE, METRIC_CARD_STYLE
+
 
 _EMPTY_TITLE = "\u6682\u65e0\u5206\u6790\u7ed3\u679c"
 _DEFAULT_EMPTY_HINT = (
@@ -58,7 +60,7 @@ class DashboardPage(QWidget):
         outer = QVBoxLayout(self)
 
         self._title_label = QLabel("")
-        self._title_label.setStyleSheet("font-size: 16px; font-weight: bold;")
+        self._title_label.setStyleSheet(DASHBOARD_TITLE_STYLE)
         outer.addWidget(self._title_label)
 
         self._empty_label = QLabel("")
@@ -156,9 +158,7 @@ class DashboardPage(QWidget):
         for metric in metrics or ():
             card = QLabel(f"{metric.title}\n{metric.value}")
             card.setToolTip(metric.description)
-            card.setStyleSheet(
-                "border: 1px solid palette(mid); padding: 8px;"
-            )
+            card.setStyleSheet(METRIC_CARD_STYLE)
             self._metrics_layout.addWidget(card)
         self._metrics_box.setVisible(bool(metrics))
 

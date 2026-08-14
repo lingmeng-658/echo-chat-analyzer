@@ -344,3 +344,34 @@ def test_save_wraps_io_failure_as_history_write_error(tmp_path):
 
     with pytest.raises(ReportHistoryWriteError):
         _save_record(manager)
+
+
+def test_clear_removes_all_records(tmp_path):
+    history_path = tmp_path / "history.jsonl"
+    manager = ReportHistoryManager(history_path)
+    _save_record(manager, analysis_scope="all")
+    _save_record(manager, analysis_scope="last_six_months")
+    assert len(manager.list_records()) == 2
+
+    manager.clear()
+
+    assert not history_path.exists()
+    assert manager.list_records() == ()
+
+
+def test_clear_missing_history_file_is_noop(tmp_path):
+    history_path = tmp_path / "history.jsonl"
+    manager = ReportHistoryManager(history_path)
+
+    manager.clear()
+
+    assert not history_path.exists()
+
+
+def test_clear_wraps_io_failure_as_history_write_error(tmp_path):
+    history_path = tmp_path / "history.jsonl"
+    history_path.mkdir()
+    manager = ReportHistoryManager(history_path)
+
+    with pytest.raises(ReportHistoryWriteError):
+        manager.clear()

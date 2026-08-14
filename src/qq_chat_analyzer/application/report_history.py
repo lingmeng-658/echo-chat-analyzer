@@ -187,6 +187,17 @@ class ReportHistoryManager:
             None,
         )
 
+    def clear(self) -> None:
+        """Remove every saved analysis history record."""
+        path = self._path()
+        try:
+            if path.exists():
+                path.unlink()
+        except OSError as exc:
+            raise ReportHistoryWriteError(
+                "Analysis history could not be cleared."
+            ) from exc
+
     def _path(self) -> Path:
         if self._configured_path is not None:
             return self._configured_path

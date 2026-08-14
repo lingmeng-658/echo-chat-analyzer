@@ -373,6 +373,30 @@ def test_remove_payload_reports_unknown_snapshot_without_creating_files(
     assert user_data.exists() is False
 
 
+def test_remove_all_payloads_removes_every_available_snapshot(
+    tmp_path: Path,
+) -> None:
+    user_data = tmp_path / "LocalChatAnalyzer"
+    manager = ChatDataSnapshotManager(user_data)
+    first = _save_snapshot(
+        manager,
+        _write_payload(tmp_path / "source" / "first.jsonl"),
+    )
+    second = _save_snapshot(
+        manager,
+        _write_payload(tmp_path / "source" / "second.jsonl"),
+    )
+    first_payload = manager.resolve_payload_path(first.id)
+    second_payload = manager.resolve_payload_path(second.id)
+
+    assert manager.remove_all_payloads() == 2
+
+    assert first_payload.exists() is False
+    assert second_payload.exists() is False
+    assert manager.get_snapshot(first.id).payload_state is SnapshotPayloadState.REMOVED
+    assert manager.get_snapshot(second.id).payload_state is SnapshotPayloadState.REMOVED
+
+
 def test_find_latest_available_returns_newest_matching_snapshot(
     tmp_path: Path,
 ) -> None:

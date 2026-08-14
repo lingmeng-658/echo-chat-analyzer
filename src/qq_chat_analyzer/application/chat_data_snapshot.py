@@ -364,6 +364,15 @@ class ChatDataSnapshotManager:
             snapshot=removed_snapshot,
         )
 
+    def remove_all_payloads(self) -> int:
+        """Remove every currently listed raw payload in one call."""
+        removed_count = 0
+        for snapshot in self.list_snapshots():
+            validation = self.remove_payload(snapshot.id)
+            if validation.snapshot is not None:
+                removed_count += 1
+        return removed_count
+
     def _user_data_root(self) -> Path:
         if self._configured_user_data_directory is not None:
             return self._configured_user_data_directory.resolve()

@@ -115,6 +115,10 @@ class WeChatKeyService:
             else self._helper_path.parent / "node_modules"
         )
 
+    def clear(self) -> None:
+        """Drop the process-local key so helpers start without stale state."""
+        _clear_key_environment()
+
     def acquire(
         self,
         timeout: float | None = None,

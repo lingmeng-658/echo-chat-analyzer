@@ -243,6 +243,34 @@ class WeChatSetupService:
             self._provider_factory.invalidate()
         return key
 
+    def disconnect(self) -> Any:
+        """Release the current WeChat connection key without deleting data.
+
+        The stored data root and runtime paths stay in ``wechat.json``; only
+        the database key is cleared, so the next connect flow re-acquires a
+        fresh key through the existing path. Provider and process-local key
+        state are also dropped.
+        """
+        _LOGGER.info("[wechat setup] disconnect requested")
+        try:
+            stored = self._config_loader.load()
+        except WeChatConfigNotFound:
+            stored = None
+
+        if stored is not None:
+            config = self._apply_default_runtime(replace(stored, db_key=None))
+            self._config_writer.save(config)
+            if self._provider_factory is not None:
+                self._provider_factory.invalidate()
+
+        clear = getattr(self._key_service, "clear", None)
+        if callable(clear):
+            clear()
+
+        if self._connection_service is None:
+            return None
+        return self._connection_service.check_status()
+
     # ---------------------------------------------------------------- internals
 
     def _merge_existing_config(

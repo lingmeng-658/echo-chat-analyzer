@@ -401,3 +401,31 @@ def test_in_progress_covers_startup_states() -> None:
     assert snap(module.ConnectionState.STARTING).in_progress is True
     assert snap(module.ConnectionState.CONNECTED).in_progress is False
     assert snap(module.ConnectionState.ERROR).in_progress is False
+
+
+def test_disconnect_ends_auth_waiting_and_reports_disconnected() -> None:
+    module = _connection_module()
+    runtime = importlib.import_module(
+        "qq_chat_analyzer.application.runtime"
+    )
+    setup = _StubSetupService(
+        runtime_status=runtime.QQRuntimeStatus(
+            state=runtime.QQRuntimeState.STOPPED,
+            available=False,
+        )
+    )
+    service = _StubConnectionService(
+        _status(available=False, qce_running=False, authenticated=False)
+    )
+    manager = _manager(
+        setup_service=setup,
+        connection_service=service,
+    )
+    manager.begin_auth_waiting()
+
+    assert manager.get_snapshot().state is module.ConnectionState.WAITING_AUTH
+
+    snapshot = manager.disconnect()
+
+    assert snapshot.state is module.ConnectionState.DISCONNECTED
+    assert manager.get_snapshot().state is module.ConnectionState.DISCONNECTED

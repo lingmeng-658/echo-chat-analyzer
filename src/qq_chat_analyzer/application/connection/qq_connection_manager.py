@@ -164,6 +164,20 @@ class QQConnectionManager:
         _LOGGER.info("[qq connection] connect state=%s", snapshot.state.value)
         return snapshot
 
+    def disconnect(self) -> ConnectionSnapshot:
+        """Stop treating this lifecycle as connected and report disconnected.
+
+        Process cleanup is owned by the caller (the auth bridge/facade); this
+        only resets the manager's transient auth state so a later snapshot
+        does not keep waiting for a login that was cancelled.
+        """
+        self._auth_waiting = False
+        return self._snapshot(
+            ConnectionState.DISCONNECTED,
+            MESSAGE_DISCONNECTED,
+            HINT_CONNECT,
+        )
+
     def begin_auth_waiting(self) -> None:
         """Remember that a runtime-owned login window is waiting for auth."""
         self._auth_waiting = True
