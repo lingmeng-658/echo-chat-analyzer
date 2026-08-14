@@ -8,6 +8,7 @@
 - conversation_type / is_self
 - Conversation Sessions core
 - Echo Conversation Sessions section
+- Echo Expression chapter (Unicode emoji + QQ face, frequency/composition)
 - GUI 会话数量与分析阶段显示逻辑
 
 ## Recently fixed
@@ -35,7 +36,7 @@ Conversation Sessions:
 3. distinctive words
 4. catchphrases
 5. poke / pat interactions
-6. emoji behavior
+6. QQ market_face / WeChat sticker / expression temporal follow-ups
 
 ## Known debt
 

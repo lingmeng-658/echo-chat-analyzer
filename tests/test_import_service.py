@@ -286,6 +286,31 @@ def test_qce_json_auto_detection_without_platform(tmp_path: Path) -> None:
     assert len(outcome.messages) == 2
 
 
+def test_qce_json_import_carries_rich_messages(tmp_path: Path) -> None:
+    input_path = tmp_path / "qce.json"
+    _write_qce_json(input_path)
+
+    outcome = ImportService().execute(
+        ImportRequest(input_path=input_path, platform="qq")
+    )
+
+    assert len(outcome.rich_messages) == 2
+    assert outcome.rich_messages[0].source == "qq"
+    assert outcome.rich_messages[0].message_id == "fictional-qce-001"
+    assert outcome.rich_messages[1].message_id == "fictional-qce-002"
+
+
+def test_qq_json_import_keeps_rich_messages_empty(tmp_path: Path) -> None:
+    input_path = tmp_path / "qq.json"
+    _write_qq_json(input_path)
+
+    outcome = ImportService().execute(
+        ImportRequest(input_path=input_path, platform="qq")
+    )
+
+    assert outcome.rich_messages == ()
+
+
 def test_wechat_detailed_json_import_returns_result_and_messages(
     tmp_path: Path,
 ) -> None:

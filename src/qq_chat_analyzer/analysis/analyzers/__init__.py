@@ -12,6 +12,11 @@ from .distinctive_word_analyzer import (
     DISTINCTIVE_TOP_WORD_LIMIT,
     DistinctiveWordAnalyzer,
 )
+from .expression_analyzer import (
+    EXPRESSION_GLOBAL_TOP_LIMIT,
+    EXPRESSION_MEMBER_TOP_LIMIT,
+    ExpressionAnalyzer,
+)
 from .message_length_analyzer import MessageLengthAnalyzer
 from .message_composition_analyzer import MessageCompositionAnalyzer
 from .private_language_analyzer import PrivateLanguageAnalyzer
@@ -22,6 +27,9 @@ __all__ = [
     "ConversationAnalyzer",
     "DistinctiveWordAnalyzer",
     "DISTINCTIVE_LOG_ODDS_PRIOR_STRENGTH",
+    "ExpressionAnalyzer",
+    "EXPRESSION_GLOBAL_TOP_LIMIT",
+    "EXPRESSION_MEMBER_TOP_LIMIT",
     "DISTINCTIVE_MIN_CANDIDATE_WORDS",
     "DISTINCTIVE_MIN_ELIGIBLE_MEMBERS",
     "DISTINCTIVE_MIN_TOKENIZED_MESSAGES",

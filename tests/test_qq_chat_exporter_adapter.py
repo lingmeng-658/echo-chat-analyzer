@@ -21,7 +21,12 @@ from qq_chat_analyzer.qq_chat_exporter_adapter import (
     parse_qce_messages,
     parse_qce_rich_messages,
 )
-from qq_chat_analyzer.rich_message import MentionRelation, ReplyRelation, TextContent
+from qq_chat_analyzer.rich_message import (
+    ExpressionContent,
+    MentionRelation,
+    ReplyRelation,
+    TextContent,
+)
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -195,6 +200,65 @@ def test_parse_qce_rich_messages_preserves_qq_identity_fields() -> None:
     assert identity.remark == "老王"
     assert identity.nickname == "Nickname"
     assert identity.contextual_name == "达拉崩吧"
+
+
+def test_parse_qce_rich_messages_maps_face_element_to_expression_content() -> None:
+    raw_message = _qce_message(
+        message_id="fictional-face-message",
+        text="[QQ表情]",
+    )
+    raw_message["content"]["elements"] = [
+        {
+            "type": "face",
+            "data": {
+                "id": 358,
+                "name": "/骰子",
+                "faceType": 3,
+                "packId": "1",
+                "stickerId": "33",
+                "resultId": "6",
+            },
+        }
+    ]
+
+    messages, warnings = parse_qce_rich_messages([raw_message])
+
+    assert warnings == ()
+    assert messages[0].contents == (
+        TextContent(text="[QQ表情]"),
+        ExpressionContent(
+            expression_kind="platform_face",
+            expression_key="358",
+            display_text="/骰子",
+        ),
+    )
+
+
+def test_parse_qce_rich_messages_keeps_face_only_message_with_empty_text() -> None:
+    raw_message = _qce_message(
+        message_id="fictional-face-only",
+        text="",
+    )
+    raw_message["content"]["elements"] = [
+        {
+            "type": "face",
+            "data": {"id": "66", "name": ""},
+        }
+    ]
+
+    messages, warnings = parse_qce_rich_messages([raw_message])
+    legacy_messages, _ = parse_qce_messages([raw_message])
+
+    assert warnings == ()
+    assert len(messages) == 1
+    assert messages[0].contents == (
+        ExpressionContent(
+            expression_kind="platform_face",
+            expression_key="66",
+            display_text="[QQ表情 66]",
+        ),
+    )
+    assert legacy_messages[0].text == ""
 
 
 def test_parse_qce_rich_messages_uses_name_as_nickname_fallback() -> None:

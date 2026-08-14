@@ -583,4 +583,78 @@ document.documentElement.classList.add("js-ready");
       });
     }
   }
+
+  var expressionCulture = data && data.expression_culture;
+  var expressionChapter = document.getElementById("expression");
+  var expressionToc = document.getElementById("expression-toc");
+  var expressionTopList = document.getElementById("expression-top-list");
+  var expressionMembers = document.getElementById("expression-members");
+  var hasExpressionCulture = Boolean(
+    expressionCulture && expressionCulture.available
+  );
+  if (expressionChapter) {
+    expressionChapter.hidden = !hasExpressionCulture;
+  }
+  if (expressionToc) {
+    expressionToc.hidden = !hasExpressionCulture;
+  }
+  if (hasExpressionCulture) {
+    setText("expression-intro", "表情在这段交流里留下的共同语言。");
+    setText(
+      "expression-message-count",
+      formatCount(expressionCulture.expression_message_count) + " 条"
+    );
+    setText(
+      "expression-only-count",
+      formatCount(expressionCulture.expression_only_message_count) + " 条"
+    );
+    setText(
+      "expression-unique-count",
+      formatCount(expressionCulture.unique_expression_count) + " 种"
+    );
+    if (expressionTopList) {
+      expressionTopList.textContent = "";
+      (expressionCulture.top_expressions || []).forEach(function (item) {
+        var entry = document.createElement("li");
+        entry.textContent = item.display_text;
+        var count = document.createElement("strong");
+        count.textContent = formatCount(item.count) + " 次";
+        entry.appendChild(count);
+        expressionTopList.appendChild(entry);
+      });
+    }
+    if (expressionMembers) {
+      expressionMembers.textContent = "";
+      (expressionCulture.members || []).forEach(function (member) {
+        var article = document.createElement("article");
+        article.className = "expression-member";
+        var header = document.createElement("header");
+        var name = document.createElement("h3");
+        name.textContent = member.display_name;
+        header.appendChild(name);
+        article.appendChild(header);
+        var share = finiteNumber(member.expression_share_percent);
+        var shareText = share === null ? "—" : share.toFixed(1) + "%";
+        var summary = document.createElement("p");
+        summary.className = "expression-summary";
+        summary.textContent =
+          "表情 " + formatCount(member.expression_occurrence_count) + " 次 · 占全部表情 " +
+          shareText + " · 带表情消息 " +
+          formatCount(member.expression_message_count) + " 条";
+        article.appendChild(summary);
+        var memberList = document.createElement("ul");
+        memberList.className = "expression-list";
+        (member.top_expressions || []).forEach(function (item) {
+          var entry = document.createElement("li");
+          entry.textContent = item.display_text;
+          var count = document.createElement("strong");
+          count.textContent = formatCount(item.count) + " 次";
+          entry.appendChild(count);
+          memberList.appendChild(entry);
+        });
+        article.appendChild(memberList);
+        expressionMembers.appendChild(article);
+      });
+    }
+  }
 })();

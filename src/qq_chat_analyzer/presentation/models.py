@@ -160,6 +160,43 @@ class EchoSharedWord:
 
 
 @dataclass(frozen=True, slots=True)
+class EchoExpressionItem:
+    """One display-ready expression occurrence."""
+
+    expression_key: str
+    display_text: str
+    count: int
+    kind: str
+
+
+@dataclass(frozen=True, slots=True)
+class EchoMemberExpression:
+    """Display-ready expression profile for one member."""
+
+    speaker_key: str
+    display_name: str
+    expression_occurrence_count: int
+    expression_message_count: int
+    expression_share_percent: float
+    expression_only_message_count: int
+    top_expressions: tuple[EchoExpressionItem, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class EchoExpressionCulture:
+    """Display-ready aggregate payload for Echo's expression chapter."""
+
+    available: bool
+    expression_message_count: int = 0
+    expression_only_message_count: int = 0
+    expression_only_rate: float = 0.0
+    unique_expression_count: int = 0
+    top_expressions: tuple[EchoExpressionItem, ...] = ()
+    members: tuple[EchoMemberExpression, ...] = ()
+    unavailable_reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class EchoLanguageProfile:
     """Prepared group/private product branch for the Echo frontend."""
 
@@ -240,6 +277,7 @@ class EchoReportView:
     members: tuple[EchoMemberCard, ...] = ()
     conversation_sessions: EchoConversationSessions | None = None
     language_profile: EchoLanguageProfile | None = None
+    expression_culture: EchoExpressionCulture | None = None
     empty_description: str = ""
     active_days: int = 0
     average_messages_per_active_day: float = 0.0

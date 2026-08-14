@@ -5,15 +5,17 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from ..legacy_projection import project_legacy_messages
 from ..message import ChatMessage
 from ..parser import (
     load_messages as load_qq_messages,
     parse_messages as parse_qq_messages,
 )
+from ..rich_message import RichMessage
 from ..qq_chat_exporter_adapter import (
     is_qce_export,
     load_qce_json,
-    parse_qce_messages,
+    parse_qce_rich_messages,
     qce_conversation_id,
     qce_conversation_type,
     qce_self_identities,
@@ -77,6 +79,7 @@ class ImportService:
             return _unsupported_outcome(request.platform)
 
         messages: list[ChatMessage] = []
+        rich_messages: list[RichMessage] = []
         warnings: list[str] = []
         formats: set[str] = set()
         detected_platforms: list[str] = []
@@ -86,6 +89,7 @@ class ImportService:
             (
                 platform,
                 file_messages,
+                file_rich_messages,
                 file_format,
                 file_warnings,
                 file_raw_count,
@@ -98,6 +102,7 @@ class ImportService:
                 continue
             detected_platforms.append(platform)
             messages.extend(file_messages)
+            rich_messages.extend(file_rich_messages)
             if file_format is not None:
                 formats.add(file_format)
             processed_message_count += file_raw_count
@@ -114,6 +119,7 @@ class ImportService:
             result=result,
             processed_message_count=processed_message_count,
             messages=tuple(messages),
+            rich_messages=tuple(rich_messages),
         )
 
 
@@ -169,7 +175,14 @@ def _is_sidecar(path: Path, root: Path) -> bool:
 def _import_file(
     input_file: Path,
     platform_hint: str | None,
-) -> tuple[str | None, tuple[ChatMessage, ...], str | None, tuple[str, ...], int]:
+) -> tuple[
+    str | None,
+    tuple[ChatMessage, ...],
+    tuple[RichMessage, ...],
+    str | None,
+    tuple[str, ...],
+    int,
+]:
     if platform_hint == "wechat":
         return _import_wechat_file(input_file)
     if platform_hint == "qq":
@@ -185,6 +198,7 @@ def _import_file(
     return (
         _UNKNOWN_PLATFORM,
         (),
+        (),
         None,
         (WARNING_UNSUPPORTED_FORMAT,),
         0,
@@ -193,7 +207,14 @@ def _import_file(
 
 def _import_qq_file(
     input_file: Path,
-) -> tuple[str, tuple[ChatMessage, ...], str, tuple[str, ...], int]:
+) -> tuple[
+    str,
+    tuple[ChatMessage, ...],
+    tuple[RichMessage, ...],
+    str,
+    tuple[str, ...],
+    int,
+]:
     if is_qce_export(input_file):
         return _import_qce_file(input_file)
 
@@ -204,6 +225,7 @@ def _import_qq_file(
     return (
         "qq",
         parsed_messages,
+        (),
         file_format,
         warnings,
         len(raw_messages),
@@ -212,22 +234,31 @@ def _import_qq_file(
 
 def _import_qce_file(
     input_file: Path,
-) -> tuple[str, tuple[ChatMessage, ...], str, tuple[str, ...], int]:
+) -> tuple[
+    str,
+    tuple[ChatMessage, ...],
+    tuple[RichMessage, ...],
+    str,
+    tuple[str, ...],
+    int,
+]:
     payload = load_qce_json(input_file)
     raw_messages = payload.get("messages", []) if payload is not None else []
-    parsed_messages, parse_warnings = parse_qce_messages(
+    rich_messages, parse_warnings = parse_qce_rich_messages(
         raw_messages,
         conversation_id=qce_conversation_id(payload),
         conversation_type=qce_conversation_type(payload),
         self_identity=qce_self_identities(payload),
     )
+    parsed_messages = tuple(project_legacy_messages(rich_messages))
     warnings = (
         *parse_warnings,
         *_import_warnings(input_file, "qq", raw_messages, parsed_messages),
     )
     return (
         "qq",
-        tuple(parsed_messages),
+        parsed_messages,
+        tuple(rich_messages),
         QQ_QCE_FORMAT,
         warnings,
         len(raw_messages),
@@ -236,7 +267,14 @@ def _import_qce_file(
 
 def _import_wechat_file(
     input_file: Path,
-) -> tuple[str, tuple[ChatMessage, ...], str, tuple[str, ...], int]:
+) -> tuple[
+    str,
+    tuple[ChatMessage, ...],
+    tuple[RichMessage, ...],
+    str,
+    tuple[str, ...],
+    int,
+]:
     if is_wechat_db_export(input_file):
         return _import_wechat_db_file(input_file)
 
@@ -269,6 +307,7 @@ def _import_wechat_file(
     return (
         "wechat",
         parsed_messages,
+        (),
         file_format,
         warnings,
         len(raw_messages),
@@ -277,7 +316,14 @@ def _import_wechat_file(
 
 def _import_wechat_cli_file(
     input_file: Path,
-) -> tuple[str, tuple[ChatMessage, ...], str, tuple[str, ...], int]:
+) -> tuple[
+    str,
+    tuple[ChatMessage, ...],
+    tuple[RichMessage, ...],
+    str,
+    tuple[str, ...],
+    int,
+]:
     raw_messages = load_wechat_cli_messages(input_file)
     parsed_messages = tuple(parse_wechat_cli_messages(raw_messages))
     warnings: tuple[str, ...] = ()
@@ -286,6 +332,7 @@ def _import_wechat_cli_file(
     return (
         "wechat",
         parsed_messages,
+        (),
         WECHAT_CLI_FORMAT,
         warnings,
         len(raw_messages),
@@ -294,7 +341,14 @@ def _import_wechat_cli_file(
 
 def _import_wechat_db_file(
     input_file: Path,
-) -> tuple[str, tuple[ChatMessage, ...], str, tuple[str, ...], int]:
+) -> tuple[
+    str,
+    tuple[ChatMessage, ...],
+    tuple[RichMessage, ...],
+    str,
+    tuple[str, ...],
+    int,
+]:
     raw_messages = load_wechat_db_messages(input_file)
     parsed_messages = tuple(parse_wechat_db_messages(raw_messages))
     warnings: tuple[str, ...] = ()
@@ -303,6 +357,7 @@ def _import_wechat_db_file(
     return (
         "wechat",
         parsed_messages,
+        (),
         WECHAT_DB_FORMAT,
         warnings,
         len(raw_messages),

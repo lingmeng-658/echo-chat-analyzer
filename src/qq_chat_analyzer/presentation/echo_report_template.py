@@ -70,20 +70,20 @@ ECHO_REPORT_HTML_SKELETON = r"""
           <span class="toc-leader" aria-hidden="true"></span>
           <span class="toc-page">06</span>
         </a>
-        <div class="toc-row is-future">
-          <span class="toc-number">04</span>
-          <span class="toc-copy"><strong>表达文化</strong><small>未来章节</small></span>
-          <span class="toc-leader" aria-hidden="true"></span>
-          <span class="toc-page">—</span>
-        </div>
-        <div class="toc-row is-future">
+        <a class="toc-row" id="expression-toc" href="#expression" hidden>
           <span class="toc-number">05</span>
+          <span class="toc-copy"><strong>表达文化</strong><small>表情与回应留下的共同语言</small></span>
+          <span class="toc-leader" aria-hidden="true"></span>
+          <span class="toc-page">07</span>
+        </a>
+        <div class="toc-row is-future">
+          <span class="toc-number">06</span>
           <span class="toc-copy"><strong>互动关系</strong><small>未来章节</small></span>
           <span class="toc-leader" aria-hidden="true"></span>
           <span class="toc-page">—</span>
         </div>
         <div class="toc-row is-future">
-          <span class="toc-number">06</span>
+          <span class="toc-number">07</span>
           <span class="toc-copy"><strong>AI 尾声</strong><small>未来章节</small></span>
           <span class="toc-leader" aria-hidden="true"></span>
           <span class="toc-page">—</span>
@@ -247,15 +247,35 @@ ECHO_REPORT_HTML_SKELETON = r"""
       <span class="page-number">06</span>
     </section>
 
+    <section class="page chapter expression-chapter" id="expression" aria-labelledby="expression-title" hidden>
+      <header class="chapter-header">
+        <span class="chapter-number">05</span>
+        <div><p class="folio">EXPRESSIONS</p><h2 id="expression-title">表达文化</h2></div>
+      </header>
+      <p class="chapter-intro" id="expression-intro"></p>
+
+      <dl class="expression-fields">
+        <div><dt>带表情的消息</dt><dd id="expression-message-count"></dd><small>含 emoji 或平台表情的消息数</small></div>
+        <div><dt>纯表情消息</dt><dd id="expression-only-count"></dd><small>只留下表情、没有文字的消息</small></div>
+        <div><dt>不同表情</dt><dd id="expression-unique-count"></dd><small>这段交流中出现过的表情种类</small></div>
+      </dl>
+
+      <div class="expression-top">
+        <h3>这段交流最常用的表情</h3>
+        <ul class="expression-list" id="expression-top-list"></ul>
+      </div>
+      <div class="expression-members" id="expression-members"></div>
+      <span class="page-number">07</span>
+    </section>
+
     <section class="page future" id="future" aria-labelledby="future-title">
       <header class="page-header"><p class="folio">UNWRITTEN</p><h2 id="future-title">尚未展开的部分</h2><p>有些痕迹，将在之后的章节中继续被看见。</p></header>
       <div class="future-list">
-        <div><span>04</span><h3>表达文化</h3><p>群体中逐渐形成的共同表达。</p></div>
-        <div><span>05</span><h3>互动关系</h3><p>交流方向与回应方式。</p></div>
-        <div><span>06</span><h3>AI 尾声</h3><p>基于报告内容形成的回望。</p></div>
+        <div><span>06</span><h3>互动关系</h3><p>交流方向与回应方式。</p></div>
+        <div><span>07</span><h3>AI 尾声</h3><p>基于报告内容形成的回望。</p></div>
       </div>
       <footer class="end-mark"><a href="#cover">回到封面 ↑</a><span>余音 Echo · <b data-current-year>2026</b></span></footer>
-      <span class="page-number">07</span>
+      <span class="page-number">08</span>
     </section>
   </main>
 
@@ -443,6 +463,71 @@ h1, h2, h3, p { margin-top: 0; }
   font: 400 22px/1.4 var(--serif);
 }
 
+.expression-chapter .chapter-intro { margin: 0 0 44px; }
+.expression-fields {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  margin: 0;
+  border-top: 1px solid var(--ink);
+  border-bottom: 1px solid var(--ink);
+}
+.expression-fields div {
+  min-height: 150px;
+  padding: 30px 24px;
+  border-right: 1px solid var(--rule);
+}
+.expression-fields div:last-child { border-right: 0; }
+.expression-fields dt {
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: .08em;
+}
+.expression-fields dd {
+  margin: 18px 0 8px;
+  font: 400 34px/1.1 var(--serif);
+}
+.expression-fields small {
+  color: var(--faint);
+  font-size: 12px;
+}
+.expression-top { margin-top: 52px; }
+.expression-top h3 {
+  margin: 0 0 18px;
+  font-size: 22px;
+  font-weight: 500;
+}
+.expression-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.expression-list li {
+  padding: 10px 16px;
+  background: var(--paper-light);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 15px;
+}
+.expression-list li strong {
+  margin-left: 10px;
+  color: var(--ink);
+  font: 500 16px/1 var(--serif);
+}
+.expression-members { margin-top: 58px; border-top: 1px solid var(--ink); }
+.expression-member { padding: 28px 0; border-bottom: 1px solid var(--rule); }
+.expression-member header { display: flex; align-items: baseline; gap: 18px; }
+.expression-member h3 { margin: 0; font: 500 24px/1.3 var(--sans); }
+.expression-summary { margin: 12px 0 0; color: var(--muted); font: 14px/1.8 var(--serif); }
+.expression-summary strong {
+  color: var(--ink);
+  font-weight: 500;
+  font-family: var(--serif);
+}
+
 .future { display: flex; flex-direction: column; }
 .future-list { margin-top: 64px; border-top: 1px solid var(--rule); }
 .future-list > div { display: grid; grid-template-columns: 54px 180px 1fr; gap: 24px; align-items: baseline; padding: 28px 0; color: var(--faint); border-bottom: 1px solid var(--rule); }
@@ -608,6 +693,15 @@ h1, h2, h3, p { margin-top: 0; }
   .member-list.mode-private { display: block; }
   .mode-private .voice-entry, .mode-private .voice-entry + .voice-entry { min-height: auto; padding-right: 0; padding-left: 0; border-left: 0; }
   .voice-descriptor, .voice-words, .voice-context { margin-left: 0; }
+  .expression-fields { grid-template-columns: 1fr; }
+  .expression-fields div,
+  .expression-fields div:last-child {
+    min-height: auto;
+    padding: 22px 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--rule);
+  }
+  .expression-fields div:last-child { border-bottom: 0; }
   .future-list > div { grid-template-columns: 34px 1fr; }
   .future-list p { grid-column: 2; }
   .page-number { right: 22px; }
@@ -1208,6 +1302,80 @@ document.documentElement.classList.add("js-ready");
         var sideLabel = item.emphasis === "self" ? "你更常说" : "TA 更常说";
         entry.textContent = item.word + " · " + sideLabel;
         sideWordsList.appendChild(entry);
+      });
+    }
+  }
+
+  var expressionCulture = data && data.expression_culture;
+  var expressionChapter = document.getElementById("expression");
+  var expressionToc = document.getElementById("expression-toc");
+  var expressionTopList = document.getElementById("expression-top-list");
+  var expressionMembers = document.getElementById("expression-members");
+  var hasExpressionCulture = Boolean(
+    expressionCulture && expressionCulture.available
+  );
+  if (expressionChapter) {
+    expressionChapter.hidden = !hasExpressionCulture;
+  }
+  if (expressionToc) {
+    expressionToc.hidden = !hasExpressionCulture;
+  }
+  if (hasExpressionCulture) {
+    setText("expression-intro", "表情在这段交流里留下的共同语言。");
+    setText(
+      "expression-message-count",
+      formatCount(expressionCulture.expression_message_count) + " 条"
+    );
+    setText(
+      "expression-only-count",
+      formatCount(expressionCulture.expression_only_message_count) + " 条"
+    );
+    setText(
+      "expression-unique-count",
+      formatCount(expressionCulture.unique_expression_count) + " 种"
+    );
+    if (expressionTopList) {
+      expressionTopList.textContent = "";
+      (expressionCulture.top_expressions || []).forEach(function (item) {
+        var entry = document.createElement("li");
+        entry.textContent = item.display_text;
+        var count = document.createElement("strong");
+        count.textContent = formatCount(item.count) + " 次";
+        entry.appendChild(count);
+        expressionTopList.appendChild(entry);
+      });
+    }
+    if (expressionMembers) {
+      expressionMembers.textContent = "";
+      (expressionCulture.members || []).forEach(function (member) {
+        var article = document.createElement("article");
+        article.className = "expression-member";
+        var header = document.createElement("header");
+        var name = document.createElement("h3");
+        name.textContent = member.display_name;
+        header.appendChild(name);
+        article.appendChild(header);
+        var share = finiteNumber(member.expression_share_percent);
+        var shareText = share === null ? "—" : share.toFixed(1) + "%";
+        var summary = document.createElement("p");
+        summary.className = "expression-summary";
+        summary.textContent =
+          "表情 " + formatCount(member.expression_occurrence_count) + " 次 · 占全部表情 " +
+          shareText + " · 带表情消息 " +
+          formatCount(member.expression_message_count) + " 条";
+        article.appendChild(summary);
+        var memberList = document.createElement("ul");
+        memberList.className = "expression-list";
+        (member.top_expressions || []).forEach(function (item) {
+          var entry = document.createElement("li");
+          entry.textContent = item.display_text;
+          var count = document.createElement("strong");
+          count.textContent = formatCount(item.count) + " 次";
+          entry.appendChild(count);
+          memberList.appendChild(entry);
+        });
+        article.appendChild(memberList);
+        expressionMembers.appendChild(article);
       });
     }
   }
