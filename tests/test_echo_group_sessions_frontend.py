@@ -35,6 +35,17 @@ SESSION_NODE_IDS = (
     "session-peer",
 
     "session-group-top",
+    "session-beat",
+    "session-beat-title",
+    "session-self-peak-hour",
+    "session-peer-peak-hour",
+    "session-reply",
+    "session-movement",
+    "session-highnotes",
+    "session-rest",
+    "session-reply-self-to-peer",
+    "session-reply-peer-to-self",
+    "session-highnotes-title",
     "session-unknown-note",
     "session-threshold-note",
     "session-viewer-identity",
@@ -52,6 +63,9 @@ SESSION_NODE_IDS = (
     "session-loudest-duration-time",
     "session-loudest-participants-time",
     "session-loudest-densest-time",
+    "session-loudest-back-and-forth",
+    "session-loudest-back-and-forth-text",
+    "session-loudest-back-and-forth-time",
     "session-fields-old",
     "session-median-duration-old",
     "session-average-messages-old",
@@ -111,6 +125,11 @@ def _sessions(
     loudest_longest_duration: dict | None = None,
     loudest_most_participants: dict | None = None,
     loudest_densest: dict | None = None,
+    private_self_peak_start_hour: int | None = None,
+    private_peer_peak_start_hour: int | None = None,
+    private_reply_median_self_to_peer_seconds: float | None = None,
+    private_reply_median_peer_to_self_seconds: float | None = None,
+    loudest_most_back_and_forth: dict | None = None,
 ) -> dict:
     return {
         "threshold_seconds": 1800,
@@ -128,6 +147,11 @@ def _sessions(
         "loudest_longest_duration": loudest_longest_duration,
         "loudest_most_participants": loudest_most_participants,
         "loudest_densest": loudest_densest,
+        "private_self_peak_start_hour": private_self_peak_start_hour,
+        "private_peer_peak_start_hour": private_peer_peak_start_hour,
+        "private_reply_median_self_to_peer_seconds": private_reply_median_self_to_peer_seconds,
+        "private_reply_median_peer_to_self_seconds": private_reply_median_peer_to_self_seconds,
+        "loudest_most_back_and_forth": loudest_most_back_and_forth,
         "items": [],
     }
 
@@ -166,8 +190,8 @@ def _render_frontend(
     )
     return json.loads(completed.stdout)
 
-def test_private_regression_no_change() -> None:
-    """Private sessions keep existing layout unchanged."""
+def test_private_sessions_render_five_section_narrative() -> None:
+    """Private sessions render the five-section narrative with reply timing."""
     rendered = _render_frontend(
         kind="private",
         sessions=_sessions(
@@ -179,15 +203,152 @@ def test_private_regression_no_change() -> None:
                 "self_share": 0.625,
                 "peer_share": 0.375,
                 "unknown_share": 0.0,
-            }
+            },
+            private_self_peak_start_hour=22,
+            private_peer_peak_start_hour=9,
+            private_reply_median_self_to_peer_seconds=90.0,
+            private_reply_median_peer_to_self_seconds=240.0,
+            session_character="一旦聊开，就会聊很久",
+            loudest_most_messages={
+                "start_timestamp": 1000,
+                "end_timestamp": 2000,
+                "duration_seconds": 1000,
+                "message_count": 42,
+                "participant_count": 2,
+                "initiator": "self",
+                "initiator_sender_key": "fictional-self-id",
+            },
+            loudest_longest_duration={
+                "start_timestamp": 1000,
+                "end_timestamp": 10000,
+                "duration_seconds": 9000,
+                "message_count": 15,
+                "participant_count": 2,
+                "initiator": "peer",
+                "initiator_sender_key": "fictional-peer-id",
+            },
+            loudest_densest={
+                "start_timestamp": 1000,
+                "end_timestamp": 1360,
+                "duration_seconds": 360,
+                "message_count": 50,
+                "participant_count": 2,
+                "initiator": "self",
+                "initiator_sender_key": "fictional-self-id",
+            },
+            loudest_most_back_and_forth={
+                "start_timestamp": 1000,
+                "end_timestamp": 3000,
+                "duration_seconds": 2000,
+                "message_count": 11,
+                "participant_count": 2,
+                "initiator": "self",
+                "initiator_sender_key": "fictional-self-id",
+                "self_message_count": 6,
+                "peer_message_count": 5,
+            },
         ),
     )
     assert rendered["conversation-sessions"]["hidden"] is False
     assert rendered["session-lead"]["text"] == "过去这段时间，你们一共聊起了 8 轮"
-    assert rendered["session-self"]["text"] == "你先开口 62.5%（5 次）"
-    assert rendered["session-peer"]["text"] == "对方先开口 37.5%（3 次）"
-    assert rendered["session-private-initiators"]["hidden"] is False
-    assert rendered["session-fields-old"]["hidden"] is False, "private: old KPI must be visible"
+    assert rendered["session-beat"]["hidden"] is False
+    assert rendered["session-group-top"]["text"] == "你开启 5 轮 · TA 开启 3 轮"
+    assert rendered["session-self-peak-hour"]["text"] == "你最容易在 22:00 左右开口"
+    assert rendered["session-peer-peak-hour"]["text"] == "TA 最容易在 9:00 左右开口"
+    assert rendered["session-reply"]["hidden"] is False
+    assert rendered["session-reply-self-to-peer"]["text"] == "约 2 分钟"
+    assert rendered["session-reply-peer-to-self"]["text"] == "约 4 分钟"
+    assert rendered["session-movement"]["hidden"] is False
+    assert rendered["session-highnotes"]["hidden"] is False
+    assert rendered["session-highnotes-title"]["text"] == "几段特别的聊天"
+    assert rendered["session-loudest-participants"]["hidden"] is True
+    assert rendered["session-loudest-back-and-forth"]["hidden"] is False
+    assert "你 6 条" in rendered["session-loudest-back-and-forth-text"]["text"]
+    assert "TA 5 条" in rendered["session-loudest-back-and-forth-text"]["text"]
+    assert rendered["session-rest"]["hidden"] is False
+    assert rendered["session-fields-old"]["hidden"] is True
+
+
+def test_private_sessions_degrade_when_reply_or_identity_unavailable() -> None:
+    """Reply section and peak-hour notes hide when data is not reliable."""
+    rendered = _render_frontend(
+        kind="private",
+        sessions=_sessions(
+            private_initiators={
+                "self_count": 1,
+                "peer_count": 0,
+                "unknown_count": 2,
+                "self_to_peer_ratio": None,
+                "self_share": 1 / 3,
+                "peer_share": 0.0,
+                "unknown_share": 2 / 3,
+            },
+        ),
+    )
+    assert rendered["session-reply"]["hidden"] is True
+    assert rendered["session-self-peak-hour"]["hidden"] is True
+    assert rendered["session-peer-peak-hour"]["hidden"] is True
+    assert rendered["session-loudest-back-and-forth"]["hidden"] is True
+
+
+def test_group_back_and_forth_card_stays_hidden() -> None:
+    """Group keeps its original four highnote cards; back-and-forth stays hidden."""
+    rendered = _render_frontend(
+        kind="group",
+        sessions=_sessions(
+            session_count=8,
+            loudest_most_messages={
+                "start_timestamp": 1000,
+                "end_timestamp": 2000,
+                "duration_seconds": 1000,
+                "message_count": 42,
+                "participant_count": 3,
+                "initiator": "a",
+                "initiator_sender_key": "a",
+            },
+            loudest_longest_duration={
+                "start_timestamp": 1000,
+                "end_timestamp": 10000,
+                "duration_seconds": 9000,
+                "message_count": 15,
+                "participant_count": 3,
+                "initiator": "a",
+                "initiator_sender_key": "a",
+            },
+            loudest_most_participants={
+                "start_timestamp": 1000,
+                "end_timestamp": 5000,
+                "duration_seconds": 4000,
+                "message_count": 20,
+                "participant_count": 5,
+                "initiator": "a",
+                "initiator_sender_key": "a",
+            },
+            loudest_densest={
+                "start_timestamp": 1000,
+                "end_timestamp": 1100,
+                "duration_seconds": 100,
+                "message_count": 50,
+                "participant_count": 3,
+                "initiator": "a",
+                "initiator_sender_key": "a",
+            },
+            loudest_most_back_and_forth={
+                "start_timestamp": 1000,
+                "end_timestamp": 3000,
+                "duration_seconds": 2000,
+                "message_count": 11,
+                "participant_count": 2,
+                "initiator": "a",
+                "initiator_sender_key": "a",
+                "self_message_count": 6,
+                "peer_message_count": 5,
+            },
+        ),
+    )
+    assert rendered["session-loudest-participants"]["hidden"] is False
+    assert rendered["session-loudest-back-and-forth"]["hidden"] is True
+    assert rendered["session-reply"]["hidden"] is True
 
 def test_group_session_shows_total_rounds() -> None:
     """Group sessions show total rounds in session-lead."""

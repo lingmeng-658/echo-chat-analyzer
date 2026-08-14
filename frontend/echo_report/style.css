@@ -200,8 +200,11 @@ h1, h2, h3, p { margin-top: 0; }
 }
 
 #session-movement .session-fields div,
+#session-reply .session-fields div,
 #session-movement .session-fields div:nth-child(odd),
-#session-movement .session-fields div:nth-child(even) {
+#session-reply .session-fields div:nth-child(odd),
+#session-movement .session-fields div:nth-child(even),
+#session-reply .session-fields div:nth-child(even) {
   min-height: auto;
   padding: 18px 20px;
   border-top: 0;
@@ -209,7 +212,8 @@ h1, h2, h3, p { margin-top: 0; }
   border-right: 1px solid var(--rule);
 }
 
-#session-movement .session-fields div:last-child {
+#session-movement .session-fields div:last-child,
+#session-reply .session-fields div:last-child {
   border-right: 0;
 }
 

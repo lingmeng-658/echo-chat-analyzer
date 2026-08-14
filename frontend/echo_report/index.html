@@ -128,9 +128,20 @@
 
       <!-- 谁来起拍 -->
       <div class="session-movement" id="session-beat" hidden>
-        <h3 class="movement-heading"><span class="movement-icon" aria-hidden="true"></span>谁来起拍</h3>
+        <h3 class="movement-heading"><span class="movement-icon" aria-hidden="true"></span><span id="session-beat-title">谁来起拍</span></h3>
         <p class="session-beat-lead" id="session-group-top"></p>
         <p class="peak-hour-note" id="session-peak-hour" hidden></p>
+        <p class="peak-hour-note" id="session-self-peak-hour" hidden></p>
+        <p class="peak-hour-note" id="session-peer-peak-hour" hidden></p>
+      </div>
+
+      <!-- 接住第一句话 -->
+      <div class="session-movement" id="session-reply" hidden>
+        <h3 class="movement-heading"><span class="movement-icon" aria-hidden="true"></span><span id="session-reply-title">接住第一句话</span></h3>
+        <dl class="session-fields">
+          <div><dt>你开口之后</dt><dd id="session-reply-self-to-peer"></dd><small>TA 通常多久接住第一句</small></div>
+          <div><dt>TA 开口之后</dt><dd id="session-reply-peer-to-self"></dd><small>你通常多久接住第一句</small></div>
+        </dl>
       </div>
 
       <!-- 一段乐句 -->
@@ -145,7 +156,7 @@
 
       <!-- 聊天里的几个高音 -->
       <div class="session-movement" id="session-highnotes" hidden>
-        <h3 class="movement-heading"><span class="movement-icon" aria-hidden="true"></span>聊天里的几个高音</h3>
+        <h3 class="movement-heading"><span class="movement-icon" aria-hidden="true"></span><span id="session-highnotes-title">聊天里的几个高音</span></h3>
         <div class="highnote-grid">
           <div class="highnote-card" id="session-loudest-messages" hidden>
             <span class="highnote-badge"><span class="highnote-note" aria-hidden="true">♪</span>话最多</span>
@@ -166,6 +177,11 @@
             <span class="highnote-badge"><span class="highnote-note" aria-hidden="true">♬</span>接得最紧</span>
             <span class="highnote-stat" id="session-loudest-densest-text"></span>
             <span class="highnote-time" id="session-loudest-densest-time"></span>
+          </div>
+          <div class="highnote-card" id="session-loudest-back-and-forth" hidden>
+            <span class="highnote-badge"><span class="highnote-note" aria-hidden="true">♫</span>最有来有回</span>
+            <span class="highnote-stat" id="session-loudest-back-and-forth-text"></span>
+            <span class="highnote-time" id="session-loudest-back-and-forth-time"></span>
           </div>
         </div>
       </div>

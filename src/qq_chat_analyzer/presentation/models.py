@@ -155,6 +155,8 @@ class EchoConversationSession:
     initiator: str
     participant_count: int = 1
     initiator_sender_key: str | None = None
+    self_message_count: int | None = None
+    peer_message_count: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +177,10 @@ class EchoConversationSessions:
     private_self_share: float | None = None
     private_peer_share: float | None = None
     private_unknown_share: float | None = None
+    private_self_peak_start_hour: int | None = None
+    private_peer_peak_start_hour: int | None = None
+    private_reply_median_self_to_peer_seconds: float | None = None
+    private_reply_median_peer_to_self_seconds: float | None = None
     group_self_count: int | None = None
     group_self_share: float | None = None
     group_top_initiator_name: str | None = None
@@ -188,6 +194,7 @@ class EchoConversationSessions:
     loudest_longest_duration: EchoConversationSession | None = None
     loudest_most_participants: EchoConversationSession | None = None
     loudest_densest: EchoConversationSession | None = None
+    loudest_most_back_and_forth: EchoConversationSession | None = None
 
 
 @dataclass(frozen=True, slots=True)

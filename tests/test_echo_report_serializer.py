@@ -15,6 +15,8 @@ sys.path.insert(0, str(SRC_ROOT))
 
 from qq_chat_analyzer.presentation import (  # noqa: E402
     ChartPoint,
+    EchoConversationSession,
+    EchoConversationSessions,
     EchoLanguageMember,
     EchoLanguageProfile,
     EchoMemberCard,
@@ -325,3 +327,71 @@ def test_echo_report_html_inlines_current_brand_assets(tmp_path: Path) -> None:
     embedded = {base64.b64decode(uri) for uri in uris}
     assert favicon.read_bytes() in embedded
     assert logo.read_bytes() in embedded
+
+
+def test_private_sessions_serialize_reply_peaks_and_back_and_forth() -> None:
+    """Private v1 fields reach the frontend JSON payload without leaking ratios."""
+    back_and_forth = EchoConversationSession(
+        start_timestamp=10,
+        end_timestamp=130,
+        duration_seconds=120,
+        message_count=11,
+        participant_count=2,
+        initiator="self",
+        initiator_sender_key="fictional-self-id",
+        self_message_count=6,
+        peer_message_count=5,
+    )
+    sessions = EchoConversationSessions(
+        threshold_seconds=1800,
+        session_count=2,
+        average_duration_seconds=600.0,
+        median_duration_seconds=600.0,
+        longest_duration_seconds=1200,
+        average_message_count=10.0,
+        items=(
+            EchoConversationSession(
+                start_timestamp=1,
+                end_timestamp=2,
+                duration_seconds=1,
+                message_count=2,
+                participant_count=2,
+                initiator="self",
+                initiator_sender_key="fictional-self-id",
+                self_message_count=1,
+                peer_message_count=1,
+            ),
+        ),
+        private_self_count=1,
+        private_peer_count=1,
+        private_unknown_count=0,
+        private_self_share=0.5,
+        private_peer_share=0.5,
+        private_unknown_share=0.0,
+        private_self_peak_start_hour=22,
+        private_peer_peak_start_hour=9,
+        private_reply_median_self_to_peer_seconds=60.0,
+        private_reply_median_peer_to_self_seconds=120.0,
+        loudest_most_back_and_forth=back_and_forth,
+    )
+    payload = echo_report_to_dict(
+        EchoReportView(
+            title="Fictional Private Echo",
+            has_data=True,
+            conversation_kind="private",
+            conversation_sessions=sessions,
+        )
+    )
+    data = payload["conversation_sessions"]
+
+    assert data["private_self_peak_start_hour"] == 22
+    assert data["private_peer_peak_start_hour"] == 9
+    assert data["private_reply_median_self_to_peer_seconds"] == 60.0
+    assert data["private_reply_median_peer_to_self_seconds"] == 120.0
+    assert data["items"][0]["self_message_count"] == 1
+    assert data["items"][0]["peer_message_count"] == 1
+    assert data["loudest_most_back_and_forth"]["self_message_count"] == 6
+    assert data["loudest_most_back_and_forth"]["peer_message_count"] == 5
+    serialized = json.dumps(data, ensure_ascii=False)
+    assert "switch_ratio" not in serialized
+    assert "switch_count" not in serialized

@@ -136,9 +136,20 @@ ECHO_REPORT_HTML_SKELETON = r"""
 
       <!-- 谁来起拍 -->
       <div class="session-movement" id="session-beat" hidden>
-        <h3 class="movement-heading"><span class="movement-icon" aria-hidden="true"></span>谁来起拍</h3>
+        <h3 class="movement-heading"><span class="movement-icon" aria-hidden="true"></span><span id="session-beat-title">谁来起拍</span></h3>
         <p class="session-beat-lead" id="session-group-top"></p>
         <p class="peak-hour-note" id="session-peak-hour" hidden></p>
+        <p class="peak-hour-note" id="session-self-peak-hour" hidden></p>
+        <p class="peak-hour-note" id="session-peer-peak-hour" hidden></p>
+      </div>
+
+      <!-- 接住第一句话 -->
+      <div class="session-movement" id="session-reply" hidden>
+        <h3 class="movement-heading"><span class="movement-icon" aria-hidden="true"></span><span id="session-reply-title">接住第一句话</span></h3>
+        <dl class="session-fields">
+          <div><dt>你开口之后</dt><dd id="session-reply-self-to-peer"></dd><small>TA 通常多久接住第一句</small></div>
+          <div><dt>TA 开口之后</dt><dd id="session-reply-peer-to-self"></dd><small>你通常多久接住第一句</small></div>
+        </dl>
       </div>
 
       <!-- 一段乐句 -->
@@ -153,7 +164,7 @@ ECHO_REPORT_HTML_SKELETON = r"""
 
       <!-- 聊天里的几个高音 -->
       <div class="session-movement" id="session-highnotes" hidden>
-        <h3 class="movement-heading"><span class="movement-icon" aria-hidden="true"></span>聊天里的几个高音</h3>
+        <h3 class="movement-heading"><span class="movement-icon" aria-hidden="true"></span><span id="session-highnotes-title">聊天里的几个高音</span></h3>
         <div class="highnote-grid">
           <div class="highnote-card" id="session-loudest-messages" hidden>
             <span class="highnote-badge"><span class="highnote-note" aria-hidden="true">♪</span>话最多</span>
@@ -174,6 +185,11 @@ ECHO_REPORT_HTML_SKELETON = r"""
             <span class="highnote-badge"><span class="highnote-note" aria-hidden="true">♬</span>接得最紧</span>
             <span class="highnote-stat" id="session-loudest-densest-text"></span>
             <span class="highnote-time" id="session-loudest-densest-time"></span>
+          </div>
+          <div class="highnote-card" id="session-loudest-back-and-forth" hidden>
+            <span class="highnote-badge"><span class="highnote-note" aria-hidden="true">♫</span>最有来有回</span>
+            <span class="highnote-stat" id="session-loudest-back-and-forth-text"></span>
+            <span class="highnote-time" id="session-loudest-back-and-forth-time"></span>
           </div>
         </div>
       </div>
@@ -448,8 +464,11 @@ h1, h2, h3, p { margin-top: 0; }
 }
 
 #session-movement .session-fields div,
+#session-reply .session-fields div,
 #session-movement .session-fields div:nth-child(odd),
-#session-movement .session-fields div:nth-child(even) {
+#session-reply .session-fields div:nth-child(odd),
+#session-movement .session-fields div:nth-child(even),
+#session-reply .session-fields div:nth-child(even) {
   min-height: auto;
   padding: 18px 20px;
   border-top: 0;
@@ -457,7 +476,8 @@ h1, h2, h3, p { margin-top: 0; }
   border-right: 1px solid var(--rule);
 }
 
-#session-movement .session-fields div:last-child {
+#session-movement .session-fields div:last-child,
+#session-reply .session-fields div:last-child {
   border-right: 0;
 }
 
@@ -638,6 +658,17 @@ document.documentElement.classList.add("js-ready");
     return Number.isInteger(count) ? String(count) : count.toFixed(1);
   }
 
+  function formatReplyDuration(value) {
+    var seconds = finiteNumber(value);
+    if (seconds === null || seconds < 0) {
+      return "时长未知";
+    }
+    if (seconds < 60) {
+      return String(Math.round(seconds)) + " 秒";
+    }
+    return formatSessionDuration(seconds);
+  }
+
   document.querySelectorAll("[data-current-year]").forEach(function (element) {
     element.textContent = String(new Date().getFullYear());
   });
@@ -717,44 +748,96 @@ document.documentElement.classList.add("js-ready");
       setHidden("session-viewer-identity", true);
     }
 
-    // === Private mode: old layout ===
+    // === Private mode: five-section narrative ===
     if (isPrivate) {
-      // Show private initiators
+      // Hide old private layout remnants
       var privateBlock = document.getElementById("session-private-initiators");
       var unknownNote = document.getElementById("session-unknown-note");
+      var oldFields = document.getElementById("session-fields-old");
+      if (privateBlock) privateBlock.hidden = true;
+      if (unknownNote) unknownNote.hidden = true;
+      if (oldFields) oldFields.hidden = true;
+
+      // 总览 / 第一句话
+      setText("session-beat-title", "总览 · 第一句话");
+      setHidden("session-beat", false);
       var initiators = sessions.private_initiators;
-      var selfShare = initiators ? finiteNumber(initiators.self_share) : null;
-      var peerShare = initiators ? finiteNumber(initiators.peer_share) : null;
       var selfCount = initiators ? finiteNumber(initiators.self_count) : null;
       var peerCount = initiators ? finiteNumber(initiators.peer_count) : null;
-      var unknownCount = initiators ? finiteNumber(initiators.unknown_count) : null;
-      var hasKnownInitiators = Boolean(selfShare !== null && peerShare !== null && (selfShare > 0 || peerShare > 0));
-      if (privateBlock) {
-        privateBlock.hidden = !hasKnownInitiators;
+      if (selfCount !== null && peerCount !== null && selfCount + peerCount > 0) {
+        setText("session-group-top", "你开启 " + formatCount(selfCount) + " 轮 · TA 开启 " + formatCount(peerCount) + " 轮");
+        setHidden("session-group-top", false);
+      } else {
+        setText("session-group-top", "");
+        setHidden("session-group-top", true);
       }
-      if (hasKnownInitiators) {
-        setText("session-self", "你先开口 " + formatPercent(selfShare) + "（" + formatCount(selfCount) + " 次）");
-        setText("session-peer", "对方先开口 " + formatPercent(peerShare) + "（" + formatCount(peerCount) + " 次）");
+      var selfPeakHour = finiteNumber(sessions.private_self_peak_start_hour);
+      if (selfPeakHour !== null) {
+        setText("session-self-peak-hour", "你最容易在 " + String(selfPeakHour) + ":00 左右开口");
+        setHidden("session-self-peak-hour", false);
+      } else {
+        setHidden("session-self-peak-hour", true);
       }
-      if (unknownNote) {
-        if (unknownCount !== null && unknownCount > 0) {
-          unknownNote.hidden = false;
-          unknownNote.textContent = "有 " + formatCount(unknownCount) + " 轮暂时无法判断谁先开口。";
-        } else {
-          unknownNote.hidden = true;
-        }
+      var peerPeakHour = finiteNumber(sessions.private_peer_peak_start_hour);
+      if (peerPeakHour !== null) {
+        setText("session-peer-peak-hour", "TA 最容易在 " + String(peerPeakHour) + ":00 左右开口");
+        setHidden("session-peer-peak-hour", false);
+      } else {
+        setHidden("session-peer-peak-hour", true);
+      }
+      setHidden("session-peak-hour", true);
+
+      // 接住第一句话
+      var selfToPeer = finiteNumber(sessions.private_reply_median_self_to_peer_seconds);
+      var peerToSelf = finiteNumber(sessions.private_reply_median_peer_to_self_seconds);
+      var hasReplyData = selfToPeer !== null || peerToSelf !== null;
+      setHidden("session-reply", !hasReplyData);
+      setText("session-reply-self-to-peer", selfToPeer !== null ? "约 " + formatReplyDuration(selfToPeer) : "暂无足够样本");
+      setText("session-reply-peer-to-self", peerToSelf !== null ? "约 " + formatReplyDuration(peerToSelf) : "暂无足够样本");
+
+      // 一段乐句
+      setHidden("session-movement", false);
+      setText("session-median-duration", "约 " + formatSessionDuration(sessions.median_duration_seconds));
+      setText("session-average-messages", "约 " + formatSessionMessages(sessions.average_message_count) + " 条");
+      var charText = sessions.session_character;
+      if (charText) {
+        setText("session-character", charText);
+        setHidden("session-character", false);
+      } else {
+        setHidden("session-character", true);
       }
 
-      // Old KPI fields for private
-      setText("session-median-duration-old", "通常一次会聊约 " + formatSessionDuration(sessions.median_duration_seconds));
-      setText("session-longest-duration", "最长的一次持续 " + formatSessionDuration(sessions.longest_duration_seconds));
-      setText("session-average-messages-old", "平均每轮约 " + formatSessionMessages(sessions.average_message_count) + " 条消息");
+      // 几段特别的聊天
+      setText("session-highnotes-title", "几段特别的聊天");
+      setHidden("session-highnotes", false);
+      renderLoudest("session-loudest-messages", sessions.loudest_most_messages,
+        function (s) {
+          return formatSessionMessages(s.message_count) + " 条消息 · " + formatSessionDuration(s.duration_seconds);
+        });
+      renderLoudest("session-loudest-duration", sessions.loudest_longest_duration,
+        function (s) {
+          return formatSessionDuration(s.duration_seconds) + " · " + formatSessionMessages(s.message_count) + " 条消息";
+        });
+      renderLoudest("session-loudest-participants", null, function () { return ""; });
+      renderLoudest("session-loudest-densest", sessions.loudest_densest,
+        function (s) {
+          return formatSessionMessages(s.message_count) + " 条消息 · " + formatSessionDuration(s.duration_seconds);
+        });
+      renderLoudest("session-loudest-back-and-forth", sessions.loudest_most_back_and_forth,
+        function (s) {
+          var selfMessages = finiteNumber(s.self_message_count);
+          var peerMessages = finiteNumber(s.peer_message_count);
+          var counts = "你 " + (selfMessages === null ? "—" : formatCount(selfMessages)) + " 条 · TA " + (peerMessages === null ? "—" : formatCount(peerMessages)) + " 条";
+          return counts + " · " + formatSessionDuration(s.duration_seconds);
+        });
 
-      // Hide group 5-section narrative
-      setHidden("session-beat", true);
-      setHidden("session-movement", true);
-      setHidden("session-highnotes", true);
-      setHidden("session-rest", true);
+      // 休止
+      setHidden("session-rest", false);
+      var thresholdSeconds = finiteNumber(sessions.threshold_seconds);
+      var thresholdMinutes = thresholdSeconds !== null && thresholdSeconds > 0 ? Math.round(thresholdSeconds / 60) : 30;
+      setText("session-threshold-note",
+        "超过 " + String(thresholdMinutes) + " 分钟未继续交流，会视作下一轮聊天。"
+      );
     }
 
     // === Group mode: 5-section narrative ===
@@ -766,8 +849,12 @@ document.documentElement.classList.add("js-ready");
       if (unknownNote) unknownNote.hidden = true;
       var oldFields = document.getElementById("session-fields-old");
       if (oldFields) oldFields.hidden = true;
+      setHidden("session-reply", true);
+      setHidden("session-self-peak-hour", true);
+      setHidden("session-peer-peak-hour", true);
 
       // 谁来起拍
+      setText("session-beat-title", "谁来起拍");
       setHidden("session-beat", false);
       if (groupInitiators && groupInitiators.top_member) {
         var topMember = groupInitiators.top_member;
@@ -799,6 +886,7 @@ document.documentElement.classList.add("js-ready");
       }
 
       // 聊天里的几个高音
+      setText("session-highnotes-title", "聊天里的几个高音");
       setHidden("session-highnotes", false);
       renderLoudest("session-loudest-messages", sessions.loudest_most_messages,
         function (s) {
@@ -816,6 +904,7 @@ document.documentElement.classList.add("js-ready");
         function (s) {
           return formatSessionMessages(s.message_count) + " 条消息 · " + formatSessionDuration(s.duration_seconds);
         });
+      renderLoudest("session-loudest-back-and-forth", null, function () { return ""; });
 
       // 休止
       setHidden("session-rest", false);

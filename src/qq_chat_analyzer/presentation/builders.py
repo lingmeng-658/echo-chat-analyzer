@@ -363,6 +363,8 @@ def _build_echo_sessions(
                 participant_count=session.participant_count,
                 initiator=session.initiator,
                 initiator_sender_key=session.initiator_sender_key,
+                self_message_count=session.self_message_count,
+                peer_message_count=session.peer_message_count,
             )
             for session in report.sessions
         ),
@@ -378,6 +380,18 @@ def _build_echo_sessions(
         private_peer_share=(private.peer_initiated_share if private else None),
         private_unknown_share=(
             private.unknown_initiated_share if private else None
+        ),
+        private_self_peak_start_hour=report.private_self_peak_start_hour,
+        private_peer_peak_start_hour=report.private_peer_peak_start_hour,
+        private_reply_median_self_to_peer_seconds=(
+            report.private_reply_timing.self_to_peer_median_seconds
+            if report.private_reply_timing is not None
+            else None
+        ),
+        private_reply_median_peer_to_self_seconds=(
+            report.private_reply_timing.peer_to_self_median_seconds
+            if report.private_reply_timing is not None
+            else None
         ),
         group_self_count=(group.self_initiated_count if group else None),
         group_self_share=(group.self_initiated_share if group else None),
@@ -426,6 +440,11 @@ def _build_echo_sessions(
             if report.loudest_densest is not None
             else None
         ),
+        loudest_most_back_and_forth=(
+            _session_to_echo(report.sessions[report.loudest_most_back_and_forth])
+            if report.loudest_most_back_and_forth is not None
+            else None
+        ),
     )
 
 
@@ -440,6 +459,8 @@ def _session_to_echo(session: ConversationSession) -> EchoConversationSession:
         participant_count=session.participant_count,
         initiator=session.initiator,
         initiator_sender_key=session.initiator_sender_key,
+        self_message_count=session.self_message_count,
+        peer_message_count=session.peer_message_count,
     )
 
 

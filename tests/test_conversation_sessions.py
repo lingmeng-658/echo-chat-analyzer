@@ -572,3 +572,259 @@ def test_loudest_densest_tie_break_uses_message_count() -> None:
     assert report.loudest_densest is not None
     # Same density, same message_count, session 1 starts earlier -> index 0
     assert report.loudest_densest == 0
+
+
+# === Private conversation session v1 ===
+
+
+def _private_pair(offset_seconds, *, self_message: bool) -> ChatMessage:
+    """One private message from the self/peer side with a distinct sender key."""
+    if self_message:
+        return _message(
+            offset_seconds,
+            is_self=True,
+            sender="Fictional Self",
+            sender_id="fictional-self-id",
+        )
+    return _message(
+        offset_seconds,
+        is_self=False,
+        sender="Fictional Peer",
+        sender_id="fictional-peer-id",
+    )
+
+
+def test_private_reply_timing_medians_for_both_directions() -> None:
+    """Reply latency is the initiator's first valid message to the other side."""
+    report = analyze_conversation_sessions(
+        (
+            _private_pair(0, self_message=True),
+            _private_pair(60, self_message=False),
+            _private_pair(120, self_message=True),
+            _private_pair(2000, self_message=False),
+            _private_pair(2045, self_message=True),
+            _private_pair(2090, self_message=False),
+        )
+    )
+
+    assert report.conversation_type == "private"
+    assert report.private_reply_timing is not None
+    assert report.private_reply_timing.self_to_peer_median_seconds == 60.0
+    assert report.private_reply_timing.peer_to_self_median_seconds == 45.0
+
+
+def test_private_reply_timing_excludes_one_sided_sessions() -> None:
+    """Sessions where only one side appears never contribute reply latency."""
+    report = analyze_conversation_sessions(
+        (
+            _private_pair(0, self_message=True),
+            _private_pair(60, self_message=True),
+            _private_pair(2000, self_message=False),
+            _private_pair(2090, self_message=True),
+        )
+    )
+
+    assert report.private_reply_timing is not None
+    assert report.private_reply_timing.self_to_peer_median_seconds is None
+    assert report.private_reply_timing.peer_to_self_median_seconds == 90.0
+
+
+def test_private_reply_timing_uses_initiators_first_valid_message() -> None:
+    """An invalid initiator timestamp is skipped, not treated as time zero."""
+    report = analyze_conversation_sessions(
+        (
+            _message(None, is_self=True, sender_id="fictional-self-id"),
+            _private_pair(100, self_message=True),
+            _private_pair(250, self_message=False),
+        )
+    )
+
+    assert report.private_reply_timing is not None
+    assert report.private_reply_timing.self_to_peer_median_seconds == 150.0
+
+
+def test_private_reply_timing_ignores_negative_reply_windows() -> None:
+    """If the other side appears before the initiator's first valid message, skip."""
+    report = analyze_conversation_sessions(
+        (
+            _message(None, is_self=True, sender_id="fictional-self-id"),
+            _private_pair(100, self_message=False),
+            _private_pair(200, self_message=True),
+        )
+    )
+
+    assert report.private_reply_timing is not None
+    assert report.private_reply_timing.self_to_peer_median_seconds is None
+
+
+def test_private_start_hour_peak_is_per_initiator() -> None:
+    """Self and peer each get their own most common active-start hour."""
+    report = analyze_conversation_sessions(
+        (
+            _private_pair(7200, self_message=True),
+            _private_pair(9001, self_message=True),
+            _private_pair(21601, self_message=False),
+            _private_pair(25201, self_message=False),
+        ),
+        threshold_seconds=1800,
+    )
+
+    assert report.private_self_peak_start_hour == 10
+    assert report.private_peer_peak_start_hour == 14
+
+
+def test_private_start_hour_peak_is_none_when_side_missing() -> None:
+    """A side with no reliably initiated sessions has no peak hour."""
+    report = analyze_conversation_sessions(
+        (
+            _private_pair(7200, self_message=True),
+            _private_pair(9001, self_message=True),
+        ),
+        threshold_seconds=1800,
+    )
+
+    assert report.private_self_peak_start_hour == 10
+    assert report.private_peer_peak_start_hour is None
+
+
+def _alternating_session(
+    start_offset: int,
+    *,
+    message_count: int,
+    gap_seconds: int = 10,
+    first_self: bool = True,
+) -> tuple[ChatMessage, ...]:
+    messages = []
+    for index in range(message_count):
+        offset = start_offset + index * gap_seconds
+        self_message = (index % 2 == 0) if first_self else (index % 2 == 1)
+        messages.append(_private_pair(offset, self_message=self_message))
+    return tuple(messages)
+
+
+def test_private_back_and_forth_prefers_higher_switch_ratio() -> None:
+    """Higher sender-switch ratio wins among eligible sessions."""
+    alternating = _alternating_session(0, message_count=10, gap_seconds=20)
+    clustered = (
+        _private_pair(2000, self_message=True),
+        _private_pair(2015, self_message=True),
+        _private_pair(2030, self_message=True),
+        _private_pair(2045, self_message=True),
+        _private_pair(2060, self_message=True),
+        _private_pair(2075, self_message=True),
+        _private_pair(2090, self_message=False),
+        _private_pair(2105, self_message=False),
+        _private_pair(2120, self_message=False),
+        _private_pair(2135, self_message=False),
+        _private_pair(2150, self_message=False),
+        _private_pair(2165, self_message=False),
+    )
+    report = analyze_conversation_sessions(alternating + clustered)
+
+    assert report.loudest_most_back_and_forth == 0
+
+
+def test_private_back_and_forth_eligibility_thresholds() -> None:
+    """Candidates need duration >= 120s and message_count >= 10."""
+    too_short = _alternating_session(0, message_count=10, gap_seconds=10)
+    report = analyze_conversation_sessions(too_short)
+    assert report.sessions[0].duration_seconds == 90
+    assert report.loudest_most_back_and_forth is None
+
+    too_few = _alternating_session(0, message_count=9, gap_seconds=20)
+    report = analyze_conversation_sessions(too_few)
+    assert report.sessions[0].message_count == 9
+    assert report.loudest_most_back_and_forth is None
+
+
+def test_private_back_and_forth_tie_breaks() -> None:
+    """Ties resolve by messages, duration, earlier start, then original order."""
+    report = analyze_conversation_sessions(
+        _alternating_session(0, message_count=12, gap_seconds=20)
+        + _alternating_session(2200, message_count=10, gap_seconds=20)
+    )
+    assert report.loudest_most_back_and_forth == 0
+
+    report = analyze_conversation_sessions(
+        _alternating_session(0, message_count=10, gap_seconds=10)
+        + _alternating_session(2000, message_count=10, gap_seconds=20)
+    )
+    assert report.loudest_most_back_and_forth == 1
+
+    report = analyze_conversation_sessions(
+        _alternating_session(0, message_count=10, gap_seconds=20)
+        + _alternating_session(2000, message_count=10, gap_seconds=20)
+    )
+    assert report.loudest_most_back_and_forth == 0
+
+
+def test_private_back_and_forth_uses_valid_messages_only() -> None:
+    """Invalid timestamps are excluded from the switch-ratio denominator."""
+    messages = list(_alternating_session(0, message_count=12, gap_seconds=20))
+    messages[3] = _message(None, is_self=True, sender_id="fictional-self-id")
+    messages[8] = _message(None, is_self=False, sender_id="fictional-peer-id")
+    report = analyze_conversation_sessions(tuple(messages))
+
+    assert report.loudest_most_back_and_forth == 0
+
+
+def test_private_session_self_peer_message_counts() -> None:
+    """Private sessions carry per-side counts, or None when identity is unreliable."""
+    report = analyze_conversation_sessions(
+        (
+            _private_pair(0, self_message=True),
+            _private_pair(10, self_message=True),
+            _private_pair(20, self_message=False),
+            _private_pair(30, self_message=False),
+            _private_pair(40, self_message=True),
+        )
+    )
+    session = report.sessions[0]
+    assert session.self_message_count == 3
+    assert session.peer_message_count == 2
+
+    unreliable = analyze_conversation_sessions(
+        (
+            _private_pair(0, self_message=True),
+            _message(10, is_self=None, sender_id="fictional-unknown-id"),
+            _private_pair(20, self_message=False),
+        )
+    )
+    assert unreliable.sessions[0].self_message_count is None
+    assert unreliable.sessions[0].peer_message_count is None
+
+
+def test_private_reuses_character_and_loudest_rules() -> None:
+    """Private sessions reuse group character/loudest rules without participant metric."""
+    report = analyze_conversation_sessions(
+        (
+            _private_pair(0, self_message=True),
+            _private_pair(1800, self_message=False),
+            _private_pair(2000, self_message=True),
+            _private_pair(2200, self_message=False),
+            _private_pair(4001, self_message=True),
+            _private_pair(5800, self_message=False),
+            _private_pair(6000, self_message=True),
+            _private_pair(6200, self_message=False),
+            _private_pair(8001, self_message=True),
+            _private_pair(9800, self_message=False),
+            _private_pair(10000, self_message=True),
+            _private_pair(10200, self_message=False),
+        ),
+        threshold_seconds=1800,
+    )
+
+    assert report.session_character == "long_running"
+    assert report.loudest_most_messages is not None
+    assert report.loudest_longest_duration is not None
+    assert report.loudest_most_participants is None
+
+
+def test_private_loudest_densest_uses_group_rules() -> None:
+    """Private densest reuses the group eligibility and tie rules."""
+    report = analyze_conversation_sessions(
+        _alternating_session(0, message_count=12, gap_seconds=20)
+    )
+    assert report.sessions[0].duration_seconds == 220
+    assert report.sessions[0].message_count == 12
+    assert report.loudest_densest == 0

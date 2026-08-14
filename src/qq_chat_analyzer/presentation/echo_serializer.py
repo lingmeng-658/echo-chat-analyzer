@@ -116,6 +116,14 @@ def _conversation_sessions_to_dict(
         "average_message_count": sessions.average_message_count,
         "private_initiators": private_initiators,
         "group_initiators": group_initiators,
+        "private_self_peak_start_hour": sessions.private_self_peak_start_hour,
+        "private_peer_peak_start_hour": sessions.private_peer_peak_start_hour,
+        "private_reply_median_self_to_peer_seconds": (
+            sessions.private_reply_median_self_to_peer_seconds
+        ),
+        "private_reply_median_peer_to_self_seconds": (
+            sessions.private_reply_median_peer_to_self_seconds
+        ),
         "items": [
             {
                 "start_timestamp": item.start_timestamp,
@@ -125,6 +133,8 @@ def _conversation_sessions_to_dict(
                 "participant_count": item.participant_count,
                 "initiator": item.initiator,
                 "initiator_sender_key": item.initiator_sender_key,
+                "self_message_count": item.self_message_count,
+                "peer_message_count": item.peer_message_count,
             }
             for item in sessions.items
         ],
@@ -139,6 +149,9 @@ def _conversation_sessions_to_dict(
         "loudest_longest_duration": _session_to_dict(sessions.loudest_longest_duration),
         "loudest_most_participants": _session_to_dict(sessions.loudest_most_participants),
         "loudest_densest": _session_to_dict(sessions.loudest_densest),
+        "loudest_most_back_and_forth": _session_to_dict(
+            sessions.loudest_most_back_and_forth
+        ),
     }
 
 
@@ -155,6 +168,8 @@ def _session_to_dict(session: EchoConversationSession | None) -> dict[str, objec
         "participant_count": session.participant_count,
         "initiator": session.initiator,
         "initiator_sender_key": session.initiator_sender_key,
+        "self_message_count": session.self_message_count,
+        "peer_message_count": session.peer_message_count,
     }
 
 
