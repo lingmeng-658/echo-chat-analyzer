@@ -177,6 +177,8 @@ Adapter 与 Parser 属于**同一层的两种形态**：
 作为跨平台分析所需的最小 identity semantics 进入 `ChatMessage`；
 `None` 表示数据源无法可靠判断本人，展示层仍通过名称注入与
 `resolved_display_name` 解析，不复制平台身份规则。
+关于 `sender_id`、`conversation_type`、`is_self` 的平台映射、canonical identity
+与 Unknown 语义，以根目录 `DATA_SEMANTICS.md` 为唯一事实来源；本文只定义其架构职责。
 
 ### 4.4 Application
 
@@ -246,7 +248,13 @@ Facade 在后续阶段接入。
 核心分两代，并存且互不干扰：
 
 - **v1**：`cleaner.py`、`tokenizer.py`、`analyzer.py` —— 词频、说话者统计。
-- **v2/v3**：`analysis/` 包 —— 活跃度、消息长度、用户画像、会话概览。
+- **v2/v3**：`analysis/` 包 —— 活跃度、消息长度、用户画像、会话概览、
+  Conversation Sessions 等结构化分析能力。
+
+**Conversation Sessions** 位于 Analysis Core 内部，只消费统一后的
+`ChatMessage.timestamp`、`conversation_type`、`is_self` 与稳定发送者身份。
+Session 切分、initiator 判定和汇总统计必须在核心完成；
+Presentation 与 Echo 只消费结果，不得重新计算。
 
 **禁止在核心中出现平台分支。** 不得出现 QQ、微信、`wxid`、`chatroom` 之类判断。
 唯一例外是 `analysis/models.py` 中对内部标识可展示性的判定，
@@ -446,7 +454,9 @@ GUI 只装配控件、转发事件、展示状态。
 | `runtime/` | 外部运行时契约（ChatRuntime）与捆绑运行时实现（BundledQQRuntime） |
 | `cleaner.py` / `tokenizer.py` / `analyzer.py` | Analysis Core v1 |
 | `analysis/models.py` | 报告模型（v2/v3） |
-| `analysis/analyzers/*.py` | 四类 analyzer |
+| `analysis/analyzers/*.py` | 独立分析器 |
+| `analysis/conversation_sessions.py` | Conversation Sessions 切分与汇总分析 |
+| `analysis/identity.py` | 稳定发送者 identity 辅助 |
 | `analysis/peaks.py` / `timestamps.py` | 分析辅助 |
 | `presentation/models.py` | 视图模型 |
 | `presentation/builders.py` / `formatters.py` | 视图构建与格式化 |
@@ -532,6 +542,8 @@ GUI 只装配控件、转发事件、展示状态。
 | 环境搭建、测试命令、Git 流程 | `DEVELOPMENT.md` |
 | AI 协作规范 | `AGENTS.md` |
 | 项目简介与快速上手 | `README.md` |
+| 跨平台字段、identity 与分析语义 | `DATA_SEMANTICS.md` |
+| 当前稳定能力、冻结区域与近期工作 | `DEVELOPMENT_STATE.md` |
 | 历史设计记录 | `docs/design/`、`docs/superpowers/specs/` |
 
 当架构描述与其他文档冲突时，**以本文档为准**。
