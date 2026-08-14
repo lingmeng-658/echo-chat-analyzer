@@ -597,6 +597,18 @@ class ChatAnalyzerFacade:
             _LOGGER.exception("Analysis history record could not be read.")
             return None
 
+    def clear_analysis_history(self) -> None:
+        """Delete every saved analysis history record."""
+        if self._report_history_manager is None:
+            return
+        try:
+            self._report_history_manager.clear()
+        except Exception as exc:
+            raise FacadeError(
+                code="history_clear_failed",
+                public_message="无法清空 Echo 历史记录，请稍后重试。",
+            ) from exc
+
     # ------------------------------------------------------------- snapshots
 
     def list_snapshots(

@@ -7,6 +7,7 @@ consumer of the facade.
 
 from __future__ import annotations
 
+import dataclasses
 import importlib
 import os
 import sys
@@ -108,6 +109,8 @@ class StubFacade:
         snapshots=(),
         snapshot_storage_usage=0,
         snapshot_error=None,
+        remove_snapshot_error=None,
+        clear_history_error=None,
     ):
         self._sources = tuple(sources)
         self._sessions = list(sessions)
@@ -129,6 +132,8 @@ class StubFacade:
         self._snapshots = list(snapshots)
         self._snapshot_storage_usage = snapshot_storage_usage
         self._snapshot_error = snapshot_error
+        self._remove_snapshot_error = remove_snapshot_error
+        self._clear_history_error = clear_history_error
         self.list_sessions_calls: list[object] = []
         self.get_connection_status_calls: list[object] = []
         self.get_wechat_setup_status_calls: list[object] = []
@@ -152,6 +157,7 @@ class StubFacade:
         self.analyze_session_calls: list[tuple] = []
         self.analyze_file_calls: list[tuple] = []
         self.list_analysis_history_calls: list[object] = []
+        self.clear_analysis_history_calls: list[object] = []
         self.get_analysis_history_calls: list[object] = []
         self.list_snapshots_calls: list[tuple] = []
         self.validate_snapshot_calls: list[object] = []
@@ -161,6 +167,12 @@ class StubFacade:
     def list_analysis_history(self):
         self.list_analysis_history_calls.append(1)
         return tuple(self._history)
+
+    def clear_analysis_history(self):
+        self.clear_analysis_history_calls.append(1)
+        if self._clear_history_error is not None:
+            raise self._clear_history_error
+        self._history = []
 
     def get_analysis_history(self, analysis_id):
         self.get_analysis_history_calls.append(analysis_id)
@@ -194,9 +206,14 @@ class StubFacade:
 
     def remove_snapshot(self, snapshot_id):
         self.remove_snapshot_calls.append(snapshot_id)
+        if self._remove_snapshot_error is not None:
+            raise self._remove_snapshot_error
         if self._snapshot_error is not None:
             raise self._snapshot_error
-        return next(
+        snapshot_module = importlib.import_module(
+            "qq_chat_analyzer.application.chat_data_snapshot"
+        )
+        removed = next(
             (
                 snapshot
                 for snapshot in self._snapshots
@@ -204,6 +221,17 @@ class StubFacade:
             ),
             None,
         )
+        self._snapshots = [
+            dataclasses.replace(
+                snapshot,
+                payload_state=snapshot_module.SnapshotPayloadState.REMOVED,
+            )
+            if getattr(snapshot, "id", None) == snapshot_id
+            else snapshot
+            for snapshot in self._snapshots
+        ]
+        self._snapshot_storage_usage = 0
+        return removed
 
     def get_snapshot_storage_usage(self):
         self.get_snapshot_storage_usage_calls.append(1)
@@ -2002,10 +2030,10 @@ def test_wechat_guide_shows_status_confirmation(qt_app) -> None:
     assert "正在准备微信连接" in page._wechat_guide_label.text()
     assert "请确保微信电脑版已安装" not in page._wechat_guide_label.text()
     assert "如需查看微信数据目录" not in page._wechat_guide_label.text()
-    assert "请保持微信停留在登录界面，不要点击进入微信" in (
+    assert "请进入微信，余音会捕捉登录这一刻的“声音”" in (
         page._wechat_guide_key_label.text()
     )
-    assert "不要进入聊天页面" in page._wechat_guide_key_label.text()
+    assert "请保持微信停留在登录界面" not in page._wechat_guide_key_label.text()
     assert "\u4e0d\u4e0a\u4f20" not in page._wechat_guide_key_label.text()
     assert "\u4e0d\u4fdd\u5b58" not in page._wechat_guide_key_label.text()
     assert "等待微信登录" in page._wechat_guide_note_label.text()
@@ -2036,8 +2064,8 @@ def test_wechat_critical_login_hint_is_plain_text_with_wrap(
         QSizePolicy.Policy.Expanding
     )
     warning_text = module._WECHAT_GUIDE_WARNING
-    assert "请保持微信停留在登录界面，不要点击进入微信" in warning_text
-    assert "登录成功后，余音会自动继续" in warning_text
+    assert "请进入微信，余音会捕捉登录这一刻的“声音”" in warning_text
+    assert "请保持微信停留在登录界面" not in warning_text
     assert "<br>" not in warning_text
     assert "<span" not in warning_text
     note_text = module._WECHAT_GUIDE_NOTE
@@ -2111,10 +2139,16 @@ def test_wechat_not_detected_shows_directory_help(qt_app) -> None:
         page._status_label.text()
     )
     assert page._wechat_setup_dialog is not None
-    assert "\u5982\u679c\u672a\u81ea\u52a8\u8bc6\u522b\u5fae\u4fe1\u6570\u636e\u76ee\u5f55" in (
+    dialog = page._wechat_setup_dialog
+    assert "如果未能自动识别微信数据目录" in dialog._hint_label.text()
+    assert "填写完成后，请退出微信到未登录界面" in dialog._hint_label.text()
+    assert "\u5982\u679c\u672a\u80fd\u81ea\u52a8\u8bc6\u522b\u5fae\u4fe1\u6570\u636e\u76ee\u5f55" in (
         page._wechat_guide_label.text()
     )
-    assert "\u5b58\u50a8\u6587\u4ef6\u5939" in page._wechat_guide_label.text()
+    assert "\u5b58\u50a8\u4f4d\u7f6e" in page._wechat_guide_label.text()
+    assert "\u586b\u5199\u5b8c\u6210\u540e\uff0c\u8bf7\u9000\u51fa\u5fae\u4fe1\u5230\u672a\u767b\u5f55\u754c\u9762" in (
+        page._wechat_guide_label.text()
+    )
 
 
 def test_saving_wechat_environment_refreshes_status(qt_app) -> None:
@@ -4358,7 +4392,7 @@ def test_wechat_guide_image_load_failure_is_safe(qt_app, tmp_path: Path) -> None
     _drain(page)
 
     assert page._wechat_guide_image_label.isVisibleTo(page) is False
-    assert "请保持微信停留在登录界面，不要点击进入微信" in (
+    assert "请进入微信，余音会捕捉登录这一刻的“声音”" in (
         page._wechat_guide_key_label.text()
     )
 
@@ -4420,7 +4454,7 @@ def test_wechat_guide_text_has_no_html_tags(qt_app) -> None:
     assert "正在准备微信连接" in texts[0]
     assert "等待微信登录" in texts[2]
     assert (
-        "请保持微信停留在登录界面，不要点击进入微信"
+        "请进入微信，余音会捕捉登录这一刻的“声音”"
         in texts[1]
     )
     assert "\u4e0d\u4e0a\u4f20" in texts[2]
@@ -5358,7 +5392,14 @@ def test_wechat_workspace_auto_detection_opens_manual_setup_when_no_candidates(
 # GUI-6: Local Data page
 # ---------------------------------------------------------------
 
-def _gui_history_record(analysis_id, source="wechat", session_name="测试会话"):
+def _gui_history_record(
+    analysis_id,
+    source="wechat",
+    session_name="测试会话",
+    analysis_scope="all",
+    scope_start=None,
+    scope_end=None,
+):
     history_module = importlib.import_module(
         "qq_chat_analyzer.application.report_history"
     )
@@ -5368,11 +5409,20 @@ def _gui_history_record(analysis_id, source="wechat", session_name="测试会话
         source=source,
         session_name=session_name,
         message_count=42,
-        analysis_scope="all",
+        analysis_scope=analysis_scope,
+        scope_start=scope_start,
+        scope_end=scope_end,
     )
 
 
-def _gui_snapshot(snapshot_id, size=2048, source=None):
+def _gui_snapshot(
+    snapshot_id,
+    size=2048,
+    source=None,
+    *,
+    session_name="虚构群",
+    payload_state=None,
+):
     snapshot_module = importlib.import_module(
         "qq_chat_analyzer.application.chat_data_snapshot"
     )
@@ -5380,12 +5430,16 @@ def _gui_snapshot(snapshot_id, size=2048, source=None):
         id=snapshot_id,
         source=source or snapshot_module.ChatDataSource.QQ,
         session_id="room-1",
-        session_name="虚构群",
+        session_name=session_name,
         session_type="group",
         acquired_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
         data_size_bytes=size,
         storage_format="qce_json",
         storage_path=f"data/snapshots/qq/{snapshot_id}/export.json",
+        payload_state=(
+            payload_state
+            or snapshot_module.SnapshotPayloadState.AVAILABLE
+        ),
     )
 
 
@@ -5431,6 +5485,7 @@ def test_local_data_page_delete_snapshot(qt_app, sources) -> None:
         snapshots=[_gui_snapshot("snap-1")],
     )
     window = _main_window(qt_app, facade)
+    window.local_data_page._confirm_delete = lambda: True
     window.show_local_data_page()
     _drain(window)
 
@@ -5439,6 +5494,232 @@ def test_local_data_page_delete_snapshot(qt_app, sources) -> None:
     _drain(window)
 
     assert facade.remove_snapshot_calls == ["snap-1"]
+
+
+def test_delete_confirmation_dialog_has_expected_copy(qt_app) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    page_module = importlib.import_module("qq_chat_analyzer.gui.local_data_page")
+    dialog = page_module._delete_confirmation_dialog()
+
+    assert dialog.windowTitle() == "确认删除"
+    assert "确定要删除所选快照吗？" in dialog.text()
+    assert "删除后将无法恢复。" in dialog.text()
+    buttons = {button.text(): button for button in dialog.buttons()}
+    assert "删除" in buttons
+    assert "取消" in buttons
+
+
+def test_local_data_delete_asks_for_confirmation(qt_app, sources) -> None:
+    facade = StubFacade(
+        sources=sources,
+        snapshots=[_gui_snapshot("snap-1")],
+    )
+    window = _main_window(qt_app, facade)
+    prompts: list[bool] = []
+    window.local_data_page._confirm_delete = lambda: prompts.append(1) or True
+    window.show_local_data_page()
+    _drain(window)
+
+    window.local_data_page._snapshot_table.selectRow(0)
+    window.local_data_page._delete_snapshot_button.click()
+    _drain(window)
+
+    assert prompts == [1]
+    assert facade.remove_snapshot_calls == ["snap-1"]
+
+
+def test_local_data_delete_cancel_does_not_remove(qt_app, sources) -> None:
+    facade = StubFacade(
+        sources=sources,
+        snapshots=[_gui_snapshot("snap-1")],
+    )
+    window = _main_window(qt_app, facade)
+    window.local_data_page._confirm_delete = lambda: False
+    window.show_local_data_page()
+    _drain(window)
+
+    window.local_data_page._snapshot_table.selectRow(0)
+    window.local_data_page._delete_snapshot_button.click()
+    _drain(window)
+
+    assert facade.remove_snapshot_calls == []
+    assert window.local_data_page._snapshot_table.rowCount() == 1
+
+
+def test_local_data_delete_success_refreshes_and_hides_snapshot(
+    qt_app,
+    sources,
+) -> None:
+    facade = StubFacade(
+        sources=sources,
+        snapshots=[_gui_snapshot("snap-1")],
+        snapshot_storage_usage=2048,
+    )
+    window = _main_window(qt_app, facade)
+    window.local_data_page._confirm_delete = lambda: True
+    window.show_local_data_page()
+    _drain(window)
+    assert window.local_data_page._snapshot_table.rowCount() == 1
+
+    window.local_data_page._snapshot_table.selectRow(0)
+    window.local_data_page._delete_snapshot_button.click()
+    _drain(window)
+
+    assert facade.remove_snapshot_calls == ["snap-1"]
+    assert window.local_data_page._snapshot_table.rowCount() == 0
+    assert window.local_data_page._snapshot_empty_label.isVisibleTo(window) is True
+    assert "0 B" in window.local_data_page._usage_label.text()
+    assert len(facade.list_snapshots_calls) >= 2
+
+
+def test_local_data_delete_failure_shows_public_message(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    facade = StubFacade(
+        sources=sources,
+        snapshots=[_gui_snapshot("snap-1")],
+        remove_snapshot_error=module.FacadeError(
+            code="snapshot_delete_failed",
+            public_message="删除快照失败，请重试。",
+        ),
+    )
+    window = _main_window(qt_app, facade)
+    window.local_data_page._confirm_delete = lambda: True
+    window.show_local_data_page()
+    _drain(window)
+
+    window.local_data_page._snapshot_table.selectRow(0)
+    window.local_data_page._delete_snapshot_button.click()
+    _drain(window)
+
+    assert window.local_data_page._status_label.text() == "删除快照失败，请重试。"
+    assert window.local_data_page._snapshot_table.rowCount() == 1
+
+
+def test_local_data_history_scope_uses_user_facing_labels(
+    qt_app,
+    sources,
+) -> None:
+    facade = StubFacade(
+        sources=sources,
+        history=[
+            _gui_history_record("h-all", analysis_scope="all"),
+            _gui_history_record("h-six", analysis_scope="last-six-month"),
+            _gui_history_record("h-real-six", analysis_scope="last_six_months"),
+            _gui_history_record("h-year", analysis_scope="last_year"),
+            _gui_history_record(
+                "h-custom",
+                analysis_scope="custom",
+                scope_start=datetime(2026, 1, 1).date(),
+                scope_end=datetime(2026, 6, 30).date(),
+            ),
+        ],
+    )
+    window = _main_window(qt_app, facade)
+    window.show_local_data_page()
+    _drain(window)
+
+    table = window.local_data_page._history_table
+    assert table.rowCount() == 5
+    scopes = [table.item(row, 4).text() for row in range(table.rowCount())]
+    assert scopes == [
+        "全部消息",
+        "最近六个月",
+        "最近六个月",
+        "最近一年",
+        "2026-01-01 至 2026-06-30",
+    ]
+
+
+def test_local_data_tables_use_fixed_readable_column_widths(
+    qt_app,
+    sources,
+) -> None:
+    facade = StubFacade(
+        sources=sources,
+        history=[_gui_history_record("h1")],
+        snapshots=[_gui_snapshot("snap-1")],
+    )
+    window = _main_window(qt_app, facade)
+    window.show_local_data_page()
+    _drain(window)
+
+    history = window.local_data_page._history_table
+    assert history.columnWidth(0) >= 150
+    assert history.columnWidth(2) >= 200
+    assert history.columnWidth(4) >= 180
+    snapshot = window.local_data_page._snapshot_table
+    assert snapshot.columnWidth(0) >= 150
+    assert snapshot.columnWidth(1) >= 200
+
+    assert history.textElideMode() == Qt.TextElideMode.ElideNone
+    assert snapshot.textElideMode() == Qt.TextElideMode.ElideNone
+
+
+def test_local_data_snapshot_table_hides_source_and_session_id(
+    qt_app,
+    sources,
+) -> None:
+    facade = StubFacade(
+        sources=sources,
+        snapshots=[_gui_snapshot("snap-2")],
+    )
+    window = _main_window(qt_app, facade)
+    window.show_local_data_page()
+    _drain(window)
+
+    table = window.local_data_page._snapshot_table
+    headers = [
+        table.horizontalHeaderItem(column).text()
+        for column in range(table.columnCount())
+    ]
+    assert table.columnCount() == 5
+    assert headers == ["时间", "会话", "消息数", "大小", "状态"]
+    assert "来源" not in headers
+
+    values = [table.item(0, column).text() for column in range(5)]
+    assert "虚构群" in values
+    assert "room-1" not in values
+    assert values[4] == "可用"
+
+
+def test_local_data_snapshot_unknown_name_and_removed_state(
+    qt_app,
+    sources,
+) -> None:
+    snapshot_module = importlib.import_module(
+        "qq_chat_analyzer.application.chat_data_snapshot"
+    )
+    facade = StubFacade(
+        sources=sources,
+        snapshots=[
+            _gui_snapshot("snap-3", session_name=None),
+            _gui_snapshot(
+                "snap-4",
+                session_name="旧会话",
+                payload_state=snapshot_module.SnapshotPayloadState.REMOVED,
+            ),
+        ],
+    )
+    window = _main_window(qt_app, facade)
+    window.show_local_data_page()
+    _drain(window)
+
+    table = window.local_data_page._snapshot_table
+    assert table.rowCount() == 1
+    assert table.item(0, 1).text() == "未知会话"
+    all_texts = [
+        table.item(row, column).text()
+        for row in range(table.rowCount())
+        for column in range(table.columnCount())
+    ]
+    assert "旧会话" not in all_texts
+    assert "已删除" not in all_texts
+    assert "room-1" not in all_texts
+    assert "SnapshotPayloadState" not in all_texts
 
 
 def test_local_data_page_error_shows_public_message(
@@ -5458,6 +5739,96 @@ def test_local_data_page_error_shows_public_message(
     _drain(window)
 
     assert window.local_data_page._status_label.text() == "快照列表读取失败。"
+
+def test_local_data_clear_history_button_is_visible(qt_app, sources) -> None:
+    window = _main_window(qt_app, StubFacade(sources=sources))
+    window.show_local_data_page()
+    _drain(window)
+
+    assert window.local_data_page._clear_history_button.isVisibleTo(window) is True
+
+
+def test_clear_history_confirmation_dialog_has_expected_copy(qt_app) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    page_module = importlib.import_module("qq_chat_analyzer.gui.local_data_page")
+    dialog = page_module._clear_history_confirmation_dialog()
+
+    assert dialog.windowTitle() == "确认删除"
+    assert "确定删除全部 Echo 历史记录吗？" in dialog.text()
+    assert "删除后无法恢复。" in dialog.text()
+    buttons = {button.text(): button for button in dialog.buttons()}
+    assert "删除" in buttons
+    assert "取消" in buttons
+
+
+def test_local_data_clear_history_cancel_does_not_delete(
+    qt_app,
+    sources,
+) -> None:
+    facade = StubFacade(
+        sources=sources,
+        history=[_gui_history_record("h1")],
+    )
+    window = _main_window(qt_app, facade)
+    window.local_data_page._confirm_clear_history = lambda: False
+    window.show_local_data_page()
+    _drain(window)
+
+    window.local_data_page._clear_history_button.click()
+    _drain(window)
+
+    assert facade.clear_analysis_history_calls == []
+    assert window.local_data_page._history_table.rowCount() == 1
+
+
+def test_local_data_clear_history_confirm_empties_list(
+    qt_app,
+    sources,
+) -> None:
+    facade = StubFacade(
+        sources=sources,
+        history=[_gui_history_record("h1")],
+    )
+    window = _main_window(qt_app, facade)
+    window.local_data_page._confirm_clear_history = lambda: True
+    window.show_local_data_page()
+    _drain(window)
+
+    window.local_data_page._clear_history_button.click()
+    _drain(window)
+
+    assert facade.clear_analysis_history_calls == [1]
+    assert window.local_data_page._history_table.rowCount() == 0
+    assert window.local_data_page._history_empty_label.isVisibleTo(window) is True
+
+
+def test_local_data_clear_history_failure_shows_public_message(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    facade = StubFacade(
+        sources=sources,
+        history=[_gui_history_record("h1")],
+        clear_history_error=module.FacadeError(
+            code="history_clear_failed",
+            public_message="无法清空 Echo 历史记录，请稍后重试。",
+        ),
+    )
+    window = _main_window(qt_app, facade)
+    window.local_data_page._confirm_clear_history = lambda: True
+    window.show_local_data_page()
+    _drain(window)
+
+    window.local_data_page._clear_history_button.click()
+    _drain(window)
+
+    assert window.local_data_page._status_label.text() == (
+        "无法清空 Echo 历史记录，请稍后重试。"
+    )
+    assert window.local_data_page._history_table.rowCount() == 1
+
 
 def test_qq_connect_error_snapshot_keeps_workspace_usable(
     qt_app, sources

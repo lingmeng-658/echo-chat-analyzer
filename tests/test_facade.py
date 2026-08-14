@@ -1774,6 +1774,34 @@ def test_facade_without_history_manager_preserves_old_outcome_behavior(
     assert _facade().get_analysis_history("missing") is None
 
 
+def test_facade_clear_analysis_history_delegates_to_manager() -> None:
+    calls: list[int] = []
+
+    class _StubHistoryManager:
+        def clear(self) -> None:
+            calls.append(1)
+
+    facade = _facade(report_history_manager=_StubHistoryManager())
+
+    facade.clear_analysis_history()
+
+    assert calls == [1]
+
+
+def test_facade_clear_analysis_history_translates_failures() -> None:
+    class _StubHistoryManager:
+        def clear(self) -> None:
+            raise RuntimeError("boom")
+
+    facade = _facade(report_history_manager=_StubHistoryManager())
+
+    with pytest.raises(_facade_module().FacadeError) as caught:
+        facade.clear_analysis_history()
+
+    assert caught.value.code == "history_clear_failed"
+    assert "无法清空 Echo 历史记录" in caught.value.public_message
+
+
 def test_analyze_private_qq_session_preserves_private_export_identity(
     tmp_path: Path,
 ) -> None:
