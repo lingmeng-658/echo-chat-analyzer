@@ -198,7 +198,8 @@ class EchoReportBuilder:
             weekday_activity=weekday_activity,
             members=members,
             conversation_sessions=_build_echo_sessions(
-                reports.conversation_sessions
+                reports.conversation_sessions,
+                members=members,
             ),
             empty_description="" if has_data else EMPTY_DESCRIPTION,
         )
@@ -206,10 +207,26 @@ class EchoReportBuilder:
 
 def _build_echo_sessions(
     report: ConversationSessionReport | None,
+    *,
+    members: tuple[EchoMemberCard, ...] = (),
 ) -> EchoConversationSessions | None:
     if report is None:
         return None
     private = report.private_stats
+    group = report.group_stats
+    top_member = (
+        next(
+            (
+                member
+                for member in members
+                if group is not None
+                and member.speaker_key == group.top_initiator_sender_key
+            ),
+            None,
+        )
+        if group is not None
+        else None
+    )
     return EchoConversationSessions(
         threshold_seconds=report.threshold_seconds,
         session_count=report.session_count,
@@ -240,6 +257,21 @@ def _build_echo_sessions(
         private_peer_share=(private.peer_initiated_share if private else None),
         private_unknown_share=(
             private.unknown_initiated_share if private else None
+        ),
+        group_self_count=(group.self_initiated_count if group else None),
+        group_self_share=(group.self_initiated_share if group else None),
+        group_top_initiator_name=(
+            top_member.display_name if top_member is not None else None
+        ),
+        group_top_initiator_count=(
+            group.top_initiated_count
+            if group is not None and top_member is not None
+            else None
+        ),
+        group_top_initiator_share=(
+            group.top_initiated_share
+            if group is not None and top_member is not None
+            else None
         ),
     )
 

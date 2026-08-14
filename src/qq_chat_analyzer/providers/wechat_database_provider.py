@@ -23,6 +23,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -46,6 +47,9 @@ MESSAGE_AVAILABILITY_REASON = (
 
 _DB_STORAGE_DIR_NAMES = ("db_storage",)
 _SESSION_TABLE = "SessionTable"
+_ACCOUNT_DIRECTORY_SUFFIX_PATTERN = re.compile(
+    r"^(?P<username>.+)_[0-9a-fA-F]{4,}$"
+)
 _LOGGER = logging.getLogger(
     "qq_chat_analyzer.providers.wechat_database_provider"
 )
@@ -447,12 +451,40 @@ class WeChatDatabaseProvider:
         return root
 
     def _resolve_self_username(self) -> str | None:
-        """Return the account directory name when it is a stable wxid."""
+        """Return the account identity used by WeChat database rows."""
         root = self._resolve_data_root()
         candidates = _account_directory_names(root)
-        if len(candidates) == 1:
-            return candidates[0]
-        return None
+        if len(candidates) != 1:
+            return None
+
+        account_directory = candidates[0]
+        match = _ACCOUNT_DIRECTORY_SUFFIX_PATTERN.fullmatch(
+            account_directory
+        )
+        if match is None:
+            return account_directory
+
+        canonical_username = match.group("username")
+        for directory in _iter_db_directories(root):
+            contact_db = directory / CONTACT_DB_NAME
+            if not contact_db.is_file():
+                continue
+            try:
+                rows = self._query(
+                    contact_db,
+                    "SELECT username FROM contact",
+                    limit=DEFAULT_MESSAGE_LIMIT,
+                    query_stage="self_username",
+                )
+            except WeChatDatabaseError:
+                continue
+            if any(
+                isinstance(row, Mapping)
+                and row.get("username") == canonical_username
+                for row in rows
+            ):
+                return canonical_username
+        return account_directory
 
     def _session_db_path(self) -> Path:
         root = self._resolve_data_root()

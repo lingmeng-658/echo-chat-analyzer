@@ -13,6 +13,7 @@ sys.path.insert(0, str(SRC_ROOT))
 from qq_chat_analyzer.analysis.conversation_sessions import (  # noqa: E402
     analyze_conversation_sessions,
 )
+from qq_chat_analyzer.analysis.analyzers import UserProfileAnalyzer  # noqa: E402
 from qq_chat_analyzer.analysis.models import AnalysisReports  # noqa: E402
 from qq_chat_analyzer.message import ChatMessage  # noqa: E402
 from qq_chat_analyzer.presentation import (  # noqa: E402
@@ -85,3 +86,61 @@ def test_echo_payload_uses_null_when_session_report_is_unavailable() -> None:
     payload = echo_report_to_dict(build_echo_report_view(AnalysisReports()))
 
     assert payload["conversation_sessions"] is None
+
+
+def test_group_echo_payload_resolves_top_initiator_to_display_name() -> None:
+    messages = (
+        ChatMessage(
+            timestamp=1_704_067_200,
+            sender="Fictional Alice",
+            sender_id="fictional-alice-id",
+            message_type="text",
+            text="fictional text",
+            platform="fictional",
+            conversation_id="fictional-group",
+            conversation_type="group",
+            is_self=True,
+        ),
+        ChatMessage(
+            timestamp=1_704_069_061,
+            sender="Fictional Alice Renamed",
+            sender_id="fictional-alice-id",
+            message_type="text",
+            text="fictional text",
+            platform="fictional",
+            conversation_id="fictional-group",
+            conversation_type="group",
+            is_self=True,
+        ),
+        ChatMessage(
+            timestamp=1_704_070_922,
+            sender="Fictional Bob",
+            sender_id="raw-fictional-bob-id",
+            message_type="text",
+            text="fictional text",
+            platform="fictional",
+            conversation_id="fictional-group",
+            conversation_type="group",
+            is_self=False,
+        ),
+    )
+    reports = AnalysisReports(
+        conversation_sessions=analyze_conversation_sessions(messages),
+        user_profiles=UserProfileAnalyzer().analyze(messages),
+    )
+
+    payload = echo_report_to_dict(
+        build_echo_report_view(reports, conversation_kind="group")
+    )
+
+    group = payload["conversation_sessions"]["group_initiators"]
+    assert group == {
+        "self_count": 2,
+        "self_share": 2 / 3,
+        "top_member": {
+            "display_name": "Fictional Alice",
+            "count": 2,
+            "share": 2 / 3,
+        },
+    }
+    assert "fictional-alice-id" not in str(group)

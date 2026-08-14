@@ -11,7 +11,7 @@ from ..peaks import (
     WEEKDAY_KEYS,
     busiest_index,
 )
-from ..timestamps import to_utc_datetime
+from ..timestamps import to_chat_datetime
 from ...message import ChatMessage
 
 
@@ -25,7 +25,7 @@ class ActivityAnalyzer:
         dated_message_count = 0
 
         for message in messages:
-            moment = to_utc_datetime(message.timestamp)
+            moment = to_chat_datetime(message.timestamp)
             if moment is None:
                 continue
             dated_message_count += 1

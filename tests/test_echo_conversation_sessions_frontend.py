@@ -32,6 +32,9 @@ SESSION_NODE_IDS = (
     "session-private-initiators",
     "session-self",
     "session-peer",
+    "session-group-initiators",
+    "session-group-self",
+    "session-group-top",
     "session-unknown-note",
     "session-threshold-note",
 )
@@ -82,6 +85,7 @@ def _sessions(
     longest_duration_seconds: int = 4 * 60 * 60 + 37 * 60,
     average_message_count: float = 12.5,
     private_initiators: dict[str, object] | None = None,
+    group_initiators: dict[str, object] | None = None,
 ) -> dict[str, object]:
     return {
         "threshold_seconds": 1800,
@@ -91,6 +95,7 @@ def _sessions(
         "longest_duration_seconds": longest_duration_seconds,
         "average_message_count": average_message_count,
         "private_initiators": private_initiators,
+        "group_initiators": group_initiators,
         "items": [],
     }
 
@@ -190,10 +195,23 @@ def test_private_unknown_initiators_do_not_show_made_up_percentages() -> None:
     assert rendered["session-unknown-note"]["hidden"] is False
 
 
-def test_group_sessions_show_no_private_initiator_comparison() -> None:
+def test_group_sessions_show_self_and_top_initiator_without_raw_key() -> None:
     rendered = _render_frontend(
         kind="group",
-        sessions=_sessions(session_count=12, average_message_count=23.0),
+        sessions=_sessions(
+            session_count=12,
+            average_message_count=23.0,
+            group_initiators={
+                "self_count": 3,
+                "self_share": 0.25,
+                "top_member": {
+                    "display_name": "Fictional Alice",
+                    "count": 5,
+                    "share": 5 / 12,
+                    "sender_key": "raw-stable-fictional-id",
+                },
+            },
+        ),
     )
 
     assert rendered["session-lead"]["text"] == (
@@ -202,9 +220,16 @@ def test_group_sessions_show_no_private_initiator_comparison() -> None:
     assert rendered["session-private-initiators"]["hidden"] is True
     assert rendered["session-self"]["text"] == ""
     assert rendered["session-peer"]["text"] == ""
+    assert rendered["session-group-initiators"]["hidden"] is False
+    assert rendered["session-group-self"]["text"] == "你发起了 3 轮，占 25.0%"
+    assert rendered["session-group-top"]["text"] == (
+        "最常发起聊天：Fictional Alice（5 轮，41.7%）"
+    )
     assert rendered["session-average-messages"]["text"] == (
         "平均每轮约 23 条消息"
     )
+    visible_text = " ".join(str(node["text"]) for node in rendered.values())
+    assert "raw-stable-fictional-id" not in visible_text
 
 
 def test_missing_or_empty_sessions_hide_the_chapter_gracefully() -> None:

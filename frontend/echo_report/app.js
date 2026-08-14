@@ -207,6 +207,55 @@ document.documentElement.classList.add("js-ready");
             " 轮暂时无法判断谁先开口。"
           : "";
     }
+
+    var groupBlock = document.getElementById("session-group-initiators");
+    var groupInitiators = isGroup ? sessions.group_initiators : null;
+    var groupSelfCount = groupInitiators
+      ? finiteNumber(groupInitiators.self_count)
+      : null;
+    var groupSelfShare = groupInitiators
+      ? finiteNumber(groupInitiators.self_share)
+      : null;
+    var topMember = groupInitiators && groupInitiators.top_member;
+    var topMemberName =
+      topMember && typeof topMember.display_name === "string"
+        ? topMember.display_name.trim()
+        : "";
+    var topMemberCount = topMember ? finiteNumber(topMember.count) : null;
+    var topMemberShare = topMember ? finiteNumber(topMember.share) : null;
+    var hasGroupSelf = Boolean(
+      isGroup && groupSelfCount !== null && groupSelfShare !== null
+    );
+    var hasTopMember = Boolean(
+      isGroup &&
+      topMemberName &&
+      topMemberCount !== null &&
+      topMemberShare !== null
+    );
+    if (groupBlock) {
+      groupBlock.hidden = !(hasGroupSelf || hasTopMember);
+    }
+    setText(
+      "session-group-self",
+      hasGroupSelf
+        ? "你发起了 " +
+            formatCount(groupSelfCount) +
+            " 轮，占 " +
+            formatPercent(groupSelfShare * 100)
+        : ""
+    );
+    setText(
+      "session-group-top",
+      hasTopMember
+        ? "最常发起聊天：" +
+            topMemberName +
+            "（" +
+            formatCount(topMemberCount) +
+            " 轮，" +
+            formatPercent(topMemberShare * 100) +
+            "）"
+        : ""
+    );
   }
 
   var hourly = (data && data.activity && data.activity.hourly) || [];

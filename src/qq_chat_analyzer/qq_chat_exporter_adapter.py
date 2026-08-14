@@ -93,18 +93,23 @@ def qce_conversation_type(payload: Mapping[str, Any] | None) -> str:
 
 def qce_self_identity(payload: Mapping[str, Any] | None) -> str | None:
     """Return the QCE export's reliable self stable ID, when present."""
+    identities = qce_self_identities(payload)
+    return identities[0] if identities else None
+
+
+def qce_self_identities(payload: Mapping[str, Any] | None) -> tuple[str, ...]:
+    """Return every reliable self ID alias exported by QCE."""
     if not isinstance(payload, Mapping):
-        return None
+        return ()
     chat_info = payload.get("chatInfo")
     if not isinstance(chat_info, Mapping):
-        return None
-    return _first_identifier(
-        chat_info,
-        "selfUid",
-        "self_uid",
-        "selfUin",
-        "self_uin",
-    )
+        return ()
+    identities: list[str] = []
+    for key in ("selfUid", "self_uid", "selfUin", "self_uin"):
+        identity = _stringify_identifier(chat_info.get(key))
+        if identity and identity not in identities:
+            identities.append(identity)
+    return tuple(identities)
 
 
 def _normalize_conversation_type(raw_type: str) -> str:
@@ -120,7 +125,7 @@ def parse_qce_messages(
     raw_messages: Iterable[Any],
     conversation_id: str | None = None,
     conversation_type: str = "unknown",
-    self_identity: str | None = None,
+    self_identity: str | Iterable[str] | None = None,
 ) -> tuple[list[ChatMessage], tuple[str, ...]]:
     """Project QCE rich messages for the existing analysis pipeline."""
     rich_messages, warnings = parse_qce_rich_messages(
@@ -136,11 +141,12 @@ def parse_qce_rich_messages(
     raw_messages: Iterable[Any],
     conversation_id: str | None = None,
     conversation_type: str = "unknown",
-    self_identity: str | None = None,
+    self_identity: str | Iterable[str] | None = None,
 ) -> tuple[list[RichMessage], tuple[str, ...]]:
     """Convert QCE messages to P0 source-neutral semantic facts."""
     parsed_messages: list[RichMessage] = []
     skipped_non_text = False
+    self_identities = _normalize_self_identities(self_identity)
 
     try:
         iterator = iter(raw_messages)
@@ -152,7 +158,7 @@ def parse_qce_rich_messages(
             raw_message,
             conversation_id=conversation_id,
             conversation_type=conversation_type,
-            self_identity=self_identity,
+            self_identities=self_identities,
         )
         if parsed_message is not None:
             parsed_messages.append(parsed_message)
@@ -180,7 +186,7 @@ def _parse_rich_message(
     raw_message: Any,
     conversation_id: str | None,
     conversation_type: str,
-    self_identity: str | None,
+    self_identities: frozenset[str],
 ) -> RichMessage | None:
     if not isinstance(raw_message, Mapping):
         return None
@@ -215,12 +221,12 @@ def _parse_rich_message(
         sender_data.get("uid") or sender_data.get("uin")
     )
     is_self = None
-    if isinstance(self_identity, str) and self_identity.strip():
-        normalized_self = self_identity.strip()
+    if self_identities:
         uid_value = _stringify_identifier(sender_data.get("uid"))
         uin_value = _stringify_identifier(sender_data.get("uin"))
         if identity_id or uid_value or uin_value:
-            is_self = normalized_self in {identity_id, uid_value, uin_value}
+            sender_identities = {identity_id, uid_value, uin_value} - {None}
+            is_self = bool(self_identities.intersection(sender_identities))
 
     return RichMessage(
         message_id=_stringify_identifier(raw_message.get("id")),
@@ -242,6 +248,22 @@ def _parse_rich_message(
         relations=_extract_relations(content),
         recall_state=recall_state,
         is_system=bool(raw_message.get("system", False)),
+    )
+
+
+def _normalize_self_identities(
+    value: str | Iterable[str] | None,
+) -> frozenset[str]:
+    if isinstance(value, str):
+        values: Iterable[str] = (value,)
+    elif value is None:
+        values = ()
+    else:
+        values = value
+    return frozenset(
+        identity.strip()
+        for identity in values
+        if isinstance(identity, str) and identity.strip()
     )
 
 

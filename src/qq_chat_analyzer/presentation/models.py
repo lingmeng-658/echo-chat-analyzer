@@ -153,6 +153,11 @@ class EchoConversationSessions:
     private_self_share: float | None = None
     private_peer_share: float | None = None
     private_unknown_share: float | None = None
+    group_self_count: int | None = None
+    group_self_share: float | None = None
+    group_top_initiator_name: str | None = None
+    group_top_initiator_count: int | None = None
+    group_top_initiator_share: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

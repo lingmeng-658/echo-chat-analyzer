@@ -414,6 +414,29 @@ def test_qq_export_self_uin_fallback_flows_through_import(
     assert [message.is_self for message in outcome.messages] == [True, False]
 
 
+def test_qq_export_matches_all_reliable_self_identity_aliases(
+    tmp_path: Path,
+) -> None:
+    export_path = tmp_path / "qq-self-aliases.json"
+    self_row = _qce_row("m1", "u-fictional-current", "Fictional Self")
+    self_row["sender"]["uin"] = "100000001"
+    peer_row = _qce_row("m2", "u-fictional-peer", "Fictional Peer")
+    peer_row["sender"]["uin"] = "100000002"
+    _write_qce(
+        export_path,
+        {
+            "type": "private",
+            "selfUid": "u-fictional-stale",
+            "selfUin": "100000001",
+        },
+        [self_row, peer_row],
+    )
+
+    outcome = _import_outcome(export_path, "qq")
+
+    assert [message.is_self for message in outcome.messages] == [True, False]
+
+
 # ----------------------------------------------------------- WeChat wiring
 
 

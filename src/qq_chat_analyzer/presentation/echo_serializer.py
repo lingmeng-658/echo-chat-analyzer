@@ -66,6 +66,23 @@ def _conversation_sessions_to_dict(
             "peer_share": sessions.private_peer_share,
             "unknown_share": sessions.private_unknown_share,
         }
+    group_initiators = None
+    if (
+        sessions.group_self_count is not None
+        or sessions.group_top_initiator_name is not None
+    ):
+        top_member = None
+        if sessions.group_top_initiator_name is not None:
+            top_member = {
+                "display_name": sessions.group_top_initiator_name,
+                "count": sessions.group_top_initiator_count,
+                "share": sessions.group_top_initiator_share,
+            }
+        group_initiators = {
+            "self_count": sessions.group_self_count,
+            "self_share": sessions.group_self_share,
+            "top_member": top_member,
+        }
     return {
         "threshold_seconds": sessions.threshold_seconds,
         "session_count": sessions.session_count,
@@ -74,6 +91,7 @@ def _conversation_sessions_to_dict(
         "longest_duration_seconds": sessions.longest_duration_seconds,
         "average_message_count": sessions.average_message_count,
         "private_initiators": private_initiators,
+        "group_initiators": group_initiators,
         "items": [
             {
                 "start_timestamp": item.start_timestamp,

@@ -212,3 +212,53 @@ def test_group_session_uses_stable_sender_identity_as_initiator() -> None:
     assert report.sessions[0].initiator == "stable-fictional-id"
     assert report.sessions[0].initiator_sender_key == "stable-fictional-id"
     assert report.private_stats is None
+
+
+def test_group_report_aggregates_self_and_top_initiator() -> None:
+    report = analyze_conversation_sessions(
+        (
+            _message(
+                0,
+                sender="Fictional Alice",
+                sender_id="fictional-alice-id",
+                conversation_type="group",
+                is_self=True,
+            ),
+            _message(
+                31 * 60,
+                sender="Fictional Alice Renamed",
+                sender_id="fictional-alice-id",
+                conversation_type="group",
+                is_self=True,
+            ),
+            _message(
+                62 * 60,
+                sender="Fictional Bob",
+                sender_id="fictional-bob-id",
+                conversation_type="group",
+                is_self=False,
+            ),
+        )
+    )
+
+    stats = report.group_stats
+    assert stats is not None
+    assert stats.self_initiated_count == 2
+    assert stats.self_initiated_share == 2 / 3
+    assert stats.top_initiator_sender_key == "fictional-alice-id"
+    assert stats.top_initiated_count == 2
+    assert stats.top_initiated_share == 2 / 3
+
+
+def test_group_self_initiator_stats_require_reliable_identity() -> None:
+    report = analyze_conversation_sessions(
+        (
+            _message(0, conversation_type="group", is_self=None),
+            _message(31 * 60, conversation_type="group", is_self=None),
+        )
+    )
+
+    stats = report.group_stats
+    assert stats is not None
+    assert stats.self_initiated_count is None
+    assert stats.self_initiated_share is None

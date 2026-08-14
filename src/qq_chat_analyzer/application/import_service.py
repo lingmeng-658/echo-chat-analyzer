@@ -16,7 +16,7 @@ from ..qq_chat_exporter_adapter import (
     parse_qce_messages,
     qce_conversation_id,
     qce_conversation_type,
-    qce_self_identity,
+    qce_self_identities,
 )
 from ..wechat_cli_adapter import (
     is_cli_export as is_wechat_cli_export,
@@ -219,7 +219,7 @@ def _import_qce_file(
         raw_messages,
         conversation_id=qce_conversation_id(payload),
         conversation_type=qce_conversation_type(payload),
-        self_identity=qce_self_identity(payload),
+        self_identity=qce_self_identities(payload),
     )
     warnings = (
         *parse_warnings,

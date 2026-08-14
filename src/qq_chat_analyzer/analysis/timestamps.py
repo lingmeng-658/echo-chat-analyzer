@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 
 _SECOND_BOUNDS = (10**8, 10**11)
 _MILLISECOND_DIVISOR = 1000
+CHAT_TIMEZONE = timezone(timedelta(hours=8), name="Asia/Shanghai")
 _DATETIME_FORMATS = (
     "%Y-%m-%d %H:%M:%S",
     "%Y-%m-%d %H:%M",
@@ -42,6 +43,14 @@ def to_utc_datetime(timestamp: int | float | str | None) -> datetime | None:
         return None
 
 
+def to_chat_datetime(timestamp: int | float | str | None) -> datetime | None:
+    """Return a datetime in the application's local chat timezone."""
+    moment = to_utc_datetime(timestamp)
+    if moment is None:
+        return None
+    return moment.astimezone(CHAT_TIMEZONE)
+
+
 def _normalize_numeric(value: float) -> int | None:
     if value != value or value in (float("inf"), float("-inf")):
         return None
@@ -69,7 +78,7 @@ def _parse_text(text: str) -> int | None:
     if parsed is None:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=CHAT_TIMEZONE)
     return int(parsed.timestamp())
 
 

@@ -2797,7 +2797,28 @@ def test_echo_entry_opens_the_latest_outcome_report_path(
     assert opened == [second_path.resolve()]
 
 
-def test_default_echo_opener_uses_a_local_file_url(
+def test_default_echo_opener_uses_windows_file_association(
+    qt_app,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    module = importlib.import_module("qq_chat_analyzer.gui.main_window")
+    report_path = (tmp_path / "echo-report.html").resolve()
+    report_path.write_text("<html>fictional report</html>", encoding="utf-8")
+    opened_paths = []
+    monkeypatch.setattr(module.os, "name", "nt")
+    monkeypatch.setattr(
+        module.os,
+        "startfile",
+        lambda path: opened_paths.append(path),
+        raising=False,
+    )
+
+    assert module._open_report_path(report_path) is True
+    assert opened_paths == [str(report_path)]
+
+
+def test_default_echo_opener_uses_local_file_url_outside_windows(
     qt_app,
     tmp_path,
     monkeypatch,
@@ -2806,6 +2827,7 @@ def test_default_echo_opener_uses_a_local_file_url(
     report_path = (tmp_path / "echo-report.html").resolve()
     report_path.write_text("<html>fictional report</html>", encoding="utf-8")
     opened_urls = []
+    monkeypatch.setattr(module.os, "name", "posix")
     monkeypatch.setattr(
         module.QDesktopServices,
         "openUrl",
@@ -2815,7 +2837,7 @@ def test_default_echo_opener_uses_a_local_file_url(
     assert module._open_report_path(report_path) is True
     assert len(opened_urls) == 1
     assert opened_urls[0].isLocalFile()
-    assert Path(opened_urls[0].toLocalFile()) == report_path
+    assert opened_urls[0].toLocalFile() == str(report_path).replace("\\", "/")
 
 
 def test_missing_report_and_failed_analysis_leave_echo_entry_unavailable(

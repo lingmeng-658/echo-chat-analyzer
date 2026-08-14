@@ -11,6 +11,7 @@ from .conversation_sessions import (
     DEFAULT_SESSION_THRESHOLD_SECONDS,
     ConversationSession,
     ConversationSessionReport,
+    GroupSessionStats,
     PrivateSessionStats,
     analyze_conversation_sessions,
 )
@@ -42,6 +43,7 @@ __all__ = [
     "ConversationSummary",
     "DEFAULT_SESSION_THRESHOLD_SECONDS",
     "HourlyActivity",
+    "GroupSessionStats",
     "LengthBucket",
     "MessageCompositionAnalyzer",
     "MessageCompositionCategory",

@@ -5,6 +5,8 @@ from __future__ import annotations
 import dataclasses
 import importlib
 import json
+import os
+import subprocess
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -1097,8 +1099,11 @@ def test_analyze_file_uses_defaults_without_a_config(tmp_path: Path) -> None:
 
 def test_default_output_keeps_generated_echo_report_after_return(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     module = _facade_module()
+    local_app_data = tmp_path / "local-app-data"
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
 
     class _WritingAnalysisService(_StubAnalysisService):
         def execute(self, request):
@@ -1115,6 +1120,37 @@ def test_default_output_keeps_generated_echo_report_after_return(
     assert outcome.report_path.name == "echo-report.html"
     assert outcome.report_path.is_file()
     assert outcome.artifact_directory == outcome.report_path.parent
+    assert outcome.report_path.is_relative_to(
+        local_app_data / "LocalChatAnalyzer" / "reports"
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACL regression")
+def test_default_report_directory_inherits_current_user_access(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    local_app_data = tmp_path / "local-app-data"
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    module = _facade_module()
+
+    output_directory, temporary_output = module._create_output_directory(
+        module.AnalysisConfig()
+    )
+
+    try:
+        acl = subprocess.run(
+            ["icacls", str(output_directory)],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        ).stdout
+        assert "(I)" in acl
+    finally:
+        if temporary_output is not None:
+            temporary_output.cleanup()
 
 
 def test_real_analysis_report_survives_facade_return(tmp_path: Path) -> None:

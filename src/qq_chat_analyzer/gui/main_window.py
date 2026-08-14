@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import logging
-import sys
+import os
 import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QTimer, QUrl
+from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -37,9 +36,6 @@ _CANCEL_ANALYSIS = "取消分析"
 ANALYSIS_PAGE_INDEX = 0
 PROCESSING_PAGE_INDEX = 1
 DASHBOARD_PAGE_INDEX = 2
-
-_LOGGER = logging.getLogger("qq_chat_analyzer.desktop.main_window")
-
 
 class MainWindow(QMainWindow):
     """Own the two pages and route signals between them."""
@@ -172,57 +168,10 @@ class MainWindow(QMainWindow):
         if report_path is None or not _is_file(report_path):
             self._clear_echo_report_entry()
             return
-        package_module = sys.modules.get("qq_chat_analyzer")
-        facade_module = sys.modules.get(
-            "qq_chat_analyzer.application.facade"
-        )
-        main_window_module = sys.modules.get(__name__)
-        _LOGGER.info(
-            "[echo-open diagnostic] runtime sys.executable=%s "
-            "qq_chat_analyzer.__file__=%s facade.__file__=%s "
-            "main_window.__file__=%s",
-            sys.executable,
-            getattr(package_module, "__file__", None),
-            getattr(facade_module, "__file__", None),
-            getattr(main_window_module, "__file__", None),
-        )
-        resolved_path = Path(report_path).resolve()
-        reference_url = QUrl.fromLocalFile(str(resolved_path))
-        _LOGGER.info(
-            "[echo-open diagnostic] report_path_raw=%s "
-            "report_path_resolved=%s report_path_as_posix=%s",
-            report_path,
-            resolved_path,
-            resolved_path.as_posix(),
-        )
-        _LOGGER.info(
-            "[echo-open diagnostic] reference_qurl_toString=%s "
-            "reference_qurl_toLocalFile=%s reference_qurl_scheme=%s "
-            "reference_qurl_isLocalFile=%s",
-            reference_url.toString(),
-            reference_url.toLocalFile(),
-            reference_url.scheme(),
-            reference_url.isLocalFile(),
-        )
-        _log_report_path_state("before_open", report_path)
         try:
             opened = self._report_opener(report_path)
         except Exception:
             opened = False
-        _LOGGER.info("[echo-open diagnostic] openUrl_return=%s", opened)
-        _log_report_path_state("after_open", report_path)
-        for delay_ms, stage in (
-            (1000, "after_1s"),
-            (3000, "after_3s"),
-            (5000, "after_5s"),
-            (10000, "after_10s"),
-        ):
-            QTimer.singleShot(
-                delay_ms,
-                lambda path=report_path, label=stage: (
-                    _log_report_path_state(label, path)
-                ),
-            )
         if opened is False:
             self.analysis_page._status_label.setText(
                 "\u65e0\u6cd5\u6253\u5f00 Echo \u62a5\u544a\u3002"
@@ -266,48 +215,10 @@ def _is_file(path: Path) -> bool:
         return False
 
 
-def _log_report_path_state(stage: str, path: Path) -> None:
-    """Write report-lifecycle diagnostics without changing GUI behavior."""
-    try:
-        path_exists = path.exists()
-    except OSError:
-        path_exists = False
-    try:
-        parent_exists = path.parent.exists()
-    except OSError:
-        parent_exists = False
-    try:
-        resolved_is_file = path.resolve().is_file()
-    except OSError:
-        resolved_is_file = False
-    try:
-        file_size = path.stat().st_size if path_exists else None
-    except OSError:
-        file_size = None
-    _LOGGER.info(
-        "[echo-open diagnostic] %s path_exists=%s is_file=%s "
-        "resolved_is_file=%s parent_exists=%s file_size=%s "
-        "file_suffix=%s",
-        stage,
-        path_exists,
-        _is_file(path),
-        resolved_is_file,
-        parent_exists,
-        file_size,
-        path.suffix,
-    )
-
-
 def _open_report_path(path: Path) -> bool:
     """Open one local HTML file with the operating system browser."""
-    actual_url = QUrl.fromLocalFile(str(path))
-    _LOGGER.info(
-        "[echo-open diagnostic] actual_qurl_variable=actual_url "
-        "actual_qurl_toString=%s actual_qurl_toLocalFile=%s "
-        "actual_qurl_scheme=%s actual_qurl_isLocalFile=%s",
-        actual_url.toString(),
-        actual_url.toLocalFile(),
-        actual_url.scheme(),
-        actual_url.isLocalFile(),
-    )
-    return QDesktopServices.openUrl(actual_url)
+    resolved_path = path.resolve()
+    if os.name == "nt":
+        os.startfile(str(resolved_path))
+        return True
+    return QDesktopServices.openUrl(QUrl.fromLocalFile(str(resolved_path)))

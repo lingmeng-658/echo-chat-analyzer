@@ -142,9 +142,13 @@ def _helper_result(rows: list[object], columns: list[str] | None = None) -> str:
     )
 
 
-def _make_data_root(tmp_path: Path, table: str | None = None) -> Path:
+def _make_data_root(
+    tmp_path: Path,
+    table: str | None = None,
+    account_name: str = "wxid_owner",
+) -> Path:
     """Build a fictional WeChat data directory layout."""
-    storage = tmp_path / "xwechat_files" / "wxid_owner" / "db_storage"
+    storage = tmp_path / "xwechat_files" / account_name / "db_storage"
     message_dir = storage / "message"
     message_dir.mkdir(parents=True, exist_ok=True)
     (message_dir / "session.db").write_bytes(b"fake")
@@ -152,13 +156,17 @@ def _make_data_root(tmp_path: Path, table: str | None = None) -> Path:
     return tmp_path / "xwechat_files"
 
 
-def _provider(tmp_path: Path, runner) -> WeChatDatabaseProvider:
+def _provider(
+    tmp_path: Path,
+    runner,
+    account_name: str = "wxid_owner",
+) -> WeChatDatabaseProvider:
     helper = tmp_path / "wcdb_cli.exe"
     helper.write_bytes(b"fake")
     library = tmp_path / "WCDB.dll"
     library.write_bytes(b"fake")
     return WeChatDatabaseProvider(
-        data_root=_make_data_root(tmp_path),
+        data_root=_make_data_root(tmp_path, account_name=account_name),
         db_key=FICTIONAL_KEY,
         wcdb_cli_path=helper,
         wcdb_dll_path=library,
@@ -590,6 +598,87 @@ def test_export_session_json_writes_self_username_from_account_dir(
 
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["conversation"]["self_username"] == "wxid_owner"
+
+
+def test_resolve_self_username_canonicalizes_account_directory_suffix(
+    tmp_path: Path,
+) -> None:
+    base_identity = "wxid_fictional_owner"
+    account_directory = f"{base_identity}_a1b2c3d4"
+    table = message_table_name(FICTIONAL_SESSION)
+
+    def runner(command, timeout, environment):
+        sql = command[command.index("--sql") + 1]
+        if "FROM contact" in sql:
+            return _FakeCompleted(
+                stdout=_helper_result(
+                    [{"username": base_identity}],
+                    columns=["username"],
+                )
+            )
+        if "sqlite_master" in sql:
+            return _FakeCompleted(stdout=_helper_result([{"name": table}]))
+        return _FakeCompleted(
+            stdout=_helper_result([_db_row(user_name=base_identity)])
+        )
+
+    provider = _provider(
+        tmp_path,
+        runner,
+        account_name=account_directory,
+    )
+    contact_dir = (
+        tmp_path
+        / "xwechat_files"
+        / account_directory
+        / "db_storage"
+        / "contact"
+    )
+    contact_dir.mkdir(parents=True, exist_ok=True)
+    (contact_dir / "contact.db").write_bytes(b"fake")
+
+    assert provider._resolve_self_username() == base_identity
+
+    output = tmp_path / "out" / "session.json"
+    provider.export_session_json(FICTIONAL_SESSION, output)
+    outcome = ImportService().execute(ImportRequest(input_path=output))
+
+    assert outcome.messages[0].sender_id == base_identity
+    assert outcome.messages[0].is_self is True
+
+
+def test_resolve_self_username_keeps_unconfirmed_hex_ending_username(
+    tmp_path: Path,
+) -> None:
+    legal_identity = "wxid_fictional_feed"
+
+    def runner(command, timeout, environment):
+        sql = command[command.index("--sql") + 1]
+        if "FROM contact" in sql:
+            return _FakeCompleted(
+                stdout=_helper_result(
+                    [{"username": legal_identity}],
+                    columns=["username"],
+                )
+            )
+        return _FakeCompleted(stdout=_helper_result([]))
+
+    provider = _provider(
+        tmp_path,
+        runner,
+        account_name=legal_identity,
+    )
+    contact_dir = (
+        tmp_path
+        / "xwechat_files"
+        / legal_identity
+        / "db_storage"
+        / "contact"
+    )
+    contact_dir.mkdir(parents=True, exist_ok=True)
+    (contact_dir / "contact.db").write_bytes(b"fake")
+
+    assert provider._resolve_self_username() == legal_identity
 
 
 def test_exported_self_username_marks_db_messages(tmp_path: Path) -> None:

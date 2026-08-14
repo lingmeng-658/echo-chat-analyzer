@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 import importlib
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -40,7 +40,7 @@ def _epoch(
             day,
             hour,
             minute,
-            tzinfo=timezone.utc,
+            tzinfo=timezone(timedelta(hours=8)),
         ).timestamp()
     )
 
@@ -111,6 +111,38 @@ def test_activity_analyzer_counts_single_message_hour_and_weekday() -> None:
     assert report.busiest_weekday == 0
 
 
+def test_activity_analyzer_counts_epoch_in_beijing_local_hour() -> None:
+    beijing_evening = int(
+        datetime(
+            2024,
+            1,
+            1,
+            20,
+            30,
+            tzinfo=timezone(timedelta(hours=8)),
+        ).timestamp()
+    )
+
+    report = _analyzers().ActivityAnalyzer().analyze(
+        (_message(timestamp=beijing_evening),)
+    )
+
+    hourly = {entry.hour: entry.count for entry in report.hourly_counts}
+    assert hourly[20] == 1
+    assert hourly[12] == 0
+    assert report.busiest_hour == 20
+
+
+def test_activity_analyzer_treats_naive_text_as_beijing_local_time() -> None:
+    report = _analyzers().ActivityAnalyzer().analyze(
+        (_message(timestamp="2024-01-01 20:30:00"),)
+    )
+
+    hourly = {entry.hour: entry.count for entry in report.hourly_counts}
+    assert hourly[20] == 1
+    assert report.busiest_hour == 20
+
+
 def test_activity_analyzer_picks_the_busiest_hour_across_messages() -> None:
     messages = (
         _message(timestamp=_epoch(hour=9)),
@@ -126,7 +158,7 @@ def test_activity_analyzer_picks_the_busiest_hour_across_messages() -> None:
 
 def test_activity_analyzer_accepts_iso_strings_and_skips_unparsable() -> None:
     messages = (
-        _message(timestamp="2024-01-01T09:30:00+00:00"),
+        _message(timestamp="2024-01-01T09:30:00+08:00"),
         _message(timestamp="not-a-timestamp"),
     )
 

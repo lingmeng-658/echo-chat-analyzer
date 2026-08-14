@@ -13,7 +13,7 @@ from ..models import (
 )
 from ..peaks import DAYS_PER_WEEK, HOURS_PER_DAY, busiest_index
 from ..identity import stable_sender_key
-from ..timestamps import to_utc_datetime
+from ..timestamps import to_chat_datetime
 from ...analyzer import top_words
 from ...cleaner import clean_text
 from ...message import ChatMessage
@@ -136,7 +136,7 @@ class _SpeakerStats:
             self.text_lengths.append(length)
             self.max_length = max(self.max_length, length)
 
-        moment = to_utc_datetime(message.timestamp)
+        moment = to_chat_datetime(message.timestamp)
         if moment is not None:
             self.hourly_counts[moment.hour] += 1
             self.weekday_counts[moment.weekday()] += 1

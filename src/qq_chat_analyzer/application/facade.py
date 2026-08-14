@@ -23,16 +23,18 @@ Everything that escapes this layer is either a plain view model or a
 from __future__ import annotations
 
 import logging
+import shutil
+from tempfile import TemporaryDirectory
 from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Any, Callable, Iterator, Protocol, runtime_checkable
+from uuid import uuid4
 
-from ..resources import resources_dir
+from ..resources import resources_dir, user_data_dir
 from ..analysis.timestamps import to_epoch_seconds
 from ..presentation import DashboardView, build_dashboard_view
 from .dto import AnalysisRequestDTO, AnalysisResultDTO
@@ -54,6 +56,23 @@ from .scope_filter import AnalysisScope, AnalysisScopeMode, resolve_scope
 
 
 _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.facade")
+
+
+class _RetainedReportDirectory:
+    """Own one report directory while preserving its inherited ACL."""
+
+    def __init__(self, parent: Path) -> None:
+        while True:
+            directory = parent / f"chat-analyzer-output-{uuid4().hex[:8]}"
+            try:
+                directory.mkdir()
+            except FileExistsError:
+                continue
+            self.name = str(directory)
+            break
+
+    def cleanup(self) -> None:
+        shutil.rmtree(self.name, ignore_errors=True)
 
 
 def _report_progress(
@@ -268,7 +287,7 @@ class ChatAnalyzerFacade:
         self._presentation_builder = presentation_builder
         self._report_history_manager = report_history_manager
         self._stopwords_directory = stopwords_directory or resources_dir()
-        self._retained_output_directory: TemporaryDirectory | None = None
+        self._retained_output_directory: _RetainedReportDirectory | None = None
 
     @property
     def _wechat_connection_service(self) -> Any:
@@ -820,7 +839,7 @@ class ChatAnalyzerFacade:
 
     def _replace_retained_output(
         self,
-        temporary_output: TemporaryDirectory | None,
+        temporary_output: _RetainedReportDirectory | None,
     ) -> None:
         """Keep only the latest successful scratch report alive."""
         previous = self._retained_output_directory
@@ -1041,14 +1060,16 @@ class ChatAnalyzerFacade:
 
 def _create_output_directory(
     config: AnalysisConfig,
-) -> tuple[Path, TemporaryDirectory | None]:
+) -> tuple[Path, _RetainedReportDirectory | None]:
     """Create an artifact directory and transfer scratch ownership upward."""
     if config.output_directory is not None:
         directory = Path(config.output_directory)
         directory.mkdir(parents=True, exist_ok=True)
         return directory, None
 
-    scratch = TemporaryDirectory(prefix="chat-analyzer-output-")
+    reports_directory = user_data_dir() / "reports"
+    reports_directory.mkdir(parents=True, exist_ok=True)
+    scratch = _RetainedReportDirectory(reports_directory)
     return Path(scratch.name), scratch
 
 
