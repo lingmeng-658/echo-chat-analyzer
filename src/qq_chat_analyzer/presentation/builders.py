@@ -43,7 +43,9 @@ from .models import (
     EchoLanguageProfile,
     EchoConversationSession,
     EchoConversationSessions,
+    EchoExpressionHabits,
     EchoReportView,
+    EchoSharedWord,
     MetricCard,
     UserCard,
 )
@@ -62,6 +64,9 @@ ECHO_LANGUAGE_CONTEXT_WORD_LIMIT = 3
 ECHO_GROUP_INSUFFICIENT_REASON = "样本不足，暂时无法比较成员特色词。"
 ECHO_PRIVATE_INSUFFICIENT_REASON = "需要双方都有可用资料，才能展示两种声音。"
 ECHO_UNKNOWN_CONVERSATION_REASON = "当前会话类型无法确定，暂不展示语言画像。"
+ECHO_PRIVATE_SHARED_TOP_LIMIT = 8
+ECHO_PRIVATE_SIDE_TOP_LIMIT = 6
+ECHO_PRIVATE_SIDE_MIN_OCCURRENCE = 2
 
 
 class DashboardBuilder:
@@ -219,6 +224,12 @@ class EchoReportBuilder:
                 viewer_speaker_key=viewer_speaker_key,
             ),
             empty_description="" if has_data else EMPTY_DESCRIPTION,
+            active_days=(reports.activity.active_days if reports.activity else 0),
+            average_messages_per_active_day=(
+                reports.activity.average_messages_per_active_day
+                if reports.activity
+                else 0.0
+            ),
         )
 
 
@@ -282,6 +293,14 @@ def _build_echo_language_profile(
             if any(member.is_viewer for member in members)
             else None
         )
+        profile_by_key = {
+            (profile.speaker_key or profile.speaker): profile
+            for profile in (
+                reports.user_profiles.profiles
+                if reports.user_profiles is not None
+                else ()
+            )
+        }
         language_members = tuple(
             EchoLanguageMember(
                 speaker_key=member.speaker_key,
@@ -293,10 +312,20 @@ def _build_echo_language_profile(
                 primary_words=member.top_words[
                     :ECHO_LANGUAGE_PRIMARY_WORD_LIMIT
                 ],
+                expression_habits=_echo_expression_habits(
+                    profile_by_key.get(member.speaker_key)
+                ),
             )
             for member in members
         )
         available = len(language_members) == 2
+        shared_words, side_words = _private_shared_word_layers(
+            reports.private_language,
+            viewer_key=known_viewer_key,
+            member_keys={
+                member.speaker_key for member in language_members
+            },
+        )
         return EchoLanguageProfile(
             mode="private_common",
             available=available,
@@ -304,6 +333,8 @@ def _build_echo_language_profile(
             unavailable_reason=(
                 "" if available else ECHO_PRIVATE_INSUFFICIENT_REASON
             ),
+            shared_words=shared_words if available else (),
+            side_preference_words=side_words if available else (),
         )
 
     return EchoLanguageProfile(
@@ -323,6 +354,90 @@ def _private_voice_heading(
     if member.is_viewer:
         return "你常说"
     return "TA 常说"
+
+
+def _echo_expression_habits(
+    profile: object | None,
+) -> EchoExpressionHabits | None:
+    """Map a core UserProfile to display-ready expression habits."""
+    if profile is None or getattr(profile, "consecutive_runs", None) is None:
+        return None
+    runs = profile.consecutive_runs
+    return EchoExpressionHabits(
+        median_length=profile.median_length,
+        average_length=profile.average_length,
+        max_length=profile.max_length,
+        run_count=runs.run_count,
+        average_run_length=runs.average_run_length,
+        median_run_length=runs.median_run_length,
+        single_message_run_count=runs.single_message_run_count,
+        multi_message_run_count=runs.multi_message_run_count,
+    )
+
+
+def _private_shared_word_layers(
+    report: object | None,
+    *,
+    viewer_key: str | None,
+    member_keys: set[str],
+) -> tuple[tuple[EchoSharedWord, ...], tuple[EchoSharedWord, ...]]:
+    """Split core private shared words into 同频 and 谁更常这样说 lists."""
+    if report is None or viewer_key is None:
+        return (), ()
+
+    shared_items = [
+        item
+        for item in report.shared_words
+        if item.speaker_a in member_keys and item.speaker_b in member_keys
+    ]
+    shared_words = tuple(
+        _to_echo_shared_word(item, viewer_key, emphasis="shared")
+        for item in shared_items[:ECHO_PRIVATE_SHARED_TOP_LIMIT]
+    )
+
+    side_items = [
+        item
+        for item in shared_items
+        if item.preferred_speaker_key is not None
+        and item.occurrence_support >= ECHO_PRIVATE_SIDE_MIN_OCCURRENCE
+    ]
+    side_items.sort(
+        key=lambda item: (
+            -abs(item.rate_a - item.rate_b),
+            -item.common_strength,
+            item.word,
+        )
+    )
+    side_words = tuple(
+        _to_echo_shared_word(item, viewer_key)
+        for item in side_items[:ECHO_PRIVATE_SIDE_TOP_LIMIT]
+    )
+    return shared_words, side_words
+
+
+def _to_echo_shared_word(
+    item: object,
+    viewer_key: str,
+    *,
+    emphasis: str | None = None,
+) -> EchoSharedWord:
+    if viewer_key == item.speaker_a:
+        self_count, peer_count = item.count_a, item.count_b
+    else:
+        self_count, peer_count = item.count_b, item.count_a
+    if emphasis is None:
+        if item.preferred_speaker_key == viewer_key:
+            emphasis = "self"
+        elif item.preferred_speaker_key is not None:
+            emphasis = "peer"
+        else:
+            emphasis = "shared"
+    return EchoSharedWord(
+        word=item.word,
+        self_count=self_count,
+        peer_count=peer_count,
+        emphasis=emphasis,
+    )
 
 
 def _build_echo_sessions(

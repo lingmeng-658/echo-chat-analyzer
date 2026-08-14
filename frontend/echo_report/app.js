@@ -116,6 +116,18 @@ document.documentElement.classList.add("js-ready");
       "overview-participants",
       hasData ? formatCount(overview.participant_count) + " 人" : "—"
     );
+    setText(
+      "overview-active-days",
+      hasData && finiteNumber(overview.active_days) > 0
+        ? formatCount(overview.active_days) + " 天"
+        : "—"
+    );
+    setText(
+      "overview-average-per-day",
+      hasData && finiteNumber(overview.average_messages_per_active_day) !== null
+        ? formatAverage(overview.average_messages_per_active_day) + " 条"
+        : "—"
+    );
     if (!hasData && emptyDescription) {
       setText("overview-intro", emptyDescription);
     }
@@ -508,7 +520,66 @@ document.documentElement.classList.add("js-ready");
           context.textContent = "常聊：" + member.context_words.join(" · ");
           article.appendChild(context);
         }
+        if (languageMode === "private_common" && member.expression_habits) {
+          var habits = member.expression_habits;
+          var habitLine = document.createElement("p");
+          habitLine.className = "voice-context";
+          habitLine.textContent =
+            "平均 " + formatSessionMessages(habits.average_length) + " 字 · " +
+            "中位 " + formatSessionMessages(habits.median_length) + " 字 · " +
+            "最长 " + formatCount(habits.max_length) + " 字 · " +
+            "一次连发 " + formatSessionMessages(habits.average_run_length) + " 条";
+          article.appendChild(habitLine);
+        }
         memberList.appendChild(article);
+      });
+    }
+  }
+
+  var sharedWordsBlock = document.getElementById("private-shared-words");
+  var sideWordsBlock = document.getElementById("private-side-words");
+  var sharedWordsList = document.getElementById("private-shared-words-list");
+  var sideWordsList = document.getElementById("private-side-words-list");
+  if (sharedWordsBlock) sharedWordsBlock.hidden = true;
+  if (sideWordsBlock) sideWordsBlock.hidden = true;
+  if (sharedWordsList) sharedWordsList.textContent = "";
+  if (sideWordsList) sideWordsList.textContent = "";
+  if (
+    languageMode === "private_common" &&
+    languageProfile &&
+    languageProfile.available &&
+    sharedWordsBlock &&
+    sharedWordsList
+  ) {
+    var sharedWords = languageProfile.shared_words || [];
+    if (sharedWords.length) {
+      sharedWordsBlock.hidden = false;
+      sharedWords.forEach(function (item) {
+        var entry = document.createElement("li");
+        var selfCount = finiteNumber(item.self_count);
+        var peerCount = finiteNumber(item.peer_count);
+        entry.textContent =
+          item.word + " · 你 " + (selfCount === null ? "—" : formatCount(selfCount)) +
+          " 次 · TA " + (peerCount === null ? "—" : formatCount(peerCount)) + " 次";
+        sharedWordsList.appendChild(entry);
+      });
+    }
+  }
+  if (
+    languageMode === "private_common" &&
+    languageProfile &&
+    languageProfile.available &&
+    sideWordsBlock &&
+    sideWordsList
+  ) {
+    var sideWords = languageProfile.side_preference_words || [];
+    if (sideWords.length) {
+      sideWordsBlock.hidden = false;
+      sideWords.forEach(function (item) {
+        var entry = document.createElement("li");
+        var sideLabel = item.emphasis === "self" ? "你更常说" : "TA 更常说";
+        entry.textContent = item.word + " · " + sideLabel;
+        sideWordsList.appendChild(entry);
       });
     }
   }

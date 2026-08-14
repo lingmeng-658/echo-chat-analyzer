@@ -170,6 +170,54 @@ def test_activity_analyzer_accepts_iso_strings_and_skips_unparsable() -> None:
     assert hourly[9] == 1
 
 
+def test_activity_analyzer_active_days_empty_input_is_safe() -> None:
+    report = _analyzers().ActivityAnalyzer().analyze(())
+
+    assert report.active_days == 0
+    assert report.average_messages_per_active_day == 0.0
+
+
+def test_activity_analyzer_active_days_single_day() -> None:
+    report = _analyzers().ActivityAnalyzer().analyze(
+        (
+            _message(timestamp=_epoch(day=1, hour=8)),
+            _message(timestamp=_epoch(day=1, hour=22)),
+            _message(timestamp=_epoch(day=1, hour=23)),
+        )
+    )
+
+    assert report.active_days == 1
+    assert report.average_messages_per_active_day == 3.0
+
+
+def test_activity_analyzer_active_days_multiple_days_and_density() -> None:
+    report = _analyzers().ActivityAnalyzer().analyze(
+        (
+            _message(timestamp=_epoch(day=1, hour=8)),
+            _message(timestamp=_epoch(day=2, hour=8)),
+            _message(timestamp=_epoch(day=2, hour=9)),
+            _message(timestamp=_epoch(day=3, hour=20)),
+            _message(timestamp=_epoch(day=3, hour=21)),
+            _message(timestamp=_epoch(day=3, hour=22)),
+        )
+    )
+
+    assert report.active_days == 3
+    assert report.average_messages_per_active_day == 2.0
+
+
+def test_activity_analyzer_active_days_ignores_invalid_dates() -> None:
+    report = _analyzers().ActivityAnalyzer().analyze(
+        (
+            _message(timestamp=_epoch(day=1, hour=8)),
+            _message(timestamp="not-a-timestamp"),
+        )
+    )
+
+    assert report.active_days == 1
+    assert report.average_messages_per_active_day == 2.0
+
+
 def test_message_length_analyzer_handles_empty_input() -> None:
     report = _analyzers().MessageLengthAnalyzer().analyze(())
 
@@ -291,6 +339,88 @@ def test_user_profile_analyzer_reuses_supplied_tokens_for_top_words() -> None:
     assert alice_words[0].count == 2
     assert len(alice_words) == 2
     assert profiles["Fictional-Bob"].top_words[0].word == "trade"
+
+
+def test_user_profile_median_length_odd_and_even_independent() -> None:
+    messages = (
+        _message(sender="Fictional-Alice", text="123"),
+        _message(sender="Fictional-Alice", text="12345"),
+        _message(sender="Fictional-Alice", text="1234567"),
+        _message(sender="Fictional-Bob", text="12"),
+        _message(sender="Fictional-Bob", text="1234"),
+    )
+
+    report = _analyzers().UserProfileAnalyzer().analyze(messages)
+    profiles = {profile.speaker: profile for profile in report.profiles}
+
+    assert profiles["Fictional-Alice"].median_length == 5.0
+    assert profiles["Fictional-Bob"].median_length == 3.0
+    assert profiles["Fictional-Alice"].average_length == 5.0
+    assert profiles["Fictional-Bob"].average_length == 3.0
+
+
+def test_user_profile_consecutive_runs_aaa_bba() -> None:
+    messages = (
+        _message(sender="Fictional-Alice", text="1"),
+        _message(sender="Fictional-Alice", text="2"),
+        _message(sender="Fictional-Alice", text="3"),
+        _message(sender="Fictional-Bob", text="4"),
+        _message(sender="Fictional-Bob", text="5"),
+        _message(sender="Fictional-Alice", text="6"),
+    )
+
+    report = _analyzers().UserProfileAnalyzer().analyze(messages)
+    profiles = {profile.speaker: profile for profile in report.profiles}
+    alice_runs = profiles["Fictional-Alice"].consecutive_runs
+    bob_runs = profiles["Fictional-Bob"].consecutive_runs
+
+    assert alice_runs is not None
+    assert bob_runs is not None
+    assert (alice_runs.run_count, alice_runs.average_run_length) == (2, 2.0)
+    assert alice_runs.median_run_length == 2.0
+    assert alice_runs.single_message_run_count == 1
+    assert alice_runs.multi_message_run_count == 1
+    assert (bob_runs.run_count, bob_runs.average_run_length) == (1, 2.0)
+    assert bob_runs.median_run_length == 2.0
+    assert bob_runs.single_message_run_count == 0
+    assert bob_runs.multi_message_run_count == 1
+
+
+def test_user_profile_consecutive_runs_full_alternation() -> None:
+    messages = (
+        _message(sender="Fictional-Alice", text="1"),
+        _message(sender="Fictional-Bob", text="2"),
+        _message(sender="Fictional-Alice", text="3"),
+        _message(sender="Fictional-Bob", text="4"),
+    )
+
+    report = _analyzers().UserProfileAnalyzer().analyze(messages)
+    profiles = {profile.speaker: profile for profile in report.profiles}
+
+    for profile in profiles.values():
+        runs = profile.consecutive_runs
+        assert runs is not None
+        assert (runs.run_count, runs.average_run_length) == (2, 1.0)
+        assert runs.median_run_length == 1.0
+        assert runs.single_message_run_count == 2
+        assert runs.multi_message_run_count == 0
+
+
+def test_user_profile_consecutive_runs_single_speaker() -> None:
+    messages = (
+        _message(sender="Fictional-Alice", text="1"),
+        _message(sender="Fictional-Alice", text="2"),
+        _message(sender="Fictional-Alice", text="3"),
+    )
+
+    profile = _analyzers().UserProfileAnalyzer().analyze(messages).profiles[0]
+    runs = profile.consecutive_runs
+
+    assert runs is not None
+    assert (runs.run_count, runs.average_run_length) == (1, 3.0)
+    assert runs.median_run_length == 3.0
+    assert runs.single_message_run_count == 0
+    assert runs.multi_message_run_count == 1
 
 
 def test_conversation_analyzer_handles_empty_input() -> None:

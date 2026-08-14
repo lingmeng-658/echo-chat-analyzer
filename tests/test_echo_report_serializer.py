@@ -17,10 +17,12 @@ from qq_chat_analyzer.presentation import (  # noqa: E402
     ChartPoint,
     EchoConversationSession,
     EchoConversationSessions,
+    EchoExpressionHabits,
     EchoLanguageMember,
     EchoLanguageProfile,
     EchoMemberCard,
     EchoReportView,
+    EchoSharedWord,
     echo_report_to_dict,
     export_echo_report_html,
     export_echo_report_json,
@@ -89,6 +91,8 @@ def test_echo_report_converts_to_stable_frontend_json_object() -> None:
             "total_message_count": 3,
             "participant_count": 2,
             "empty_description": "",
+            "active_days": 0,
+            "average_messages_per_active_day": 0.0,
         },
         "activity": {
             "hourly": [{"label": "09:00-09:59", "value": 3.0}],
@@ -99,6 +103,8 @@ def test_echo_report_converts_to_stable_frontend_json_object() -> None:
             "mode": "group_distinctive",
             "available": True,
             "unavailable_reason": "",
+            "shared_words": [],
+            "side_preference_words": [],
             "members": [
                 {
                     "speaker_key": "fictional-alice",
@@ -106,6 +112,7 @@ def test_echo_report_converts_to_stable_frontend_json_object() -> None:
                     "heading": "虚构 Alice",
                     "primary_words": ["风格词", "回声"],
                     "context_words": ["讨论", "项目"],
+                    "expression_habits": None,
                 },
             ],
         },
@@ -190,6 +197,8 @@ def test_empty_echo_report_serializes_with_stable_empty_collections() -> None:
         "total_message_count": 0,
         "participant_count": 0,
         "empty_description": "",
+        "active_days": 0,
+        "average_messages_per_active_day": 0.0,
     }
     assert payload["activity"] == {"hourly": [], "weekday": []}
     assert payload["language_profile"] is None
@@ -395,3 +404,69 @@ def test_private_sessions_serialize_reply_peaks_and_back_and_forth() -> None:
     serialized = json.dumps(data, ensure_ascii=False)
     assert "switch_ratio" not in serialized
     assert "switch_count" not in serialized
+
+
+def test_private_language_profile_serializes_new_layers_and_overview_density() -> None:
+    """Overview density and private language layers reach the frontend JSON."""
+    view = EchoReportView(
+        title="Fictional Private Echo",
+        has_data=True,
+        conversation_kind="private",
+        active_days=5,
+        average_messages_per_active_day=8.8,
+        language_profile=EchoLanguageProfile(
+            mode="private_common",
+            available=True,
+            members=(
+                EchoLanguageMember(
+                    speaker_key="fictional-self-id",
+                    display_name="虚构自己",
+                    heading="你常说",
+                    primary_words=("散步",),
+                    expression_habits=EchoExpressionHabits(
+                        median_length=5.0,
+                        average_length=5.0,
+                        max_length=7,
+                        run_count=2,
+                        average_run_length=2.0,
+                        median_run_length=2.0,
+                        single_message_run_count=1,
+                        multi_message_run_count=1,
+                    ),
+                ),
+            ),
+            shared_words=(
+                EchoSharedWord(
+                    word="回声",
+                    self_count=6,
+                    peer_count=4,
+                    emphasis="shared",
+                ),
+            ),
+            side_preference_words=(
+                EchoSharedWord(
+                    word="方案",
+                    self_count=5,
+                    peer_count=1,
+                    emphasis="self",
+                ),
+            ),
+        ),
+    )
+
+    payload = echo_report_to_dict(view)
+    assert payload["overview"]["active_days"] == 5
+    assert payload["overview"]["average_messages_per_active_day"] == 8.8
+
+    language = payload["language_profile"]
+    assert language["shared_words"] == [
+        {"word": "回声", "self_count": 6, "peer_count": 4, "emphasis": "shared"}
+    ]
+    assert language["side_preference_words"] == [
+        {"word": "方案", "self_count": 5, "peer_count": 1, "emphasis": "self"}
+    ]
+    habits = language["members"][0]["expression_habits"]
+    assert habits["median_length"] == 5.0
+    assert habits["average_length"] == 5.0
+    assert habits["run_count"] == 2
+    assert habits["multi_message_run_count"] == 1

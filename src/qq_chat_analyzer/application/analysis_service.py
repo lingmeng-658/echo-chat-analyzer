@@ -15,6 +15,7 @@ from ..analysis.analyzers import (
     DistinctiveWordAnalyzer,
     MessageCompositionAnalyzer,
     MessageLengthAnalyzer,
+    PrivateLanguageAnalyzer,
     UserProfileAnalyzer,
 )
 from ..analysis.models import AnalysisReports
@@ -229,6 +230,10 @@ def _build_reports(
         message_composition=MessageCompositionAnalyzer().analyze(messages),
         conversation_sessions=analyze_conversation_sessions(messages),
         distinctive_words=DistinctiveWordAnalyzer().analyze(
+            sender_tokens,
+            conversation_type=conversation_type,
+        ),
+        private_language=PrivateLanguageAnalyzer().analyze(
             sender_tokens,
             conversation_type=conversation_type,
         ),

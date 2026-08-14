@@ -132,6 +132,31 @@ class EchoLanguageMember:
     heading: str
     primary_words: tuple[str, ...] = ()
     context_words: tuple[str, ...] = ()
+    expression_habits: EchoExpressionHabits | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EchoExpressionHabits:
+    """Per-speaker expression statistics prepared for Echo display."""
+
+    median_length: float
+    average_length: float
+    max_length: int
+    run_count: int
+    average_run_length: float
+    median_run_length: float
+    single_message_run_count: int
+    multi_message_run_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class EchoSharedWord:
+    """One display-ready private shared word with a restrained emphasis."""
+
+    word: str
+    self_count: int | None
+    peer_count: int | None
+    emphasis: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +167,8 @@ class EchoLanguageProfile:
     available: bool
     members: tuple[EchoLanguageMember, ...] = ()
     unavailable_reason: str = ""
+    shared_words: tuple[EchoSharedWord, ...] = ()
+    side_preference_words: tuple[EchoSharedWord, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,3 +241,5 @@ class EchoReportView:
     conversation_sessions: EchoConversationSessions | None = None
     language_profile: EchoLanguageProfile | None = None
     empty_description: str = ""
+    active_days: int = 0
+    average_messages_per_active_day: float = 0.0

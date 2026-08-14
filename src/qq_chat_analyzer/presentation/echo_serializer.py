@@ -39,6 +39,10 @@ def echo_report_to_dict(view: EchoReportView) -> dict[str, object]:
             "total_message_count": view.total_message_count,
             "participant_count": view.participant_count,
             "empty_description": view.empty_description,
+            "active_days": view.active_days,
+            "average_messages_per_active_day": (
+                view.average_messages_per_active_day
+            ),
         },
         "activity": {
             "hourly": _points_to_list(view.hourly_activity),
@@ -61,6 +65,12 @@ def _language_profile_to_dict(
         "mode": profile.mode,
         "available": profile.available,
         "unavailable_reason": profile.unavailable_reason,
+        "shared_words": [
+            _shared_word_to_dict(word) for word in profile.shared_words
+        ],
+        "side_preference_words": [
+            _shared_word_to_dict(word) for word in profile.side_preference_words
+        ],
         "members": [
             {
                 "speaker_key": member.speaker_key,
@@ -68,9 +78,38 @@ def _language_profile_to_dict(
                 "heading": member.heading,
                 "primary_words": list(member.primary_words),
                 "context_words": list(member.context_words),
+                "expression_habits": _expression_habits_to_dict(
+                    member.expression_habits
+                ),
             }
             for member in profile.members
         ],
+    }
+
+
+def _shared_word_to_dict(word: object) -> dict[str, object]:
+    return {
+        "word": word.word,
+        "self_count": word.self_count,
+        "peer_count": word.peer_count,
+        "emphasis": word.emphasis,
+    }
+
+
+def _expression_habits_to_dict(
+    habits: object | None,
+) -> dict[str, object] | None:
+    if habits is None:
+        return None
+    return {
+        "median_length": habits.median_length,
+        "average_length": habits.average_length,
+        "max_length": habits.max_length,
+        "run_count": habits.run_count,
+        "average_run_length": habits.average_run_length,
+        "median_run_length": habits.median_run_length,
+        "single_message_run_count": habits.single_message_run_count,
+        "multi_message_run_count": habits.multi_message_run_count,
     }
 
 

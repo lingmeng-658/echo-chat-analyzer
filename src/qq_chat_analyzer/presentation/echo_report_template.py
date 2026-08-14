@@ -108,6 +108,8 @@ ECHO_REPORT_HTML_SKELETON = r"""
         <dl class="archive-fields">
           <div><dt>时间跨度</dt><dd id="overview-time-span"></dd><small>报告覆盖的时间范围</small></div>
           <div><dt>参与人数</dt><dd id="overview-participants"></dd><small>在这段会话中留下消息</small></div>
+          <div><dt>活跃天数</dt><dd id="overview-active-days"></dd><small>实际有聊天的日子</small></div>
+          <div><dt>日均消息</dt><dd id="overview-average-per-day"></dd><small>有聊天的日子平均消息数</small></div>
           <div class="wide"><dt>最活跃时间</dt><dd id="busiest-hour"></dd><small>一天中消息最集中的时段</small></div>
         </dl>
       </div>
@@ -147,8 +149,8 @@ ECHO_REPORT_HTML_SKELETON = r"""
       <div class="session-movement" id="session-reply" hidden>
         <h3 class="movement-heading"><span class="movement-icon" aria-hidden="true"></span><span id="session-reply-title">接住第一句话</span></h3>
         <dl class="session-fields">
-          <div><dt>你开口之后</dt><dd id="session-reply-self-to-peer"></dd><small>TA 通常多久接住第一句</small></div>
-          <div><dt>TA 开口之后</dt><dd id="session-reply-peer-to-self"></dd><small>你通常多久接住第一句</small></div>
+          <div><dt>你开口之后</dt><dd id="session-reply-self-to-peer"></dd><small>TA 通常接住第一句</small></div>
+          <div><dt>TA 开口之后</dt><dd id="session-reply-peer-to-self"></dd><small>你通常接住第一句</small></div>
         </dl>
       </div>
 
@@ -232,6 +234,16 @@ ECHO_REPORT_HTML_SKELETON = r"""
       <p class="chapter-intro" id="voices-intro"></p>
 
       <div class="member-list" id="member-list"></div>
+      <div class="private-language-blocks" id="private-shared-words" hidden>
+        <h3>同频</h3>
+        <p>两个人都相对常说的词。</p>
+        <ul class="language-word-list" id="private-shared-words-list"></ul>
+      </div>
+      <div class="private-language-blocks" id="private-side-words" hidden>
+        <h3>谁更常这样说</h3>
+        <p>同一份习惯里，更常开口的一方。</p>
+        <ul class="language-word-list" id="private-side-words-list"></ul>
+      </div>
       <span class="page-number">06</span>
     </section>
 
@@ -398,6 +410,38 @@ h1, h2, h3, p { margin-top: 0; }
 .mode-private .voice-words li::after { content: ""; }
 .voice-context { margin: 30px 0 0 40px; color: var(--faint); font: 13px/1.8 var(--serif); }
 .language-unavailable { margin: 0; padding: 52px 0; color: var(--muted); font: 17px/2 var(--serif); border-bottom: 1px solid var(--rule); }
+
+.private-language-blocks {
+  margin-top: 36px;
+  padding-top: 24px;
+  border-top: 1px solid var(--rule);
+}
+
+.private-language-blocks h3 {
+  margin: 0 0 12px;
+  font-size: 21px;
+  font-weight: 500;
+}
+
+.private-language-blocks > p {
+  margin: 0 0 18px;
+  color: var(--muted);
+  font: 14px/1.8 var(--serif);
+}
+
+.language-word-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 28px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.language-word-list li {
+  color: var(--ink);
+  font: 400 22px/1.4 var(--serif);
+}
 
 .future { display: flex; flex-direction: column; }
 .future-list { margin-top: 64px; border-top: 1px solid var(--rule); }
@@ -699,6 +743,18 @@ document.documentElement.classList.add("js-ready");
     setText(
       "overview-participants",
       hasData ? formatCount(overview.participant_count) + " 人" : "—"
+    );
+    setText(
+      "overview-active-days",
+      hasData && finiteNumber(overview.active_days) > 0
+        ? formatCount(overview.active_days) + " 天"
+        : "—"
+    );
+    setText(
+      "overview-average-per-day",
+      hasData && finiteNumber(overview.average_messages_per_active_day) !== null
+        ? formatAverage(overview.average_messages_per_active_day) + " 条"
+        : "—"
     );
     if (!hasData && emptyDescription) {
       setText("overview-intro", emptyDescription);
@@ -1092,7 +1148,66 @@ document.documentElement.classList.add("js-ready");
           context.textContent = "常聊：" + member.context_words.join(" · ");
           article.appendChild(context);
         }
+        if (languageMode === "private_common" && member.expression_habits) {
+          var habits = member.expression_habits;
+          var habitLine = document.createElement("p");
+          habitLine.className = "voice-context";
+          habitLine.textContent =
+            "平均 " + formatSessionMessages(habits.average_length) + " 字 · " +
+            "中位 " + formatSessionMessages(habits.median_length) + " 字 · " +
+            "最长 " + formatCount(habits.max_length) + " 字 · " +
+            "一次连发 " + formatSessionMessages(habits.average_run_length) + " 条";
+          article.appendChild(habitLine);
+        }
         memberList.appendChild(article);
+      });
+    }
+  }
+
+  var sharedWordsBlock = document.getElementById("private-shared-words");
+  var sideWordsBlock = document.getElementById("private-side-words");
+  var sharedWordsList = document.getElementById("private-shared-words-list");
+  var sideWordsList = document.getElementById("private-side-words-list");
+  if (sharedWordsBlock) sharedWordsBlock.hidden = true;
+  if (sideWordsBlock) sideWordsBlock.hidden = true;
+  if (sharedWordsList) sharedWordsList.textContent = "";
+  if (sideWordsList) sideWordsList.textContent = "";
+  if (
+    languageMode === "private_common" &&
+    languageProfile &&
+    languageProfile.available &&
+    sharedWordsBlock &&
+    sharedWordsList
+  ) {
+    var sharedWords = languageProfile.shared_words || [];
+    if (sharedWords.length) {
+      sharedWordsBlock.hidden = false;
+      sharedWords.forEach(function (item) {
+        var entry = document.createElement("li");
+        var selfCount = finiteNumber(item.self_count);
+        var peerCount = finiteNumber(item.peer_count);
+        entry.textContent =
+          item.word + " · 你 " + (selfCount === null ? "—" : formatCount(selfCount)) +
+          " 次 · TA " + (peerCount === null ? "—" : formatCount(peerCount)) + " 次";
+        sharedWordsList.appendChild(entry);
+      });
+    }
+  }
+  if (
+    languageMode === "private_common" &&
+    languageProfile &&
+    languageProfile.available &&
+    sideWordsBlock &&
+    sideWordsList
+  ) {
+    var sideWords = languageProfile.side_preference_words || [];
+    if (sideWords.length) {
+      sideWordsBlock.hidden = false;
+      sideWords.forEach(function (item) {
+        var entry = document.createElement("li");
+        var sideLabel = item.emphasis === "self" ? "你更常说" : "TA 更常说";
+        entry.textContent = item.word + " · " + sideLabel;
+        sideWordsList.appendChild(entry);
       });
     }
   }

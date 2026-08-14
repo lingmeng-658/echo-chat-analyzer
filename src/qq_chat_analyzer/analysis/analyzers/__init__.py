@@ -14,6 +14,7 @@ from .distinctive_word_analyzer import (
 )
 from .message_length_analyzer import MessageLengthAnalyzer
 from .message_composition_analyzer import MessageCompositionAnalyzer
+from .private_language_analyzer import PrivateLanguageAnalyzer
 from .user_profile_analyzer import UserProfileAnalyzer
 
 __all__ = [
@@ -29,5 +30,6 @@ __all__ = [
     "DISTINCTIVE_TOP_WORD_LIMIT",
     "MessageCompositionAnalyzer",
     "MessageLengthAnalyzer",
+    "PrivateLanguageAnalyzer",
     "UserProfileAnalyzer",
 ]

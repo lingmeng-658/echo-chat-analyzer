@@ -135,6 +135,38 @@ h1, h2, h3, p { margin-top: 0; }
 .voice-context { margin: 30px 0 0 40px; color: var(--faint); font: 13px/1.8 var(--serif); }
 .language-unavailable { margin: 0; padding: 52px 0; color: var(--muted); font: 17px/2 var(--serif); border-bottom: 1px solid var(--rule); }
 
+.private-language-blocks {
+  margin-top: 36px;
+  padding-top: 24px;
+  border-top: 1px solid var(--rule);
+}
+
+.private-language-blocks h3 {
+  margin: 0 0 12px;
+  font-size: 21px;
+  font-weight: 500;
+}
+
+.private-language-blocks > p {
+  margin: 0 0 18px;
+  color: var(--muted);
+  font: 14px/1.8 var(--serif);
+}
+
+.language-word-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 28px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.language-word-list li {
+  color: var(--ink);
+  font: 400 22px/1.4 var(--serif);
+}
+
 .future { display: flex; flex-direction: column; }
 .future-list { margin-top: 64px; border-top: 1px solid var(--rule); }
 .future-list > div { display: grid; grid-template-columns: 54px 180px 1fr; gap: 24px; align-items: baseline; padding: 28px 0; color: var(--faint); border-bottom: 1px solid var(--rule); }

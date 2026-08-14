@@ -66,6 +66,19 @@ class ActivityReport:
     weekday_distribution: Mapping[str, int] = field(default_factory=dict)
     peak_hour: int | None = None
     peak_weekday: str | None = None
+    active_days: int = 0
+    average_messages_per_active_day: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class ConsecutiveRunStats:
+    """Per-speaker consecutive-sending statistics over kept message order."""
+
+    run_count: int
+    average_run_length: float
+    median_run_length: float
+    single_message_run_count: int
+    multi_message_run_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +138,8 @@ class UserProfile:
     remark: str | None = None
     nickname: str | None = None
     contextual_name: str | None = None
+    median_length: float = 0.0
+    consecutive_runs: ConsecutiveRunStats | None = None
 
     @property
     def resolved_display_name(self) -> str:
@@ -187,6 +202,31 @@ class DistinctiveWordReport:
 
 
 @dataclass(frozen=True, slots=True)
+class PrivateSharedWord:
+    """One word both private sides used, with normalized per-side statistics."""
+
+    word: str
+    speaker_a: str
+    speaker_b: str
+    count_a: int
+    count_b: int
+    total_tokens_a: int
+    total_tokens_b: int
+    rate_a: float
+    rate_b: float
+    common_strength: float
+    preferred_speaker_key: str | None
+    occurrence_support: int
+
+
+@dataclass(frozen=True, slots=True)
+class PrivateLanguageReport:
+    """Private shared-word statistics derived from full sender tokens."""
+
+    shared_words: tuple[PrivateSharedWord, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class ConversationSummary:
     """Volume, span, and participation for one conversation."""
 
@@ -231,6 +271,7 @@ class AnalysisReports:
     message_composition: MessageCompositionReport | None = None
     conversation_sessions: ConversationSessionReport | None = None
     distinctive_words: DistinctiveWordReport | None = None
+    private_language: PrivateLanguageReport | None = None
 
 
 @dataclass(frozen=True, slots=True)

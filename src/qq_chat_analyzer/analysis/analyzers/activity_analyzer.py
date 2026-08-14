@@ -23,17 +23,20 @@ class ActivityAnalyzer:
         hourly_counts = [0] * HOURS_PER_DAY
         weekday_counts = [0] * DAYS_PER_WEEK
         dated_message_count = 0
+        active_dates: set[object] = set()
 
         for message in messages:
             moment = to_chat_datetime(message.timestamp)
             if moment is None:
                 continue
             dated_message_count += 1
+            active_dates.add(moment.date())
             hourly_counts[moment.hour] += 1
             weekday_counts[moment.weekday()] += 1
 
         peak_hour = busiest_index(hourly_counts)
         peak_weekday_index = busiest_index(weekday_counts)
+        active_days = len(active_dates)
 
         return ActivityReport(
             total_message_count=len(messages),
@@ -60,5 +63,9 @@ class ActivityAnalyzer:
                 None
                 if peak_weekday_index is None
                 else WEEKDAY_KEYS[peak_weekday_index]
+            ),
+            active_days=active_days,
+            average_messages_per_active_day=(
+                len(messages) / active_days if active_days else 0.0
             ),
         )

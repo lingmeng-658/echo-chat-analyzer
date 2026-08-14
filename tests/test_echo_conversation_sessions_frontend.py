@@ -37,6 +37,21 @@ SESSION_NODE_IDS = (
     "session-group-top",
     "session-unknown-note",
     "session-threshold-note",
+    "session-beat",
+    "session-viewer-identity",
+    "session-peak-hour",
+    "session-self-peak-hour",
+    "session-peer-peak-hour",
+    "session-reply",
+    "session-reply-self-to-peer",
+    "session-reply-peer-to-self",
+    "session-movement",
+    "session-character",
+    "session-highnotes",
+    "session-loudest-duration",
+    "session-loudest-duration-text",
+    "session-loudest-duration-time",
+    "session-rest",
 )
 
 NODE_RUNNER = r"""
@@ -86,6 +101,14 @@ def _sessions(
     average_message_count: float = 12.5,
     private_initiators: dict[str, object] | None = None,
     group_initiators: dict[str, object] | None = None,
+    viewer_identity_reliable: bool = False,
+    peak_start_hour: int | None = None,
+    private_self_peak_start_hour: int | None = None,
+    private_peer_peak_start_hour: int | None = None,
+    private_reply_median_self_to_peer_seconds: float | None = None,
+    private_reply_median_peer_to_self_seconds: float | None = None,
+    session_character: str | None = None,
+    loudest_longest_duration: dict[str, object] | None = None,
 ) -> dict[str, object]:
     return {
         "threshold_seconds": 1800,
@@ -96,6 +119,18 @@ def _sessions(
         "average_message_count": average_message_count,
         "private_initiators": private_initiators,
         "group_initiators": group_initiators,
+        "viewer_identity_reliable": viewer_identity_reliable,
+        "peak_start_hour": peak_start_hour,
+        "private_self_peak_start_hour": private_self_peak_start_hour,
+        "private_peer_peak_start_hour": private_peer_peak_start_hour,
+        "private_reply_median_self_to_peer_seconds": (
+            private_reply_median_self_to_peer_seconds
+        ),
+        "private_reply_median_peer_to_self_seconds": (
+            private_reply_median_peer_to_self_seconds
+        ),
+        "session_character": session_character,
+        "loudest_longest_duration": loudest_longest_duration,
         "items": [],
     }
 
@@ -156,17 +191,11 @@ def test_private_sessions_show_rounds_initiators_and_readable_durations() -> Non
     assert rendered["session-lead"]["text"] == (
         "过去这段时间，你们一共聊起了 8 轮"
     )
-    assert rendered["session-self"]["text"] == "你先开口 62.5%（5 次）"
-    assert rendered["session-peer"]["text"] == "对方先开口 37.5%（3 次）"
-    assert rendered["session-median-duration"]["text"] == (
-        "通常一次会聊约 18 分钟"
-    )
-    assert rendered["session-longest-duration"]["text"] == (
-        "最长的一次持续 4 小时 37 分钟"
-    )
-    assert rendered["session-average-messages"]["text"] == (
-        "平均每轮约 12.5 条消息"
-    )
+    assert rendered["session-beat"]["hidden"] is False
+    assert rendered["session-group-top"]["text"] == "你开启 5 轮 · TA 开启 3 轮"
+    assert rendered["session-movement"]["hidden"] is False
+    assert rendered["session-median-duration"]["text"] == "约 18 分钟"
+    assert rendered["session-average-messages"]["text"] == "约 12.5 条"
 
 
 def test_private_unknown_initiators_do_not_show_made_up_percentages() -> None:
@@ -186,13 +215,11 @@ def test_private_unknown_initiators_do_not_show_made_up_percentages() -> None:
         ),
     )
 
-    assert rendered["session-private-initiators"]["hidden"] is True
-    assert rendered["session-self"]["text"] == ""
-    assert rendered["session-peer"]["text"] == ""
-    assert rendered["session-unknown-note"]["text"] == (
-        "有 3 轮暂时无法判断谁先开口。"
-    )
-    assert rendered["session-unknown-note"]["hidden"] is False
+    assert rendered["session-group-top"]["hidden"] is True
+    assert rendered["session-group-top"]["text"] == ""
+    assert rendered["session-self-peak-hour"]["hidden"] is True
+    assert rendered["session-peer-peak-hour"]["hidden"] is True
+    assert rendered["session-unknown-note"]["hidden"] is True
 
 
 def test_group_sessions_show_self_and_top_initiator_without_raw_key() -> None:
@@ -201,6 +228,7 @@ def test_group_sessions_show_self_and_top_initiator_without_raw_key() -> None:
         sessions=_sessions(
             session_count=12,
             average_message_count=23.0,
+            viewer_identity_reliable=True,
             group_initiators={
                 "self_count": 3,
                 "self_share": 0.25,
@@ -217,17 +245,13 @@ def test_group_sessions_show_self_and_top_initiator_without_raw_key() -> None:
     assert rendered["session-lead"]["text"] == (
         "过去这段时间，群里一共聊起了 12 轮"
     )
-    assert rendered["session-private-initiators"]["hidden"] is True
-    assert rendered["session-self"]["text"] == ""
-    assert rendered["session-peer"]["text"] == ""
-    assert rendered["session-group-initiators"]["hidden"] is False
-    assert rendered["session-group-self"]["text"] == "你发起了 3 轮，占 25.0%"
+    assert rendered["session-viewer-identity"]["hidden"] is False
+    assert rendered["session-viewer-identity"]["text"] == "你发起了 3 轮，占 25.0%"
+    assert rendered["session-beat"]["hidden"] is False
     assert rendered["session-group-top"]["text"] == (
         "最常发起聊天：Fictional Alice（5 轮，41.7%）"
     )
-    assert rendered["session-average-messages"]["text"] == (
-        "平均每轮约 23 条消息"
-    )
+    assert rendered["session-average-messages"]["text"] == "约 23 条"
     visible_text = " ".join(str(node["text"]) for node in rendered.values())
     assert "raw-stable-fictional-id" not in visible_text
 
@@ -250,19 +274,28 @@ def test_session_duration_formatting_handles_minutes_and_hours() -> None:
         kind="group",
         sessions=_sessions(
             median_duration_seconds=18 * 60,
-            longest_duration_seconds=4 * 60 * 60 + 37 * 60,
+            loudest_longest_duration={
+                "start_timestamp": 1000,
+                "end_timestamp": 10000,
+                "duration_seconds": 4 * 60 * 60 + 37 * 60,
+                "message_count": 15,
+                "participant_count": 3,
+                "initiator": "a",
+                "initiator_sender_key": "a",
+            },
         ),
     )
 
     assert "18 分钟" in rendered["session-median-duration"]["text"]
-    assert "4 小时 37 分钟" in rendered["session-longest-duration"]["text"]
+    assert rendered["session-loudest-duration"]["hidden"] is False
+    assert "4 小时 37 分钟" in rendered["session-loudest-duration-text"]["text"]
 
 
 def test_session_chapter_explains_the_thirty_minute_boundary() -> None:
     rendered = _render_frontend(kind="group", sessions=_sessions())
 
     assert rendered["session-threshold-note"]["text"] == (
-        "相隔超过 30 分钟未继续交流，会被视为一段新的聊天。"
+        "超过 30 分钟未继续交流，会视作下一轮聊天。"
     )
 
 
@@ -329,4 +362,5 @@ def test_self_contained_echo_html_includes_the_session_chapter(
 
     assert 'id="conversation-sessions"' in html
     assert 'id="session-median-duration"' in html
-    assert "相隔超过" in html
+    assert 'id="session-beat"' in html
+    assert "会视作下一轮聊天" in html
