@@ -185,6 +185,29 @@ ECHO_REPORT_HTML_SKELETON = r"""
       <span class="page-number">04</span>
     </section>
 
+    <section class="page chapter" id="rhythm" aria-labelledby="rhythm-title">
+      <header class="chapter-header">
+        <span class="chapter-number">03</span>
+        <div><p class="folio">RHYTHM</p><h2 id="rhythm-title">节奏</h2></div>
+      </header>
+      <p class="chapter-intro">消息在一天与一周中的分布，形成这段交流的时间纹理。</p>
+
+      <figure class="figure-block">
+        <figcaption><h3>一天中的活跃轨迹</h3><p>每一格代表一个小时，深浅仅表示消息数量。</p></figcaption>
+        <div class="hourly-track" role="img" aria-label="全天二十四小时活跃分布">
+          <div class="staff-grid" aria-hidden="true"></div>
+          <div class="hour-bars" id="hour-bars" aria-hidden="true"></div>
+          <div class="hour-labels"><span>00</span><span>06</span><span>12</span><span>18</span><span>23</span></div>
+        </div>
+      </figure>
+
+      <figure class="figure-block weekday-figure">
+        <figcaption><h3>一周中的活跃轨迹</h3><p>星期顺序保持不变，便于阅读时间节奏。</p></figcaption>
+        <div class="weekday-tracks" id="weekday-tracks" role="img" aria-label="星期一到星期日活跃分布"></div>
+      </figure>
+      <span class="page-number">05</span>
+    </section>
+
     <section class="page chapter" id="voices" aria-labelledby="voices-title">
       <header class="chapter-header">
         <span class="chapter-number">04</span>
