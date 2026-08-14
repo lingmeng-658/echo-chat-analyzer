@@ -29,8 +29,9 @@ from ..application.facade import WeChatEnvironmentConfig
 
 DATA_ROOT_LABEL = "微信数据位置"
 DATA_ROOT_HINT = (
-    "如果未自动识别微信数据目录，请点击上方按钮，"
-    "选择微信设置中显示的存储文件夹。"
+    "如果未能自动识别微信数据目录，请进入微信，"
+    "从“左下角的按键“三”→ 设置 → 存储位置”处获取微信存储位置，并手动填入。\n"
+    "填写完成后，请退出微信到未登录界面。"
 )
 BROWSE_CAPTION = "选择微信存储文件夹"
 

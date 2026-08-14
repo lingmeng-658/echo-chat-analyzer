@@ -19,6 +19,7 @@ from .desktop_runtime import (
     install_global_exception_handler,
     log_startup,
 )
+from .theme import BASE_QSS
 
 
 APP_VERSION = "0.8.0"
@@ -161,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
         from .main_window import MainWindow
 
         app = QApplication(arguments)
+        app.setStyleSheet(BASE_QSS)
         window = MainWindow(build_facade())
         window.resize(960, 720)
         window.show()
