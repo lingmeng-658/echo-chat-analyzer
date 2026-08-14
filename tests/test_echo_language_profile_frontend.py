@@ -39,13 +39,21 @@ const nodes = {
   "private-shared-words-list": new FakeNode("private-shared-words-list"),
   "private-side-words-list": new FakeNode("private-side-words-list")
 };
-global.window = { ECHO_DATA: JSON.parse(process.env.ECHO_PAYLOAD) };
+global.window = {
+  ECHO_DATA: JSON.parse(process.env.ECHO_PAYLOAD),
+  ECHO_ASSETS: {}
+};
 global.document = {
   title: "",
   documentElement: new FakeNode("html"),
   getElementById: function (id) { return nodes[id] || null; },
   querySelectorAll: function () { return []; },
-  createElement: function () { return new FakeNode(""); }
+  createElement: function () { return new FakeNode(""); },
+  createTextNode: function (text) {
+    var node = new FakeNode("");
+    node.textContent = String(text);
+    return node;
+  }
 };
 
 eval(fs.readFileSync(process.env.ECHO_APP_PATH, "utf8"));
@@ -113,7 +121,9 @@ def test_group_frontend_renders_precomputed_distinctive_words_as_primary() -> No
     assert "在这段聊天里，这些词更像 TA" in rendered["intro"]
     assert "虚构成员甲" in rendered["body"]
     assert "风格词" in rendered["body"]
-    assert "常聊：项目 · 讨论" in rendered["body"]
+    assert "常聊：" in rendered["body"]
+    assert "项目" in rendered["body"]
+    assert "讨论" in rendered["body"]
     assert "private-stable-key" not in rendered["body"]
 
 

@@ -19,9 +19,13 @@ from .models import (
     EchoMemberCard,
     EchoReportView,
 )
+from .expression_assets import (
+    expression_asset_data_uri,
+    resolve_wechat_asset_key,
+)
 
 
-ECHO_REPORT_SCHEMA_VERSION = "echo-report.v0.3"
+ECHO_REPORT_SCHEMA_VERSION = "echo-report.v0.7"
 
 
 def echo_report_to_dict(view: EchoReportView) -> dict[str, object]:
@@ -95,6 +99,10 @@ def _expression_culture_to_dict(
             }
             for member in culture.members
         ],
+        "top_combinations": [
+            _expression_combination_to_dict(combination)
+            for combination in culture.top_combinations
+        ],
         "unavailable_reason": culture.unavailable_reason,
     }
 
@@ -104,6 +112,27 @@ def _expression_item_to_dict(item: object) -> dict[str, object]:
         "display_text": item.display_text,
         "count": item.count,
         "kind": item.kind,
+        "with_text_message_count": item.with_text_message_count,
+        "text_only_message_count": item.text_only_message_count,
+        "asset_key": item.asset_key,
+        "nearby_words": list(getattr(item, "nearby_words", ())),
+    }
+
+
+def _expression_combination_to_dict(
+    combination: object,
+) -> dict[str, object]:
+    return {
+        "asset_keys": list(getattr(combination, "asset_keys", ())),
+        "count": combination.count,
+        "common_members": [
+            {
+                "display_name": member.display_name,
+                "count": member.count,
+                "share_percent": member.share_percent,
+            }
+            for member in getattr(combination, "common_members", ())
+        ],
     }
 
 
@@ -127,8 +156,12 @@ def _language_profile_to_dict(
                 "speaker_key": member.speaker_key,
                 "display_name": member.display_name,
                 "heading": member.heading,
-                "primary_words": list(member.primary_words),
-                "context_words": list(member.context_words),
+                "primary_words": [
+                    _word_to_display(word) for word in member.primary_words
+                ],
+                "context_words": [
+                    _word_to_display(word) for word in member.context_words
+                ],
                 "expression_habits": _expression_habits_to_dict(
                     member.expression_habits
                 ),
@@ -140,11 +173,32 @@ def _language_profile_to_dict(
 
 def _shared_word_to_dict(word: object) -> dict[str, object]:
     return {
-        "word": word.word,
+        "word": _word_to_display(word.word),
         "self_count": word.self_count,
         "peer_count": word.peer_count,
         "emphasis": word.emphasis,
     }
+
+
+def _word_to_display(word: str) -> str | dict[str, str]:
+    """Turn an expression token into a display-safe word entry."""
+    if isinstance(word, str) and word.startswith("expression:"):
+        expression_key = word[len("expression:") :]
+        asset_key = resolve_wechat_asset_key(expression_key)
+        if asset_key:
+            return {"asset_key": asset_key}
+        if _is_emoji_expression(expression_key):
+            return {"text": expression_key}
+        return {"text": "表情"}
+    return word
+
+
+def _is_emoji_expression(expression_key: str) -> bool:
+    return any(
+        0x1F000 <= ord(char) <= 0x1FAFF
+        or 0x2600 <= ord(char) <= 0x27BF
+        for char in expression_key
+    )
 
 
 def _expression_habits_to_dict(
@@ -299,7 +353,7 @@ def _member_to_dict(member: EchoMemberCard) -> dict[str, object]:
             "hourly": _points_to_list(member.hourly_activity),
             "weekday": _points_to_list(member.weekday_activity),
         },
-        "top_words": list(member.top_words),
+        "top_words": [_word_to_display(word) for word in member.top_words],
     }
 
 
@@ -345,6 +399,7 @@ def _build_echo_report_html(view: EchoReportView) -> str:
         .replace("__ECHO_LOGO_TAG__", logo_tag)
         .replace("__ECHO_CSS__", ECHO_REPORT_CSS)
         .replace("__ECHO_DATA__", _encode_echo_data(view))
+        .replace("__ECHO_ASSETS__", _encode_echo_assets(view))
         .replace("__ECHO_APP_JS__", ECHO_REPORT_APP_JS)
     )
 
@@ -361,6 +416,41 @@ def _encode_echo_data(view: EchoReportView) -> str:
         .replace("\u2028", "\\u2028")
         .replace("\u2029", "\\u2029")
     )
+
+
+def _encode_echo_assets(view: EchoReportView) -> str:
+    """Inline only the expression images needed by this report."""
+    assets: dict[str, str] = {}
+    for item in _iter_expression_items(view):
+        asset_key = getattr(item, "asset_key", None)
+        if not isinstance(asset_key, str) or not asset_key:
+            continue
+        data_uri = expression_asset_data_uri(asset_key)
+        if data_uri:
+            assets[asset_key] = data_uri
+    culture = getattr(view, "expression_culture", None)
+    if culture is not None:
+        for combination in getattr(culture, "top_combinations", ()):
+            for asset_key in getattr(combination, "asset_keys", ()):
+                if not isinstance(asset_key, str) or not asset_key:
+                    continue
+                data_uri = expression_asset_data_uri(asset_key)
+                if data_uri:
+                    assets[asset_key] = data_uri
+    return json.dumps(
+        assets,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _iter_expression_items(view: EchoReportView):
+    culture = view.expression_culture
+    if culture is None:
+        return
+    yield from getattr(culture, "top_expressions", ())
+    for member in getattr(culture, "members", ()):
+        yield from getattr(member, "top_expressions", ())
 
 
 def _png_data_uri(relative_path: str) -> str:

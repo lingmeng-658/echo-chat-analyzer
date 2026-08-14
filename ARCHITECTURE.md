@@ -256,10 +256,12 @@ Facade 在后续阶段接入。
 Session 切分、initiator 判定和汇总统计必须在核心完成；
 Presentation 与 Echo 只消费结果，不得重新计算。
 
-**Rich 能力（Expression v1）** 可选消费 `rich_message.py` 中的 source-neutral
+**Rich 能力（Expression v1.1）** 可选消费 `rich_message.py` 中的 source-neutral
 content part（如 `ExpressionContent`），作为 `ChatMessage` legacy 文本投影之外
-的旁路输入。`ImportOutcome.rich_messages` 只在来源 adapter 已支持 Rich 语义时
-填充；Analysis 仍不得出现平台字段或来源分支。
+的旁路输入。QQ face、QQ market_face、微信 type47 sticker 与微信
+`local_type=1` 官方文本表情 `[名称]` 统一进入 `ExpressionContent`；
+`ImportOutcome.rich_messages` 只在来源 adapter 已支持 Rich 语义时填充；
+Analysis 仍不得出现平台分支。
 
 **禁止在核心中出现平台分支。** 不得出现 QQ、微信、`wxid`、`chatroom` 之类判断。
 唯一例外是 `analysis/models.py` 中对内部标识可展示性的判定，
@@ -509,7 +511,7 @@ GUI 只装配控件、转发事件、展示状态。
 4. 在 `AnalysisApplicationService._build_reports()` 接线。
 5. 若需展示，再到 `presentation/` 增加对应视图模型与构建逻辑。
 
-需要 Rich 语义的新分析器（如 Expression v1）可额外接收 `ImportOutcome.rich_messages`
+需要 Rich 语义的新分析器（如 Expression v1.1）可额外接收 `ImportOutcome.rich_messages`
 中的 source-neutral `RichMessage`；该通道默认空元组，旧分析器不感知。
 
 **不许**把新统计塞进 `analyzer.py`；

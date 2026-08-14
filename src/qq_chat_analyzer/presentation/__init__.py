@@ -24,6 +24,11 @@ from .echo_serializer import (
     export_echo_report_html,
     export_echo_report_json,
 )
+from .expression_assets import (
+    expression_asset_data_uri,
+    resolve_wechat_asset_key,
+    wechat_asset_index,
+)
 from .models import (
     ChartData,
     ChartKind,
@@ -33,6 +38,8 @@ from .models import (
     DashboardView,
     EchoConversationSession,
     EchoConversationSessions,
+    EchoExpressionCombination,
+    EchoExpressionCombinationMember,
     EchoExpressionCulture,
     EchoExpressionHabits,
     EchoExpressionItem,
@@ -58,6 +65,8 @@ __all__ = [
     "EchoMemberCard",
     "EchoConversationSession",
     "EchoConversationSessions",
+    "EchoExpressionCombination",
+    "EchoExpressionCombinationMember",
     "EchoExpressionCulture",
     "EchoExpressionHabits",
     "EchoExpressionItem",
@@ -75,6 +84,9 @@ __all__ = [
     "echo_report_to_dict",
     "export_echo_report_html",
     "export_echo_report_json",
+    "expression_asset_data_uri",
+    "resolve_wechat_asset_key",
+    "wechat_asset_index",
     "format_active_period",
     "format_average",
     "format_count",

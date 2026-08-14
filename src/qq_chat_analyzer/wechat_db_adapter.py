@@ -27,13 +27,26 @@ rich model, then projects that model for legacy analysis callers.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree
+
+import zstandard as zstd
 
 from .legacy_projection import project_legacy_message, project_legacy_messages
 from .message import ChatMessage
-from .rich_message import RichMessage, SenderIdentity, TextContent
+from .rich_message import (
+    EXPRESSION_KIND_PLATFORM_FACE,
+    EXPRESSION_KIND_STICKER,
+    ExpressionContent,
+    RichContent,
+    RichMessage,
+    SenderIdentity,
+    TextContent,
+)
+from .wechat_official_emojis import OFFICIAL_WECHAT_EMOJI_NAMES
 
 
 WECHAT_PLATFORM = "wechat"
@@ -41,14 +54,23 @@ DB_JSON_FORMAT = "wechat-db-json"
 SOURCE_MARKER = "wechat-db"
 
 TEXT_LOCAL_TYPE = 1
+STICKER_LOCAL_TYPE = 47
 _TEXT_TYPE = "text"
+_STICKER_TYPE = "sticker"
 
-# Only ``local_type = 1`` carries plain analyzable text. Every other local type
-# (image, voice, video, system, revoke, app message) is skipped here rather
+# Type 1 carries plain text; type 47 carries sticker XML. Other local types
+# (image, voice, video, system, revoke, app message) are skipped here rather
 # than filtered later, matching wechat_parser and wechat_cli_adapter.
-_SUPPORTED_LOCAL_TYPES = {TEXT_LOCAL_TYPE: _TEXT_TYPE}
+_SUPPORTED_LOCAL_TYPES = {
+    TEXT_LOCAL_TYPE: _TEXT_TYPE,
+    STICKER_LOCAL_TYPE: _STICKER_TYPE,
+}
 
 _JSON_SUFFIX = ".json"
+_XML_UNSAFE_RE = re.compile(r"<!DOCTYPE|<!ENTITY", re.IGNORECASE)
+_XML_PARSE_MAX_LEN = 20000
+_CONTENT_TYPE_COMPRESSED = 4
+_WECHAT_EMOJI_TOKEN_RE = re.compile(r"\[([^\[\]]+)\]")
 
 
 def is_wechat_db_export(path: str | Path) -> bool:
@@ -136,9 +158,11 @@ def parse_rich_message(raw_message: Any) -> RichMessage | None:
     if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float, str)):
         return None
 
-    text = raw_message.get("message_content")
-    if not isinstance(text, str):
-        return None
+    message_content = raw_message.get("message_content")
+    content_type = raw_message.get("WCDB_CT_message_content")
+    if content_type is None:
+        content_type = raw_message.get("content_type")
+    decoded_content = _decode_message_content(message_content, content_type)
 
     sender_id = _clean_string(raw_message.get("user_name"))
     if sender_id is None:
@@ -149,9 +173,24 @@ def parse_rich_message(raw_message: Any) -> RichMessage | None:
     if self_username is not None:
         is_self = sender_id == self_username
 
+    message_id = (
+        _stringify_id(raw_message.get("server_id"))
+        or _stringify_id(raw_message.get("local_id"))
+    )
+    if message_type == _TEXT_TYPE:
+        if decoded_content is None:
+            return None
+        contents = _text_expression_contents(decoded_content)
+    else:
+        contents = (
+            _sticker_expression(
+                decoded_content,
+                message_id=message_id,
+            ),
+        )
+
     return RichMessage(
-        message_id=_stringify_id(raw_message.get("server_id"))
-        or _stringify_id(raw_message.get("local_id")),
+        message_id=message_id,
         source=WECHAT_PLATFORM,
         conversation_id=_clean_string(raw_message.get("username")),
         conversation_type=_conversation_type(raw_message),
@@ -162,7 +201,7 @@ def parse_rich_message(raw_message: Any) -> RichMessage | None:
         is_self=is_self,
         timestamp=timestamp,
         message_type=message_type,
-        contents=(TextContent(text=text),),
+        contents=contents,
         source_type=local_type,
         is_system=False,
     )
@@ -188,6 +227,107 @@ def _stringify_id(value: Any) -> str | None:
         text = str(value).strip()
         return text or None
     return None
+
+
+def _text_expression_contents(text: str) -> tuple[RichContent, ...]:
+    """Keep the legacy text projection and expose official bracket emojis."""
+    return (
+        TextContent(text=text),
+        *_extract_official_text_expressions(text),
+    )
+
+
+def _extract_official_text_expressions(text: str) -> tuple[ExpressionContent, ...]:
+    """Extract known official WeChat emoji tokens without removing their text."""
+    matches = [
+        match
+        for match in _WECHAT_EMOJI_TOKEN_RE.finditer(text)
+        if match.group(1).strip() in OFFICIAL_WECHAT_EMOJI_NAMES
+    ]
+    expressions: list[ExpressionContent] = []
+    for position, match in enumerate(matches):
+        previous_end = matches[position - 1].end() if position > 0 else 0
+        next_start = (
+            matches[position + 1].start()
+            if position + 1 < len(matches)
+            else len(text)
+        )
+        expressions.append(
+            ExpressionContent(
+                expression_kind=EXPRESSION_KIND_PLATFORM_FACE,
+                expression_key=match.group(1).strip(),
+                display_text=match.group(0),
+                source=WECHAT_PLATFORM,
+                position=position,
+                text_before=text[previous_end : match.start()][-40:],
+                text_after=text[match.end() : next_start][:40],
+            )
+        )
+    return tuple(expressions)
+
+
+def _decode_message_content(value: Any, content_type: Any) -> str | None:
+    """Return decoded message text, handling WCDB zstd-compressed blobs."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        if (
+            content_type == _CONTENT_TYPE_COMPRESSED
+            and value.strip()
+        ):
+            try:
+                raw = bytes.fromhex(value)
+            except ValueError:
+                return value
+            return _decompress_text(raw)
+        return value
+    if isinstance(value, bytes):
+        if content_type == _CONTENT_TYPE_COMPRESSED:
+            return _decompress_text(value)
+        return value.decode("utf-8", errors="replace")
+    return None
+
+
+def _decompress_text(raw: bytes) -> str | None:
+    try:
+        return zstd.ZstdDecompressor().decompress(raw).decode(
+            "utf-8",
+            errors="replace",
+        )
+    except (zstd.ZstdError, ValueError):
+        return None
+
+
+def _sticker_expression(
+    content: str | None,
+    *,
+    message_id: str | None,
+) -> ExpressionContent:
+    """Build a source-neutral sticker from WeChat type-47 XML."""
+    fallback_key = message_id or "unknown"
+    md5 = None
+    if (
+        content
+        and len(content) <= _XML_PARSE_MAX_LEN
+        and not _XML_UNSAFE_RE.search(content)
+    ):
+        try:
+            root = ElementTree.fromstring(content)
+        except ElementTree.ParseError:
+            root = None
+        if root is not None:
+            emoji = root.find(".//emoji")
+            if emoji is not None:
+                md5 = _clean_string(emoji.get("md5"))
+
+    expression_key = md5 or fallback_key
+    return ExpressionContent(
+        expression_kind=EXPRESSION_KIND_STICKER,
+        expression_key=expression_key,
+        display_text="[贴图]",
+        source=WECHAT_PLATFORM,
+        position=0,
+    )
 
 
 def _conversation_id(payload: Mapping[str, Any]) -> str | None:

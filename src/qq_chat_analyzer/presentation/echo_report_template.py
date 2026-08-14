@@ -255,14 +255,18 @@ ECHO_REPORT_HTML_SKELETON = r"""
       <p class="chapter-intro" id="expression-intro"></p>
 
       <dl class="expression-fields">
-        <div><dt>带表情的消息</dt><dd id="expression-message-count"></dd><small>含 emoji 或平台表情的消息数</small></div>
-        <div><dt>纯表情消息</dt><dd id="expression-only-count"></dd><small>只留下表情、没有文字的消息</small></div>
-        <div><dt>不同表情</dt><dd id="expression-unique-count"></dd><small>这段交流中出现过的表情种类</small></div>
+        <div><dt>带表达的消息</dt><dd id="expression-message-count"></dd><small>包含表达的消息数</small></div>
+        <div><dt>只用表达回应</dt><dd id="expression-only-count"></dd><small>只用表达、没有文字</small></div>
+        <div><dt>常用表达</dt><dd id="expression-unique-count"></dd><small>当前展示的常用表达数量</small></div>
       </dl>
 
       <div class="expression-top">
-        <h3>这段交流最常用的表情</h3>
+        <h3>这段交流最常用的表达</h3>
         <ul class="expression-list" id="expression-top-list"></ul>
+      </div>
+      <div class="expression-combos" id="expression-combos" hidden>
+        <h3>常一起出现的表达</h3>
+        <ul class="expression-combo-list" id="expression-combo-list"></ul>
       </div>
       <div class="expression-members" id="expression-members"></div>
       <span class="page-number">07</span>
@@ -283,6 +287,7 @@ ECHO_REPORT_HTML_SKELETON = r"""
 
   <script>
 window.ECHO_DATA = __ECHO_DATA__;
+  window.ECHO_ASSETS = __ECHO_ASSETS__;
   </script>
   <script>__ECHO_APP_JS__</script>
 
@@ -490,6 +495,12 @@ h1, h2, h3, p { margin-top: 0; }
   color: var(--faint);
   font-size: 12px;
 }
+.expression-top,
+.expression-combos,
+.expression-members {
+  width: 100%;
+  max-width: 100%;
+}
 .expression-top { margin-top: 52px; }
 .expression-top h3 {
   margin: 0 0 18px;
@@ -517,7 +528,89 @@ h1, h2, h3, p { margin-top: 0; }
   color: var(--ink);
   font: 500 16px/1 var(--serif);
 }
-.expression-members { margin-top: 58px; border-top: 1px solid var(--ink); }
+.expression-list li img.expression-asset {
+  width: 28px;
+  height: 28px;
+  margin-right: 6px;
+  vertical-align: -7px;
+}
+.voice-expression {
+  width: 24px;
+  height: 24px;
+  margin-right: 4px;
+  vertical-align: -5px;
+}
+.expression-list li .expression-name {
+  margin-right: 6px;
+  color: var(--ink);
+  font-size: 15px;
+}
+.expression-list li .expression-nearby {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.expression-list li .expression-fallback {
+  color: var(--muted);
+  font-size: 14px;
+}
+.expression-list li small {
+  display: block;
+  margin-top: 5px;
+  color: var(--faint);
+  font-size: 12px;
+}
+.expression-combos { margin-top: 42px; }
+.expression-combos h3 {
+  margin: 0 0 18px;
+  font-size: 22px;
+  font-weight: 500;
+}
+.expression-combo-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.expression-combo-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 10px 16px;
+  background: var(--paper-light);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 15px;
+}
+.expression-combo-images {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.expression-combo-item strong {
+  margin-left: 0;
+  color: var(--ink);
+  font: 500 16px/1 var(--serif);
+}
+.expression-combo-plus { color: var(--faint); }
+.expression-combo-members {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.expression-members {
+  height: 460px;
+  margin-top: 58px;
+  overflow-y: hidden;
+  border-top: 1px solid var(--ink);
+}
+.expression-members:hover { overflow-y: auto; }
 .expression-member { padding: 28px 0; border-bottom: 1px solid var(--rule); }
 .expression-member header { display: flex; align-items: baseline; gap: 18px; }
 .expression-member h3 { margin: 0; font: 500 24px/1.3 var(--sans); }
@@ -1192,10 +1285,32 @@ document.documentElement.classList.add("js-ready");
     list.className = "voice-words";
     (words || []).forEach(function (word) {
       var item = document.createElement("li");
-      item.textContent = word;
+      appendInlineWord(item, word);
       list.appendChild(item);
     });
     parent.appendChild(list);
+  }
+
+  function appendInlineWord(container, word) {
+    if (typeof word === "object" && word !== null) {
+      var src =
+        word.asset_key &&
+        window.ECHO_ASSETS &&
+        window.ECHO_ASSETS[word.asset_key];
+      if (src) {
+        var img = document.createElement("img");
+        img.className = "voice-expression";
+        img.src = src;
+        img.alt = "";
+        container.appendChild(img);
+        return;
+      }
+      container.appendChild(
+        document.createTextNode(word.text || "表情")
+      );
+      return;
+    }
+    container.appendChild(document.createTextNode(String(word)));
   }
 
   var memberList = document.getElementById("member-list");
@@ -1239,7 +1354,11 @@ document.documentElement.classList.add("js-ready");
         if (languageMode === "group_distinctive" && member.context_words.length) {
           var context = document.createElement("p");
           context.className = "voice-context";
-          context.textContent = "常聊：" + member.context_words.join(" · ");
+          context.appendChild(document.createTextNode("常聊："));
+          member.context_words.forEach(function (word) {
+            appendInlineWord(context, word);
+            context.appendChild(document.createTextNode(" "));
+          });
           article.appendChild(context);
         }
         if (languageMode === "private_common" && member.expression_habits) {
@@ -1280,9 +1399,13 @@ document.documentElement.classList.add("js-ready");
         var entry = document.createElement("li");
         var selfCount = finiteNumber(item.self_count);
         var peerCount = finiteNumber(item.peer_count);
-        entry.textContent =
-          item.word + " · 你 " + (selfCount === null ? "—" : formatCount(selfCount)) +
-          " 次 · TA " + (peerCount === null ? "—" : formatCount(peerCount)) + " 次";
+        appendInlineWord(entry, item.word);
+        entry.appendChild(
+          document.createTextNode(
+            " · 你 " + (selfCount === null ? "—" : formatCount(selfCount)) +
+            " 次 · TA " + (peerCount === null ? "—" : formatCount(peerCount)) + " 次"
+          )
+        );
         sharedWordsList.appendChild(entry);
       });
     }
@@ -1300,10 +1423,46 @@ document.documentElement.classList.add("js-ready");
       sideWords.forEach(function (item) {
         var entry = document.createElement("li");
         var sideLabel = item.emphasis === "self" ? "你更常说" : "TA 更常说";
-        entry.textContent = item.word + " · " + sideLabel;
+        appendInlineWord(entry, item.word);
+        entry.appendChild(document.createTextNode(" · " + sideLabel));
         sideWordsList.appendChild(entry);
       });
     }
+  }
+
+  function appendExpressionEntry(list, item) {
+    var entry = document.createElement("li");
+    var assetSrc =
+      item.asset_key &&
+      window.ECHO_ASSETS &&
+      window.ECHO_ASSETS[item.asset_key];
+    if (assetSrc) {
+      var img = document.createElement("img");
+      img.className = "expression-asset";
+      img.src = assetSrc;
+      img.alt = item.display_text;
+      img.title = item.display_text;
+      img.loading = "lazy";
+      if (img.addEventListener) {
+        img.addEventListener("error", function () {
+          img.style.display = "none";
+        });
+      }
+      entry.appendChild(img);
+    } else {
+      entry.textContent = item.display_text;
+    }
+    var count = document.createElement("strong");
+    count.textContent = formatCount(item.count) + " 次";
+    entry.appendChild(count);
+    if (item.nearby_words && item.nearby_words.length) {
+      var nearby = document.createElement("span");
+      nearby.className = "expression-nearby";
+      nearby.textContent =
+        "常和这些词一起：" + item.nearby_words.join(" ");
+      entry.appendChild(nearby);
+    }
+    list.appendChild(entry);
   }
 
   var expressionCulture = data && data.expression_culture;
@@ -1321,7 +1480,7 @@ document.documentElement.classList.add("js-ready");
     expressionToc.hidden = !hasExpressionCulture;
   }
   if (hasExpressionCulture) {
-    setText("expression-intro", "表情在这段交流里留下的共同语言。");
+    setText("expression-intro", "表达在这段交流里留下的共同语言。");
     setText(
       "expression-message-count",
       formatCount(expressionCulture.expression_message_count) + " 条"
@@ -1332,17 +1491,86 @@ document.documentElement.classList.add("js-ready");
     );
     setText(
       "expression-unique-count",
-      formatCount(expressionCulture.unique_expression_count) + " 种"
+      formatCount((expressionCulture.top_expressions || []).length) + " 种"
     );
     if (expressionTopList) {
       expressionTopList.textContent = "";
       (expressionCulture.top_expressions || []).forEach(function (item) {
+        appendExpressionEntry(expressionTopList, item);
+      });
+    }
+    var expressionCombos = document.getElementById("expression-combos");
+    var expressionComboList = document.getElementById("expression-combo-list");
+    var combos = (expressionCulture.top_combinations || []).filter(
+      function (combo) {
+        return (combo.asset_keys || []).every(function (assetKey) {
+          return (
+            assetKey &&
+            window.ECHO_ASSETS &&
+            window.ECHO_ASSETS[assetKey]
+          );
+        });
+      }
+    );
+    var hasCombos = Boolean(
+      combos.length
+    );
+    if (expressionCombos) {
+      expressionCombos.hidden = !hasCombos;
+    }
+    if (expressionComboList) {
+      expressionComboList.textContent = "";
+      combos.forEach(function (combo) {
+        var hasAllAssets = (combo.asset_keys || []).every(function (assetKey) {
+          return (
+            assetKey &&
+            window.ECHO_ASSETS &&
+            window.ECHO_ASSETS[assetKey]
+          );
+        });
+        if (!hasAllAssets) return;
         var entry = document.createElement("li");
-        entry.textContent = item.display_text;
+        entry.className = "expression-combo-item";
+        var images = document.createElement("span");
+        images.className = "expression-combo-images";
+        (combo.asset_keys || []).forEach(function (assetKey, index) {
+          if (index > 0) {
+            var plus = document.createElement("span");
+            plus.className = "expression-combo-plus";
+            plus.textContent = "+";
+            images.appendChild(plus);
+          }
+          var img = document.createElement("img");
+          img.className = "expression-asset";
+          img.src = window.ECHO_ASSETS[assetKey];
+          img.alt = "";
+          img.loading = "lazy";
+          images.appendChild(img);
+        });
+        entry.appendChild(images);
         var count = document.createElement("strong");
-        count.textContent = formatCount(item.count) + " 次";
+        count.textContent = formatCount(combo.count) + " 次";
         entry.appendChild(count);
-        expressionTopList.appendChild(entry);
+        if (combo.common_members && combo.common_members.length) {
+          var members = document.createElement("span");
+          members.className = "expression-combo-members";
+          members.textContent =
+            "常用者：" +
+            combo.common_members
+              .map(function (member) {
+                return (
+                  member.display_name +
+                  " " +
+                  formatCount(member.count) +
+                  " 次 · " +
+                  (member.share_percent || 0).toFixed(1) +
+                  "%"
+                );
+              })
+              .join("，");
+          entry.appendChild(members);
+        }
+        expressionComboList.appendChild(entry);
       });
     }
     if (expressionMembers) {
@@ -1355,24 +1583,10 @@ document.documentElement.classList.add("js-ready");
         name.textContent = member.display_name;
         header.appendChild(name);
         article.appendChild(header);
-        var share = finiteNumber(member.expression_share_percent);
-        var shareText = share === null ? "—" : share.toFixed(1) + "%";
-        var summary = document.createElement("p");
-        summary.className = "expression-summary";
-        summary.textContent =
-          "表情 " + formatCount(member.expression_occurrence_count) + " 次 · 占全部表情 " +
-          shareText + " · 带表情消息 " +
-          formatCount(member.expression_message_count) + " 条";
-        article.appendChild(summary);
         var memberList = document.createElement("ul");
         memberList.className = "expression-list";
         (member.top_expressions || []).forEach(function (item) {
-          var entry = document.createElement("li");
-          entry.textContent = item.display_text;
-          var count = document.createElement("strong");
-          count.textContent = formatCount(item.count) + " 次";
-          entry.appendChild(count);
-          memberList.appendChild(entry);
+          appendExpressionEntry(memberList, item);
         });
         article.appendChild(memberList);
         expressionMembers.appendChild(article);

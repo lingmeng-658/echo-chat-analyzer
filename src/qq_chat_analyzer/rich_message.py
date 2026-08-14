@@ -5,6 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+EXPRESSION_KIND_UNICODE = "unicode"
+EXPRESSION_KIND_PLATFORM_FACE = "platform_face"
+EXPRESSION_KIND_STICKER = "sticker"
+
+
 @dataclass(frozen=True, slots=True)
 class SenderIdentity:
     """Stable source identity plus its human-readable name."""
@@ -30,6 +35,10 @@ class ExpressionContent:
     expression_kind: str
     expression_key: str
     display_text: str | None = None
+    source: str | None = None
+    position: int | None = None
+    text_before: str | None = None
+    text_after: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

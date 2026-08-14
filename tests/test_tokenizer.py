@@ -180,3 +180,14 @@ def test_normal_text_not_harmed() -> None:
         "2026",
         "天津",
     ]
+
+
+def test_ignores_expression_markers_for_language_tokens() -> None:
+    tokens = tokenize("今天真的崩了[捂脸] [OK] 继续[旺柴]")
+
+    assert "今天" in tokens
+    assert "真的" in tokens
+    assert "继续" in tokens
+    assert "捂脸" not in tokens
+    assert "旺柴" not in tokens
+    assert "OK" not in tokens

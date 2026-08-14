@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from .legacy_projection import project_legacy_messages
 from .message import ChatMessage
 from .rich_message import (
+    EXPRESSION_KIND_PLATFORM_FACE,
+    EXPRESSION_KIND_STICKER,
     ExpressionContent,
     MentionRelation,
     MessageRelation,
@@ -209,14 +212,9 @@ def _parse_rich_message(
     if not isinstance(content, Mapping):
         return None
 
-    text = content.get("text")
-    expression_contents = _extract_expression_contents(content)
-    if not isinstance(text, str) and not expression_contents:
+    contents = _build_rich_contents(content)
+    if not contents:
         return None
-    contents: list[RichContent] = []
-    if isinstance(text, str) and text:
-        contents.append(TextContent(text=text))
-    contents.extend(expression_contents)
 
     recalled = raw_message.get("recalled")
     recall_state = (
@@ -321,19 +319,127 @@ def _extract_relations(content: Mapping[Any, Any]) -> tuple[MessageRelation, ...
 def _extract_expression_contents(
     content: Mapping[Any, Any],
 ) -> tuple[ExpressionContent, ...]:
-    """Extract source-neutral expression content from QCE face elements."""
+    """Extract source-neutral expression content from QCE elements."""
     expressions: list[ExpressionContent] = []
     elements = content.get("elements")
     if isinstance(elements, list):
         for element in elements:
             if not isinstance(element, Mapping):
                 continue
-            if element.get("type") != "face" and element.get("elementType") != 6:
-                continue
-            expression = _face_expression(element)
+            expression = _expression_from_element(element)
             if expression is not None:
                 expressions.append(expression)
     return tuple(expressions)
+
+
+def _build_rich_contents(content: Mapping[Any, Any]) -> tuple[RichContent, ...]:
+    """Build ordered contents, falling back to the legacy text projection."""
+    ordered = _ordered_content_parts(content)
+    if ordered is not None:
+        return ordered
+
+    text = content.get("text")
+    contents: list[RichContent] = []
+    if isinstance(text, str) and text:
+        contents.append(TextContent(text=text))
+    contents.extend(_extract_expression_contents(content))
+    return tuple(contents)
+
+
+def _ordered_content_parts(
+    content: Mapping[Any, Any],
+) -> tuple[RichContent, ...] | None:
+    """Reconstruct QCE element order when it matches the exported text."""
+    elements = content.get("elements")
+    if not isinstance(elements, list):
+        return None
+
+    parts: list[RichContent] = []
+    text_parts: list[str] = []
+    for element in elements:
+        if not isinstance(element, Mapping):
+            continue
+        text_value = _text_element_content(element)
+        if text_value is not None:
+            parts.append(TextContent(text=text_value))
+            text_parts.append(text_value)
+            continue
+        expression = _expression_from_element(element)
+        if expression is not None:
+            parts.append(expression)
+
+    has_expression = any(
+        isinstance(part, ExpressionContent) for part in parts
+    )
+    if not has_expression or not text_parts:
+        return None
+    exported_text = content.get("text")
+    if not isinstance(exported_text, str):
+        return None
+    if "".join(text_parts) != exported_text:
+        return None
+
+    expression_index = 0
+    resolved: list[RichContent] = []
+    for index, part in enumerate(parts):
+        if not isinstance(part, ExpressionContent):
+            resolved.append(part)
+            continue
+        resolved.append(
+            replace(
+                part,
+                position=expression_index,
+                text_before=_adjacent_text_before(parts, index),
+                text_after=_adjacent_text_after(parts, index),
+            )
+        )
+        expression_index += 1
+    return tuple(resolved)
+
+
+def _text_element_content(element: Mapping[Any, Any]) -> str | None:
+    element_type = element.get("type")
+    if element_type != "text" and element.get("elementType") != 1:
+        return None
+    block = element.get("textElement")
+    if not isinstance(block, Mapping):
+        block = element.get("data")
+    if not isinstance(block, Mapping):
+        return None
+    text = _first_text(block, "content", "text")
+    return text
+
+
+def _expression_from_element(element: Mapping[Any, Any]) -> ExpressionContent | None:
+    element_type = element.get("type")
+    element_code = element.get("elementType")
+    if element_type == "face" or element_code == 6:
+        return _face_expression(element)
+    if element_type == "market_face" or element_code == 37:
+        return _market_face_expression(element)
+    return None
+
+
+def _adjacent_text_before(
+    parts: list[RichContent],
+    index: int,
+) -> str | None:
+    for candidate in range(index - 1, -1, -1):
+        part = parts[candidate]
+        if isinstance(part, TextContent):
+            return part.text[-40:]
+    return None
+
+
+def _adjacent_text_after(
+    parts: list[RichContent],
+    index: int,
+) -> str | None:
+    for candidate in range(index + 1, len(parts)):
+        part = parts[candidate]
+        if isinstance(part, TextContent):
+            return part.text[:40]
+    return None
 
 
 def _face_expression(element: Mapping[Any, Any]) -> ExpressionContent | None:
@@ -351,9 +457,32 @@ def _face_expression(element: Mapping[Any, Any]) -> ExpressionContent | None:
         return None
     face_name = _first_text(block, "name", "faceText")
     return ExpressionContent(
-        expression_kind="platform_face",
+        expression_kind=EXPRESSION_KIND_PLATFORM_FACE,
         expression_key=face_id,
         display_text=face_name or f"[QQ表情 {face_id}]",
+        source="qq",
+    )
+
+
+def _market_face_expression(element: Mapping[Any, Any]) -> ExpressionContent | None:
+    block = element.get("data")
+    if not isinstance(block, Mapping):
+        block = element.get("marketFaceElement")
+    if not isinstance(block, Mapping):
+        return None
+    expression_key = (
+        _stringify_identifier(block.get("emojiId"))
+        or _stringify_identifier(block.get("key"))
+        or _first_text(block, "faceName", "name")
+    )
+    if expression_key is None:
+        return None
+    face_name = _first_text(block, "faceName", "name")
+    return ExpressionContent(
+        expression_kind=EXPRESSION_KIND_STICKER,
+        expression_key=expression_key,
+        display_text=face_name or "[贴图]",
+        source="qq",
     )
 
 

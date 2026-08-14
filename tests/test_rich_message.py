@@ -13,6 +13,10 @@ sys.path.insert(0, str(SRC_ROOT))
 
 from qq_chat_analyzer.legacy_projection import project_legacy_message
 from qq_chat_analyzer.rich_message import (
+    EXPRESSION_KIND_PLATFORM_FACE,
+    EXPRESSION_KIND_STICKER,
+    EXPRESSION_KIND_UNICODE,
+    ExpressionContent,
     MentionRelation,
     RecallEvent,
     RecallState,
@@ -21,6 +25,38 @@ from qq_chat_analyzer.rich_message import (
     SenderIdentity,
     TextContent,
 )
+
+
+def test_expression_content_defaults_keep_existing_construction_compatible() -> None:
+    expression = ExpressionContent(
+        expression_kind=EXPRESSION_KIND_STICKER,
+        expression_key="fictional-sticker",
+    )
+
+    assert expression.source is None
+    assert expression.position is None
+    assert expression.text_before is None
+    assert expression.text_after is None
+    assert EXPRESSION_KIND_UNICODE == "unicode"
+    assert EXPRESSION_KIND_PLATFORM_FACE == "platform_face"
+    assert EXPRESSION_KIND_STICKER == "sticker"
+
+
+def test_expression_content_carries_source_and_text_anchor() -> None:
+    expression = ExpressionContent(
+        expression_kind=EXPRESSION_KIND_STICKER,
+        expression_key="fictional-sticker",
+        display_text="[贴图]",
+        source="wechat",
+        position=0,
+        text_before="哈哈",
+        text_after="来了",
+    )
+
+    assert expression.source == "wechat"
+    assert expression.position == 0
+    assert expression.text_before == "哈哈"
+    assert expression.text_after == "来了"
 
 
 def _text_message(

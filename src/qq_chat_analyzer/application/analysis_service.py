@@ -19,6 +19,7 @@ from ..analysis.analyzers import (
     PrivateLanguageAnalyzer,
     UserProfileAnalyzer,
 )
+from ..analysis.analyzers.expression_analyzer import iter_emoji_clusters
 from ..analysis.models import AnalysisReports
 from ..analyzer import (
     WordSpeakerSummary,
@@ -35,7 +36,7 @@ from ..exporters import (
     generate_wordcloud,
 )
 from ..message import ChatMessage
-from ..rich_message import RichMessage
+from ..rich_message import ExpressionContent, RichMessage
 from ..presentation import (
     build_echo_report_view,
     export_echo_report_html,
@@ -73,6 +74,10 @@ _ARTIFACT_FILENAMES = {
     "echo_report_json": "echo-report.json",
     "echo_report_html": "echo-report.html",
 }
+_ECHO_ARTIFACTS = (
+    ArtifactDTO(kind="echo_report_json", filename="echo-report.json"),
+    ArtifactDTO(kind="echo_report_html", filename="echo-report.html"),
+)
 
 
 @dataclass(slots=True)
@@ -114,24 +119,54 @@ class AnalysisApplicationService:
         analyzed = _analyze_kept_messages(
             kept_messages,
             request.stopwords_path,
+            outcome.rich_messages,
         )
+        expression_report = ExpressionAnalyzer().analyze(
+            kept_messages,
+            rich_messages=outcome.rich_messages,
+        )
+        has_expression_report = expression_report.expression_message_count > 0
 
-        if analyzed.valid_text_count == 0:
+        if analyzed.valid_text_count == 0 and not has_expression_report:
             return AnalysisResultDTO(
                 status=AnalysisStatus.NO_VALID_TEXT,
                 processed_message_count=processed_message_count,
                 valid_text_count=0,
                 diagnostic_counts=diagnostic_counts,
             )
-        if not analyzed.tokens:
+        if not analyzed.tokens and not has_expression_report:
             return AnalysisResultDTO(
                 status=AnalysisStatus.NO_TOKENS,
                 processed_message_count=processed_message_count,
                 valid_text_count=analyzed.valid_text_count,
                 diagnostic_counts=diagnostic_counts,
             )
+        conversation_type = _resolve_conversation_type(
+            kept_messages,
+            request.conversation_kind,
+        )
+        if not analyzed.tokens and has_expression_report:
+            return _expression_only_result(
+                request=request,
+                kept_messages=kept_messages,
+                analyzed=analyzed,
+                diagnostic_counts=diagnostic_counts,
+                processed_message_count=processed_message_count,
+                rich_messages=outcome.rich_messages,
+                conversation_type=conversation_type,
+            )
 
         ranked_words = top_words(analyzed.tokens, request.top)
+        if not ranked_words and has_expression_report:
+            return _expression_only_result(
+                request=request,
+                kept_messages=kept_messages,
+                analyzed=analyzed,
+                diagnostic_counts=diagnostic_counts,
+                processed_message_count=processed_message_count,
+                rich_messages=outcome.rich_messages,
+                conversation_type=conversation_type,
+            )
         if not ranked_words:
             return AnalysisResultDTO(
                 status=AnalysisStatus.NO_TOKENS,
@@ -140,10 +175,6 @@ class AnalysisApplicationService:
                 diagnostic_counts=diagnostic_counts,
             )
 
-        conversation_type = _resolve_conversation_type(
-            kept_messages,
-            request.conversation_kind,
-        )
         reports = _build_reports(
             kept_messages,
             analyzed.sender_tokens,
@@ -153,7 +184,9 @@ class AnalysisApplicationService:
             rich_messages=outcome.rich_messages,
         )
         speaker_display_names = _speaker_display_names(reports)
-        word_sender_counts = count_word_speakers(analyzed.sender_tokens)
+        word_sender_counts = count_word_speakers(
+            _text_sender_tokens(analyzed.sender_tokens)
+        )
         speaker_summaries = _display_speaker_summaries(
             top_word_speaker_summary(word_sender_counts),
             speaker_display_names,
@@ -248,6 +281,64 @@ def _build_reports(
     )
 
 
+def _expression_only_result(
+    *,
+    request: AnalysisRequestDTO,
+    kept_messages: list[ChatMessage],
+    analyzed: _AnalyzedMessages,
+    diagnostic_counts: AnalysisDiagnosticCounts,
+    processed_message_count: int,
+    rich_messages: tuple[RichMessage, ...],
+    conversation_type: str,
+) -> AnalysisResultDTO:
+    """Build the guarded expression-only result with graceful fallback."""
+    try:
+        reports = _build_reports(
+            kept_messages,
+            analyzed.sender_tokens,
+            speaker_names=request.speaker_names,
+            conversation_names=request.conversation_names,
+            conversation_type=conversation_type,
+            rich_messages=rich_messages,
+        )
+        _export_echo_artifacts(
+            request,
+            reports,
+            viewer_speaker_key=_viewer_speaker_key(
+                kept_messages,
+                request.viewer_speaker_key,
+            ),
+            conversation_kind=conversation_type,
+        )
+    except Exception:
+        _LOGGER.warning(
+            "expression-only report generation failed; falling back",
+            exc_info=True,
+        )
+        for filename in (
+            _ARTIFACT_FILENAMES["echo_report_json"],
+            _ARTIFACT_FILENAMES["echo_report_html"],
+        ):
+            try:
+                (request.output_directory / filename).unlink(missing_ok=True)
+            except OSError:
+                pass
+        return AnalysisResultDTO(
+            status=AnalysisStatus.NO_TOKENS,
+            processed_message_count=processed_message_count,
+            valid_text_count=analyzed.valid_text_count,
+            diagnostic_counts=diagnostic_counts,
+        )
+    return AnalysisResultDTO(
+        status=AnalysisStatus.EXPRESSION_ONLY,
+        processed_message_count=processed_message_count,
+        valid_text_count=analyzed.valid_text_count,
+        diagnostic_counts=diagnostic_counts,
+        artifacts=_ECHO_ARTIFACTS,
+        reports=reports,
+    )
+
+
 def _validate_request(request: AnalysisRequestDTO) -> None:
     if (
         not isinstance(request.top, int)
@@ -277,26 +368,81 @@ def _resolve_conversation_type(
 def _analyze_kept_messages(
     messages: list[ChatMessage],
     stopwords_path: Path,
+    rich_messages: tuple[RichMessage, ...] = (),
 ) -> _AnalyzedMessages:
     valid_text_count = 0
     tokens: list[str] = []
     sender_tokens: list[tuple[str, list[str]]] = []
+    rich_by_id = {
+        message.message_id: message
+        for message in rich_messages
+        if message.message_id is not None
+    }
 
     for message in messages:
         cleaned_text = clean_text(message.text, platform=message.platform)
-        if not cleaned_text:
-            continue
-        valid_text_count += 1
-        message_tokens = tokenize(cleaned_text, str(stopwords_path))
+        message_tokens = (
+            tokenize(cleaned_text, str(stopwords_path))
+            if cleaned_text
+            else []
+        )
+        if cleaned_text:
+            valid_text_count += 1
         tokens.extend(message_tokens)
-        if message_tokens:
-            sender_tokens.append((stable_sender_key(message), message_tokens))
+        expression_tokens = _expression_tokens(
+            message,
+            rich_by_id,
+        )
+        combined_tokens = [*message_tokens, *expression_tokens]
+        if combined_tokens:
+            sender_tokens.append(
+                (stable_sender_key(message), combined_tokens)
+            )
 
     return _AnalyzedMessages(
         valid_text_count=valid_text_count,
         tokens=tokens,
         sender_tokens=sender_tokens,
     )
+
+
+def _expression_tokens(
+    message: ChatMessage,
+    rich_by_id: Mapping[str, RichMessage],
+) -> list[str]:
+    """Return source-neutral expression tokens for the Voices pipeline."""
+    tokens = [
+        f"expression:{emoji}"
+        for emoji in iter_emoji_clusters(message.text)
+    ]
+    rich_message = (
+        rich_by_id.get(message.message_id)
+        if message.message_id is not None
+        else None
+    )
+    if rich_message is not None:
+        tokens.extend(
+            f"expression:{content.expression_key}"
+            for content in rich_message.contents
+            if isinstance(content, ExpressionContent)
+        )
+    return tokens
+
+
+def _text_sender_tokens(
+    sender_tokens: list[tuple[str, list[str]]],
+) -> list[tuple[str, list[str]]]:
+    return [
+        (
+            speaker_key,
+            [
+                token
+                for token in message_tokens
+                if not token.startswith("expression:")
+            ],
+        )
+        for speaker_key, message_tokens in sender_tokens
+    ]
 
 
 def _speaker_display_names(reports: AnalysisReports) -> dict[str, str]:
@@ -421,19 +567,33 @@ def _export_artifacts(
         str(output_directory / _ARTIFACT_FILENAMES["wordcloud"]),
         request.font_path,
     )
+    _export_echo_artifacts(
+        request,
+        reports,
+        viewer_speaker_key=viewer_speaker_key,
+        conversation_kind=conversation_kind,
+    )
+
+
+def _export_echo_artifacts(
+    request: AnalysisRequestDTO,
+    reports: AnalysisReports,
+    *,
+    viewer_speaker_key: str | None,
+    conversation_kind: str,
+) -> None:
+    """Write the Echo JSON and self-contained HTML report artifacts."""
+    output_directory = request.output_directory
+    view = build_echo_report_view(
+        reports,
+        viewer_speaker_key=viewer_speaker_key,
+        conversation_kind=conversation_kind,
+    )
     export_echo_report_json(
-        build_echo_report_view(
-            reports,
-            viewer_speaker_key=viewer_speaker_key,
-            conversation_kind=conversation_kind,
-        ),
+        view,
         str(output_directory / _ARTIFACT_FILENAMES["echo_report_json"]),
     )
     export_echo_report_html(
-        build_echo_report_view(
-            reports,
-            viewer_speaker_key=viewer_speaker_key,
-            conversation_kind=conversation_kind,
-        ),
+        view,
         str(output_directory / _ARTIFACT_FILENAMES["echo_report_html"]),
     )

@@ -167,6 +167,28 @@ class EchoExpressionItem:
     display_text: str
     count: int
     kind: str
+    with_text_message_count: int = 0
+    text_only_message_count: int = 0
+    asset_key: str | None = None
+    nearby_words: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class EchoExpressionCombination:
+    """Two display-safe expressions that often appeared together."""
+
+    asset_keys: tuple[str | None, str | None]
+    count: int
+    common_members: tuple[EchoExpressionCombinationMember, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class EchoExpressionCombinationMember:
+    """One sender frequently associated with an expression combination."""
+
+    display_name: str
+    count: int
+    share_percent: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,6 +215,7 @@ class EchoExpressionCulture:
     unique_expression_count: int = 0
     top_expressions: tuple[EchoExpressionItem, ...] = ()
     members: tuple[EchoMemberExpression, ...] = ()
+    top_combinations: tuple[EchoExpressionCombination, ...] = ()
     unavailable_reason: str = ""
 
 

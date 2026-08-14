@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import zstandard as zstd
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -21,7 +22,11 @@ from qq_chat_analyzer import wechat_db_adapter
 from qq_chat_analyzer.application import ImportRequest, ImportService
 from qq_chat_analyzer.application.import_service import WECHAT_DB_FORMAT
 from qq_chat_analyzer.legacy_projection import project_legacy_message
-from qq_chat_analyzer.rich_message import TextContent
+from qq_chat_analyzer.rich_message import (
+    EXPRESSION_KIND_PLATFORM_FACE,
+    ExpressionContent,
+    TextContent,
+)
 from qq_chat_analyzer.providers.wechat_database_provider import (
     DatabaseNotFound,
     KeyUnavailable,
@@ -37,6 +42,7 @@ from qq_chat_analyzer.providers import wechat_database_provider
 
 TEXT_LOCAL_TYPE = 1
 IMAGE_LOCAL_TYPE = 3
+STICKER_LOCAL_TYPE = 47
 FICTIONAL_KEY = "a" * 64
 FICTIONAL_SESSION = "wxid_fictional_room@chatroom"
 
@@ -210,6 +216,57 @@ def test_text_row_becomes_rich_message_then_projects_to_legacy(
     assert legacy_message.timestamp == 1753412807
 
 
+def test_text_row_with_official_bracket_emoji_splits_expression_content(
+    tmp_path: Path,
+) -> None:
+    export = tmp_path / "session.json"
+    text = "哈哈[捂脸]来了[旺柴]"
+    _write_db_export(export, [_db_row(message_content=text)])
+
+    rich_messages = wechat_db_adapter.parse_rich_messages(
+        wechat_db_adapter.load_messages(export)
+    )
+
+    assert len(rich_messages) == 1
+    assert rich_messages[0].contents == (
+        TextContent(text=text),
+        ExpressionContent(
+            expression_kind=EXPRESSION_KIND_PLATFORM_FACE,
+            expression_key="捂脸",
+            display_text="[捂脸]",
+            source="wechat",
+            position=0,
+            text_before="哈哈",
+            text_after="来了",
+        ),
+        ExpressionContent(
+            expression_kind=EXPRESSION_KIND_PLATFORM_FACE,
+            expression_key="旺柴",
+            display_text="[旺柴]",
+            source="wechat",
+            position=1,
+            text_before="来了",
+            text_after="",
+        ),
+    )
+    legacy = project_legacy_message(rich_messages[0])
+    assert legacy.text == text
+
+
+def test_text_row_keeps_unknown_bracket_text_as_plain_text(
+    tmp_path: Path,
+) -> None:
+    export = tmp_path / "session.json"
+    text = "今天[某个自定义词]继续"
+    _write_db_export(export, [_db_row(message_content=text)])
+
+    rich_messages = wechat_db_adapter.parse_rich_messages(
+        wechat_db_adapter.load_messages(export)
+    )
+
+    assert rich_messages[0].contents == (TextContent(text=text),)
+
+
 def test_text_row_becomes_chat_message_with_mapped_fields(tmp_path: Path) -> None:
     export = tmp_path / "session.json"
     _write_db_export(export, [_db_row()])
@@ -259,6 +316,105 @@ def test_non_text_local_types_are_skipped(tmp_path: Path) -> None:
     )
 
     assert messages == []
+
+
+def test_sticker_row_becomes_rich_expression_and_legacy_message(
+    tmp_path: Path,
+) -> None:
+    export = tmp_path / "session.json"
+    row = _db_row(
+        local_type=STICKER_LOCAL_TYPE,
+        server_id=900047,
+        message_content=(
+            '<msg><emoji md5="fictionalmd5abcdef" '
+            'cdnurl="fictional-cdn-url"/></msg>'
+        ),
+    )
+    row["sender_name"] = "Fictional Alice"
+    _write_db_export(export, [row])
+
+    rich_messages = wechat_db_adapter.parse_rich_messages(
+        wechat_db_adapter.load_messages(export)
+    )
+
+    assert len(rich_messages) == 1
+    rich_message = rich_messages[0]
+    assert rich_message.message_type == "sticker"
+    assert rich_message.contents == (
+        ExpressionContent(
+            expression_kind="sticker",
+            expression_key="fictionalmd5abcdef",
+            display_text="[贴图]",
+            source="wechat",
+            position=0,
+        ),
+    )
+    legacy = project_legacy_message(rich_message)
+    assert legacy.text == ""
+    assert legacy.message_type == "sticker"
+
+
+def test_sticker_row_falls_back_to_message_id_without_md5(tmp_path: Path) -> None:
+    export = tmp_path / "session.json"
+    row = _db_row(
+        local_type=STICKER_LOCAL_TYPE,
+        server_id=900048,
+        message_content="not-valid-xml",
+    )
+    _write_db_export(export, [row])
+
+    rich_messages = wechat_db_adapter.parse_rich_messages(
+        wechat_db_adapter.load_messages(export)
+    )
+
+    assert rich_messages[0].contents == (
+        ExpressionContent(
+            expression_kind="sticker",
+            expression_key="900048",
+            display_text="[贴图]",
+            source="wechat",
+            position=0,
+        ),
+    )
+
+
+def test_sticker_row_decodes_zstd_compressed_content(tmp_path: Path) -> None:
+    export = tmp_path / "session.json"
+    xml = '<msg><emoji md5="compressedmd5"/></msg>'.encode("utf-8")
+    compressed = zstd.ZstdCompressor().compress(xml)
+    row = _db_row(
+        local_type=STICKER_LOCAL_TYPE,
+        server_id=900049,
+        message_content=compressed.hex(),
+    )
+    row["WCDB_CT_message_content"] = 4
+    _write_db_export(export, [row])
+
+    rich_messages = wechat_db_adapter.parse_rich_messages(
+        wechat_db_adapter.load_messages(export)
+    )
+
+    assert rich_messages[0].contents[0].expression_key == "compressedmd5"
+
+
+def test_import_service_carries_wechat_sticker_rich_messages(
+    tmp_path: Path,
+) -> None:
+    export = tmp_path / "session.json"
+    row = _db_row(
+        local_type=STICKER_LOCAL_TYPE,
+        server_id=900050,
+        message_content='<msg><emoji md5="importedsticker"/></msg>',
+    )
+    _write_db_export(export, [row])
+
+    outcome = ImportService().execute(ImportRequest(input_path=export))
+
+    assert len(outcome.rich_messages) == 1
+    assert outcome.rich_messages[0].source == "wechat"
+    assert outcome.rich_messages[0].contents[0].expression_key == "importedsticker"
+    assert outcome.messages[0].text == ""
+    assert outcome.messages[0].message_type == "sticker"
 
 
 @pytest.mark.parametrize(
@@ -530,7 +686,8 @@ def test_export_session_json_writes_provider_document(tmp_path: Path) -> None:
     assert len(payload["messages"]) == 1
     message_sql = seen_sql[-1]
     assert table in message_sql
-    assert "local_type = 1" in message_sql
+    assert "(m.local_type & 0xFFFFFFFF) IN (1, 47)" in message_sql
+    assert "WCDB_CT_message_content" in message_sql
     assert "Name2Id" in message_sql
 
 

@@ -230,6 +230,7 @@ def test_parse_qce_rich_messages_maps_face_element_to_expression_content() -> No
             expression_kind="platform_face",
             expression_key="358",
             display_text="/骰子",
+            source="qq",
         ),
     )
 
@@ -256,9 +257,103 @@ def test_parse_qce_rich_messages_keeps_face_only_message_with_empty_text() -> No
             expression_kind="platform_face",
             expression_key="66",
             display_text="[QQ表情 66]",
+            source="qq",
         ),
     )
     assert legacy_messages[0].text == ""
+
+
+def test_parse_qce_rich_messages_maps_market_face_to_sticker() -> None:
+    raw_message = _qce_message(
+        message_id="fictional-market-face",
+        text="",
+    )
+    raw_message["content"]["elements"] = [
+        {
+            "type": "market_face",
+            "marketFaceElement": {
+                "faceName": "[肘击]",
+                "emojiId": "fictional-emoji-001",
+                "key": "fictional-key",
+            },
+        }
+    ]
+
+    messages, warnings = parse_qce_rich_messages([raw_message])
+
+    assert warnings == ()
+    assert messages[0].contents == (
+        ExpressionContent(
+            expression_kind="sticker",
+            expression_key="fictional-emoji-001",
+            display_text="[肘击]",
+            source="qq",
+        ),
+    )
+
+
+def test_unknown_market_face_fallback_hides_key_from_display() -> None:
+    raw_message = _qce_message(
+        message_id="fictional-market-face-fallback",
+        text="",
+    )
+    raw_message["content"]["elements"] = [
+        {
+            "type": "market_face",
+            "marketFaceElement": {
+                "emojiId": "leaky-key",
+                "key": "leaky-key",
+            },
+        }
+    ]
+
+    messages, warnings = parse_qce_rich_messages([raw_message])
+
+    assert warnings == ()
+    expression = messages[0].contents[0]
+    assert expression.expression_key == "leaky-key"
+    assert expression.display_text == "[贴图]"
+
+
+def test_parse_qce_rich_messages_preserves_ordered_text_anchor() -> None:
+    raw_message = _qce_message(
+        message_id="fictional-anchored-message",
+        text="哈哈  来了",
+    )
+    raw_message["content"]["elements"] = [
+        {
+            "type": "text",
+            "textElement": {"content": "哈哈 "},
+        },
+        {
+            "type": "market_face",
+            "marketFaceElement": {
+                "faceName": "[肘击]",
+                "emojiId": "fictional-anchor-emoji",
+            },
+        },
+        {
+            "type": "text",
+            "textElement": {"content": " 来了"},
+        },
+    ]
+
+    messages, warnings = parse_qce_rich_messages([raw_message])
+
+    assert warnings == ()
+    assert messages[0].contents == (
+        TextContent(text="哈哈 "),
+        ExpressionContent(
+            expression_kind="sticker",
+            expression_key="fictional-anchor-emoji",
+            display_text="[肘击]",
+            source="qq",
+            position=0,
+            text_before="哈哈 ",
+            text_after=" 来了",
+        ),
+        TextContent(text=" 来了"),
+    )
 
 
 def test_parse_qce_rich_messages_uses_name_as_nickname_fallback() -> None:

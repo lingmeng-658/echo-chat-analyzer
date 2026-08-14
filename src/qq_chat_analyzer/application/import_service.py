@@ -29,7 +29,7 @@ from ..wechat_db_adapter import (
     DB_JSON_FORMAT as WECHAT_DB_FORMAT,
     is_wechat_db_export,
     load_messages as load_wechat_db_messages,
-    parse_messages as parse_wechat_db_messages,
+    parse_rich_messages as parse_wechat_db_rich_messages,
 )
 from ..wechat_parser import (
     is_wechat_export,
@@ -350,14 +350,15 @@ def _import_wechat_db_file(
     int,
 ]:
     raw_messages = load_wechat_db_messages(input_file)
-    parsed_messages = tuple(parse_wechat_db_messages(raw_messages))
+    rich_messages = tuple(parse_wechat_db_rich_messages(raw_messages))
+    parsed_messages = tuple(project_legacy_messages(rich_messages))
     warnings: tuple[str, ...] = ()
     if not raw_messages:
         warnings = (WARNING_NO_MESSAGES_LOADED,)
     return (
         "wechat",
         parsed_messages,
-        (),
+        rich_messages,
         WECHAT_DB_FORMAT,
         warnings,
         len(raw_messages),

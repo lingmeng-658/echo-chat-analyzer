@@ -21,6 +21,7 @@ class AnalysisStatus(str, Enum):
     COMPLETED = "completed"
     NO_VALID_TEXT = "no_valid_text"
     NO_TOKENS = "no_tokens"
+    EXPRESSION_ONLY = "expression_only"
 
 
 @dataclass(frozen=True, slots=True)

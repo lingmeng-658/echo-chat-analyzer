@@ -108,6 +108,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if result.status is AnalysisStatus.NO_TOKENS:
         print("有效文本未产生可统计词语，不生成输出文件。")
         return 0
+    if result.status is AnalysisStatus.EXPRESSION_ONLY:
+        print("没有可分词文本，已生成表达文化报告。")
+        return 0
 
     print(f"Top {configuration.top} 词频:")
     for word_frequency in result.top_words:
