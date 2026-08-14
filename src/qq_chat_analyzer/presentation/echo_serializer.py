@@ -39,6 +39,10 @@ def echo_report_to_dict(view: EchoReportView) -> dict[str, object]:
             "total_message_count": view.total_message_count,
             "participant_count": view.participant_count,
             "empty_description": view.empty_description,
+            "active_days": view.active_days,
+            "average_messages_per_active_day": (
+                view.average_messages_per_active_day
+            ),
         },
         "activity": {
             "hourly": _points_to_list(view.hourly_activity),
@@ -61,6 +65,12 @@ def _language_profile_to_dict(
         "mode": profile.mode,
         "available": profile.available,
         "unavailable_reason": profile.unavailable_reason,
+        "shared_words": [
+            _shared_word_to_dict(word) for word in profile.shared_words
+        ],
+        "side_preference_words": [
+            _shared_word_to_dict(word) for word in profile.side_preference_words
+        ],
         "members": [
             {
                 "speaker_key": member.speaker_key,
@@ -68,9 +78,38 @@ def _language_profile_to_dict(
                 "heading": member.heading,
                 "primary_words": list(member.primary_words),
                 "context_words": list(member.context_words),
+                "expression_habits": _expression_habits_to_dict(
+                    member.expression_habits
+                ),
             }
             for member in profile.members
         ],
+    }
+
+
+def _shared_word_to_dict(word: object) -> dict[str, object]:
+    return {
+        "word": word.word,
+        "self_count": word.self_count,
+        "peer_count": word.peer_count,
+        "emphasis": word.emphasis,
+    }
+
+
+def _expression_habits_to_dict(
+    habits: object | None,
+) -> dict[str, object] | None:
+    if habits is None:
+        return None
+    return {
+        "median_length": habits.median_length,
+        "average_length": habits.average_length,
+        "max_length": habits.max_length,
+        "run_count": habits.run_count,
+        "average_run_length": habits.average_run_length,
+        "median_run_length": habits.median_run_length,
+        "single_message_run_count": habits.single_message_run_count,
+        "multi_message_run_count": habits.multi_message_run_count,
     }
 
 
@@ -116,17 +155,60 @@ def _conversation_sessions_to_dict(
         "average_message_count": sessions.average_message_count,
         "private_initiators": private_initiators,
         "group_initiators": group_initiators,
+        "private_self_peak_start_hour": sessions.private_self_peak_start_hour,
+        "private_peer_peak_start_hour": sessions.private_peer_peak_start_hour,
+        "private_reply_median_self_to_peer_seconds": (
+            sessions.private_reply_median_self_to_peer_seconds
+        ),
+        "private_reply_median_peer_to_self_seconds": (
+            sessions.private_reply_median_peer_to_self_seconds
+        ),
         "items": [
             {
                 "start_timestamp": item.start_timestamp,
                 "end_timestamp": item.end_timestamp,
                 "duration_seconds": item.duration_seconds,
                 "message_count": item.message_count,
+                "participant_count": item.participant_count,
                 "initiator": item.initiator,
                 "initiator_sender_key": item.initiator_sender_key,
+                "self_message_count": item.self_message_count,
+                "peer_message_count": item.peer_message_count,
             }
             for item in sessions.items
         ],
+        "viewer_identity_reliable": sessions.viewer_identity_reliable,
+        "start_hour_distribution": [
+            {"label": p.label, "value": p.value}
+            for p in sessions.start_hour_distribution
+        ],
+        "peak_start_hour": sessions.peak_start_hour,
+        "session_character": sessions.session_character,
+        "loudest_most_messages": _session_to_dict(sessions.loudest_most_messages),
+        "loudest_longest_duration": _session_to_dict(sessions.loudest_longest_duration),
+        "loudest_most_participants": _session_to_dict(sessions.loudest_most_participants),
+        "loudest_densest": _session_to_dict(sessions.loudest_densest),
+        "loudest_most_back_and_forth": _session_to_dict(
+            sessions.loudest_most_back_and_forth
+        ),
+    }
+
+
+
+def _session_to_dict(session: EchoConversationSession | None) -> dict[str, object] | None:
+    """Convert an EchoConversationSession to a dict, or None."""
+    if session is None:
+        return None
+    return {
+        "start_timestamp": session.start_timestamp,
+        "end_timestamp": session.end_timestamp,
+        "duration_seconds": session.duration_seconds,
+        "message_count": session.message_count,
+        "participant_count": session.participant_count,
+        "initiator": session.initiator,
+        "initiator_sender_key": session.initiator_sender_key,
+        "self_message_count": session.self_message_count,
+        "peer_message_count": session.peer_message_count,
     }
 
 

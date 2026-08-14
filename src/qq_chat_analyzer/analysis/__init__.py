@@ -13,6 +13,7 @@ from .analyzers import (
     DistinctiveWordAnalyzer,
     MessageCompositionAnalyzer,
     MessageLengthAnalyzer,
+    PrivateLanguageAnalyzer,
     UserProfileAnalyzer,
 )
 from .conversation_sessions import (
@@ -26,6 +27,7 @@ from .conversation_sessions import (
 from .models import (
     ActivityReport,
     AnalysisReports,
+    ConsecutiveRunStats,
     ConversationReport,
     ConversationSummary,
     DistinctiveWord,
@@ -38,6 +40,8 @@ from .models import (
     MessageLengthReport,
     MemberDistinctiveWords,
     ProfileWord,
+    PrivateLanguageReport,
+    PrivateSharedWord,
     SpeakerLength,
     UserProfile,
     UserProfileReport,
@@ -48,6 +52,7 @@ __all__ = [
     "ActivityAnalyzer",
     "ActivityReport",
     "AnalysisReports",
+    "ConsecutiveRunStats",
     "ConversationAnalyzer",
     "ConversationReport",
     "ConversationSession",
@@ -74,6 +79,9 @@ __all__ = [
     "MessageLengthAnalyzer",
     "MessageLengthReport",
     "MemberDistinctiveWords",
+    "PrivateLanguageAnalyzer",
+    "PrivateLanguageReport",
+    "PrivateSharedWord",
     "ProfileWord",
     "PrivateSessionStats",
     "SpeakerLength",

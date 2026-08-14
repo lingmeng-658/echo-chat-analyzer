@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from statistics import median
 
 from ..models import (
+    ConsecutiveRunStats,
     HourlyActivity,
     ProfileWord,
     UserProfile,
@@ -39,11 +41,25 @@ class UserProfileAnalyzer:
         of any chat source.
         """
         stats: dict[str, _SpeakerStats] = {}
+        runs: dict[str, list[int]] = {}
+        current_run_key: str | None = None
+        current_run_length = 0
 
         for message in messages:
             speaker_key = stable_sender_key(message)
+            if current_run_key == speaker_key:
+                current_run_length += 1
+            else:
+                if current_run_key is not None and current_run_length:
+                    runs.setdefault(current_run_key, []).append(
+                        current_run_length
+                    )
+                current_run_key = speaker_key
+                current_run_length = 1
             speaker_stats = stats.setdefault(speaker_key, _SpeakerStats())
             speaker_stats.add(message)
+        if current_run_key is not None and current_run_length:
+            runs.setdefault(current_run_key, []).append(current_run_length)
 
         total_message_count = len(messages)
         speaker_words = _speaker_top_words(sender_tokens, top_words_per_user)
@@ -57,6 +73,7 @@ class UserProfileAnalyzer:
                     total_message_count,
                 ),
                 average_length=speaker_stats.average_length(),
+                median_length=speaker_stats.median_length(),
                 max_length=speaker_stats.max_length,
                 busiest_hour=busiest_index(speaker_stats.hourly_counts),
                 busiest_weekday=busiest_index(speaker_stats.weekday_counts),
@@ -75,6 +92,11 @@ class UserProfileAnalyzer:
                 remark=speaker_stats.remark,
                 nickname=speaker_stats.nickname,
                 contextual_name=speaker_stats.contextual_name,
+                consecutive_runs=(
+                    _consecutive_run_stats(runs[speaker])
+                    if runs.get(speaker)
+                    else None
+                ),
             )
             for speaker, speaker_stats in stats.items()
         ]
@@ -146,6 +168,11 @@ class _SpeakerStats:
             return 0.0
         return round(sum(self.text_lengths) / len(self.text_lengths), 2)
 
+    def median_length(self) -> float:
+        if not self.text_lengths:
+            return 0.0
+        return float(median(self.text_lengths))
+
 
 def _share_percent(count: int, total: int) -> float:
     if total <= 0:
@@ -201,3 +228,24 @@ def _speaker_display_name(
     if isinstance(name, str) and name.strip():
         return name.strip()
     return None
+
+
+def _consecutive_run_stats(runs: list[int]) -> ConsecutiveRunStats:
+    """Aggregate one speaker's consecutive-sender runs deterministically."""
+    run_count = len(runs)
+    if run_count == 0:
+        return ConsecutiveRunStats(
+            run_count=0,
+            average_run_length=0.0,
+            median_run_length=0.0,
+            single_message_run_count=0,
+            multi_message_run_count=0,
+        )
+    single_message_count = sum(1 for length in runs if length == 1)
+    return ConsecutiveRunStats(
+        run_count=run_count,
+        average_run_length=round(sum(runs) / run_count, 2),
+        median_run_length=float(median(runs)),
+        single_message_run_count=single_message_count,
+        multi_message_run_count=run_count - single_message_count,
+    )

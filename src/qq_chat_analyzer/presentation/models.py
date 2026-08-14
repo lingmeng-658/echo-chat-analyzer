@@ -132,6 +132,31 @@ class EchoLanguageMember:
     heading: str
     primary_words: tuple[str, ...] = ()
     context_words: tuple[str, ...] = ()
+    expression_habits: EchoExpressionHabits | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EchoExpressionHabits:
+    """Per-speaker expression statistics prepared for Echo display."""
+
+    median_length: float
+    average_length: float
+    max_length: int
+    run_count: int
+    average_run_length: float
+    median_run_length: float
+    single_message_run_count: int
+    multi_message_run_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class EchoSharedWord:
+    """One display-ready private shared word with a restrained emphasis."""
+
+    word: str
+    self_count: int | None
+    peer_count: int | None
+    emphasis: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +167,8 @@ class EchoLanguageProfile:
     available: bool
     members: tuple[EchoLanguageMember, ...] = ()
     unavailable_reason: str = ""
+    shared_words: tuple[EchoSharedWord, ...] = ()
+    side_preference_words: tuple[EchoSharedWord, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,7 +180,10 @@ class EchoConversationSession:
     duration_seconds: int
     message_count: int
     initiator: str
+    participant_count: int = 1
     initiator_sender_key: str | None = None
+    self_message_count: int | None = None
+    peer_message_count: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,11 +204,24 @@ class EchoConversationSessions:
     private_self_share: float | None = None
     private_peer_share: float | None = None
     private_unknown_share: float | None = None
+    private_self_peak_start_hour: int | None = None
+    private_peer_peak_start_hour: int | None = None
+    private_reply_median_self_to_peer_seconds: float | None = None
+    private_reply_median_peer_to_self_seconds: float | None = None
     group_self_count: int | None = None
     group_self_share: float | None = None
     group_top_initiator_name: str | None = None
     group_top_initiator_count: int | None = None
     group_top_initiator_share: float | None = None
+    viewer_identity_reliable: bool = False
+    start_hour_distribution: tuple[ChartPoint, ...] = ()
+    peak_start_hour: int | None = None
+    session_character: str | None = None
+    loudest_most_messages: EchoConversationSession | None = None
+    loudest_longest_duration: EchoConversationSession | None = None
+    loudest_most_participants: EchoConversationSession | None = None
+    loudest_densest: EchoConversationSession | None = None
+    loudest_most_back_and_forth: EchoConversationSession | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,3 +241,5 @@ class EchoReportView:
     conversation_sessions: EchoConversationSessions | None = None
     language_profile: EchoLanguageProfile | None = None
     empty_description: str = ""
+    active_days: int = 0
+    average_messages_per_active_day: float = 0.0

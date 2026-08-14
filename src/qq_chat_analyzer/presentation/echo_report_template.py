@@ -4,6 +4,8 @@ from __future__ import annotations
 
 
 ECHO_REPORT_HTML_SKELETON = r"""
+
+
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -12,9 +14,7 @@ ECHO_REPORT_HTML_SKELETON = r"""
   <meta name="color-scheme" content="light">
   <title>余音 Echo · 聊天记忆报告</title>
   __ECHO_FAVICON_TAG__
-  <style>
-__ECHO_CSS__
-  </style>
+  <style>__ECHO_CSS__</style>
 </head>
 <body>
   <main class="report" aria-label="余音 Echo 聊天记忆报告">
@@ -108,6 +108,8 @@ __ECHO_CSS__
         <dl class="archive-fields">
           <div><dt>时间跨度</dt><dd id="overview-time-span"></dd><small>报告覆盖的时间范围</small></div>
           <div><dt>参与人数</dt><dd id="overview-participants"></dd><small>在这段会话中留下消息</small></div>
+          <div><dt>活跃天数</dt><dd id="overview-active-days"></dd><small>实际有聊天的日子</small></div>
+          <div><dt>日均消息</dt><dd id="overview-average-per-day"></dd><small>有聊天的日子平均消息数</small></div>
           <div class="wide"><dt>最活跃时间</dt><dd id="busiest-hour"></dd><small>一天中消息最集中的时段</small></div>
         </dl>
       </div>
@@ -120,24 +122,84 @@ __ECHO_CSS__
         <div><p class="folio">SESSIONS</p><h2 id="sessions-title">聊天轮次</h2></div>
       </header>
       <p class="chapter-intro" id="session-lead"></p>
+      <p class="session-viewer-identity" id="session-viewer-identity" hidden></p>
 
-      <div class="session-ledger">
-        <div class="session-initiators" id="session-private-initiators">
-          <p id="session-self"></p>
-          <p id="session-peer"></p>
-        </div>
-        <div class="session-initiators" id="session-group-initiators" hidden>
-          <p id="session-group-self"></p>
-          <p id="session-group-top"></p>
-        </div>
-        <p class="session-unknown-note" id="session-unknown-note" hidden></p>
+      <!-- Private initiators (private only) -->
+      <div class="session-initiators" id="session-private-initiators" hidden>
+        <p id="session-self"></p>
+        <p id="session-peer"></p>
+      </div>
+      <p class="session-unknown-note" id="session-unknown-note" hidden></p>
+      <dl class="session-fields" id="session-fields-old">
+        <div><dt>一次会聊多久</dt><dd id="session-median-duration-old"></dd><small>所有聊天轮次的中位时长</small></div>
+        <div><dt>最长的一次</dt><dd id="session-longest-duration"></dd><small>这段时间里持续最久的一轮</small></div>
+        <div class="wide"><dt>每轮消息</dt><dd id="session-average-messages-old"></dd><small>平均每轮留下的消息数量</small></div>
+      </dl>
+
+      <!-- 谁来起拍 -->
+      <div class="session-movement" id="session-beat" hidden>
+        <h3 class="movement-heading"><span class="movement-icon" aria-hidden="true"></span><span id="session-beat-title">谁来起拍</span></h3>
+        <p class="session-beat-lead" id="session-group-top"></p>
+        <p class="peak-hour-note" id="session-peak-hour" hidden></p>
+        <p class="peak-hour-note" id="session-self-peak-hour" hidden></p>
+        <p class="peak-hour-note" id="session-peer-peak-hour" hidden></p>
+      </div>
+
+      <!-- 接住第一句话 -->
+      <div class="session-movement" id="session-reply" hidden>
+        <h3 class="movement-heading"><span class="movement-icon" aria-hidden="true"></span><span id="session-reply-title">接住第一句话</span></h3>
         <dl class="session-fields">
-          <div><dt>一次会聊多久</dt><dd id="session-median-duration"></dd><small>所有聊天轮次的中位时长</small></div>
-          <div><dt>最长的一次</dt><dd id="session-longest-duration"></dd><small>这段时间里持续最久的一轮</small></div>
-          <div class="wide"><dt>每轮消息</dt><dd id="session-average-messages"></dd><small>平均每轮留下的消息数量</small></div>
+          <div><dt>你开口之后</dt><dd id="session-reply-self-to-peer"></dd><small>TA 通常接住第一句</small></div>
+          <div><dt>TA 开口之后</dt><dd id="session-reply-peer-to-self"></dd><small>你通常接住第一句</small></div>
         </dl>
       </div>
-      <p class="session-threshold-note" id="session-threshold-note"></p>
+
+      <!-- 一段乐句 -->
+      <div class="session-movement" id="session-movement" hidden>
+        <h3 class="movement-heading"><span class="movement-icon" aria-hidden="true"></span>一段乐句</h3>
+        <dl class="session-fields">
+          <div><dt>通常会聊多久</dt><dd id="session-median-duration"></dd><small>所有聊天轮次的中位时长</small></div>
+          <div><dt>平均每轮消息</dt><dd id="session-average-messages"></dd><small>平均每轮留下的消息数量</small></div>
+        </dl>
+        <p class="session-character" id="session-character" hidden></p>
+      </div>
+
+      <!-- 聊天里的几个高音 -->
+      <div class="session-movement" id="session-highnotes" hidden>
+        <h3 class="movement-heading"><span class="movement-icon" aria-hidden="true"></span><span id="session-highnotes-title">聊天里的几个高音</span></h3>
+        <div class="highnote-grid">
+          <div class="highnote-card" id="session-loudest-messages" hidden>
+            <span class="highnote-badge"><span class="highnote-note" aria-hidden="true">♪</span>话最多</span>
+            <span class="highnote-stat" id="session-loudest-messages-text"></span>
+            <span class="highnote-time" id="session-loudest-messages-time"></span>
+          </div>
+          <div class="highnote-card" id="session-loudest-duration" hidden>
+            <span class="highnote-badge"><span class="highnote-note" aria-hidden="true">𝅝</span>聊最久</span>
+            <span class="highnote-stat" id="session-loudest-duration-text"></span>
+            <span class="highnote-time" id="session-loudest-duration-time"></span>
+          </div>
+          <div class="highnote-card" id="session-loudest-participants" hidden>
+            <span class="highnote-badge"><span class="highnote-note" aria-hidden="true">♫</span>最热闹</span>
+            <span class="highnote-stat" id="session-loudest-participants-text"></span>
+            <span class="highnote-time" id="session-loudest-participants-time"></span>
+          </div>
+          <div class="highnote-card" id="session-loudest-densest" hidden>
+            <span class="highnote-badge"><span class="highnote-note" aria-hidden="true">♬</span>接得最紧</span>
+            <span class="highnote-stat" id="session-loudest-densest-text"></span>
+            <span class="highnote-time" id="session-loudest-densest-time"></span>
+          </div>
+          <div class="highnote-card" id="session-loudest-back-and-forth" hidden>
+            <span class="highnote-badge"><span class="highnote-note" aria-hidden="true">♫</span>最有来有回</span>
+            <span class="highnote-stat" id="session-loudest-back-and-forth-text"></span>
+            <span class="highnote-time" id="session-loudest-back-and-forth-time"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 休止 -->
+      <p class="session-rest-note" id="session-rest" hidden>
+        <span class="session-rest-symbol" aria-hidden="true">𝄽</span> 休止 · <span id="session-threshold-note"></span>
+      </p>
       <span class="page-number">04</span>
     </section>
 
@@ -172,6 +234,16 @@ __ECHO_CSS__
       <p class="chapter-intro" id="voices-intro"></p>
 
       <div class="member-list" id="member-list"></div>
+      <div class="private-language-blocks" id="private-shared-words" hidden>
+        <h3>同频</h3>
+        <p>两个人都相对常说的词。</p>
+        <ul class="language-word-list" id="private-shared-words-list"></ul>
+      </div>
+      <div class="private-language-blocks" id="private-side-words" hidden>
+        <h3>谁更常这样说</h3>
+        <p>同一份习惯里，更常开口的一方。</p>
+        <ul class="language-word-list" id="private-side-words-list"></ul>
+      </div>
       <span class="page-number">06</span>
     </section>
 
@@ -186,12 +258,15 @@ __ECHO_CSS__
       <span class="page-number">07</span>
     </section>
   </main>
+
+
+
   <script>
 window.ECHO_DATA = __ECHO_DATA__;
   </script>
-  <script>
-__ECHO_APP_JS__
-  </script>
+  <script>__ECHO_APP_JS__</script>
+
+
 </body>
 </html>
 
@@ -213,6 +288,7 @@ ECHO_REPORT_CSS = r"""
   --viewer-soft: #e2ebe5;
   --serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", SimSun, serif;
   --sans: "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  --music: "Segoe UI Symbol", "Noto Sans Symbols 2", "Noto Music", "DejaVu Sans", sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -255,6 +331,7 @@ h1, h2, h3, p { margin-top: 0; }
 .chapter-header { display: flex; gap: 26px; align-items: flex-start; padding-bottom: 24px; border-bottom: 1px solid var(--rule); }
 .chapter-number { padding-top: 9px; color: var(--accent); font: 16px/1 var(--serif); letter-spacing: .08em; }
 .chapter-intro { max-width: 540px; margin: 32px 0 62px; color: var(--muted); font: 17px/2 var(--serif); }
+.session-chapter .chapter-intro { margin: 0 0 40px; }
 .overview-ledger { border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
 .primary-figure { display: grid; grid-template-columns: 1fr auto; align-items: end; min-height: 250px; padding: 42px 0; border-bottom: 1px solid var(--rule); }
 .primary-figure strong { font-size: clamp(72px, 13vw, 132px); font-weight: 400; line-height: .9; letter-spacing: -.06em; }
@@ -271,18 +348,31 @@ h1, h2, h3, p { margin-top: 0; }
 
 .session-ledger { border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
 .session-initiators { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid var(--rule); }
+.session-initiators[hidden] { display: none; }
 .session-initiators p { min-height: 128px; margin: 0; padding: 38px 34px 30px 0; font: 28px/1.55 var(--serif); }
 .session-initiators p + p { padding-right: 0; padding-left: 34px; border-left: 1px solid var(--rule); }
 .session-fields { display: grid; grid-template-columns: 1fr 1fr; margin: 0; }
+.session-fields[hidden] { display: none; }
 .session-fields div { min-height: 150px; padding: 28px 0; }
 .session-fields div:nth-child(odd) { padding-right: 34px; border-right: 1px solid var(--rule); }
 .session-fields div:nth-child(even) { padding-left: 34px; }
 .session-fields .wide { grid-column: 1 / -1; padding-right: 0; border-top: 1px solid var(--rule); border-right: 0; }
 .session-fields dt { color: var(--muted); font-size: 12px; letter-spacing: .08em; }
 .session-fields dd { margin: 18px 0 7px; font-size: 25px; }
-.session-fields small, .session-unknown-note, .session-threshold-note { color: var(--faint); font-size: 12px; }
+.session-fields small, .session-unknown-note { color: var(--faint); font-size: 12px; }
 .session-unknown-note { margin: 0; padding: 16px 0; border-bottom: 1px solid var(--rule); }
-.session-threshold-note { margin: 24px 0 0; line-height: 1.8; }
+.session-rest-note {
+  margin: 48px 0 0;
+  color: var(--faint);
+  font: 12px/1.8 var(--sans);
+  letter-spacing: 0.02em;
+  text-align: right;
+}
+
+.session-rest-symbol {
+  font-family: var(--music);
+  font-size: 13px;
+}
 
 .figure-block { margin: 0 0 72px; }
 .figure-block figcaption { display: flex; align-items: baseline; justify-content: space-between; gap: 24px; margin-bottom: 26px; }
@@ -321,6 +411,38 @@ h1, h2, h3, p { margin-top: 0; }
 .voice-context { margin: 30px 0 0 40px; color: var(--faint); font: 13px/1.8 var(--serif); }
 .language-unavailable { margin: 0; padding: 52px 0; color: var(--muted); font: 17px/2 var(--serif); border-bottom: 1px solid var(--rule); }
 
+.private-language-blocks {
+  margin-top: 36px;
+  padding-top: 24px;
+  border-top: 1px solid var(--rule);
+}
+
+.private-language-blocks h3 {
+  margin: 0 0 12px;
+  font-size: 21px;
+  font-weight: 500;
+}
+
+.private-language-blocks > p {
+  margin: 0 0 18px;
+  color: var(--muted);
+  font: 14px/1.8 var(--serif);
+}
+
+.language-word-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 28px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.language-word-list li {
+  color: var(--ink);
+  font: 400 22px/1.4 var(--serif);
+}
+
 .future { display: flex; flex-direction: column; }
 .future-list { margin-top: 64px; border-top: 1px solid var(--rule); }
 .future-list > div { display: grid; grid-template-columns: 54px 180px 1fr; gap: 24px; align-items: baseline; padding: 28px 0; color: var(--faint); border-bottom: 1px solid var(--rule); }
@@ -330,6 +452,138 @@ h1, h2, h3, p { margin-top: 0; }
 .end-mark { display: flex; justify-content: space-between; margin-top: auto; padding-top: 80px; color: var(--muted); font-size: 12px; }
 .end-mark::before { position: absolute; right: 0; bottom: 112px; left: 0; height: 1px; content: ""; background: linear-gradient(90deg, var(--accent), transparent 76%); }
 .end-mark b { font-weight: 400; }
+
+
+/* === Session 5-section narrative === */
+.session-viewer-identity {
+  margin: 0 0 30px;
+  color: var(--muted);
+  font: 15px/1.8 var(--serif);
+  letter-spacing: 0.04em;
+}
+
+.session-movement {
+  margin-top: 36px;
+  padding-top: 22px;
+  border-top: 1px solid var(--rule);
+}
+
+.movement-heading {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 0 0 16px;
+  font: 500 22px/1.3 var(--serif);
+  letter-spacing: 0.02em;
+}
+
+.movement-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  color: var(--accent);
+  font-family: var(--music);
+  font-size: 18px;
+}
+
+.movement-icon::before {
+  content: "♪";
+  font-size: 20px;
+  line-height: 1;
+}
+
+.session-beat-lead {
+  margin: 0;
+  color: var(--ink);
+  font: 17px/1.8 var(--serif);
+  letter-spacing: 0.01em;
+}
+
+.peak-hour-note {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font: 14px/1.8 var(--serif);
+}
+
+#session-movement .session-fields div,
+#session-reply .session-fields div,
+#session-movement .session-fields div:nth-child(odd),
+#session-reply .session-fields div:nth-child(odd),
+#session-movement .session-fields div:nth-child(even),
+#session-reply .session-fields div:nth-child(even) {
+  min-height: auto;
+  padding: 18px 20px;
+  border-top: 0;
+  border-bottom: 0;
+  border-right: 1px solid var(--rule);
+}
+
+#session-movement .session-fields div:last-child,
+#session-reply .session-fields div:last-child {
+  border-right: 0;
+}
+
+.session-character {
+  margin: 16px 0 0;
+  padding: 16px 20px;
+  color: var(--ink);
+  font: 17px/1.7 var(--serif);
+  letter-spacing: 0.03em;
+  background: var(--paper-light);
+  border-left: 3px solid var(--accent-soft);
+  border-radius: 2px;
+}
+
+/* === Highnote grid === */
+.highnote-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  border: 1px solid var(--rule);
+  background: var(--rule);
+}
+
+.highnote-card {
+  padding: 20px 18px;
+  background: var(--paper);
+}
+
+.highnote-time {
+  display: block;
+  margin-top: 8px;
+  color: var(--faint);
+  font: 12px/1.6 var(--sans);
+  letter-spacing: 0.04em;
+}
+
+.highnote-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 12px;
+  padding: 3px 12px;
+  color: var(--accent);
+  font: 600 11px/1.6 var(--sans);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  border: 1px solid var(--accent-soft);
+  border-radius: 2px;
+}
+
+.highnote-note {
+  font-family: var(--music);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.highnote-stat {
+  display: block;
+  color: var(--ink);
+  font: 400 20px/1.4 var(--serif);
+  letter-spacing: -0.01em;
+}
 
 @media (max-width: 720px) {
   .report { width: 100%; margin: 0; }
@@ -349,6 +603,8 @@ h1, h2, h3, p { margin-top: 0; }
   .session-initiators p, .session-initiators p + p { min-height: auto; padding: 24px 0; border-left: 0; border-bottom: 1px solid var(--rule); }
   .session-fields div, .session-fields div:nth-child(odd), .session-fields div:nth-child(even) { padding: 24px 0; border-right: 0; border-bottom: 1px solid var(--rule); }
   .session-fields .wide { grid-column: auto; }
+  .highnote-grid { grid-template-columns: 1fr; }
+  .session-rest-note { margin-top: 40px; }
   .member-list.mode-private { display: block; }
   .mode-private .voice-entry, .mode-private .voice-entry + .voice-entry { min-height: auto; padding-right: 0; padding-left: 0; border-left: 0; }
   .voice-descriptor, .voice-words, .voice-context { margin-left: 0; }
@@ -391,6 +647,13 @@ document.documentElement.classList.add("js-ready");
     }
   }
 
+  function setHidden(id, hidden) {
+    var node = document.getElementById(id);
+    if (node) {
+      node.hidden = Boolean(hidden);
+    }
+  }
+
   function formatCount(value) {
     return String(Number(value) || 0).replace(
       /\B(?=(\d{3})+(?!\d))/g,
@@ -399,7 +662,7 @@ document.documentElement.classList.add("js-ready");
   }
 
   function formatPercent(value) {
-    return (Number(value) || 0).toFixed(1) + "%";
+    return ((Number(value) || 0) * 100).toFixed(1) + "%";
   }
 
   function formatAverage(value) {
@@ -439,6 +702,17 @@ document.documentElement.classList.add("js-ready");
     return Number.isInteger(count) ? String(count) : count.toFixed(1);
   }
 
+  function formatReplyDuration(value) {
+    var seconds = finiteNumber(value);
+    if (seconds === null || seconds < 0) {
+      return "时长未知";
+    }
+    if (seconds < 60) {
+      return String(Math.round(seconds)) + " 秒";
+    }
+    return formatSessionDuration(seconds);
+  }
+
   document.querySelectorAll("[data-current-year]").forEach(function (element) {
     element.textContent = String(new Date().getFullYear());
   });
@@ -470,6 +744,18 @@ document.documentElement.classList.add("js-ready");
       "overview-participants",
       hasData ? formatCount(overview.participant_count) + " 人" : "—"
     );
+    setText(
+      "overview-active-days",
+      hasData && finiteNumber(overview.active_days) > 0
+        ? formatCount(overview.active_days) + " 天"
+        : "—"
+    );
+    setText(
+      "overview-average-per-day",
+      hasData && finiteNumber(overview.average_messages_per_active_day) !== null
+        ? formatAverage(overview.average_messages_per_active_day) + " 条"
+        : "—"
+    );
     if (!hasData && emptyDescription) {
       setText("overview-intro", emptyDescription);
     }
@@ -488,7 +774,7 @@ document.documentElement.classList.add("js-ready");
   if (sessionsToc) {
     sessionsToc.hidden = !hasSessions;
   }
-  if (hasSessions) {
+    if (hasSessions) {
     var conversationKind = conversation && conversation.kind;
     var isPrivate = conversationKind === "private";
     var isGroup = conversationKind === "group";
@@ -500,137 +786,232 @@ document.documentElement.classList.add("js-ready");
           ? "过去这段时间，群里一共聊起了 " + formatCount(sessionCount) + " 轮"
           : "过去这段时间，一共聊起了 " + formatCount(sessionCount) + " 轮"
     );
-    setText(
-      "session-median-duration",
-      "通常一次会聊约 " +
-        formatSessionDuration(sessions.median_duration_seconds)
-    );
-    setText(
-      "session-longest-duration",
-      "最长的一次持续 " +
-        formatSessionDuration(sessions.longest_duration_seconds)
-    );
-    setText(
-      "session-average-messages",
-      "平均每轮约 " +
-        formatSessionMessages(sessions.average_message_count) +
-        " 条消息"
-    );
 
-    var thresholdSeconds = finiteNumber(sessions.threshold_seconds);
-    var thresholdMinutes =
-      thresholdSeconds !== null && thresholdSeconds > 0
-        ? Math.round(thresholdSeconds / 60)
-        : 30;
-    setText(
-      "session-threshold-note",
-      "相隔超过 " +
-        String(thresholdMinutes) +
-        " 分钟未继续交流，会被视为一段新的聊天。"
-    );
-
-    var privateBlock = document.getElementById("session-private-initiators");
-    var unknownNote = document.getElementById("session-unknown-note");
-    var initiators = isPrivate ? sessions.private_initiators : null;
-    var selfShare = initiators ? finiteNumber(initiators.self_share) : null;
-    var peerShare = initiators ? finiteNumber(initiators.peer_share) : null;
-    var selfCount = initiators ? finiteNumber(initiators.self_count) : null;
-    var peerCount = initiators ? finiteNumber(initiators.peer_count) : null;
-    var unknownCount = initiators
-      ? finiteNumber(initiators.unknown_count)
-      : null;
-    var hasKnownInitiators = Boolean(
-      isPrivate &&
-      selfShare !== null &&
-      peerShare !== null &&
-      selfCount !== null &&
-      peerCount !== null &&
-      selfCount + peerCount > 0
-    );
-    if (privateBlock) {
-      privateBlock.hidden = !hasKnownInitiators;
-    }
-    setText(
-      "session-self",
-      hasKnownInitiators
-        ? "你先开口 " +
-            formatPercent(selfShare * 100) +
-            "（" +
-            formatCount(selfCount) +
-            " 次）"
-        : ""
-    );
-    setText(
-      "session-peer",
-      hasKnownInitiators
-        ? "对方先开口 " +
-            formatPercent(peerShare * 100) +
-            "（" +
-            formatCount(peerCount) +
-            " 次）"
-        : ""
-    );
-    if (unknownNote) {
-      unknownNote.hidden = !(isPrivate && unknownCount > 0);
-      unknownNote.textContent =
-        isPrivate && unknownCount > 0
-          ? "有 " +
-            formatCount(unknownCount) +
-            " 轮暂时无法判断谁先开口。"
-          : "";
+    // Viewer identity (secondary text, group only)
+    var groupInitiators = sessions.group_initiators;
+    var viewerIdentityReliable = sessions.viewer_identity_reliable;
+    if (isGroup && viewerIdentityReliable && groupInitiators) {
+      var selfCount = finiteNumber(groupInitiators.self_count);
+      var selfShare = finiteNumber(groupInitiators.self_share);
+      if (selfCount !== null && selfShare !== null) {
+        setText(
+          "session-viewer-identity",
+          "你发起了 " + formatCount(selfCount) + " 轮，占 " + formatPercent(selfShare)
+        );
+        setHidden("session-viewer-identity", false);
+      }
+    } else {
+      setHidden("session-viewer-identity", true);
     }
 
-    var groupBlock = document.getElementById("session-group-initiators");
-    var groupInitiators = isGroup ? sessions.group_initiators : null;
-    var groupSelfCount = groupInitiators
-      ? finiteNumber(groupInitiators.self_count)
-      : null;
-    var groupSelfShare = groupInitiators
-      ? finiteNumber(groupInitiators.self_share)
-      : null;
-    var topMember = groupInitiators && groupInitiators.top_member;
-    var topMemberName =
-      topMember && typeof topMember.display_name === "string"
-        ? topMember.display_name.trim()
-        : "";
-    var topMemberCount = topMember ? finiteNumber(topMember.count) : null;
-    var topMemberShare = topMember ? finiteNumber(topMember.share) : null;
-    var hasGroupSelf = Boolean(
-      isGroup && groupSelfCount !== null && groupSelfShare !== null
-    );
-    var hasTopMember = Boolean(
-      isGroup &&
-      topMemberName &&
-      topMemberCount !== null &&
-      topMemberShare !== null
-    );
-    if (groupBlock) {
-      groupBlock.hidden = !(hasGroupSelf || hasTopMember);
+    // === Private mode: five-section narrative ===
+    if (isPrivate) {
+      // Hide old private layout remnants
+      var privateBlock = document.getElementById("session-private-initiators");
+      var unknownNote = document.getElementById("session-unknown-note");
+      var oldFields = document.getElementById("session-fields-old");
+      if (privateBlock) privateBlock.hidden = true;
+      if (unknownNote) unknownNote.hidden = true;
+      if (oldFields) oldFields.hidden = true;
+
+      // 总览 / 第一句话
+      setText("session-beat-title", "总览 · 第一句话");
+      setHidden("session-beat", false);
+      var initiators = sessions.private_initiators;
+      var selfCount = initiators ? finiteNumber(initiators.self_count) : null;
+      var peerCount = initiators ? finiteNumber(initiators.peer_count) : null;
+      if (selfCount !== null && peerCount !== null && selfCount + peerCount > 0) {
+        setText("session-group-top", "你开启 " + formatCount(selfCount) + " 轮 · TA 开启 " + formatCount(peerCount) + " 轮");
+        setHidden("session-group-top", false);
+      } else {
+        setText("session-group-top", "");
+        setHidden("session-group-top", true);
+      }
+      var selfPeakHour = finiteNumber(sessions.private_self_peak_start_hour);
+      if (selfPeakHour !== null) {
+        setText("session-self-peak-hour", "你最容易在 " + String(selfPeakHour) + ":00 左右开口");
+        setHidden("session-self-peak-hour", false);
+      } else {
+        setHidden("session-self-peak-hour", true);
+      }
+      var peerPeakHour = finiteNumber(sessions.private_peer_peak_start_hour);
+      if (peerPeakHour !== null) {
+        setText("session-peer-peak-hour", "TA 最容易在 " + String(peerPeakHour) + ":00 左右开口");
+        setHidden("session-peer-peak-hour", false);
+      } else {
+        setHidden("session-peer-peak-hour", true);
+      }
+      setHidden("session-peak-hour", true);
+
+      // 接住第一句话
+      var selfToPeer = finiteNumber(sessions.private_reply_median_self_to_peer_seconds);
+      var peerToSelf = finiteNumber(sessions.private_reply_median_peer_to_self_seconds);
+      var hasReplyData = selfToPeer !== null || peerToSelf !== null;
+      setHidden("session-reply", !hasReplyData);
+      setText("session-reply-self-to-peer", selfToPeer !== null ? "约 " + formatReplyDuration(selfToPeer) : "暂无足够样本");
+      setText("session-reply-peer-to-self", peerToSelf !== null ? "约 " + formatReplyDuration(peerToSelf) : "暂无足够样本");
+
+      // 一段乐句
+      setHidden("session-movement", false);
+      setText("session-median-duration", "约 " + formatSessionDuration(sessions.median_duration_seconds));
+      setText("session-average-messages", "约 " + formatSessionMessages(sessions.average_message_count) + " 条");
+      var charText = sessions.session_character;
+      if (charText) {
+        setText("session-character", charText);
+        setHidden("session-character", false);
+      } else {
+        setHidden("session-character", true);
+      }
+
+      // 几段特别的聊天
+      setText("session-highnotes-title", "几段特别的聊天");
+      setHidden("session-highnotes", false);
+      renderLoudest("session-loudest-messages", sessions.loudest_most_messages,
+        function (s) {
+          return formatSessionMessages(s.message_count) + " 条消息 · " + formatSessionDuration(s.duration_seconds);
+        });
+      renderLoudest("session-loudest-duration", sessions.loudest_longest_duration,
+        function (s) {
+          return formatSessionDuration(s.duration_seconds) + " · " + formatSessionMessages(s.message_count) + " 条消息";
+        });
+      renderLoudest("session-loudest-participants", null, function () { return ""; });
+      renderLoudest("session-loudest-densest", sessions.loudest_densest,
+        function (s) {
+          return formatSessionMessages(s.message_count) + " 条消息 · " + formatSessionDuration(s.duration_seconds);
+        });
+      renderLoudest("session-loudest-back-and-forth", sessions.loudest_most_back_and_forth,
+        function (s) {
+          var selfMessages = finiteNumber(s.self_message_count);
+          var peerMessages = finiteNumber(s.peer_message_count);
+          var counts = "你 " + (selfMessages === null ? "—" : formatCount(selfMessages)) + " 条 · TA " + (peerMessages === null ? "—" : formatCount(peerMessages)) + " 条";
+          return counts + " · " + formatSessionDuration(s.duration_seconds);
+        });
+
+      // 休止
+      setHidden("session-rest", false);
+      var thresholdSeconds = finiteNumber(sessions.threshold_seconds);
+      var thresholdMinutes = thresholdSeconds !== null && thresholdSeconds > 0 ? Math.round(thresholdSeconds / 60) : 30;
+      setText("session-threshold-note",
+        "超过 " + String(thresholdMinutes) + " 分钟未继续交流，会视作下一轮聊天。"
+      );
     }
-    setText(
-      "session-group-self",
-      hasGroupSelf
-        ? "你发起了 " +
-            formatCount(groupSelfCount) +
-            " 轮，占 " +
-            formatPercent(groupSelfShare * 100)
-        : ""
-    );
-    setText(
-      "session-group-top",
-      hasTopMember
-        ? "最常发起聊天：" +
-            topMemberName +
-            "（" +
-            formatCount(topMemberCount) +
-            " 轮，" +
-            formatPercent(topMemberShare * 100) +
-            "）"
-        : ""
-    );
+
+    // === Group mode: 5-section narrative ===
+    if (isGroup) {
+      // Hide old private layout
+      var privateBlock = document.getElementById("session-private-initiators");
+      if (privateBlock) privateBlock.hidden = true;
+      var unknownNote = document.getElementById("session-unknown-note");
+      if (unknownNote) unknownNote.hidden = true;
+      var oldFields = document.getElementById("session-fields-old");
+      if (oldFields) oldFields.hidden = true;
+      setHidden("session-reply", true);
+      setHidden("session-self-peak-hour", true);
+      setHidden("session-peer-peak-hour", true);
+
+      // 谁来起拍
+      setText("session-beat-title", "谁来起拍");
+      setHidden("session-beat", false);
+      if (groupInitiators && groupInitiators.top_member) {
+        var topMember = groupInitiators.top_member;
+        setText("session-group-top",
+          "最常发起聊天：" + topMember.display_name +
+          "（" + formatCount(topMember.count) + " 轮，" + formatPercent(topMember.share) + "）"
+        );
+      } else {
+        setText("session-group-top", "");
+      }
+      var peakHour = finiteNumber(sessions.peak_start_hour);
+      if (peakHour !== null) {
+        setText("session-peak-hour", "聊天最容易从 " + String(peakHour) + ":00 左右开始");
+        setHidden("session-peak-hour", false);
+      } else {
+        setHidden("session-peak-hour", true);
+      }
+
+      // 一段乐句
+      setHidden("session-movement", false);
+      setText("session-median-duration", "约 " + formatSessionDuration(sessions.median_duration_seconds));
+      setText("session-average-messages", "约 " + formatSessionMessages(sessions.average_message_count) + " 条");
+      var charText = sessions.session_character;
+      if (charText) {
+        setText("session-character", charText);
+        setHidden("session-character", false);
+      } else {
+        setHidden("session-character", true);
+      }
+
+      // 聊天里的几个高音
+      setText("session-highnotes-title", "聊天里的几个高音");
+      setHidden("session-highnotes", false);
+      renderLoudest("session-loudest-messages", sessions.loudest_most_messages,
+        function (s) {
+          return formatSessionMessages(s.message_count) + " 条消息 · " + formatSessionDuration(s.duration_seconds);
+        });
+      renderLoudest("session-loudest-duration", sessions.loudest_longest_duration,
+        function (s) {
+          return formatSessionDuration(s.duration_seconds) + " · " + formatSessionMessages(s.message_count) + " 条消息";
+        });
+      renderLoudest("session-loudest-participants", sessions.loudest_most_participants,
+        function (s) {
+          return String(s.participant_count) + " 人参与 · " + formatSessionMessages(s.message_count) + " 条消息";
+        });
+      renderLoudest("session-loudest-densest", sessions.loudest_densest,
+        function (s) {
+          return formatSessionMessages(s.message_count) + " 条消息 · " + formatSessionDuration(s.duration_seconds);
+        });
+      renderLoudest("session-loudest-back-and-forth", null, function () { return ""; });
+
+      // 休止
+      setHidden("session-rest", false);
+      var thresholdSeconds = finiteNumber(sessions.threshold_seconds);
+      var thresholdMinutes = thresholdSeconds !== null && thresholdSeconds > 0 ? Math.round(thresholdSeconds / 60) : 30;
+      setText("session-threshold-note",
+        "超过 " + String(thresholdMinutes) + " 分钟未继续交流，会视作下一轮聊天。"
+      );
+    }
   }
 
-  var hourly = (data && data.activity && data.activity.hourly) || [];
+  function formatTimestamp(ts) {
+    if (ts === null || ts === undefined || ts === "") {
+      return null;
+    }
+    var d = new Date(Number(ts) * 1000);
+    if (isNaN(d.getTime())) return null;
+    var y = String(d.getFullYear()).slice(-2);
+    var m = String(d.getMonth() + 1);
+    var day = String(d.getDate());
+    var hh = String(d.getHours()).padStart(2, "0");
+    var mm = String(d.getMinutes()).padStart(2, "0");
+    return y + "/" + m + "/" + day + " \u00b7 " + hh + ":" + mm;
+  }
+
+    function renderLoudest(containerId, session, formatFn) {
+    var container = document.getElementById(containerId);
+    if (!container) return;
+    if (session && session.message_count > 0) {
+      container.hidden = false;
+      var textId = containerId + "-text";
+      var textNode = document.getElementById(textId);
+      if (textNode) {
+        textNode.textContent = formatFn(session);
+      }
+      // Set time anchor
+      var timeId = containerId + "-time";
+      var timeNode = document.getElementById(timeId);
+      if (timeNode) {
+        var ts = formatTimestamp(session.start_timestamp);
+        if (ts) {
+          timeNode.textContent = ts;
+          timeNode.hidden = false;
+        } else {
+          timeNode.hidden = true;
+        }
+      }
+    } else {
+      container.hidden = true;
+    }
+  }  var hourly = (data && data.activity && data.activity.hourly) || [];
   var busiestBlock = document.getElementById("busiest-hour");
   if (busiestBlock) {
     var peak = null;
@@ -767,7 +1148,66 @@ document.documentElement.classList.add("js-ready");
           context.textContent = "常聊：" + member.context_words.join(" · ");
           article.appendChild(context);
         }
+        if (languageMode === "private_common" && member.expression_habits) {
+          var habits = member.expression_habits;
+          var habitLine = document.createElement("p");
+          habitLine.className = "voice-context";
+          habitLine.textContent =
+            "平均 " + formatSessionMessages(habits.average_length) + " 字 · " +
+            "中位 " + formatSessionMessages(habits.median_length) + " 字 · " +
+            "最长 " + formatCount(habits.max_length) + " 字 · " +
+            "一次连发 " + formatSessionMessages(habits.average_run_length) + " 条";
+          article.appendChild(habitLine);
+        }
         memberList.appendChild(article);
+      });
+    }
+  }
+
+  var sharedWordsBlock = document.getElementById("private-shared-words");
+  var sideWordsBlock = document.getElementById("private-side-words");
+  var sharedWordsList = document.getElementById("private-shared-words-list");
+  var sideWordsList = document.getElementById("private-side-words-list");
+  if (sharedWordsBlock) sharedWordsBlock.hidden = true;
+  if (sideWordsBlock) sideWordsBlock.hidden = true;
+  if (sharedWordsList) sharedWordsList.textContent = "";
+  if (sideWordsList) sideWordsList.textContent = "";
+  if (
+    languageMode === "private_common" &&
+    languageProfile &&
+    languageProfile.available &&
+    sharedWordsBlock &&
+    sharedWordsList
+  ) {
+    var sharedWords = languageProfile.shared_words || [];
+    if (sharedWords.length) {
+      sharedWordsBlock.hidden = false;
+      sharedWords.forEach(function (item) {
+        var entry = document.createElement("li");
+        var selfCount = finiteNumber(item.self_count);
+        var peerCount = finiteNumber(item.peer_count);
+        entry.textContent =
+          item.word + " · 你 " + (selfCount === null ? "—" : formatCount(selfCount)) +
+          " 次 · TA " + (peerCount === null ? "—" : formatCount(peerCount)) + " 次";
+        sharedWordsList.appendChild(entry);
+      });
+    }
+  }
+  if (
+    languageMode === "private_common" &&
+    languageProfile &&
+    languageProfile.available &&
+    sideWordsBlock &&
+    sideWordsList
+  ) {
+    var sideWords = languageProfile.side_preference_words || [];
+    if (sideWords.length) {
+      sideWordsBlock.hidden = false;
+      sideWords.forEach(function (item) {
+        var entry = document.createElement("li");
+        var sideLabel = item.emphasis === "self" ? "你更常说" : "TA 更常说";
+        entry.textContent = item.word + " · " + sideLabel;
+        sideWordsList.appendChild(entry);
       });
     }
   }

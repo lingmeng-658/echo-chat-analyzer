@@ -28,6 +28,9 @@ from .formatters import (
     format_percent,
     format_weekday,
 )
+from ..analysis.conversation_sessions import (
+    ConversationSession,
+)
 from .models import (
     ChartData,
     ChartKind,
@@ -40,7 +43,9 @@ from .models import (
     EchoLanguageProfile,
     EchoConversationSession,
     EchoConversationSessions,
+    EchoExpressionHabits,
     EchoReportView,
+    EchoSharedWord,
     MetricCard,
     UserCard,
 )
@@ -59,6 +64,9 @@ ECHO_LANGUAGE_CONTEXT_WORD_LIMIT = 3
 ECHO_GROUP_INSUFFICIENT_REASON = "样本不足，暂时无法比较成员特色词。"
 ECHO_PRIVATE_INSUFFICIENT_REASON = "需要双方都有可用资料，才能展示两种声音。"
 ECHO_UNKNOWN_CONVERSATION_REASON = "当前会话类型无法确定，暂不展示语言画像。"
+ECHO_PRIVATE_SHARED_TOP_LIMIT = 8
+ECHO_PRIVATE_SIDE_TOP_LIMIT = 6
+ECHO_PRIVATE_SIDE_MIN_OCCURRENCE = 2
 
 
 class DashboardBuilder:
@@ -216,6 +224,12 @@ class EchoReportBuilder:
                 viewer_speaker_key=viewer_speaker_key,
             ),
             empty_description="" if has_data else EMPTY_DESCRIPTION,
+            active_days=(reports.activity.active_days if reports.activity else 0),
+            average_messages_per_active_day=(
+                reports.activity.average_messages_per_active_day
+                if reports.activity
+                else 0.0
+            ),
         )
 
 
@@ -279,6 +293,14 @@ def _build_echo_language_profile(
             if any(member.is_viewer for member in members)
             else None
         )
+        profile_by_key = {
+            (profile.speaker_key or profile.speaker): profile
+            for profile in (
+                reports.user_profiles.profiles
+                if reports.user_profiles is not None
+                else ()
+            )
+        }
         language_members = tuple(
             EchoLanguageMember(
                 speaker_key=member.speaker_key,
@@ -290,10 +312,20 @@ def _build_echo_language_profile(
                 primary_words=member.top_words[
                     :ECHO_LANGUAGE_PRIMARY_WORD_LIMIT
                 ],
+                expression_habits=_echo_expression_habits(
+                    profile_by_key.get(member.speaker_key)
+                ),
             )
             for member in members
         )
         available = len(language_members) == 2
+        shared_words, side_words = _private_shared_word_layers(
+            reports.private_language,
+            viewer_key=known_viewer_key,
+            member_keys={
+                member.speaker_key for member in language_members
+            },
+        )
         return EchoLanguageProfile(
             mode="private_common",
             available=available,
@@ -301,6 +333,8 @@ def _build_echo_language_profile(
             unavailable_reason=(
                 "" if available else ECHO_PRIVATE_INSUFFICIENT_REASON
             ),
+            shared_words=shared_words if available else (),
+            side_preference_words=side_words if available else (),
         )
 
     return EchoLanguageProfile(
@@ -320,6 +354,90 @@ def _private_voice_heading(
     if member.is_viewer:
         return "你常说"
     return "TA 常说"
+
+
+def _echo_expression_habits(
+    profile: object | None,
+) -> EchoExpressionHabits | None:
+    """Map a core UserProfile to display-ready expression habits."""
+    if profile is None or getattr(profile, "consecutive_runs", None) is None:
+        return None
+    runs = profile.consecutive_runs
+    return EchoExpressionHabits(
+        median_length=profile.median_length,
+        average_length=profile.average_length,
+        max_length=profile.max_length,
+        run_count=runs.run_count,
+        average_run_length=runs.average_run_length,
+        median_run_length=runs.median_run_length,
+        single_message_run_count=runs.single_message_run_count,
+        multi_message_run_count=runs.multi_message_run_count,
+    )
+
+
+def _private_shared_word_layers(
+    report: object | None,
+    *,
+    viewer_key: str | None,
+    member_keys: set[str],
+) -> tuple[tuple[EchoSharedWord, ...], tuple[EchoSharedWord, ...]]:
+    """Split core private shared words into 同频 and 谁更常这样说 lists."""
+    if report is None or viewer_key is None:
+        return (), ()
+
+    shared_items = [
+        item
+        for item in report.shared_words
+        if item.speaker_a in member_keys and item.speaker_b in member_keys
+    ]
+    shared_words = tuple(
+        _to_echo_shared_word(item, viewer_key, emphasis="shared")
+        for item in shared_items[:ECHO_PRIVATE_SHARED_TOP_LIMIT]
+    )
+
+    side_items = [
+        item
+        for item in shared_items
+        if item.preferred_speaker_key is not None
+        and item.occurrence_support >= ECHO_PRIVATE_SIDE_MIN_OCCURRENCE
+    ]
+    side_items.sort(
+        key=lambda item: (
+            -abs(item.rate_a - item.rate_b),
+            -item.common_strength,
+            item.word,
+        )
+    )
+    side_words = tuple(
+        _to_echo_shared_word(item, viewer_key)
+        for item in side_items[:ECHO_PRIVATE_SIDE_TOP_LIMIT]
+    )
+    return shared_words, side_words
+
+
+def _to_echo_shared_word(
+    item: object,
+    viewer_key: str,
+    *,
+    emphasis: str | None = None,
+) -> EchoSharedWord:
+    if viewer_key == item.speaker_a:
+        self_count, peer_count = item.count_a, item.count_b
+    else:
+        self_count, peer_count = item.count_b, item.count_a
+    if emphasis is None:
+        if item.preferred_speaker_key == viewer_key:
+            emphasis = "self"
+        elif item.preferred_speaker_key is not None:
+            emphasis = "peer"
+        else:
+            emphasis = "shared"
+    return EchoSharedWord(
+        word=item.word,
+        self_count=self_count,
+        peer_count=peer_count,
+        emphasis=emphasis,
+    )
 
 
 def _build_echo_sessions(
@@ -357,8 +475,11 @@ def _build_echo_sessions(
                 end_timestamp=session.end_timestamp,
                 duration_seconds=session.duration_seconds,
                 message_count=session.message_count,
+                participant_count=session.participant_count,
                 initiator=session.initiator,
                 initiator_sender_key=session.initiator_sender_key,
+                self_message_count=session.self_message_count,
+                peer_message_count=session.peer_message_count,
             )
             for session in report.sessions
         ),
@@ -375,6 +496,18 @@ def _build_echo_sessions(
         private_unknown_share=(
             private.unknown_initiated_share if private else None
         ),
+        private_self_peak_start_hour=report.private_self_peak_start_hour,
+        private_peer_peak_start_hour=report.private_peer_peak_start_hour,
+        private_reply_median_self_to_peer_seconds=(
+            report.private_reply_timing.self_to_peer_median_seconds
+            if report.private_reply_timing is not None
+            else None
+        ),
+        private_reply_median_peer_to_self_seconds=(
+            report.private_reply_timing.peer_to_self_median_seconds
+            if report.private_reply_timing is not None
+            else None
+        ),
         group_self_count=(group.self_initiated_count if group else None),
         group_self_share=(group.self_initiated_share if group else None),
         group_top_initiator_name=(
@@ -390,7 +523,74 @@ def _build_echo_sessions(
             if group is not None and top_member is not None
             else None
         ),
+        viewer_identity_reliable=(
+            group is not None and group.self_initiated_count is not None
+        ),
+        start_hour_distribution=tuple(
+            ChartPoint(
+                label=f"{h.hour:02d}:00-{h.hour:02d}:59",
+                value=float(h.count),
+            )
+            for h in report.start_hour_counts
+        ),
+        peak_start_hour=report.peak_start_hour,
+        session_character=_session_character_label(report.session_character),
+        loudest_most_messages=(
+            _session_to_echo(report.sessions[report.loudest_most_messages])
+            if report.loudest_most_messages is not None
+            else None
+        ),
+        loudest_longest_duration=(
+            _session_to_echo(report.sessions[report.loudest_longest_duration])
+            if report.loudest_longest_duration is not None
+            else None
+        ),
+        loudest_most_participants=(
+            _session_to_echo(report.sessions[report.loudest_most_participants])
+            if report.loudest_most_participants is not None
+            else None
+        ),
+        loudest_densest=(
+            _session_to_echo(report.sessions[report.loudest_densest])
+            if report.loudest_densest is not None
+            else None
+        ),
+        loudest_most_back_and_forth=(
+            _session_to_echo(report.sessions[report.loudest_most_back_and_forth])
+            if report.loudest_most_back_and_forth is not None
+            else None
+        ),
     )
+
+
+
+def _session_to_echo(session: ConversationSession) -> EchoConversationSession:
+    """Convert a core ConversationSession to an EchoConversationSession."""
+    return EchoConversationSession(
+        start_timestamp=session.start_timestamp,
+        end_timestamp=session.end_timestamp,
+        duration_seconds=session.duration_seconds,
+        message_count=session.message_count,
+        participant_count=session.participant_count,
+        initiator=session.initiator,
+        initiator_sender_key=session.initiator_sender_key,
+        self_message_count=session.self_message_count,
+        peer_message_count=session.peer_message_count,
+    )
+
+
+_SESSION_CHARACTER_LABELS: dict[str, str] = {
+    "quick_and_brief": "来得快，也散得快",
+    "long_running": "一旦聊开，就会聊很久",
+    "mixed": "有长有短，节奏不一",
+}
+
+
+def _session_character_label(key: str | None) -> str | None:
+    """Map a core session character key to its Chinese label."""
+    if key is None:
+        return None
+    return _SESSION_CHARACTER_LABELS.get(key, key)
 
 
 def build_echo_report_view(

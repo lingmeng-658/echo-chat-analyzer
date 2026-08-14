@@ -33,7 +33,11 @@ function allText(node) {
 
 const nodes = {
   "voices-intro": new FakeNode("voices-intro"),
-  "member-list": new FakeNode("member-list")
+  "member-list": new FakeNode("member-list"),
+  "private-shared-words": new FakeNode("private-shared-words"),
+  "private-side-words": new FakeNode("private-side-words"),
+  "private-shared-words-list": new FakeNode("private-shared-words-list"),
+  "private-side-words-list": new FakeNode("private-side-words-list")
 };
 global.window = { ECHO_DATA: JSON.parse(process.env.ECHO_PAYLOAD) };
 global.document = {
@@ -48,7 +52,11 @@ eval(fs.readFileSync(process.env.ECHO_APP_PATH, "utf8"));
 process.stdout.write(JSON.stringify({
   intro: allText(nodes["voices-intro"]),
   body: allText(nodes["member-list"]),
-  childCount: nodes["member-list"].children.length
+  childCount: nodes["member-list"].children.length,
+  sharedHidden: nodes["private-shared-words"].hidden,
+  shared: allText(nodes["private-shared-words"]) + " " + allText(nodes["private-shared-words-list"]),
+  sideHidden: nodes["private-side-words"].hidden,
+  side: allText(nodes["private-side-words"]) + " " + allText(nodes["private-side-words-list"])
 }));
 """
 
@@ -155,6 +163,74 @@ def test_frontend_renders_presentation_unavailable_reason_without_recalculation(
     assert rendered["body"] == "样本不足，暂时无法比较成员特色词。"
 
 
+def test_private_frontend_renders_shared_words_and_side_preference() -> None:
+    rendered = _render(
+        {
+            "mode": "private_common",
+            "available": True,
+            "unavailable_reason": "",
+            "members": [
+                {
+                    "speaker_key": "a",
+                    "display_name": "虚构甲",
+                    "heading": "你常说",
+                    "primary_words": ["散步"],
+                    "context_words": [],
+                    "expression_habits": {
+                        "median_length": 5.0,
+                        "average_length": 5.0,
+                        "max_length": 7,
+                        "run_count": 2,
+                        "average_run_length": 2.0,
+                        "median_run_length": 2.0,
+                        "single_message_run_count": 1,
+                        "multi_message_run_count": 1,
+                    },
+                },
+                {
+                    "speaker_key": "b",
+                    "display_name": "虚构乙",
+                    "heading": "TA 常说",
+                    "primary_words": ["到家"],
+                    "context_words": [],
+                    "expression_habits": {
+                        "median_length": 3.0,
+                        "average_length": 3.0,
+                        "max_length": 5,
+                        "run_count": 1,
+                        "average_run_length": 3.0,
+                        "median_run_length": 3.0,
+                        "single_message_run_count": 0,
+                        "multi_message_run_count": 1,
+                    },
+                },
+            ],
+            "shared_words": [
+                {"word": "回声", "self_count": 6, "peer_count": 4, "emphasis": "shared"}
+            ],
+            "side_preference_words": [
+                {"word": "方案", "self_count": 5, "peer_count": 1, "emphasis": "self"}
+            ],
+        }
+    )
+
+    assert rendered["sharedHidden"] is False
+    assert "回声" in rendered["shared"]
+    assert rendered["sideHidden"] is False
+    assert "方案" in rendered["side"]
+    assert "你更常说" in rendered["side"]
+    assert "中位 5 字" in rendered["body"]
+    assert "连发 2 条" in rendered["body"]
+    assert "common_strength" not in rendered["shared"]
+    assert "rate_a" not in rendered["shared"]
+
+    html_source = (PROJECT_ROOT / "frontend" / "echo_report" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    assert "同频" in html_source
+    assert "谁更常这样说" in html_source
+
+
 def test_frontend_contains_no_log_odds_eligibility_or_identity_implementation() -> None:
     source = APP_PATH.read_text(encoding="utf-8")
 
@@ -165,5 +241,9 @@ def test_frontend_contains_no_log_odds_eligibility_or_identity_implementation() 
         "tokenized_messages",
         "Math.log",
         "is_viewer",
+        "common_strength",
+        "preferred_speaker_key",
+        "rate_a",
+        "rate_b",
     ):
         assert forbidden not in source
