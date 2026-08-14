@@ -167,6 +167,103 @@ def test_user_profile_report_reuses_pipeline_tokens(tmp_path: Path) -> None:
     assert profiles["Fictional-Bob"].top_words != ()
 
 
+def test_distinctive_report_reuses_pipeline_tokens_and_stable_sender_keys(
+    tmp_path: Path,
+) -> None:
+    service_module = importlib.import_module(
+        "qq_chat_analyzer.application.analysis_service"
+    )
+    message_module = importlib.import_module("qq_chat_analyzer.message")
+    stopwords_path = tmp_path / "private-stopwords.txt"
+    stopwords_path.write_text("", encoding="utf-8")
+    messages = []
+    for member_index, sender_id in enumerate(("stable-a", "stable-b", "stable-c")):
+        for message_index in range(30):
+            messages.append(
+                message_module.ChatMessage(
+                    timestamp=1704099600 + message_index,
+                    sender=f"Alias-{member_index}-{message_index % 2}",
+                    sender_id=sender_id,
+                    message_type="text",
+                    text=(
+                        f"common common common signature{member_index} "
+                        f"signature{member_index} support{member_index} "
+                        f"third{member_index}"
+                    ),
+                    conversation_type="group",
+                )
+            )
+
+    analyzed = service_module._analyze_kept_messages(messages, stopwords_path)
+    reports = service_module._build_reports(
+        messages,
+        analyzed.sender_tokens,
+        conversation_type="group",
+    )
+
+    assert reports.distinctive_words is not None
+    assert reports.distinctive_words.available is True
+    assert {member.speaker_key for member in reports.distinctive_words.members} == {
+        "stable-a",
+        "stable-b",
+        "stable-c",
+    }
+
+
+def test_unknown_conversation_does_not_infer_group_distinctive_words(
+    tmp_path: Path,
+) -> None:
+    service_module = importlib.import_module(
+        "qq_chat_analyzer.application.analysis_service"
+    )
+
+    reports = service_module._build_reports(
+        [],
+        [],
+        conversation_type="unknown",
+    )
+
+    assert reports.distinctive_words is not None
+    assert reports.distinctive_words.available is False
+    assert reports.distinctive_words.availability.value == "not_group"
+
+
+def test_explicit_message_conversation_type_is_used_when_request_is_unknown() -> None:
+    service_module = importlib.import_module(
+        "qq_chat_analyzer.application.analysis_service"
+    )
+    message_module = importlib.import_module("qq_chat_analyzer.message")
+    messages = [
+        message_module.ChatMessage(
+            timestamp=1,
+            sender="Fictional-Alice",
+            message_type="text",
+            text="hello",
+            conversation_type="group",
+        )
+    ]
+
+    assert service_module._resolve_conversation_type(messages, "unknown") == "group"
+
+
+def test_unknown_message_conversation_type_stays_unknown() -> None:
+    service_module = importlib.import_module(
+        "qq_chat_analyzer.application.analysis_service"
+    )
+    message_module = importlib.import_module("qq_chat_analyzer.message")
+    messages = [
+        message_module.ChatMessage(
+            timestamp=1,
+            sender="Fictional-Alice",
+            message_type="text",
+            text="hello",
+            conversation_type="unknown",
+        )
+    ]
+
+    assert service_module._resolve_conversation_type(messages, "unknown") == "unknown"
+
+
 def _text_category_count(report) -> int:
     for item in report.categories:
         if item.category == "文本":
@@ -257,7 +354,7 @@ def test_execute_generates_echo_report_json_artifact(tmp_path: Path) -> None:
     report_path = output_directory / "echo-report.json"
     assert report_path.is_file()
     payload = json.loads(report_path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == "echo-report.v0.1"
+    assert payload["schema_version"] == "echo-report.v0.2"
 
 
 def test_execute_generates_echo_report_html_artifact(tmp_path: Path) -> None:

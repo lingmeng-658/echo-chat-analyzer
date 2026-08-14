@@ -143,6 +143,39 @@ def _full_reports():
     )
 
 
+def _distinctive_group_report(*, available: bool = True):
+    models = _analysis_models()
+    if not available:
+        return models.DistinctiveWordReport(
+            conversation_type="group",
+            availability=models.DistinctiveWordAvailability.INSUFFICIENT_MEMBERS,
+            eligible_member_count=2,
+        )
+    return models.DistinctiveWordReport(
+        conversation_type="group",
+        availability=models.DistinctiveWordAvailability.AVAILABLE,
+        eligible_member_count=1,
+        members=(
+            models.MemberDistinctiveWords(
+                speaker_key="Fictional-Alice",
+                tokenized_message_count=30,
+                token_count=120,
+                eligible_word_candidate_count=3,
+                words=(
+                    models.DistinctiveWord(
+                        word="distinctive-only",
+                        count=9,
+                        member_rate=0.075,
+                        others_rate=0.01,
+                        relative_ratio=7.0,
+                        ranking_score=2.5,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
 def _profile_report(profile):
     models = _analysis_models()
     return models.AnalysisReports(
@@ -181,6 +214,8 @@ def test_presentation_models_are_immutable_dataclasses() -> None:
         presentation.ConversationCard,
         presentation.EchoReportView,
         presentation.EchoMemberCard,
+        presentation.EchoLanguageMember,
+        presentation.EchoLanguageProfile,
     ):
         assert dataclasses.is_dataclass(model_type)
 
@@ -216,6 +251,138 @@ def test_echo_report_builder_never_guesses_viewer_identity() -> None:
     view = presentation.build_echo_report_view(_full_reports())
 
     assert all(not member.is_viewer for member in view.members)
+
+
+def test_group_language_profile_uses_finished_distinctive_words() -> None:
+    presentation = _presentation()
+    models = _analysis_models()
+    reports = dataclasses.replace(
+        _full_reports(),
+        distinctive_words=_distinctive_group_report(),
+    )
+
+    view = presentation.build_echo_report_view(
+        reports,
+        conversation_kind="group",
+    )
+
+    assert view.language_profile is not None
+    assert view.language_profile.mode == "group_distinctive"
+    assert view.language_profile.available is True
+    assert len(view.language_profile.members) == 1
+    language_member = view.language_profile.members[0]
+    assert language_member.speaker_key == "Fictional-Alice"
+    assert language_member.heading == "Fictional-Alice"
+    assert language_member.primary_words == ("distinctive-only",)
+    assert language_member.context_words == ("deck", "talk")
+
+
+def test_group_language_profile_exposes_insufficient_sample() -> None:
+    presentation = _presentation()
+    reports = dataclasses.replace(
+        _full_reports(),
+        distinctive_words=_distinctive_group_report(available=False),
+    )
+
+    view = presentation.build_echo_report_view(
+        reports,
+        conversation_kind="group",
+    )
+
+    assert view.language_profile is not None
+    assert view.language_profile.mode == "group_distinctive"
+    assert view.language_profile.available is False
+    assert "样本不足" in view.language_profile.unavailable_reason
+    assert view.language_profile.members == ()
+
+
+def test_private_language_profile_reuses_each_user_top_words() -> None:
+    presentation = _presentation()
+
+    view = presentation.build_echo_report_view(
+        _full_reports(),
+        conversation_kind="private",
+        viewer_speaker_key="Fictional-Bob",
+    )
+
+    assert view.language_profile is not None
+    assert view.language_profile.mode == "private_common"
+    assert view.language_profile.available is True
+    voices = {member.speaker_key: member for member in view.language_profile.members}
+    assert voices["Fictional-Alice"].heading == "TA 常说"
+    assert voices["Fictional-Alice"].primary_words == ("deck", "talk")
+    assert voices["Fictional-Bob"].heading == "你常说"
+    assert voices["Fictional-Bob"].primary_words == ()
+    assert all(member.context_words == () for member in voices.values())
+
+
+def test_private_language_profile_does_not_generate_distinctive_words() -> None:
+    presentation = _presentation()
+    reports = dataclasses.replace(
+        _full_reports(),
+        distinctive_words=_distinctive_group_report(),
+    )
+
+    view = presentation.build_echo_report_view(
+        reports,
+        conversation_kind="private",
+    )
+
+    assert view.language_profile is not None
+    assert view.language_profile.mode == "private_common"
+    assert all(
+        member.context_words == ()
+        for member in view.language_profile.members
+    )
+    assert all(
+        "distinctive-only" not in member.primary_words
+        for member in view.language_profile.members
+    )
+
+
+def test_private_language_profile_does_not_guess_you_or_ta_without_viewer() -> None:
+    presentation = _presentation()
+
+    view = presentation.build_echo_report_view(
+        _full_reports(),
+        conversation_kind="private",
+    )
+
+    assert view.language_profile is not None
+    headings = [member.heading for member in view.language_profile.members]
+    assert headings == ["Fictional-Alice 常说", "Fictional-Bob 常说"]
+    assert "你常说" not in headings
+    assert "TA 常说" not in headings
+
+
+def test_private_language_profile_does_not_guess_when_viewer_key_is_unmatched() -> None:
+    presentation = _presentation()
+
+    view = presentation.build_echo_report_view(
+        _full_reports(),
+        conversation_kind="private",
+        viewer_speaker_key="missing-stable-key",
+    )
+
+    assert view.language_profile is not None
+    assert [member.heading for member in view.language_profile.members] == [
+        "Fictional-Alice 常说",
+        "Fictional-Bob 常说",
+    ]
+
+
+def test_unknown_language_profile_does_not_infer_group_or_private() -> None:
+    presentation = _presentation()
+
+    view = presentation.build_echo_report_view(
+        _full_reports(),
+        conversation_kind="unknown",
+    )
+
+    assert view.language_profile is not None
+    assert view.language_profile.mode == "unavailable"
+    assert view.language_profile.available is False
+    assert view.language_profile.members == ()
 
 
 def test_echo_member_builder_carries_stable_identity_skeleton() -> None:

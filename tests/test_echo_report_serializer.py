@@ -15,6 +15,8 @@ sys.path.insert(0, str(SRC_ROOT))
 
 from qq_chat_analyzer.presentation import (  # noqa: E402
     ChartPoint,
+    EchoLanguageMember,
+    EchoLanguageProfile,
     EchoMemberCard,
     EchoReportView,
     echo_report_to_dict,
@@ -36,6 +38,19 @@ def _echo_view() -> EchoReportView:
         participant_count=2,
         hourly_activity=(ChartPoint(label="09:00-09:59", value=3.0),),
         weekday_activity=(ChartPoint(label="周一", value=3.0),),
+        language_profile=EchoLanguageProfile(
+            mode="group_distinctive",
+            available=True,
+            members=(
+                EchoLanguageMember(
+                    speaker_key="fictional-alice",
+                    display_name="虚构 Alice",
+                    heading="虚构 Alice",
+                    primary_words=("风格词", "回声"),
+                    context_words=("讨论", "项目"),
+                ),
+            ),
+        ),
         members=(
             EchoMemberCard(
                 speaker_key="fictional-alice",
@@ -60,7 +75,7 @@ def test_echo_report_converts_to_stable_frontend_json_object() -> None:
     payload = echo_report_to_dict(_echo_view())
 
     assert payload == {
-        "schema_version": "echo-report.v0.1",
+        "schema_version": "echo-report.v0.2",
         "title": "余音 Echo",
         "conversation": {
             "kind": "group",
@@ -78,6 +93,20 @@ def test_echo_report_converts_to_stable_frontend_json_object() -> None:
             "weekday": [{"label": "周一", "value": 3.0}],
         },
         "conversation_sessions": None,
+        "language_profile": {
+            "mode": "group_distinctive",
+            "available": True,
+            "unavailable_reason": "",
+            "members": [
+                {
+                    "speaker_key": "fictional-alice",
+                    "display_name": "虚构 Alice",
+                    "heading": "虚构 Alice",
+                    "primary_words": ["风格词", "回声"],
+                    "context_words": ["讨论", "项目"],
+                },
+            ],
+        },
         "members": [
             {
                 "speaker_key": "fictional-alice",
@@ -161,6 +190,7 @@ def test_empty_echo_report_serializes_with_stable_empty_collections() -> None:
         "empty_description": "",
     }
     assert payload["activity"] == {"hourly": [], "weekday": []}
+    assert payload["language_profile"] is None
     assert payload["members"] == []
 
 
@@ -175,7 +205,23 @@ def test_export_echo_report_json_creates_parent_directories(
 
     assert result_path.is_file()
     payload = json.loads(result_path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == "echo-report.v0.1"
+    assert payload["schema_version"] == "echo-report.v0.2"
+
+
+def test_language_profile_serializer_hides_log_odds_internal_statistics() -> None:
+    payload = echo_report_to_dict(_echo_view())
+    language = payload["language_profile"]
+
+    assert language is not None
+    serialized = json.dumps(language, ensure_ascii=False)
+    for internal_name in (
+        "ranking_score",
+        "member_rate",
+        "others_rate",
+        "relative_ratio",
+        "eligible_member_count",
+    ):
+        assert internal_name not in serialized
 
 
 def test_echo_report_html_is_self_contained_with_real_data(
@@ -200,6 +246,9 @@ def test_echo_report_html_is_self_contained_with_real_data(
     assert "assets/branding" not in html
     assert 'href="style.css"' not in html
     assert 'src="app.js"' not in html
+    assert "个人语言画像" in html
+    assert 'id="voices-intro"' in html
+    assert '"mode":"group_distinctive"' in html
 
 
 def test_echo_report_html_escapes_injected_user_text(tmp_path: Path) -> None:

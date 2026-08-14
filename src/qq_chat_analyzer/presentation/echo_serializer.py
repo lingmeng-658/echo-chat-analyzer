@@ -15,12 +15,13 @@ from .echo_report_template import (
 from .models import (
     ChartPoint,
     EchoConversationSessions,
+    EchoLanguageProfile,
     EchoMemberCard,
     EchoReportView,
 )
 
 
-ECHO_REPORT_SCHEMA_VERSION = "echo-report.v0.1"
+ECHO_REPORT_SCHEMA_VERSION = "echo-report.v0.2"
 
 
 def echo_report_to_dict(view: EchoReportView) -> dict[str, object]:
@@ -46,7 +47,30 @@ def echo_report_to_dict(view: EchoReportView) -> dict[str, object]:
         "conversation_sessions": _conversation_sessions_to_dict(
             view.conversation_sessions
         ),
+        "language_profile": _language_profile_to_dict(view.language_profile),
         "members": [_member_to_dict(member) for member in view.members],
+    }
+
+
+def _language_profile_to_dict(
+    profile: EchoLanguageProfile | None,
+) -> dict[str, object] | None:
+    if profile is None:
+        return None
+    return {
+        "mode": profile.mode,
+        "available": profile.available,
+        "unavailable_reason": profile.unavailable_reason,
+        "members": [
+            {
+                "speaker_key": member.speaker_key,
+                "display_name": member.display_name,
+                "heading": member.heading,
+                "primary_words": list(member.primary_words),
+                "context_words": list(member.context_words),
+            }
+            for member in profile.members
+        ],
     }
 
 

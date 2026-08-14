@@ -12,6 +12,7 @@ from ..analysis.models import (
     ActivityReport,
     AnalysisReports,
     ConversationReport,
+    DistinctiveWordAvailability,
     MessageLengthReport,
     UserProfile,
     UserProfileReport,
@@ -35,6 +36,8 @@ from .models import (
     ConversationCard,
     DashboardView,
     EchoMemberCard,
+    EchoLanguageMember,
+    EchoLanguageProfile,
     EchoConversationSession,
     EchoConversationSessions,
     EchoReportView,
@@ -51,6 +54,11 @@ DEFAULT_CONVERSATION_CARD_LIMIT = 10
 DEFAULT_TOP_WORD_LIMIT = 20
 DEFAULT_PROFILE_WORD_LIMIT = 5
 ECHO_REPORT_TITLE = "Echo Report"
+ECHO_LANGUAGE_PRIMARY_WORD_LIMIT = 5
+ECHO_LANGUAGE_CONTEXT_WORD_LIMIT = 3
+ECHO_GROUP_INSUFFICIENT_REASON = "样本不足，暂时无法比较成员特色词。"
+ECHO_PRIVATE_INSUFFICIENT_REASON = "需要双方都有可用资料，才能展示两种声音。"
+ECHO_UNKNOWN_CONVERSATION_REASON = "当前会话类型无法确定，暂不展示语言画像。"
 
 
 class DashboardBuilder:
@@ -201,8 +209,117 @@ class EchoReportBuilder:
                 reports.conversation_sessions,
                 members=members,
             ),
+            language_profile=_build_echo_language_profile(
+                reports,
+                members=members,
+                conversation_kind=conversation_kind,
+                viewer_speaker_key=viewer_speaker_key,
+            ),
             empty_description="" if has_data else EMPTY_DESCRIPTION,
         )
+
+
+def _build_echo_language_profile(
+    reports: AnalysisReports,
+    *,
+    members: tuple[EchoMemberCard, ...],
+    conversation_kind: str,
+    viewer_speaker_key: str | None,
+) -> EchoLanguageProfile:
+    member_by_key = {member.speaker_key: member for member in members}
+
+    if conversation_kind == "group":
+        report = reports.distinctive_words
+        if report is None or not report.available:
+            reason = (
+                ECHO_GROUP_INSUFFICIENT_REASON
+                if report is not None
+                and report.availability
+                is DistinctiveWordAvailability.INSUFFICIENT_MEMBERS
+                else "暂无可用的群聊特色词分析。"
+            )
+            return EchoLanguageProfile(
+                mode="group_distinctive",
+                available=False,
+                unavailable_reason=reason,
+            )
+        language_members = []
+        for distinctive_member in report.members:
+            member = member_by_key.get(distinctive_member.speaker_key)
+            if member is None:
+                continue
+            language_members.append(
+                EchoLanguageMember(
+                    speaker_key=member.speaker_key,
+                    display_name=member.display_name,
+                    heading=member.display_name,
+                    primary_words=tuple(
+                        word.word
+                        for word in distinctive_member.words[
+                            :ECHO_LANGUAGE_PRIMARY_WORD_LIMIT
+                        ]
+                    ),
+                    context_words=member.top_words[
+                        :ECHO_LANGUAGE_CONTEXT_WORD_LIMIT
+                    ],
+                )
+            )
+        return EchoLanguageProfile(
+            mode="group_distinctive",
+            available=bool(language_members),
+            members=tuple(language_members),
+            unavailable_reason=(
+                "" if language_members else "暂无可展示的成员特色词。"
+            ),
+        )
+
+    if conversation_kind == "private":
+        known_viewer_key = (
+            viewer_speaker_key
+            if any(member.is_viewer for member in members)
+            else None
+        )
+        language_members = tuple(
+            EchoLanguageMember(
+                speaker_key=member.speaker_key,
+                display_name=member.display_name,
+                heading=_private_voice_heading(
+                    member,
+                    viewer_speaker_key=known_viewer_key,
+                ),
+                primary_words=member.top_words[
+                    :ECHO_LANGUAGE_PRIMARY_WORD_LIMIT
+                ],
+            )
+            for member in members
+        )
+        available = len(language_members) == 2
+        return EchoLanguageProfile(
+            mode="private_common",
+            available=available,
+            members=language_members if available else (),
+            unavailable_reason=(
+                "" if available else ECHO_PRIVATE_INSUFFICIENT_REASON
+            ),
+        )
+
+    return EchoLanguageProfile(
+        mode="unavailable",
+        available=False,
+        unavailable_reason=ECHO_UNKNOWN_CONVERSATION_REASON,
+    )
+
+
+def _private_voice_heading(
+    member: EchoMemberCard,
+    *,
+    viewer_speaker_key: str | None,
+) -> str:
+    if viewer_speaker_key is None:
+        return f"{member.display_name} 常说"
+    if member.is_viewer:
+        return "你常说"
+    return "TA 常说"
 
 
 def _build_echo_sessions(

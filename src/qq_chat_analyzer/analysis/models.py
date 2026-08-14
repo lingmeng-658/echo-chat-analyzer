@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import Enum
 
 from .conversation_sessions import ConversationSessionReport
 
@@ -140,6 +141,51 @@ class UserProfileReport:
     profiles: tuple[UserProfile, ...] = ()
 
 
+class DistinctiveWordAvailability(str, Enum):
+    """Why a distinctive-word report is or is not displayable."""
+
+    AVAILABLE = "available"
+    NOT_GROUP = "not_group"
+    INSUFFICIENT_MEMBERS = "insufficient_members"
+
+
+@dataclass(frozen=True, slots=True)
+class DistinctiveWord:
+    """One member word ranked by smoothed log-odds z-score."""
+
+    word: str
+    count: int
+    member_rate: float
+    others_rate: float
+    relative_ratio: float
+    ranking_score: float
+
+
+@dataclass(frozen=True, slots=True)
+class MemberDistinctiveWords:
+    """Distinctive words for one member who passed sample thresholds."""
+
+    speaker_key: str
+    tokenized_message_count: int
+    token_count: int
+    eligible_word_candidate_count: int
+    words: tuple[DistinctiveWord, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class DistinctiveWordReport:
+    """Source-neutral group distinctive-word analysis result."""
+
+    conversation_type: str
+    availability: DistinctiveWordAvailability
+    eligible_member_count: int = 0
+    members: tuple[MemberDistinctiveWords, ...] = ()
+
+    @property
+    def available(self) -> bool:
+        return self.availability is DistinctiveWordAvailability.AVAILABLE
+
+
 @dataclass(frozen=True, slots=True)
 class ConversationSummary:
     """Volume, span, and participation for one conversation."""
@@ -184,6 +230,7 @@ class AnalysisReports:
     conversations: ConversationReport | None = None
     message_composition: MessageCompositionReport | None = None
     conversation_sessions: ConversationSessionReport | None = None
+    distinctive_words: DistinctiveWordReport | None = None
 
 
 @dataclass(frozen=True, slots=True)

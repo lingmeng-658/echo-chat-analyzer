@@ -12,6 +12,7 @@ from ..analysis.conversation_sessions import analyze_conversation_sessions
 from ..analysis.analyzers import (
     ActivityAnalyzer,
     ConversationAnalyzer,
+    DistinctiveWordAnalyzer,
     MessageCompositionAnalyzer,
     MessageLengthAnalyzer,
     UserProfileAnalyzer,
@@ -136,11 +137,16 @@ class AnalysisApplicationService:
                 diagnostic_counts=diagnostic_counts,
             )
 
+        conversation_type = _resolve_conversation_type(
+            kept_messages,
+            request.conversation_kind,
+        )
         reports = _build_reports(
             kept_messages,
             analyzed.sender_tokens,
             speaker_names=request.speaker_names,
             conversation_names=request.conversation_names,
+            conversation_type=conversation_type,
         )
         speaker_display_names = _speaker_display_names(reports)
         word_sender_counts = count_word_speakers(analyzed.sender_tokens)
@@ -173,6 +179,7 @@ class AnalysisApplicationService:
                 speaker_frequency_rows,
                 reports,
                 viewer_speaker_key=viewer_speaker_key,
+                conversation_kind=conversation_type,
             )
         except (OSError, ValueError):
             raise ArtifactGenerationFailed() from None
@@ -199,6 +206,7 @@ def _build_reports(
     sender_tokens: list[tuple[str, list[str]]],
     speaker_names: Mapping[str, str] | None = None,
     conversation_names: Mapping[str, str] | None = None,
+    conversation_type: str = "unknown",
 ) -> AnalysisReports:
     """Run every extended analyzer over the messages kept for analysis.
 
@@ -220,6 +228,10 @@ def _build_reports(
         ),
         message_composition=MessageCompositionAnalyzer().analyze(messages),
         conversation_sessions=analyze_conversation_sessions(messages),
+        distinctive_words=DistinctiveWordAnalyzer().analyze(
+            sender_tokens,
+            conversation_type=conversation_type,
+        ),
     )
 
 
@@ -232,6 +244,21 @@ def _validate_request(request: AnalysisRequestDTO) -> None:
         raise InvalidAnalysisRequest()
     if not request.input_path.exists():
         raise InputPathNotFound()
+
+
+def _resolve_conversation_type(
+    messages: list[ChatMessage],
+    requested_type: str,
+) -> str:
+    """Use explicit application context, then unanimous message semantics."""
+    if requested_type in {"group", "private"}:
+        return requested_type
+    message_types = {message.conversation_type for message in messages}
+    if message_types == {"group"}:
+        return "group"
+    if message_types == {"private"}:
+        return "private"
+    return "unknown"
 
 
 def _analyze_kept_messages(
@@ -347,6 +374,7 @@ def _export_artifacts(
     reports: AnalysisReports,
     *,
     viewer_speaker_key: str | None,
+    conversation_kind: str,
 ) -> None:
     output_directory = request.output_directory
     export_word_frequency_csv(
@@ -384,7 +412,7 @@ def _export_artifacts(
         build_echo_report_view(
             reports,
             viewer_speaker_key=viewer_speaker_key,
-            conversation_kind=request.conversation_kind,
+            conversation_kind=conversation_kind,
         ),
         str(output_directory / _ARTIFACT_FILENAMES["echo_report_json"]),
     )
@@ -392,7 +420,7 @@ def _export_artifacts(
         build_echo_report_view(
             reports,
             viewer_speaker_key=viewer_speaker_key,
-            conversation_kind=request.conversation_kind,
+            conversation_kind=conversation_kind,
         ),
         str(output_directory / _ARTIFACT_FILENAMES["echo_report_html"]),
     )

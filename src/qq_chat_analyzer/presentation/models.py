@@ -124,6 +124,27 @@ class EchoMemberCard:
 
 
 @dataclass(frozen=True, slots=True)
+class EchoLanguageMember:
+    """One display-ready voice in Echo's language-profile chapter."""
+
+    speaker_key: str
+    display_name: str
+    heading: str
+    primary_words: tuple[str, ...] = ()
+    context_words: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class EchoLanguageProfile:
+    """Prepared group/private product branch for the Echo frontend."""
+
+    mode: str
+    available: bool
+    members: tuple[EchoLanguageMember, ...] = ()
+    unavailable_reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class EchoConversationSession:
     """Display-neutral session detail carried to Echo serialization."""
 
@@ -175,4 +196,5 @@ class EchoReportView:
     weekday_activity: tuple[ChartPoint, ...] = ()
     members: tuple[EchoMemberCard, ...] = ()
     conversation_sessions: EchoConversationSessions | None = None
+    language_profile: EchoLanguageProfile | None = None
     empty_description: str = ""

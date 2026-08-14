@@ -329,90 +329,74 @@ document.documentElement.classList.add("js-ready");
     }
   }
 
+  var languageProfile = data && data.language_profile;
+  var languageMode = languageProfile && languageProfile.mode;
+  setText(
+    "voices-intro",
+    languageMode === "group_distinctive"
+      ? "在这段聊天里，这些词更像 TA。它们只描述当前时间范围与当前群聊。"
+      : languageMode === "private_common"
+        ? "你们反复说起的词，像两种声音在这段聊天里留下的回声。"
+        : "会话类型明确后，才能选择合适的语言画像。"
+  );
+
+  function appendWords(parent, words) {
+    var list = document.createElement("ol");
+    list.className = "voice-words";
+    (words || []).forEach(function (word) {
+      var item = document.createElement("li");
+      item.textContent = word;
+      list.appendChild(item);
+    });
+    parent.appendChild(list);
+  }
+
   var memberList = document.getElementById("member-list");
-  var members = (data && data.members) || [];
   if (memberList) {
     memberList.textContent = "";
-    members.forEach(function (member, index) {
-      var article = document.createElement("article");
-      article.className =
-        "member-entry" + (member.is_viewer ? " is-viewer" : "");
+    memberList.className =
+      "member-list" +
+      (languageMode === "private_common" ? " mode-private" : " mode-group");
+    if (!languageProfile || !languageProfile.available) {
+      var unavailable = document.createElement("p");
+      unavailable.className = "language-unavailable";
+      unavailable.textContent =
+        (languageProfile && languageProfile.unavailable_reason) ||
+        emptyDescription ||
+        "暂无可展示的语言画像。";
+      memberList.appendChild(unavailable);
+    } else {
+      (languageProfile.members || []).forEach(function (member, index) {
+        var article = document.createElement("article");
+        article.className = "voice-entry";
 
-      var header = document.createElement("header");
-      var number = document.createElement("span");
-      number.className = "member-index";
-      number.textContent =
-        index < 9 ? "0" + String(index + 1) : String(index + 1);
-      var nameBlock = document.createElement("div");
-      var name = document.createElement("h3");
-      name.textContent = member.display_name || "成员";
-      var subtitle = document.createElement("p");
-      subtitle.textContent = "本地聊天成员";
-      nameBlock.appendChild(name);
-      nameBlock.appendChild(subtitle);
-      header.appendChild(number);
-      header.appendChild(nameBlock);
-      if (member.is_viewer) {
-        var mark = document.createElement("span");
-        mark.className = "viewer-mark";
-        mark.textContent = "这是你";
-        header.appendChild(mark);
-      }
-      article.appendChild(header);
+        var header = document.createElement("header");
+        var number = document.createElement("span");
+        number.className = "member-index";
+        number.textContent =
+          index < 9 ? "0" + String(index + 1) : String(index + 1);
+        var heading = document.createElement("h3");
+        heading.textContent = member.heading || member.display_name || "成员";
+        header.appendChild(number);
+        header.appendChild(heading);
+        article.appendChild(header);
 
-      var dl = document.createElement("dl");
-      var fields = [
-        ["消息数量", formatCount(member.message_count)],
-        ["占比", formatPercent(member.message_share_percent)],
-        ["平均长度", formatAverage(member.average_length)],
-        ["活跃时间", member.active_period || "—"]
-      ];
-      fields.forEach(function (field) {
-        var div = document.createElement("div");
-        var dt = document.createElement("dt");
-        dt.textContent = field[0];
-        var dd = document.createElement("dd");
-        dd.textContent = field[1];
-        div.appendChild(dt);
-        div.appendChild(dd);
-        dl.appendChild(div);
-      });
-      article.appendChild(dl);
-
-      var rhythm = document.createElement("div");
-      rhythm.className = "member-rhythm";
-      var memberHourly = (member.activity && member.activity.hourly) || [];
-      var activeIndexes = [];
-      memberHourly.forEach(function (point, pointIndex) {
-        if (Number(point.value) > 0) {
-          activeIndexes.push(pointIndex);
+        if (languageMode === "group_distinctive") {
+          var descriptor = document.createElement("p");
+          descriptor.className = "voice-descriptor";
+          descriptor.textContent = "在这段聊天里，这些词更像 TA";
+          article.appendChild(descriptor);
         }
+        appendWords(article, member.primary_words);
+
+        if (languageMode === "group_distinctive" && member.context_words.length) {
+          var context = document.createElement("p");
+          context.className = "voice-context";
+          context.textContent = "常聊：" + member.context_words.join(" · ");
+          article.appendChild(context);
+        }
+        memberList.appendChild(article);
       });
-      if (activeIndexes.length && memberHourly.length === 24) {
-        var startIndex = activeIndexes[0];
-        var endIndex = activeIndexes[activeIndexes.length - 1];
-        var segment = document.createElement("i");
-        segment.style.setProperty(
-          "--start",
-          ((startIndex / 24) * 100).toFixed(1) + "%"
-        );
-        segment.style.setProperty(
-          "--width",
-          (((endIndex - startIndex + 1) / 24) * 100).toFixed(1) + "%"
-        );
-        rhythm.appendChild(segment);
-      }
-      article.appendChild(rhythm);
-
-      memberList.appendChild(article);
-    });
-
-    if (hasData && !members.length) {
-      var note = document.createElement("p");
-      note.className = "chapter-intro";
-      note.textContent =
-        emptyDescription || "没有可展示的成员数据。";
-      memberList.appendChild(note);
     }
   }
 })();

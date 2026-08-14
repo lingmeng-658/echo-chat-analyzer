@@ -66,7 +66,7 @@ __ECHO_CSS__
         </a>
         <a class="toc-row" href="#voices">
           <span class="toc-number">04</span>
-          <span class="toc-copy"><strong>声音：成员画像</strong><small>每位成员留下的表达痕迹</small></span>
+          <span class="toc-copy"><strong>个人语言画像</strong><small>群聊特色词与私聊中的两种声音</small></span>
           <span class="toc-leader" aria-hidden="true"></span>
           <span class="toc-page">06</span>
         </a>
@@ -167,9 +167,9 @@ __ECHO_CSS__
     <section class="page chapter" id="voices" aria-labelledby="voices-title">
       <header class="chapter-header">
         <span class="chapter-number">04</span>
-        <div><p class="folio">VOICES</p><h2 id="voices-title">声音</h2></div>
+        <div><p class="folio">VOICES</p><h2 id="voices-title">语言画像</h2></div>
       </header>
-      <p class="chapter-intro">每个人以不同的频率与时间参与其中，留下各自的表达痕迹。</p>
+      <p class="chapter-intro" id="voices-intro"></p>
 
       <div class="member-list" id="member-list"></div>
       <span class="page-number">06</span>
@@ -303,18 +303,23 @@ h1, h2, h3, p { margin-top: 0; }
 .weekday-tracks i { position: absolute; inset: 0 auto 0 0; width: var(--v); background: var(--accent); }
 
 .member-list { border-top: 1px solid var(--ink); }
-.member-entry { position: relative; padding: 34px 0 38px; border-bottom: 1px solid var(--rule); }
-.member-entry.is-viewer { margin: 0 -22px; padding-right: 22px; padding-left: 22px; background: linear-gradient(90deg, var(--viewer-soft) 0 5px, rgb(226 235 229 / 42%) 5px, transparent 70%); }
-.member-entry header { display: flex; align-items: flex-start; gap: 18px; }
-.member-entry h3 { margin: 0 0 6px; font-size: 25px; font-weight: 500; }
-.member-entry header p { margin: 0; color: var(--faint); font-size: 11px; }
+.member-list.mode-private { display: grid; grid-template-columns: 1fr 1fr; }
+.voice-entry { position: relative; padding: 34px 0 42px; border-bottom: 1px solid var(--rule); }
+.mode-private .voice-entry { min-height: 340px; padding-right: 34px; }
+.mode-private .voice-entry + .voice-entry { padding-right: 0; padding-left: 34px; border-left: 1px solid var(--rule); }
+.voice-entry header { display: flex; align-items: baseline; gap: 18px; }
+.voice-entry h3 { margin: 0; font: 500 25px/1.3 var(--sans); }
 .member-index { color: var(--accent); font: 13px/1.8 var(--serif); }
-.viewer-mark { margin-left: auto; padding: 5px 10px; color: var(--viewer); border: 1px solid #adc0b7; border-radius: 99px; font-size: 11px; }
-.member-entry dl { display: grid; grid-template-columns: repeat(4, 1fr); gap: 28px; margin: 30px 0 26px 40px; }
-.member-entry dd { margin: 10px 0 0; font-size: 20px; }
-.member-rhythm { position: relative; height: 20px; margin-left: 40px; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); background: repeating-linear-gradient(90deg, transparent 0 calc(4.166% - 1px), rgb(210 202 189 / 45%) calc(4.166% - 1px) 4.166%); }
-.member-rhythm i { position: absolute; top: 5px; left: var(--start); width: var(--width); height: 8px; background: var(--accent-soft); }
-.is-viewer .member-rhythm i { background: var(--viewer); }
+.voice-descriptor { margin: 13px 0 0 40px; color: var(--muted); font: 14px/1.8 var(--serif); }
+.voice-words { display: flex; flex-wrap: wrap; gap: 12px 28px; margin: 34px 0 0 40px; padding: 0; list-style: none; }
+.voice-words li { position: relative; color: var(--ink); font: 400 clamp(25px, 4vw, 39px)/1.25 var(--serif); letter-spacing: -.02em; }
+.voice-words li::after { margin-left: 28px; color: var(--accent-soft); content: "／"; font-size: .56em; vertical-align: .18em; }
+.voice-words li:last-child::after { content: ""; }
+.mode-private .voice-words { display: block; margin-top: 42px; }
+.mode-private .voice-words li { margin: 0 0 18px; font-size: clamp(28px, 4.4vw, 44px); }
+.mode-private .voice-words li::after { content: ""; }
+.voice-context { margin: 30px 0 0 40px; color: var(--faint); font: 13px/1.8 var(--serif); }
+.language-unavailable { margin: 0; padding: 52px 0; color: var(--muted); font: 17px/2 var(--serif); border-bottom: 1px solid var(--rule); }
 
 .future { display: flex; flex-direction: column; }
 .future-list { margin-top: 64px; border-top: 1px solid var(--rule); }
@@ -344,8 +349,9 @@ h1, h2, h3, p { margin-top: 0; }
   .session-initiators p, .session-initiators p + p { min-height: auto; padding: 24px 0; border-left: 0; border-bottom: 1px solid var(--rule); }
   .session-fields div, .session-fields div:nth-child(odd), .session-fields div:nth-child(even) { padding: 24px 0; border-right: 0; border-bottom: 1px solid var(--rule); }
   .session-fields .wide { grid-column: auto; }
-  .member-entry dl { grid-template-columns: 1fr 1fr; margin-left: 0; }
-  .member-rhythm { margin-left: 0; }
+  .member-list.mode-private { display: block; }
+  .mode-private .voice-entry, .mode-private .voice-entry + .voice-entry { min-height: auto; padding-right: 0; padding-left: 0; border-left: 0; }
+  .voice-descriptor, .voice-words, .voice-context { margin-left: 0; }
   .future-list > div { grid-template-columns: 34px 1fr; }
   .future-list p { grid-column: 2; }
   .page-number { right: 22px; }
@@ -695,90 +701,74 @@ document.documentElement.classList.add("js-ready");
     }
   }
 
+  var languageProfile = data && data.language_profile;
+  var languageMode = languageProfile && languageProfile.mode;
+  setText(
+    "voices-intro",
+    languageMode === "group_distinctive"
+      ? "在这段聊天里，这些词更像 TA。它们只描述当前时间范围与当前群聊。"
+      : languageMode === "private_common"
+        ? "你们反复说起的词，像两种声音在这段聊天里留下的回声。"
+        : "会话类型明确后，才能选择合适的语言画像。"
+  );
+
+  function appendWords(parent, words) {
+    var list = document.createElement("ol");
+    list.className = "voice-words";
+    (words || []).forEach(function (word) {
+      var item = document.createElement("li");
+      item.textContent = word;
+      list.appendChild(item);
+    });
+    parent.appendChild(list);
+  }
+
   var memberList = document.getElementById("member-list");
-  var members = (data && data.members) || [];
   if (memberList) {
     memberList.textContent = "";
-    members.forEach(function (member, index) {
-      var article = document.createElement("article");
-      article.className =
-        "member-entry" + (member.is_viewer ? " is-viewer" : "");
+    memberList.className =
+      "member-list" +
+      (languageMode === "private_common" ? " mode-private" : " mode-group");
+    if (!languageProfile || !languageProfile.available) {
+      var unavailable = document.createElement("p");
+      unavailable.className = "language-unavailable";
+      unavailable.textContent =
+        (languageProfile && languageProfile.unavailable_reason) ||
+        emptyDescription ||
+        "暂无可展示的语言画像。";
+      memberList.appendChild(unavailable);
+    } else {
+      (languageProfile.members || []).forEach(function (member, index) {
+        var article = document.createElement("article");
+        article.className = "voice-entry";
 
-      var header = document.createElement("header");
-      var number = document.createElement("span");
-      number.className = "member-index";
-      number.textContent =
-        index < 9 ? "0" + String(index + 1) : String(index + 1);
-      var nameBlock = document.createElement("div");
-      var name = document.createElement("h3");
-      name.textContent = member.display_name || "成员";
-      var subtitle = document.createElement("p");
-      subtitle.textContent = "本地聊天成员";
-      nameBlock.appendChild(name);
-      nameBlock.appendChild(subtitle);
-      header.appendChild(number);
-      header.appendChild(nameBlock);
-      if (member.is_viewer) {
-        var mark = document.createElement("span");
-        mark.className = "viewer-mark";
-        mark.textContent = "这是你";
-        header.appendChild(mark);
-      }
-      article.appendChild(header);
+        var header = document.createElement("header");
+        var number = document.createElement("span");
+        number.className = "member-index";
+        number.textContent =
+          index < 9 ? "0" + String(index + 1) : String(index + 1);
+        var heading = document.createElement("h3");
+        heading.textContent = member.heading || member.display_name || "成员";
+        header.appendChild(number);
+        header.appendChild(heading);
+        article.appendChild(header);
 
-      var dl = document.createElement("dl");
-      var fields = [
-        ["消息数量", formatCount(member.message_count)],
-        ["占比", formatPercent(member.message_share_percent)],
-        ["平均长度", formatAverage(member.average_length)],
-        ["活跃时间", member.active_period || "—"]
-      ];
-      fields.forEach(function (field) {
-        var div = document.createElement("div");
-        var dt = document.createElement("dt");
-        dt.textContent = field[0];
-        var dd = document.createElement("dd");
-        dd.textContent = field[1];
-        div.appendChild(dt);
-        div.appendChild(dd);
-        dl.appendChild(div);
-      });
-      article.appendChild(dl);
-
-      var rhythm = document.createElement("div");
-      rhythm.className = "member-rhythm";
-      var memberHourly = (member.activity && member.activity.hourly) || [];
-      var activeIndexes = [];
-      memberHourly.forEach(function (point, pointIndex) {
-        if (Number(point.value) > 0) {
-          activeIndexes.push(pointIndex);
+        if (languageMode === "group_distinctive") {
+          var descriptor = document.createElement("p");
+          descriptor.className = "voice-descriptor";
+          descriptor.textContent = "在这段聊天里，这些词更像 TA";
+          article.appendChild(descriptor);
         }
+        appendWords(article, member.primary_words);
+
+        if (languageMode === "group_distinctive" && member.context_words.length) {
+          var context = document.createElement("p");
+          context.className = "voice-context";
+          context.textContent = "常聊：" + member.context_words.join(" · ");
+          article.appendChild(context);
+        }
+        memberList.appendChild(article);
       });
-      if (activeIndexes.length && memberHourly.length === 24) {
-        var startIndex = activeIndexes[0];
-        var endIndex = activeIndexes[activeIndexes.length - 1];
-        var segment = document.createElement("i");
-        segment.style.setProperty(
-          "--start",
-          ((startIndex / 24) * 100).toFixed(1) + "%"
-        );
-        segment.style.setProperty(
-          "--width",
-          (((endIndex - startIndex + 1) / 24) * 100).toFixed(1) + "%"
-        );
-        rhythm.appendChild(segment);
-      }
-      article.appendChild(rhythm);
-
-      memberList.appendChild(article);
-    });
-
-    if (hasData && !members.length) {
-      var note = document.createElement("p");
-      note.className = "chapter-intro";
-      note.textContent =
-        emptyDescription || "没有可展示的成员数据。";
-      memberList.appendChild(note);
     }
   }
 })();
