@@ -5065,3 +5065,130 @@ def test_workspace_cancel_analysis_returns_to_workspace(
     assert executor.cancelled is True
     assert window.stack.currentIndex() == QQ_WORKSPACE_INDEX
     assert window.qq_workspace.session_panel._analysis_running is False
+
+# ----------------------------------------------------------------
+# GUI-5: WeChat data path auto-detection on workspace entry
+# ----------------------------------------------------------------
+
+def test_wechat_workspace_auto_detects_single_root_when_not_configured(
+    qt_app, sources
+) -> None:
+    """No saved path and one candidate: auto-use it and continue connecting."""
+    module = _facade_module()
+    missing = module.WeChatConnectionStatus(
+        available=False, data_found=False, db_key_available=False,
+        runtime_available=False, message="未找到微信数据位置。", action_hint="",
+    )
+    connected = module.WeChatConnectionStatus(
+        available=True, data_found=True, db_key_available=True,
+        runtime_available=True, message="微信已连接", action_hint="",
+    )
+    facade = StubFacade(
+        sources=sources,
+        connection_status=missing,
+        connection_status_after_connect=connected,
+        sessions=[_session(module.ChatSource.WECHAT, "wx1", "测试会话1", 10)],
+        data_roots=["D:/fictional_wechat"],
+    )
+    executor = _DeferredExecutor()
+    window = _main_window(qt_app, facade, executor=executor)
+    window.navigate_to_wechat()
+    _drain(window)
+
+    assert facade.detect_wechat_data_roots_calls == []
+    executor.operation()
+    executor.succeed(missing)
+
+    # Auto-detection ran and submitted the one-click connect operation.
+    assert facade.detect_wechat_data_roots_calls
+    assert executor.operation is not None
+    executor.operation(lambda _message: None)
+    assert facade.setup_wechat_environment_calls
+    assert facade.acquire_wechat_db_key_calls
+    executor.succeed(connected)
+    _drain(window)
+
+    executor.operation()
+    executor.succeed(facade._sessions)
+    assert window.wechat_workspace.session_panel._sessions_ready is True
+    assert window.wechat_workspace.session_panel._session_list.count() == 1
+
+
+def test_wechat_workspace_auto_detection_keeps_saved_path_flow_when_key_missing(
+    qt_app, sources
+) -> None:
+    """A valid saved path keeps the existing flow; no auto-detection."""
+    module = _facade_module()
+    status = module.WeChatConnectionStatus(
+        available=False, data_found=True, db_key_available=False,
+        runtime_available=True, message="等待微信登录", action_hint="",
+    )
+    facade = StubFacade(
+        sources=sources,
+        connection_status=status,
+        sessions=[_session(module.ChatSource.WECHAT, "wx1", "测试会话1", 10)],
+        data_roots=["D:/fictional_wechat"],
+    )
+    executor = _DeferredExecutor()
+    window = _main_window(qt_app, facade, executor=executor)
+    window.navigate_to_wechat()
+    _drain(window)
+
+    executor.operation()
+    executor.succeed(status)
+
+    assert facade.detect_wechat_data_roots_calls == []
+    assert window.wechat_workspace._connection_task is None
+    assert window.wechat_workspace._wechat_connect_button.isVisibleTo(window) is True
+    assert not hasattr(window.wechat_workspace, "_wechat_setup_dialog")
+
+
+def test_wechat_workspace_auto_detection_opens_choice_for_multiple_roots(
+    qt_app, sources
+) -> None:
+    """Multiple candidates open the existing selection dialog."""
+    module = _facade_module()
+    status = module.WeChatConnectionStatus(
+        available=False, data_found=False, db_key_available=False,
+        runtime_available=False, message="未找到微信数据位置。", action_hint="",
+    )
+    facade = StubFacade(
+        sources=sources,
+        connection_status=status,
+        data_roots=["D:/wechat_one", "D:/wechat_two"],
+    )
+    window = _main_window(qt_app, facade)
+    window.navigate_to_wechat()
+    _drain(window)
+
+    assert facade.detect_wechat_data_roots_calls
+    dialog = window.wechat_workspace._wechat_setup_dialog
+    assert dialog is not None
+    assert dialog._use_data_roots is True
+    assert dialog._data_root_combo.count() == 2
+    assert facade.setup_wechat_environment_calls == []
+
+
+def test_wechat_workspace_auto_detection_opens_manual_setup_when_no_candidates(
+    qt_app, sources
+) -> None:
+    """No candidates open the existing manual setup dialog."""
+    module = _facade_module()
+    status = module.WeChatConnectionStatus(
+        available=False, data_found=False, db_key_available=False,
+        runtime_available=False, message="未找到微信数据位置。", action_hint="",
+    )
+    facade = StubFacade(
+        sources=sources,
+        connection_status=status,
+        data_roots=[],
+    )
+    window = _main_window(qt_app, facade)
+    window.navigate_to_wechat()
+    _drain(window)
+
+    assert facade.detect_wechat_data_roots_calls
+    dialog = window.wechat_workspace._wechat_setup_dialog
+    assert dialog is not None
+    assert dialog._use_data_roots is False
+    assert facade.setup_wechat_environment_calls == []

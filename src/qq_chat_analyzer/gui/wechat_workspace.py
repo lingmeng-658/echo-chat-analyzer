@@ -310,6 +310,15 @@ class WeChatWorkspace(QWidget):
         elif not available:
             self.session_panel.show_disconnected_placeholder()
 
+        if (
+            load_sessions_on_ready
+            and not available
+            and not bool(getattr(status, "data_found", False))
+            and self._connection_task is None
+            and not self._wechat_connect_pending
+        ):
+            self.connect_wechat()
+
     # ---------------------------------------------------------------- guide
 
     def _show_wechat_guide(
