@@ -32,6 +32,9 @@ _RESTART_CONNECTION_LABEL = "重新开始"
 _CONNECTION_CANCELLED = "连接已取消，可以重新开始。"
 _QQ_CONNECT_MIN_DISPLAY_MS = 500
 _QQ_STATUS_POLL_INTERVAL_MS = 2000
+_QQ_WAITING_AUTH_TIMEOUT_MS = 120_000
+_QQ_AUTH_TIMEOUT_TITLE = "QQ登录等待超时"
+_QQ_AUTH_TIMEOUT_HINT = "扫码时间过长，请取消后重新连接。"
 _QQ_STATUS_STYLE_BASE = (
     "padding: 8px 10px; border-radius: 6px; "
     "background: palette(alternate-base);"
@@ -104,6 +107,7 @@ class QQWorkspace(QWidget):
         self._qq_connect_in_flight = False
         self._connection_task: Any = None
         self._last_qq_status_message = ""
+        self._qq_waiting_auth_since: float | None = None
         self._qq_qrcode_path = _default_qq_qrcode_path()
         self._sessions_loaded = False
 
@@ -219,6 +223,11 @@ class QQWorkspace(QWidget):
         state = _snapshot_state(snapshot)
         message = _snapshot_message(snapshot)
         action_hint = _snapshot_hint(snapshot)
+        if state == _QQ_STATE_WAITING_AUTH:
+            if self._qq_waiting_auth_since is None:
+                self._qq_waiting_auth_since = time.monotonic()
+        else:
+            self._qq_waiting_auth_since = None
         self._last_qq_status_message = message
         self._status_label.setStyleSheet(
             _QQ_STATUS_ERROR_STYLE
@@ -264,6 +273,9 @@ class QQWorkspace(QWidget):
 
     def _poll_qq_status(self) -> None:
         """Refresh the QQ snapshot while the user is waiting to log in."""
+        if self._qq_auth_waiting_expired():
+            self._handle_qq_auth_timeout()
+            return
         self._executor(
             lambda: self._facade.get_qq_connection_snapshot(),
             on_success=lambda snapshot: self._show_qq_status(
@@ -279,6 +291,25 @@ class QQWorkspace(QWidget):
 
     def _stop_qq_status_polling(self) -> None:
         self._qq_status_timer.stop()
+
+    def _qq_auth_waiting_expired(self) -> bool:
+        since = self._qq_waiting_auth_since
+        if since is None:
+            return False
+        return (time.monotonic() - since) * 1000 >= _QQ_WAITING_AUTH_TIMEOUT_MS
+
+    def _handle_qq_auth_timeout(self) -> None:
+        """Stop polling and show a reconnectable error after a long wait."""
+        self._stop_qq_status_polling()
+        self._hide_qq_qrcode()
+        self._hide_qq_login_guide()
+        self._status_label.setStyleSheet(_QQ_STATUS_ERROR_STYLE)
+        self._status_label.setText(_DISCONNECTED_PREFIX + _QQ_AUTH_TIMEOUT_TITLE)
+        self._status_label.setToolTip(_QQ_AUTH_TIMEOUT_HINT)
+        self._status_label.setVisible(True)
+        self.session_panel.show_disconnected_placeholder()
+        self._set_restart_action()
+        self.status_changed.emit(_QQ_AUTH_TIMEOUT_TITLE)
 
     def _refresh_qq_qrcode(self) -> None:
         """Show the runtime QR only when the facade says it is fresh."""
@@ -337,6 +368,7 @@ class QQWorkspace(QWidget):
             return
         _LOGGER.info("[qq gui] connect_qq requested")
         started_at = time.monotonic()
+        self._qq_waiting_auth_since = None
         self._qq_connect_in_flight = True
         self._qq_connect_button.setText(_CANCEL_CONNECTION_LABEL)
         self._qq_connect_button.setEnabled(True)
@@ -442,6 +474,7 @@ class QQWorkspace(QWidget):
             shutdown()
         self._connection_task = None
         self._qq_connect_in_flight = False
+        self._qq_waiting_auth_since = None
         self._stop_qq_status_polling()
         self._hide_qq_qrcode()
         self._hide_qq_login_guide()

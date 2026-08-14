@@ -82,7 +82,7 @@ class MainWindow(QMainWindow):
         processing_layout.addWidget(self._cancel_analysis_button)
         processing_layout.addStretch(1)
         self.dashboard_page = DashboardPage()
-        self.local_data_page = LocalDataPage()
+        self.local_data_page = LocalDataPage(facade, executor=executor)
         self.analysis_page = AnalysisPage(facade, executor=executor)  # backward compat
 
         # Header row
@@ -181,11 +181,12 @@ class MainWindow(QMainWindow):
         self._clear_echo_report_entry()
 
     def show_local_data_page(self) -> None:
-        """Navigate to the local data management placeholder."""
+        """Navigate to the local data management page."""
         self.stack.setCurrentIndex(LOCAL_DATA_PAGE_INDEX)
         self._home_button.setVisible(True)
         self._back_button.setVisible(False)
         self._clear_echo_report_entry()
+        self.local_data_page.refresh()
 
     def show_processing_page(self) -> None:
         """Isolate one active analysis from all selection controls."""

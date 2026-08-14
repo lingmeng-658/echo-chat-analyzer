@@ -104,6 +104,10 @@ class StubFacade:
         qq_runtime_status=None,
         qq_environment_config=None,
         message_range=None,
+        history=(),
+        snapshots=(),
+        snapshot_storage_usage=0,
+        snapshot_error=None,
     ):
         self._sources = tuple(sources)
         self._sessions = list(sessions)
@@ -121,6 +125,10 @@ class StubFacade:
         self._qq_runtime_status = qq_runtime_status
         self._qq_environment_config = qq_environment_config
         self._message_range = message_range
+        self._history = list(history)
+        self._snapshots = list(snapshots)
+        self._snapshot_storage_usage = snapshot_storage_usage
+        self._snapshot_error = snapshot_error
         self.list_sessions_calls: list[object] = []
         self.get_connection_status_calls: list[object] = []
         self.get_wechat_setup_status_calls: list[object] = []
@@ -141,6 +149,65 @@ class StubFacade:
         self.get_session_message_range_calls: list[tuple] = []
         self.analyze_session_calls: list[tuple] = []
         self.analyze_file_calls: list[tuple] = []
+        self.list_analysis_history_calls: list[object] = []
+        self.get_analysis_history_calls: list[object] = []
+        self.list_snapshots_calls: list[tuple] = []
+        self.validate_snapshot_calls: list[object] = []
+        self.remove_snapshot_calls: list[object] = []
+        self.get_snapshot_storage_usage_calls: list[object] = []
+
+    def list_analysis_history(self):
+        self.list_analysis_history_calls.append(1)
+        return tuple(self._history)
+
+    def get_analysis_history(self, analysis_id):
+        self.get_analysis_history_calls.append(analysis_id)
+        return next(
+            (
+                record
+                for record in self._history
+                if getattr(record, "analysis_id", None) == analysis_id
+            ),
+            None,
+        )
+
+    def list_snapshots(self, source=None, session_id=None):
+        self.list_snapshots_calls.append((source, session_id))
+        if self._snapshot_error is not None:
+            raise self._snapshot_error
+        return tuple(self._snapshots)
+
+    def validate_snapshot(self, snapshot_id):
+        self.validate_snapshot_calls.append(snapshot_id)
+        if self._snapshot_error is not None:
+            raise self._snapshot_error
+        return next(
+            (
+                snapshot
+                for snapshot in self._snapshots
+                if getattr(snapshot, "id", None) == snapshot_id
+            ),
+            None,
+        )
+
+    def remove_snapshot(self, snapshot_id):
+        self.remove_snapshot_calls.append(snapshot_id)
+        if self._snapshot_error is not None:
+            raise self._snapshot_error
+        return next(
+            (
+                snapshot
+                for snapshot in self._snapshots
+                if getattr(snapshot, "id", None) == snapshot_id
+            ),
+            None,
+        )
+
+    def get_snapshot_storage_usage(self):
+        self.get_snapshot_storage_usage_calls.append(1)
+        if self._snapshot_error is not None:
+            raise self._snapshot_error
+        return self._snapshot_storage_usage
 
     def list_sources(self):
         return self._sources
@@ -5192,3 +5259,162 @@ def test_wechat_workspace_auto_detection_opens_manual_setup_when_no_candidates(
     assert dialog is not None
     assert dialog._use_data_roots is False
     assert facade.setup_wechat_environment_calls == []
+
+# ---------------------------------------------------------------
+# GUI-6: Local Data page
+# ---------------------------------------------------------------
+
+def _gui_history_record(analysis_id, source="wechat", session_name="测试会话"):
+    history_module = importlib.import_module(
+        "qq_chat_analyzer.application.report_history"
+    )
+    return history_module.AnalysisHistoryRecord(
+        analysis_id=analysis_id,
+        created_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        source=source,
+        session_name=session_name,
+        message_count=42,
+        analysis_scope="all",
+    )
+
+
+def _gui_snapshot(snapshot_id, size=2048, source=None):
+    snapshot_module = importlib.import_module(
+        "qq_chat_analyzer.application.chat_data_snapshot"
+    )
+    return snapshot_module.ChatDataSnapshot(
+        id=snapshot_id,
+        source=source or snapshot_module.ChatDataSource.QQ,
+        session_id="room-1",
+        session_name="虚构群",
+        session_type="group",
+        acquired_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        data_size_bytes=size,
+        storage_format="qce_json",
+        storage_path=f"data/snapshots/qq/{snapshot_id}/export.json",
+    )
+
+
+def test_local_data_page_renders_history_and_snapshots(
+    qt_app,
+    sources,
+) -> None:
+    from qq_chat_analyzer.gui.main_window import LOCAL_DATA_PAGE_INDEX
+
+    facade = StubFacade(
+        sources=sources,
+        history=[_gui_history_record("h1")],
+        snapshots=[_gui_snapshot("snap-1")],
+        snapshot_storage_usage=2048,
+    )
+    window = _main_window(qt_app, facade)
+    window.show_local_data_page()
+    _drain(window)
+
+    assert window.stack.currentIndex() == LOCAL_DATA_PAGE_INDEX
+    assert window.local_data_page._history_table.rowCount() == 1
+    assert window.local_data_page._snapshot_table.rowCount() == 1
+    assert "2" in window.local_data_page._usage_label.text()
+    assert facade.list_analysis_history_calls
+    assert facade.list_snapshots_calls
+    assert facade.get_snapshot_storage_usage_calls
+
+
+def test_local_data_page_empty_state(qt_app, sources) -> None:
+    window = _main_window(qt_app, StubFacade(sources=sources))
+    window.show_local_data_page()
+    _drain(window)
+
+    assert window.local_data_page._history_table.rowCount() == 0
+    assert window.local_data_page._snapshot_table.rowCount() == 0
+    assert window.local_data_page._history_empty_label.isVisibleTo(window)
+    assert window.local_data_page._snapshot_empty_label.isVisibleTo(window)
+
+
+def test_local_data_page_delete_snapshot(qt_app, sources) -> None:
+    facade = StubFacade(
+        sources=sources,
+        snapshots=[_gui_snapshot("snap-1")],
+    )
+    window = _main_window(qt_app, facade)
+    window.show_local_data_page()
+    _drain(window)
+
+    window.local_data_page._snapshot_table.selectRow(0)
+    window.local_data_page._delete_snapshot_button.click()
+    _drain(window)
+
+    assert facade.remove_snapshot_calls == ["snap-1"]
+
+
+def test_local_data_page_error_shows_public_message(
+    qt_app,
+    sources,
+) -> None:
+    module = _facade_module()
+    facade = StubFacade(
+        sources=sources,
+        snapshot_error=module.FacadeError(
+            code="snapshot_list_failed",
+            public_message="快照列表读取失败。",
+        ),
+    )
+    window = _main_window(qt_app, facade)
+    window.show_local_data_page()
+    _drain(window)
+
+    assert window.local_data_page._status_label.text() == "快照列表读取失败。"
+
+def test_qq_connect_error_snapshot_keeps_workspace_usable(
+    qt_app, sources
+) -> None:
+    """An ERROR snapshot from the auth flow renders restart, never crashes."""
+    from qq_chat_analyzer.gui.main_window import QQ_WORKSPACE_INDEX
+
+    models = importlib.import_module(
+        "qq_chat_analyzer.application.connection.models"
+    )
+    error_snapshot = models.ConnectionSnapshot(
+        state=models.ConnectionState.ERROR,
+        source="qq",
+        message="QQ 连接异常。",
+        action_hint="请重试",
+    )
+    facade = StubFacade(sources=sources)
+    executor = _DeferredExecutor()
+    window = _main_window(qt_app, facade, executor=executor)
+    window.navigate_to_qq()
+    _drain(window)
+
+    executor.operation()
+    executor.succeed(facade.get_qq_connection_snapshot())
+
+    window.qq_workspace._qq_connect_button.click()
+    executor.operation(lambda _message: None)
+    assert facade.start_qq_auth_flow_calls == [1]
+    executor.succeed(error_snapshot)
+    _drain(window)
+
+    assert window.qq_workspace._qq_connect_in_flight is False
+    assert window.qq_workspace._qq_connect_button.text() == "重新开始"
+    assert window.qq_workspace._status_label.text()
+    assert window.stack.currentIndex() == QQ_WORKSPACE_INDEX
+
+
+def test_waiting_auth_timeout_enters_error_state(qt_app, sources) -> None:
+    module = importlib.import_module("qq_chat_analyzer.gui.qq_workspace")
+    facade = _SnapshotFacade(_qq_snapshot("waiting_auth"), sources=sources)
+    workspace = module.QQWorkspace(facade, executor=_inline_executor())
+
+    workspace._show_qq_status(
+        _qq_snapshot("waiting_auth"),
+        load_sessions_on_ready=False,
+    )
+    assert workspace._qq_status_timer.isActive() is True
+
+    workspace._qq_waiting_auth_since = module.time.monotonic() - 121
+    workspace._poll_qq_status()
+
+    assert workspace._qq_status_timer.isActive() is False
+    assert "等待超时" in workspace._status_label.text()
+    assert workspace._qq_connect_button.text() == "重新开始"

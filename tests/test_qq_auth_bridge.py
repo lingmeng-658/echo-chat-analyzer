@@ -34,6 +34,12 @@ def _connection_module():
     )
 
 
+def _config_module():
+    return importlib.import_module(
+        "qq_chat_analyzer.application.qq_environment_config"
+    )
+
+
 def _status(
     *,
     available=False,
@@ -76,13 +82,16 @@ class _StubSetupService:
         error=None,
         runtime_status=None,
         config=None,
+        config_missing=False,
     ):
         self._connect_status = connect_status
         self._error = error
         self._runtime_status = runtime_status
         self._config = config
+        self._config_missing = config_missing
         self.connect_calls = 0
         self.config_calls = 0
+        self.save_calls = 0
         self.start_runtime_calls = 0
 
     def connect(self):
@@ -91,10 +100,20 @@ class _StubSetupService:
             raise self._error
         return self._connect_status
 
+    def save_environment(self, config):
+        self.save_calls += 1
+        if self._error is not None:
+            raise self._error
+        self._config = config
+        self._config_missing = False
+        return self._connect_status
+
     def get_environment_config(self):
         self.config_calls += 1
         if self._error is not None:
             raise self._error
+        if self._config_missing:
+            raise _config_module().QQConfigNotFound()
         return self._config
 
     def get_runtime_status(self):
@@ -1070,3 +1089,137 @@ def test_resolve_qq_install_path_reads_the_saved_launcher_path(
     resolved = bridge.resolve_qq_install_path(None, tmp_path)
 
     assert resolved == qq_path
+
+
+# ------------------------------------------------------------ config recovery
+
+
+def test_launch_window_recovers_missing_qq_config_before_launch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = _bridge_module()
+    config = _runtime_config(tmp_path)
+    setup = _StubSetupService(config_missing=True)
+    launcher = _RecordingLauncher()
+
+    class _FakeLoader:
+        @staticmethod
+        def load_or_default():
+            return config
+
+    monkeypatch.setattr(bridge, "QQEnvironmentConfigLoader", _FakeLoader)
+    monkeypatch.setattr(bridge, "default_auth_window_launcher", lambda _: launcher)
+
+    instance = _bridge(setup_service=setup)
+    instance._launch_window()
+
+    assert setup.config_calls == 2
+    assert setup.save_calls == 1
+    assert setup.connect_calls == 0
+    assert launcher.calls == 1
+    assert instance._auth_launch_started is True
+
+
+def test_launch_window_keeps_existing_config_flow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = _bridge_module()
+    setup = _StubSetupService(config=_runtime_config(tmp_path))
+    launcher = _RecordingLauncher()
+
+    monkeypatch.setattr(bridge, "default_auth_window_launcher", lambda _: launcher)
+
+    instance = _bridge(setup_service=setup)
+    instance._launch_window()
+
+    assert setup.config_calls == 1
+    assert setup.save_calls == 0
+    assert setup.connect_calls == 0
+    assert launcher.calls == 1
+
+
+def test_start_auth_flow_missing_config_recovery_failure_returns_friendly_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _connection_module()
+    bridge = _bridge_module()
+    config_error = _config_module().QQConfigNotFound()
+    setup = _StubSetupService(error=config_error, config_missing=True)
+    service = _StubConnectionService(
+        _status(available=False, qce_running=False, authenticated=False)
+    )
+    launcher = _RecordingLauncher()
+
+    class _FakeLoader:
+        @staticmethod
+        def load_or_default():
+            raise _config_module().QQConfigNotFound()
+
+    monkeypatch.setattr(bridge, "QQEnvironmentConfigLoader", _FakeLoader)
+    monkeypatch.setattr(bridge, "default_auth_window_launcher", lambda _: launcher)
+
+    snapshot = _bridge(
+        setup_service=setup,
+        connection_service=service,
+    ).start_auth_flow()
+
+    assert snapshot.state is module.ConnectionState.ERROR
+    assert snapshot.message == "未找到可用的 QQ 运行组件，请确认 Echo 安装完整后重试。"
+    assert setup.save_calls == 0
+    assert setup.connect_calls == 0
+    assert launcher.calls == 0
+
+
+# ------------------------------------------------------- launcher relaunch
+
+
+class _ExitableProcess:
+    """Launcher process stub whose exit state can change between launches."""
+
+    def __init__(self, pid: int = 4242) -> None:
+        self.pid = pid
+        self._exited = False
+
+    def mark_exited(self) -> None:
+        self._exited = True
+
+    def poll(self):
+        return 1 if self._exited else None
+
+
+class _ProcessReturningLauncher:
+    """Count calls and return the same process stub each time."""
+
+    def __init__(self, process):
+        self.calls = 0
+        self._process = process
+
+    def __call__(self):
+        self.calls += 1
+        return self._process
+
+
+def test_launch_window_relaunches_after_launcher_exits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = _bridge_module()
+    setup = _StubSetupService(config=_runtime_config(tmp_path))
+    process = _ExitableProcess()
+    launcher = _ProcessReturningLauncher(process)
+
+    monkeypatch.setattr(bridge, "default_auth_window_launcher", lambda _: launcher)
+
+    instance = _bridge(setup_service=setup)
+    instance._launch_window()
+
+    assert launcher.calls == 1
+    assert instance._auth_launch_started is True
+
+    process.mark_exited()
+    instance._launch_window()
+
+    assert launcher.calls == 2
+    assert instance._auth_launch_started is True

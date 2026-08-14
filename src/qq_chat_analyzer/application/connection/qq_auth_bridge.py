@@ -33,6 +33,10 @@ from .qq_connection_manager import (
     QQConnectionManager,
     SOURCE_QQ,
 )
+from ..qq_environment_config import (
+    QQConfigNotFound,
+    QQEnvironmentConfigLoader,
+)
 from ..qq_process_registry import (
     QQProcessRegistry,
     default_qq_process_registry,
@@ -48,6 +52,10 @@ MESSAGE_ERROR = (
     "\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002"
 )
 HINT_RETRY = "\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002"
+MESSAGE_RUNTIME_UNAVAILABLE = (
+    "\u672a\u627e\u5230\u53ef\u7528\u7684 QQ \u8fd0\u884c\u7ec4\u4ef6\uff0c"
+    "\u8bf7\u786e\u8ba4 Echo \u5b89\u88c5\u5b8c\u6574\u540e\u91cd\u8bd5\u3002"
+)
 
 MESSAGE_WINDOW_MISSING = (
     "\u672a\u627e\u5230 QQ \u767b\u5f55\u7a97\u53e3\u5165\u53e3\uff0c"
@@ -108,6 +116,7 @@ class QQAuthBridge:
         self._qrcode_path = qrcode_path
         self._runtime_cleaner = runtime_cleaner
         self._auth_launch_started = False
+        self._launched_process: Any | None = None
         self._qr_baseline: tuple[str, int, int] | None = None
         self._qr_session_started_at: float | None = None
         self._qr_ready_logged = False
@@ -234,15 +243,19 @@ class QQAuthBridge:
         return self._manager
 
     def _launch_window(self) -> None:
-        if self._auth_launch_started:
+        if self._auth_launch_started and self._launcher_process_alive():
             _LOGGER.info("[qq auth] launcher already started; reusing")
             return
+        self._auth_launch_started = False
         if self._window_launcher is not None:
             _LOGGER.info("[qq auth] using injected window launcher")
             self._window_launcher()
             self._auth_launch_started = True
             return
-        config = self._setup_service.get_environment_config()
+        try:
+            config = self._setup_service.get_environment_config()
+        except QQConfigNotFound:
+            config = self._recover_environment_config()
         _LOGGER.info(
             "[qq auth] building default window launcher config=%s",
             _config_summary(config),
@@ -250,9 +263,41 @@ class QQAuthBridge:
         launcher = default_auth_window_launcher(config)
         process = launcher()
         self._auth_launch_started = True
+        self._launched_process = process
         pid = getattr(process, "pid", None)
         if pid is not None:
             self._process_registry.record(pid)
+
+    def _launcher_process_alive(self) -> bool:
+        """Return whether the launched window process is still running.
+
+        An injected launcher does not expose a process, so it is treated as
+        alive to preserve the single-launch guard used by tests and stubs.
+        """
+        process = self._launched_process
+        if process is None:
+            return True
+        poll = getattr(process, "poll", None)
+        if not callable(poll):
+            return True
+        return poll() is None
+
+    def _recover_environment_config(self) -> Any:
+        """Persist the effective default config, then return it for launch.
+
+        The launcher still owns the runtime lifecycle, so recovery only
+        writes qq.json; no qce-server is started here.
+        """
+        _LOGGER.info("[qq auth] environment config missing; auto-initializing")
+        try:
+            config = QQEnvironmentConfigLoader().load_or_default()
+            saver = getattr(self._setup_service, "save_environment", None)
+            if not callable(saver):
+                raise QQConfigNotFound()
+            saver(config)
+            return self._setup_service.get_environment_config()
+        except QQConfigNotFound:
+            raise QQConfigNotFound(MESSAGE_RUNTIME_UNAVAILABLE) from None
 
     def _remember_qr_baseline(self) -> None:
         """Record the QR cache state that predates this auth session."""

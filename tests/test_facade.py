@@ -2207,3 +2207,232 @@ def test_facade_is_exported_from_the_application_package() -> None:
     ):
         assert name in application.__all__
         assert hasattr(application, name)
+
+# ---------------------------------------------------------------
+# GUI-6A: snapshot Facade bridge
+# ---------------------------------------------------------------
+
+def _snapshot_module():
+    return importlib.import_module(
+        "qq_chat_analyzer.application.chat_data_snapshot"
+    )
+
+
+def _snapshot(
+    snapshot_id,
+    source=None,
+    size=0,
+    payload_state=None,
+):
+    module = _snapshot_module()
+    return module.ChatDataSnapshot(
+        id=snapshot_id,
+        source=source or module.ChatDataSource.QQ,
+        session_id="room-1",
+        session_name="Fictional Room",
+        session_type="group",
+        acquired_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        data_size_bytes=size,
+        storage_format="qce_json",
+        storage_path=f"data/snapshots/qq/{snapshot_id}/export.json",
+        payload_state=(
+            payload_state or module.SnapshotPayloadState.AVAILABLE
+        ),
+    )
+
+
+def _validation(snapshot, available=True):
+    module = _snapshot_module()
+    status = (
+        module.SnapshotStatus.AVAILABLE
+        if available
+        else module.SnapshotStatus.REMOVED
+    )
+    return module.SnapshotValidation(
+        snapshot.id,
+        status,
+        snapshot=snapshot,
+        payload_path=Path("/fictional/export.json"),
+    )
+
+
+class _StubSnapshotManager:
+    """Mirror the ChatDataSnapshotManager surface used by the facade."""
+
+    def __init__(self, snapshots=(), validations=None, errors=None):
+        self._snapshots = list(snapshots)
+        self._validations = dict(validations or {})
+        self._errors = dict(errors or {})
+        self.list_calls = 0
+        self.list_kwargs = []
+        self.validate_calls = []
+        self.remove_calls = []
+
+    def list_snapshots(self, *, source=None, session_id=None):
+        self.list_calls += 1
+        self.list_kwargs.append((source, session_id))
+        if self._errors.get("list") is not None:
+            raise self._errors["list"]
+        return tuple(self._snapshots)
+
+    def validate_snapshot(self, snapshot_id):
+        self.validate_calls.append(snapshot_id)
+        if self._errors.get("validate") is not None:
+            raise self._errors["validate"]
+        module = _snapshot_module()
+        return self._validations.get(
+            snapshot_id,
+            module.SnapshotValidation(
+                snapshot_id,
+                module.SnapshotStatus.NOT_FOUND,
+            ),
+        )
+
+    def remove_payload(self, snapshot_id):
+        self.remove_calls.append(snapshot_id)
+        if self._errors.get("remove") is not None:
+            raise self._errors["remove"]
+        validation = self.validate_snapshot(snapshot_id)
+        module = _snapshot_module()
+        if (
+            validation.status is module.SnapshotStatus.NOT_FOUND
+            or validation.snapshot is None
+        ):
+            return module.SnapshotValidation(
+                snapshot_id,
+                module.SnapshotStatus.NOT_FOUND,
+            )
+        removed = dataclasses.replace(
+            validation.snapshot,
+            payload_state=module.SnapshotPayloadState.REMOVED,
+        )
+        return module.SnapshotValidation(
+            snapshot_id,
+            module.SnapshotStatus.REMOVED,
+            snapshot=removed,
+        )
+
+
+def test_facade_lists_snapshots_through_the_application_boundary() -> None:
+    module = _facade_module()
+    first = _snapshot("snap-1", size=10)
+    second = _snapshot("snap-2", size=20)
+    manager = _StubSnapshotManager(snapshots=[first, second])
+    facade = _facade(snapshot_manager=manager)
+
+    assert facade.list_snapshots() == (first, second)
+
+    facade.list_snapshots(
+        source=module.ChatSource.QQ,
+        session_id="room-1",
+    )
+    assert manager.list_kwargs[-1] == (module.ChatSource.QQ, "room-1")
+
+
+def test_facade_validates_a_snapshot_and_reports_missing() -> None:
+    module = _facade_module()
+    snapshot = _snapshot("snap-1", size=10)
+    manager = _StubSnapshotManager(
+        snapshots=[snapshot],
+        validations={snapshot.id: _validation(snapshot)},
+    )
+    facade = _facade(snapshot_manager=manager)
+
+    validation = facade.validate_snapshot("snap-1")
+    assert validation.available is True
+    assert validation.snapshot.id == "snap-1"
+
+    missing = facade.validate_snapshot("missing")
+    snapshot_module = _snapshot_module()
+    assert missing.status is snapshot_module.SnapshotStatus.NOT_FOUND
+
+
+def test_facade_removes_a_snapshot_payload_and_returns_its_metadata() -> None:
+    module = _snapshot_module()
+    snapshot = _snapshot("snap-1", size=10)
+    manager = _StubSnapshotManager(
+        snapshots=[snapshot],
+        validations={snapshot.id: _validation(snapshot)},
+    )
+    facade = _facade(snapshot_manager=manager)
+
+    removed = facade.remove_snapshot("snap-1")
+
+    assert manager.remove_calls == ["snap-1"]
+    assert removed is not None
+    assert removed.id == "snap-1"
+    assert removed.payload_state is module.SnapshotPayloadState.REMOVED
+
+
+def test_facade_remove_missing_snapshot_returns_none_without_error() -> None:
+    facade = _facade(snapshot_manager=_StubSnapshotManager())
+
+    assert facade.remove_snapshot("missing") is None
+
+
+def test_facade_reports_available_snapshot_storage_usage() -> None:
+    available = _snapshot("snap-1", size=10)
+    removed = _snapshot("snap-2", size=20)
+    manager = _StubSnapshotManager(
+        snapshots=[available, removed],
+        validations={
+            available.id: _validation(available, available=True),
+            removed.id: _validation(removed, available=False),
+        },
+    )
+    facade = _facade(snapshot_manager=manager)
+
+    assert facade.get_snapshot_storage_usage() == 10
+    assert _facade(
+        snapshot_manager=_StubSnapshotManager()
+    ).get_snapshot_storage_usage() == 0
+
+
+@pytest.mark.parametrize(
+    ("method_name", "error_key", "expected_code"),
+    [
+        ("list_snapshots", "list", "snapshot_list_failed"),
+        ("validate_snapshot", "validate", "snapshot_validation_failed"),
+        ("remove_snapshot", "remove", "snapshot_remove_failed"),
+        ("get_snapshot_storage_usage", "usage", "snapshot_storage_usage_failed"),
+    ],
+)
+def test_facade_snapshot_errors_become_stable_facade_errors(
+    method_name,
+    error_key,
+    expected_code,
+) -> None:
+    module = _facade_module()
+
+    class _FailingUsageManager(_StubSnapshotManager):
+        def list_snapshots(self, *, source=None, session_id=None):
+            self.list_calls += 1
+            if self._errors.get("usage") is not None:
+                raise self._errors["usage"]
+            return super().list_snapshots(source=source, session_id=session_id)
+
+    manager = _FailingUsageManager(errors={error_key: RuntimeError("boom")})
+    facade = _facade(snapshot_manager=manager)
+    method = getattr(facade, method_name)
+
+    with pytest.raises(module.FacadeError) as captured:
+        if method_name == "list_snapshots":
+            method()
+        elif method_name == "get_snapshot_storage_usage":
+            method()
+        else:
+            method("snap-1")
+
+    assert captured.value.code == expected_code
+    assert captured.value.public_message
+
+
+def test_facade_defaults_to_the_real_snapshot_manager() -> None:
+    module = _snapshot_module()
+
+    facade = _facade()
+
+    assert isinstance(
+        facade._snapshot_manager,
+        module.ChatDataSnapshotManager,
+    )

@@ -48,6 +48,7 @@ from .qq_environment_config import QQEnvironmentConfig
 from .qq_export_import_service import QQExportImportRequest
 from .qq_setup_service import QQSetupStatus
 from .report_history import InputIdentitySummary
+from .chat_data_snapshot import ChatDataSnapshotManager
 from .wechat_connection_service import WeChatConnectionStatus
 from .wechat_environment_config import WeChatEnvironmentConfig
 from .wechat_export_import_service import WeChatExportImportRequest
@@ -268,6 +269,7 @@ class ChatAnalyzerFacade:
         analysis_service: Any = None,
         presentation_builder: Any = None,
         report_history_manager: Any = None,
+        snapshot_manager: Any = None,
         stopwords_directory: Path | None = None,
     ) -> None:
         self._services: dict[ChatSource, Any] = {
@@ -286,6 +288,7 @@ class ChatAnalyzerFacade:
         self._analysis_service = analysis_service
         self._presentation_builder = presentation_builder
         self._report_history_manager = report_history_manager
+        self._snapshot_manager = snapshot_manager or ChatDataSnapshotManager()
         self._stopwords_directory = stopwords_directory or resources_dir()
         self._retained_output_directory: _RetainedReportDirectory | None = None
 
@@ -573,6 +576,77 @@ class ChatAnalyzerFacade:
         except Exception:
             _LOGGER.exception("Analysis history record could not be read.")
             return None
+
+    # ------------------------------------------------------------- snapshots
+
+    def list_snapshots(
+        self,
+        source: ChatSource | None = None,
+        session_id: str | None = None,
+    ) -> tuple[Any, ...]:
+        """Return snapshot metadata through the application boundary."""
+        try:
+            return tuple(
+                self._snapshot_manager.list_snapshots(
+                    source=source,
+                    session_id=session_id,
+                )
+            )
+        except Exception as exc:
+            raise FacadeError(
+                code="snapshot_list_failed",
+                public_message="\u5feb\u7167\u5217\u8868\u8bfb\u53d6\u5931\u8d25\u3002",
+            ) from exc
+
+    def validate_snapshot(self, snapshot_id: str) -> Any:
+        """Validate one snapshot manifest and payload."""
+        try:
+            return self._snapshot_manager.validate_snapshot(snapshot_id)
+        except Exception as exc:
+            raise FacadeError(
+                code="snapshot_validation_failed",
+                public_message="\u5feb\u7167\u6821\u9a8c\u5931\u8d25\u3002",
+            ) from exc
+
+    def remove_snapshot(self, snapshot_id: str) -> Any | None:
+        """Remove one snapshot payload and return its metadata.
+
+        Returns ``None`` when no snapshot with that id exists, so a caller
+        can distinguish success from a clear missing result.
+        """
+        try:
+            validation = self._snapshot_manager.remove_payload(snapshot_id)
+        except Exception as exc:
+            raise FacadeError(
+                code="snapshot_remove_failed",
+                public_message="\u5feb\u7167\u5220\u9664\u5931\u8d25\u3002",
+            ) from exc
+        return getattr(validation, "snapshot", None)
+
+    def get_snapshot_storage_usage(self) -> int:
+        """Return total bytes of currently available snapshot payloads."""
+        try:
+            total = 0
+            for snapshot in self._snapshot_manager.list_snapshots():
+                validation = self._snapshot_manager.validate_snapshot(
+                    getattr(snapshot, "id", "")
+                )
+                if getattr(validation, "available", False):
+                    total += int(
+                        getattr(
+                            getattr(validation, "snapshot", None),
+                            "data_size_bytes",
+                            0,
+                        )
+                    )
+            return total
+        except Exception as exc:
+            raise FacadeError(
+                code="snapshot_storage_usage_failed",
+                public_message=(
+                    "\u5feb\u7167\u5b58\u50a8\u5360\u7528\u7edf\u8ba1\u5931\u8d25\u3002"
+                ),
+            ) from exc
 
     # -------------------------------------------------------------- analysis
 
