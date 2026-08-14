@@ -93,6 +93,7 @@ class StubFacade:
         outcome=None,
         error=None,
         connection_status=None,
+        connection_status_after_connect=None,
         connection_error=None,
         connect_qq_error=None,
         setup_status=None,
@@ -109,6 +110,7 @@ class StubFacade:
         self._outcome = outcome
         self._error = error
         self._connection_status = connection_status
+        self._connection_status_after_connect = connection_status_after_connect
         self._connection_error = connection_error
         self._connect_qq_error = connect_qq_error
         self._setup_status = setup_status
@@ -135,6 +137,7 @@ class StubFacade:
         self.start_qq_auth_flow_calls: list[object] = []
         self.get_qq_connection_snapshot_calls: list[object] = []
         self.shutdown_qq_runtime_calls: list[object] = []
+        self.shutdown_calls: list[object] = []
         self.get_session_message_range_calls: list[tuple] = []
         self.analyze_session_calls: list[tuple] = []
         self.analyze_file_calls: list[tuple] = []
@@ -209,6 +212,8 @@ class StubFacade:
         self.connect_qq_calls.append(1)
         if self._connect_qq_error is not None:
             raise self._connect_qq_error
+        if self._connection_status_after_connect is not None:
+            self._connection_status = self._connection_status_after_connect
         return self._qq_snapshot()
 
     def start_qq_auth_flow(self, progress=None):
@@ -217,6 +222,8 @@ class StubFacade:
             progress("正在加载 NapCat...")
         if self._connect_qq_error is not None:
             raise self._connect_qq_error
+        if self._connection_status_after_connect is not None:
+            self._connection_status = self._connection_status_after_connect
         return self._qq_snapshot()
 
     def is_qq_qrcode_ready(self):
@@ -230,6 +237,9 @@ class StubFacade:
 
     def shutdown_qq_runtime(self):
         self.shutdown_qq_runtime_calls.append(1)
+
+    def shutdown(self):
+        self.shutdown_calls.append(1)
 
     def _qq_snapshot(self):
         """Map the stubbed QQ status onto the connection lifecycle model."""
@@ -278,6 +288,8 @@ class StubFacade:
 
     def acquire_wechat_db_key(self, progress=None):
         self.acquire_wechat_db_key_calls.append(progress)
+        if self._connection_status_after_connect is not None:
+            self._connection_status = self._connection_status_after_connect
         return "fictional-key-64"
 
     def setup_wechat_environment(self, config):
@@ -450,6 +462,12 @@ def _main_window(qt_app, facade, executor=None):
     return module.MainWindow(facade, executor=executor or _inline_executor())
 
 
+def _main_window_no_executor(qt_app, facade):
+    """Create MainWindow without executor, as in real GUI app.py."""
+    module = importlib.import_module("qq_chat_analyzer.gui.main_window")
+    return module.MainWindow(facade, executor=None)
+
+
 def _inline_executor():
     """Run facade calls on the calling thread.
 
@@ -544,7 +562,7 @@ def _settle_workers(timeout_ms: int = 5000) -> None:
 def test_main_window_builds_both_pages(qt_app, sources) -> None:
     window = _main_window(qt_app, StubFacade(sources=sources))
 
-    assert window.stack.count() == 3
+    assert window.stack.count() == 7
     assert window.windowTitle() != ""
     assert window.stack.currentIndex() == 0
 
@@ -640,6 +658,93 @@ def test_main_window_close_does_not_wait_for_slow_process_cleanup(
 
     assert elapsed < 0.1
     assert cleanup_finished.wait(timeout=1.0)
+
+def test_main_window_close_calls_facade_shutdown(qt_app, sources) -> None:
+    """closeEvent calls facade.shutdown() in addition to QQ shutdown."""
+    facade = StubFacade(sources=sources)
+    window = _main_window(qt_app, facade)
+
+    window.close()
+
+    deadline = time.monotonic() + 1.0
+    while not facade.shutdown_calls and time.monotonic() < deadline:
+        time.sleep(0.005)
+
+    assert facade.shutdown_calls == [1]
+
+
+def test_main_window_close_still_calls_qq_shutdown(qt_app, sources) -> None:
+    """Original QQ runtime shutdown is preserved alongside facade.shutdown()."""
+    facade = StubFacade(sources=sources)
+    window = _main_window(qt_app, facade)
+
+    window.close()
+
+    deadline = time.monotonic() + 1.0
+    while not facade.shutdown_qq_runtime_calls and time.monotonic() < deadline:
+        time.sleep(0.005)
+
+    assert facade.shutdown_qq_runtime_calls == [1]
+    assert facade.shutdown_calls == [1]
+
+
+def test_main_window_close_survives_facade_shutdown_exception(qt_app, sources) -> None:
+    """An exception in facade.shutdown() must not prevent window close."""
+    class _ShutdownRaisesFacade(StubFacade):
+        def shutdown(self):
+            self.shutdown_calls.append(1)
+            raise RuntimeError("simulated shutdown failure")
+
+    facade = _ShutdownRaisesFacade(sources=sources)
+    window = _main_window(qt_app, facade)
+
+    # close() should not raise
+    window.close()
+
+    deadline = time.monotonic() + 1.0
+    while not facade.shutdown_calls and time.monotonic() < deadline:
+        time.sleep(0.005)
+
+    assert facade.shutdown_calls == [1]
+
+
+def test_main_window_has_minimum_size(qt_app, sources) -> None:
+    """MainWindow has a reasonable minimum size set."""
+    facade = StubFacade(sources=sources)
+    window = _main_window(qt_app, facade)
+
+    minimum = window.minimumSize()
+    assert minimum.width() > 0
+    assert minimum.height() > 0
+    assert minimum.width() >= 800
+    assert minimum.height() >= 600
+
+
+def test_main_window_size_stable_across_page_switches(qt_app, sources) -> None:
+    """Page switching must not change the MainWindow actual size."""
+    facade = StubFacade(sources=sources)
+    window = _main_window(qt_app, facade)
+    window.show()
+    window.resize(960, 720)
+
+    initial = window.size()
+
+    window.show_processing_page()
+    _drain(window)
+    after_processing = window.size()
+    assert after_processing == initial
+
+    window.show_analysis_page()
+    _drain(window)
+    after_analysis = window.size()
+    assert after_analysis == initial
+
+    # Simulate a successful outcome to reach DashboardPage
+    window.show_outcome(_StubOutcome(_dashboard_view()))
+    _drain(window)
+    after_dashboard = window.size()
+    assert after_dashboard == initial
+
 
 
 def _connection_status(
@@ -2748,7 +2853,7 @@ def test_successful_analysis_switches_to_the_dashboard(
     window.analysis_page.start_analysis()
     _drain(window.analysis_page)
 
-    assert window.stack.currentIndex() == 2
+    assert window.stack.currentIndex() == 4
     assert window.dashboard_page._user_table.rowCount() == 1
 
 
@@ -2757,7 +2862,7 @@ def test_show_outcome_accepts_a_bare_view(qt_app, sources) -> None:
 
     window.show_outcome(_dashboard_view())
 
-    assert window.stack.currentIndex() == 2
+    assert window.stack.currentIndex() == 4
 
 
 def test_successful_outcome_exposes_echo_report_entry(
@@ -2886,7 +2991,7 @@ def test_show_outcome_reports_history_save_status_after_rendering(
         _StubOutcome(_dashboard_view(), history_saved=history_saved)
     )
 
-    assert window.stack.currentIndex() == 2
+    assert window.stack.currentIndex() == 4
     assert window.dashboard_page._user_table.rowCount() == 1
     assert window.analysis_page._status_label.text() == expected_status
 
@@ -2943,7 +3048,7 @@ def test_analysis_enters_processing_page_and_rejects_second_start(
     window.analysis_page.start_analysis()
     window.analysis_page.start_analysis()
 
-    assert window.stack.currentIndex() == 1
+    assert window.stack.currentIndex() == 3
     assert window.processing_status_label.text()
     assert window.analysis_page.isEnabled() is False
     assert executor.submission_count == 0
@@ -3046,7 +3151,7 @@ def test_cancel_analysis_returns_to_selection_and_releases_all_locks(
     window._cancel_analysis_button.click()
 
     assert executor.cancelled is True
-    assert window.stack.currentIndex() == 0
+    assert window.stack.currentIndex() == 6
     assert page._analysis_running is False
     assert page.isEnabled() is True
     assert page._session_list.isEnabled() is True
@@ -3083,7 +3188,7 @@ def test_failed_analysis_returns_to_selection_and_releases_lock(
     assert facade.analyze_session_calls[0][0] == module.ChatSource.WECHAT
     executor.fail("fictional_failure", "\u865a\u6784\u5206\u6790\u5931\u8d25")
 
-    assert window.stack.currentIndex() == 0
+    assert window.stack.currentIndex() == 6
     assert window.analysis_page._analysis_running is False
     assert window.analysis_page._analyze_button.isEnabled() is True
     assert "\u865a\u6784\u5206\u6790\u5931\u8d25" in (
@@ -4285,3 +4390,600 @@ def test_ready_session_search_remains_available_when_no_name_matches(
 
     assert page._session_search.isEnabled() is True
     assert "没有匹配的会话" in page._session_list.item(0).text()
+
+# ---------------------------------------------------------------- GUI-2: Home + Navigation
+
+def test_main_window_starts_at_home_page(qt_app, sources) -> None:
+    """MainWindow starts with HomePage visible."""
+    from qq_chat_analyzer.gui.main_window import HOME_PAGE_INDEX
+    facade = StubFacade(sources=sources)
+    window = _main_window(qt_app, facade)
+    assert window.stack.currentIndex() == HOME_PAGE_INDEX
+    # home_page is the current (top) page in the stack
+
+
+def test_home_page_has_three_entry_buttons(qt_app, sources) -> None:
+    """HomePage has QQ, WeChat, and local data buttons."""
+    facade = StubFacade(sources=sources)
+    window = _main_window(qt_app, facade)
+    page = window.home_page
+    from PySide6.QtWidgets import QPushButton
+    buttons = page.findChildren(QPushButton)
+    labels = {b.text() for b in buttons}
+    assert "QQ" in labels
+    assert "\u5fae\u4fe1" in labels
+    assert "\u672c\u5730\u6570\u636e" in labels
+
+
+def test_click_qq_navigates_to_analysis_page_with_qq_source(qt_app, sources) -> None:
+    """Clicking QQ on HomePage navigates to AnalysisPage with QQ preselected."""
+    from qq_chat_analyzer.gui.main_window import ANALYSIS_PAGE_INDEX
+    facade = StubFacade(sources=sources)
+    window = _main_window(qt_app, facade)
+    window.navigate_to_qq()
+    _drain(window)
+    from qq_chat_analyzer.gui.main_window import QQ_WORKSPACE_INDEX
+    assert window.stack.currentIndex() == QQ_WORKSPACE_INDEX
+    from qq_chat_analyzer.gui.main_window import QQ_WORKSPACE_INDEX
+    assert window.stack.currentIndex() == QQ_WORKSPACE_INDEX
+def test_click_wechat_navigates_to_analysis_page_with_wechat_source(qt_app, sources) -> None:
+    """Clicking WeChat on HomePage navigates to AnalysisPage with WeChat preselected."""
+    from qq_chat_analyzer.gui.main_window import ANALYSIS_PAGE_INDEX
+    facade = StubFacade(sources=sources)
+    window = _main_window(qt_app, facade)
+    window.navigate_to_wechat()
+    _drain(window)
+    from qq_chat_analyzer.gui.main_window import WECHAT_WORKSPACE_INDEX
+    assert window.stack.currentIndex() == WECHAT_WORKSPACE_INDEX
+    from qq_chat_analyzer.gui.main_window import WECHAT_WORKSPACE_INDEX
+    assert window.stack.currentIndex() == WECHAT_WORKSPACE_INDEX
+    """Clicking local data on HomePage navigates to LocalDataPage."""
+    from qq_chat_analyzer.gui.main_window import LOCAL_DATA_PAGE_INDEX
+    facade = StubFacade(sources=sources)
+    window = _main_window(qt_app, facade)
+    window.show_local_data_page()
+    _drain(window)
+    assert window.stack.currentIndex() == LOCAL_DATA_PAGE_INDEX
+    # local_data_page is the current (top) page in the stack
+
+
+def test_local_data_page_has_back_to_home_button(qt_app, sources) -> None:
+    """LocalDataPage has a button that returns to HomePage."""
+    from qq_chat_analyzer.gui.main_window import HOME_PAGE_INDEX
+    facade = StubFacade(sources=sources)
+    window = _main_window(qt_app, facade)
+    window.show_local_data_page()
+    _drain(window)
+    window.local_data_page._back_button.click()
+    _drain(window)
+    assert window.stack.currentIndex() == HOME_PAGE_INDEX
+
+
+def test_analysis_page_can_return_to_home_from_home_button(qt_app, sources) -> None:
+    """The home button in the header returns to HomePage from AnalysisPage."""
+    from qq_chat_analyzer.gui.main_window import HOME_PAGE_INDEX
+    facade = StubFacade(sources=sources)
+    window = _main_window(qt_app, facade)
+    window.show_analysis_page()
+    _drain(window)
+    window.show()
+    _drain(window)
+    assert window._home_button.isVisible() is True
+    window._home_button.click()
+    _drain(window)
+    assert window.stack.currentIndex() == HOME_PAGE_INDEX
+
+
+
+def test_home_button_hidden_on_home_page(qt_app, sources) -> None:
+    """Home button is hidden when on HomePage."""
+    facade = StubFacade(sources=sources)
+    window = _main_window(qt_app, facade)
+    assert window._home_button.isVisible() is False
+
+
+def test_page_switch_does_not_change_window_size_with_home_page(qt_app, sources) -> None:
+    """Switching pages does not resize the window (incl. HomePage)."""
+    facade = StubFacade(sources=sources)
+    window = _main_window(qt_app, facade)
+    window.show()
+    window.resize(960, 720)
+    initial = window.size()
+    window.show_analysis_page()
+    _drain(window)
+    assert window.size() == initial
+    window.show_local_data_page()
+    _drain(window)
+    assert window.size() == initial
+    window.show_home_page()
+    _drain(window)
+    assert window.size() == initial
+
+
+def test_processing_page_still_works_after_navigation_change(qt_app, sources) -> None:
+    """Start analysis still switches to ProcessingPage."""
+    from qq_chat_analyzer.gui.main_window import PROCESSING_PAGE_INDEX
+    module = _facade_module()
+    facade = StubFacade(
+        sources=sources,
+        sessions=[_session(module.ChatSource.QQ, "10001", "虚构群")],
+        qq_setup_status=_qq_setup_status(configured=True, runtime_available=True),
+        qq_runtime_status=_qq_runtime_status(state="running"),
+    )
+    executor = _DeferredExecutor()
+    window = _main_window(qt_app, facade, executor=executor)
+    page = window.analysis_page
+    page._selected_source = module.ChatSource.QQ
+    page._populate_sessions(facade._sessions)
+    page._session_list.setCurrentRow(0)
+    page.start_analysis()
+    _drain(page)
+    assert window.stack.currentIndex() == PROCESSING_PAGE_INDEX
+
+
+def test_dashboard_page_still_works_after_navigation_change(qt_app, sources) -> None:
+    """A successful outcome still switches to DashboardPage."""
+    from qq_chat_analyzer.gui.main_window import DASHBOARD_PAGE_INDEX
+    module = _facade_module()
+    view = _dashboard_view()
+    facade = StubFacade(
+        sources=sources,
+        sessions=[_session(module.ChatSource.QQ, "10001", "虚构群")],
+        outcome=_StubOutcome(view),
+        qq_setup_status=_qq_setup_status(configured=True, runtime_available=True),
+        qq_runtime_status=_qq_runtime_status(state="running"),
+    )
+    window = _main_window(qt_app, facade)
+    window.analysis_page.select_source(module.ChatSource.QQ)
+    _drain(window.analysis_page)
+    window.analysis_page._session_list.setCurrentRow(0)
+    window.analysis_page.start_analysis()
+    _drain(window.analysis_page)
+    assert window.stack.currentIndex() == DASHBOARD_PAGE_INDEX
+
+# ----------------------------------------------------------------
+
+# ----------------------------------------------------------------
+# GUI-3 stabilization: restore GUI-2 workspace behavior equivalence
+# ----------------------------------------------------------------
+
+def test_qq_workspace_uses_snapshot_facade_api(qt_app, sources) -> None:
+    """QQ status flows through facade.get_qq_connection_snapshot()."""
+    from qq_chat_analyzer.gui.main_window import QQ_WORKSPACE_INDEX
+    module = _facade_module()
+    status = module.QQConnectionStatus(
+        available=False, qce_running=False, authenticated=False,
+        version="", message="QQ 尚未连接。", action_hint="",
+    )
+    facade = StubFacade(sources=sources, connection_status=status)
+    window = _main_window(qt_app, facade)
+    window.navigate_to_qq()
+    _drain(window)
+
+    assert window.stack.currentIndex() == QQ_WORKSPACE_INDEX
+    assert facade.get_qq_connection_snapshot_calls
+    assert facade.get_connection_status_calls == []
+    assert "QQ" in window.qq_workspace._status_label.text()
+    assert window.qq_workspace._qq_connect_button.isVisibleTo(window) is True
+    assert window.qq_workspace.session_panel._sessions_ready is False
+
+
+def test_wechat_workspace_uses_connection_status_facade_api(
+    qt_app, sources
+) -> None:
+    """WeChat status flows through facade.get_connection_status(WECHAT)."""
+    from qq_chat_analyzer.gui.main_window import WECHAT_WORKSPACE_INDEX
+    module = _facade_module()
+    status = module.WeChatConnectionStatus(
+        available=False, data_found=False, db_key_available=False,
+        runtime_available=False, message="微信尚未连接。", action_hint="",
+    )
+    facade = StubFacade(sources=sources, connection_status=status)
+    window = _main_window(qt_app, facade)
+    window.navigate_to_wechat()
+    _drain(window)
+
+    assert window.stack.currentIndex() == WECHAT_WORKSPACE_INDEX
+    assert facade.get_connection_status_calls == [module.ChatSource.WECHAT]
+    assert "微信" in window.wechat_workspace._status_label.text()
+    assert window.wechat_workspace._wechat_connect_button.isVisibleTo(window) is True
+    assert window.wechat_workspace.session_panel._sessions_ready is False
+
+
+def test_qq_workspace_shows_connect_button_when_disconnected(
+    qt_app, sources
+) -> None:
+    """QQ disconnected status shows the connect action and no sessions."""
+    from qq_chat_analyzer.gui.main_window import QQ_WORKSPACE_INDEX
+    module = _facade_module()
+    status = module.QQConnectionStatus(
+        available=False, qce_running=False, authenticated=False,
+        version="", message="QQ 服务未运行。", action_hint="",
+    )
+    facade = StubFacade(
+        sources=sources,
+        connection_status=status,
+        sessions=[_session(module.ChatSource.QQ, "10001", "虚构群")],
+    )
+    window = _main_window(qt_app, facade)
+    window.navigate_to_qq()
+    _drain(window)
+
+    assert window.stack.currentIndex() == QQ_WORKSPACE_INDEX
+    assert window.qq_workspace._qq_connect_button.isVisibleTo(window) is True
+    assert window.qq_workspace._qq_connect_button.isEnabled()
+    assert window.qq_workspace.session_panel._sessions_ready is False
+
+
+def test_wechat_workspace_shows_connect_button_when_disconnected(
+    qt_app, sources
+) -> None:
+    """WeChat disconnected status shows the connect action and no sessions."""
+    from qq_chat_analyzer.gui.main_window import WECHAT_WORKSPACE_INDEX
+    module = _facade_module()
+    status = module.WeChatConnectionStatus(
+        available=False, data_found=False, db_key_available=False,
+        runtime_available=False, message="微信环境未配置。", action_hint="",
+    )
+    facade = StubFacade(
+        sources=sources,
+        connection_status=status,
+        sessions=[_session(module.ChatSource.WECHAT, "20001", "测试群")],
+    )
+    window = _main_window(qt_app, facade)
+    window.navigate_to_wechat()
+    _drain(window)
+
+    assert window.stack.currentIndex() == WECHAT_WORKSPACE_INDEX
+    assert window.wechat_workspace._wechat_connect_button.isVisibleTo(window) is True
+    assert window.wechat_workspace._wechat_connect_button.isEnabled()
+    assert window.wechat_workspace.session_panel._sessions_ready is False
+
+
+def test_qq_connection_does_not_crash_without_explicit_executor(
+    qt_app, sources
+) -> None:
+    """QQ connect works when MainWindow was created without an executor."""
+    module = _facade_module()
+    status = module.QQConnectionStatus(
+        available=False, qce_running=False, authenticated=False,
+        version="", message="QQ 尚未连接。", action_hint="",
+    )
+    facade = StubFacade(sources=sources, connection_status=status)
+    window = _main_window_no_executor(qt_app, facade)
+    window.navigate_to_qq()
+    _drain(window)
+
+    window.qq_workspace._qq_connect_button.click()
+    _drain(window)
+
+    assert window.qq_workspace._connection_task is not None
+
+
+def test_wechat_connection_does_not_crash_without_explicit_executor(
+    qt_app, sources
+) -> None:
+    """WeChat connect opens setup when MainWindow has no executor."""
+    module = _facade_module()
+    status = module.WeChatConnectionStatus(
+        available=False, data_found=False, db_key_available=False,
+        runtime_available=False, message="微信尚未连接。", action_hint="",
+    )
+    facade = StubFacade(sources=sources, connection_status=status)
+    window = _main_window_no_executor(qt_app, facade)
+    window.navigate_to_wechat()
+    _drain(window)
+
+    window.wechat_workspace._wechat_connect_button.click()
+    _drain(window)
+
+    assert hasattr(window.wechat_workspace, "_wechat_setup_dialog")
+
+
+def test_session_panel_populates_sessions_without_crash(qt_app, sources) -> None:
+    """The shared panel renders sessions and becomes ready."""
+    from qq_chat_analyzer.gui.session_analysis_panel import SessionAnalysisPanel
+    module = _facade_module()
+    facade = StubFacade(sources=sources)
+    panel = SessionAnalysisPanel()
+    panel.configure(facade, module.ChatSource.WECHAT)
+    sessions = [
+        _session(module.ChatSource.WECHAT, "wx1", "测试会话1", 10),
+        _session(module.ChatSource.WECHAT, "wx2", "测试会话2", 5),
+    ]
+    panel.populate_sessions(sessions)
+
+    assert panel._session_list.count() == 2
+    assert panel._sessions_ready is True
+
+
+def test_session_panel_empty_source_shows_real_empty_state(
+    qt_app, sources
+) -> None:
+    """An empty session list renders a non-interactive empty state."""
+    from qq_chat_analyzer.gui.session_analysis_panel import SessionAnalysisPanel
+    module = _facade_module()
+    panel = SessionAnalysisPanel()
+    panel.configure(StubFacade(sources=sources), module.ChatSource.WECHAT)
+
+    panel.populate_sessions([])
+
+    assert panel._sessions_ready is True
+    assert panel._session_list.count() == 1
+    assert "没有找到" in panel._session_list.item(0).text()
+    assert panel._analyze_button.isEnabled() is False
+
+
+def test_session_panel_disables_sessions_without_messages(
+    qt_app, sources
+) -> None:
+    """Sessions without analyzable messages stay disabled."""
+    from qq_chat_analyzer.gui.session_analysis_panel import SessionAnalysisPanel
+    module = _facade_module()
+    sessions = [
+        module.SessionInfo(
+            source=module.ChatSource.WECHAT,
+            session_id="wx1",
+            display_name="有消息",
+            message_count=5,
+        ),
+        module.SessionInfo(
+            source=module.ChatSource.WECHAT,
+            session_id="wx2",
+            display_name="无消息",
+            message_count=0,
+            message_available=False,
+            unavailable_reason="该会话没有可分析消息",
+        ),
+    ]
+    panel = SessionAnalysisPanel()
+    panel.configure(StubFacade(sources=sources), module.ChatSource.WECHAT)
+    panel.populate_sessions(sessions)
+
+    panel._session_list.setCurrentRow(1)
+    assert panel._analyze_button.isEnabled() is False
+    panel._session_list.setCurrentRow(0)
+    assert panel._analyze_button.isEnabled() is True
+
+
+def test_session_panel_selection_requests_message_range(qt_app, sources) -> None:
+    """Selecting a session fetches its real message range through the facade."""
+    from datetime import datetime
+
+    from qq_chat_analyzer.gui.session_analysis_panel import SessionAnalysisPanel
+    module = _facade_module()
+    session_id = "wx_time_range"
+    start = 1704067200
+    end = 1704153600
+    facade = StubFacade(
+        sources=sources,
+        sessions=[_session(module.ChatSource.WECHAT, session_id, "测试会话", 10)],
+        message_range=(start, end),
+    )
+    panel = SessionAnalysisPanel()
+    panel.configure(facade, module.ChatSource.WECHAT, executor=_inline_executor())
+    panel.populate_sessions(facade._sessions)
+    panel._session_list.setCurrentRow(0)
+    _drain(panel)
+    panel._scope_custom.setChecked(True)
+
+    assert facade.get_session_message_range_calls == [
+        (module.ChatSource.WECHAT, session_id)
+    ]
+    assert panel._start_date.date().toPython() == datetime.fromtimestamp(
+        start
+    ).date()
+    assert panel._end_date.date().toPython() == datetime.fromtimestamp(end).date()
+
+
+def test_qq_workspace_full_chain_connect_sessions_analyze(
+    qt_app, sources
+) -> None:
+    """QQ workspace keeps the GUI-2 connect -> sessions -> analyze chain."""
+    from qq_chat_analyzer.gui.main_window import (
+        DASHBOARD_PAGE_INDEX,
+        PROCESSING_PAGE_INDEX,
+        QQ_WORKSPACE_INDEX,
+    )
+    module = _facade_module()
+    qq_module = importlib.import_module("qq_chat_analyzer.gui.qq_workspace")
+    qq_module._QQ_CONNECT_MIN_DISPLAY_MS = 0
+    disconnected = module.QQConnectionStatus(
+        available=False, qce_running=False, authenticated=False,
+        version="", message="QQ 尚未连接。", action_hint="",
+    )
+    connected = module.QQConnectionStatus(
+        available=True, qce_running=True, authenticated=True,
+        version="4.1.0", message="已连接", action_hint="",
+    )
+    facade = StubFacade(
+        sources=sources,
+        sessions=[_session(module.ChatSource.QQ, "q1", "QQ群1", 100)],
+        outcome=_StubOutcome(_dashboard_view()),
+        connection_status=disconnected,
+        connection_status_after_connect=connected,
+    )
+    executor = _DeferredExecutor()
+    window = _main_window(qt_app, facade, executor=executor)
+    window.navigate_to_qq()
+    _drain(window)
+
+    # status -> disconnected
+    assert executor.operation is not None
+    executor.operation()
+    executor.succeed(facade.get_qq_connection_snapshot())
+    assert window.qq_workspace._qq_connect_button.isVisibleTo(window) is True
+    assert window.qq_workspace.session_panel._sessions_ready is False
+
+    # connect/auth operation with progress
+    window.qq_workspace._qq_connect_button.click()
+    executor.on_progress("等待QQ登录")
+    assert window.qq_workspace._qq_login_guide_label.isVisibleTo(window) is True
+    executor.operation(lambda _message: None)
+    assert facade.start_qq_auth_flow_calls
+    executor.succeed(facade.get_qq_connection_snapshot())
+    _drain(window)
+
+    # connected -> list_sessions(QQ)
+    executor.operation()
+    executor.succeed(facade._sessions)
+    assert facade.list_sessions_calls == [module.ChatSource.QQ]
+    assert window.qq_workspace.session_panel._sessions_ready is True
+    assert window.qq_workspace.session_panel._session_list.count() == 1
+
+    # select session + custom scope -> analyze_session -> processing -> dashboard
+    window.qq_workspace.session_panel._session_list.setCurrentRow(0)
+    window.qq_workspace.session_panel._scope_custom.setChecked(True)
+    window.qq_workspace.session_panel._start_date.setDate(QDate(2024, 1, 1))
+    window.qq_workspace.session_panel._end_date.setDate(QDate(2024, 12, 31))
+    window.qq_workspace.session_panel.start_analysis()
+    _drain(window.qq_workspace.session_panel)
+    assert window.stack.currentIndex() == PROCESSING_PAGE_INDEX
+
+    executor.operation(lambda _message: None)
+    assert facade.analyze_session_calls
+    source, session_id, config = facade.analyze_session_calls[0]
+    assert source == module.ChatSource.QQ
+    assert session_id == "q1"
+    assert config.scope_mode is module.AnalysisScopeMode.CUSTOM
+    assert config.start_time == "2024-01-01"
+    assert config.end_time == "2024-12-31"
+    executor.succeed(_StubOutcome(_dashboard_view()))
+    assert window.stack.currentIndex() == DASHBOARD_PAGE_INDEX
+
+
+def test_wechat_workspace_full_chain_connect_sessions_analyze(
+    qt_app, sources
+) -> None:
+    """WeChat workspace keeps the GUI-2 connect -> sessions -> analyze chain."""
+    from qq_chat_analyzer.gui.main_window import (
+        DASHBOARD_PAGE_INDEX,
+        PROCESSING_PAGE_INDEX,
+        WECHAT_WORKSPACE_INDEX,
+    )
+    module = _facade_module()
+    disconnected = module.WeChatConnectionStatus(
+        available=False, data_found=True, db_key_available=False,
+        runtime_available=True, message="等待微信登录", action_hint="",
+    )
+    connected = module.WeChatConnectionStatus(
+        available=True, data_found=True, db_key_available=True,
+        runtime_available=True, message="微信已连接", action_hint="",
+    )
+    facade = StubFacade(
+        sources=sources,
+        sessions=[_session(module.ChatSource.WECHAT, "wx1", "测试会话1", 10)],
+        outcome=_StubOutcome(_dashboard_view()),
+        connection_status=disconnected,
+        connection_status_after_connect=connected,
+        data_roots=["D:/fictional_wechat"],
+    )
+    executor = _DeferredExecutor()
+    window = _main_window(qt_app, facade, executor=executor)
+    window.navigate_to_wechat()
+    _drain(window)
+
+    # status -> disconnected
+    executor.operation()
+    executor.succeed(disconnected)
+    assert window.wechat_workspace._wechat_connect_button.isVisibleTo(window) is True
+    assert window.wechat_workspace.session_panel._sessions_ready is False
+
+    # one-click connect: detect root -> save environment + key -> connected
+    window.wechat_workspace._wechat_connect_button.click()
+    assert facade.detect_wechat_data_roots_calls
+    executor.on_progress("等待微信登录")
+    assert "等待微信登录" in window.wechat_workspace._status_label.text()
+    executor.operation(lambda _message: None)
+    assert facade.setup_wechat_environment_calls
+    assert facade.acquire_wechat_db_key_calls
+    executor.succeed(connected)
+    _drain(window)
+
+    # connected -> list_sessions(WECHAT)
+    executor.operation()
+    executor.succeed(facade._sessions)
+    assert facade.list_sessions_calls == [module.ChatSource.WECHAT]
+    assert window.wechat_workspace.session_panel._sessions_ready is True
+    assert window.wechat_workspace.session_panel._session_list.count() == 1
+
+    # select session + analyze -> processing -> dashboard
+    window.wechat_workspace.session_panel._session_list.setCurrentRow(0)
+    window.wechat_workspace.session_panel.start_analysis()
+    _drain(window.wechat_workspace.session_panel)
+    assert window.stack.currentIndex() == PROCESSING_PAGE_INDEX
+
+    executor.operation(lambda _message: None)
+    assert facade.analyze_session_calls
+    source, session_id, config = facade.analyze_session_calls[0]
+    assert source == module.ChatSource.WECHAT
+    assert session_id == "wx1"
+    assert config.scope_mode is module.AnalysisScopeMode.ALL
+    executor.succeed(_StubOutcome(_dashboard_view()))
+    assert window.stack.currentIndex() == DASHBOARD_PAGE_INDEX
+
+
+def test_workspace_analysis_failure_returns_to_workspace(
+    qt_app, sources, monkeypatch
+) -> None:
+    """A failed workspace analysis returns to its workspace, not the legacy page."""
+    from qq_chat_analyzer.gui.main_window import QQ_WORKSPACE_INDEX
+    main_window_module = importlib.import_module(
+        "qq_chat_analyzer.gui.main_window"
+    )
+    monkeypatch.setattr(
+        main_window_module.QMessageBox, "warning", lambda *args: None
+    )
+    module = _facade_module()
+    facade = StubFacade(
+        sources=sources,
+        sessions=[_session(module.ChatSource.QQ, "q1", "QQ群1", 100)],
+    )
+    executor = _DeferredExecutor()
+    window = _main_window(qt_app, facade, executor=executor)
+    window.navigate_to_qq()
+    _drain(window)
+    executor.operation()
+    executor.succeed(facade.get_qq_connection_snapshot())
+    executor.operation()
+    executor.succeed(facade._sessions)
+
+    window.qq_workspace.session_panel._session_list.setCurrentRow(0)
+    window.qq_workspace.session_panel.start_analysis()
+    _drain(window.qq_workspace.session_panel)
+    executor.operation(lambda _message: None)
+    executor.fail("fictional_failure", "虚构分析失败")
+
+    assert window.stack.currentIndex() == QQ_WORKSPACE_INDEX
+    assert "虚构分析失败" in window.analysis_page._status_label.text()
+
+
+def test_workspace_cancel_analysis_returns_to_workspace(
+    qt_app, sources
+) -> None:
+    """Cancelling workspace analysis returns to the same workspace."""
+    from qq_chat_analyzer.gui.main_window import QQ_WORKSPACE_INDEX
+    module = _facade_module()
+    facade = StubFacade(
+        sources=sources,
+        sessions=[_session(module.ChatSource.QQ, "q1", "QQ群1", 100)],
+    )
+    executor = _DeferredExecutor()
+    window = _main_window(qt_app, facade, executor=executor)
+    window.navigate_to_qq()
+    _drain(window)
+    executor.operation()
+    executor.succeed(facade.get_qq_connection_snapshot())
+    executor.operation()
+    executor.succeed(facade._sessions)
+
+    window.qq_workspace.session_panel._session_list.setCurrentRow(0)
+    window.qq_workspace.session_panel.start_analysis()
+    _drain(window.qq_workspace.session_panel)
+    assert executor.cancelled is False
+
+    window._cancel_analysis_button.click()
+
+    assert executor.cancelled is True
+    assert window.stack.currentIndex() == QQ_WORKSPACE_INDEX
+    assert window.qq_workspace.session_panel._analysis_running is False
