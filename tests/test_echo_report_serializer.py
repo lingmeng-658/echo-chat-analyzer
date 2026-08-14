@@ -18,6 +18,8 @@ from qq_chat_analyzer.presentation import (  # noqa: E402
     EchoConversationSession,
     EchoConversationSessions,
     EchoExpressionCulture,
+    EchoExpressionCombination,
+    EchoExpressionCombinationMember,
     EchoExpressionHabits,
     EchoExpressionItem,
     EchoLanguageMember,
@@ -82,7 +84,7 @@ def test_echo_report_converts_to_stable_frontend_json_object() -> None:
     payload = echo_report_to_dict(_echo_view())
 
     assert payload == {
-        "schema_version": "echo-report.v0.3",
+        "schema_version": "echo-report.v0.7",
         "title": "余音 Echo",
         "conversation": {
             "kind": "group",
@@ -221,7 +223,7 @@ def test_export_echo_report_json_creates_parent_directories(
 
     assert result_path.is_file()
     payload = json.loads(result_path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == "echo-report.v0.3"
+    assert payload["schema_version"] == "echo-report.v0.7"
 
 
 def test_language_profile_serializer_hides_log_odds_internal_statistics() -> None:
@@ -250,6 +252,7 @@ def test_echo_report_html_is_self_contained_with_real_data(
     assert result_path == output_path
     html = output_path.read_text(encoding="utf-8")
     assert "window.ECHO_DATA" in html
+    assert "window.ECHO_ASSETS" in html
     assert "虚构讨论组" in html
     assert "虚构 Alice" in html
     assert "data:image/png;base64," in html
@@ -265,6 +268,12 @@ def test_echo_report_html_is_self_contained_with_real_data(
     assert "个人语言画像" in html
     assert 'id="voices-intro"' in html
     assert '"mode":"group_distinctive"' in html
+    assert "带表达的消息" in html
+    assert "只用表达回应" in html
+    assert "常用表达" in html
+    assert "这段交流最常用的表达" in html
+    assert "带表情的消息" not in html
+    assert "不同表情" not in html
 
 
 def test_echo_report_html_escapes_injected_user_text(tmp_path: Path) -> None:
@@ -337,12 +346,26 @@ def test_expression_culture_serializes_display_ready_fields_only() -> None:
                 display_text="😀",
                 count=5,
                 kind="unicode",
+                with_text_message_count=4,
+                text_only_message_count=1,
             ),
             EchoExpressionItem(
                 expression_key="358",
                 display_text="/骰子",
                 count=2,
                 kind="platform_face",
+                with_text_message_count=2,
+                text_only_message_count=0,
+            ),
+            EchoExpressionItem(
+                expression_key="捂脸",
+                display_text="[捂脸]",
+                count=3,
+                kind="platform_face",
+                with_text_message_count=2,
+                text_only_message_count=1,
+                asset_key="wechat:捂脸",
+                nearby_words=("挂科", "今天"),
             ),
         ),
         members=(
@@ -359,6 +382,21 @@ def test_expression_culture_serializes_display_ready_fields_only() -> None:
                         display_text="😀",
                         count=4,
                         kind="unicode",
+                        with_text_message_count=3,
+                        text_only_message_count=1,
+                    ),
+                ),
+            ),
+        ),
+        top_combinations=(
+            EchoExpressionCombination(
+                asset_keys=("wechat:捂脸", "wechat:旺柴"),
+                count=3,
+                common_members=(
+                    EchoExpressionCombinationMember(
+                        display_name="虚构离黎",
+                        count=2,
+                        share_percent=66.7,
                     ),
                 ),
             ),
@@ -378,10 +416,128 @@ def test_expression_culture_serializes_display_ready_fields_only() -> None:
     assert data["expression_only_rate"] == 0.22
     assert data["top_expressions"][0]["display_text"] == "😀"
     assert data["top_expressions"][1]["kind"] == "platform_face"
+    assert data["top_expressions"][0]["with_text_message_count"] == 4
+    assert data["top_expressions"][0]["text_only_message_count"] == 1
+    assert data["top_expressions"][2]["asset_key"] == "wechat:捂脸"
+    assert data["top_expressions"][2]["nearby_words"] == ["挂科", "今天"]
+    assert data["top_combinations"][0] == {
+        "asset_keys": ["wechat:捂脸", "wechat:旺柴"],
+        "count": 3,
+        "common_members": [
+            {
+                "display_name": "虚构离黎",
+                "count": 2,
+                "share_percent": 66.7,
+            }
+        ],
+    }
+    assert data["members"][0]["top_expressions"][0]["with_text_message_count"] == 3
     assert data["members"][0]["display_name"] == "虚构 Alice"
     serialized = json.dumps(data, ensure_ascii=False)
     assert "expression_key" not in serialized
     assert "face_type" not in serialized
+    assert "internal-sticker-md5" not in serialized
+    assert "md5" not in serialized
+    assert "source" not in serialized
+    assert "text_before" not in serialized
+    assert "text_after" not in serialized
+    assert "D:" not in serialized
+    assert "references" not in serialized
+
+
+def test_echo_report_html_inlines_expression_assets_without_local_paths(
+    tmp_path: Path,
+) -> None:
+    culture = EchoExpressionCulture(
+        available=True,
+        expression_message_count=3,
+        expression_only_message_count=1,
+        expression_only_rate=0.33,
+        unique_expression_count=1,
+        top_expressions=(
+            EchoExpressionItem(
+                expression_key="捂脸",
+                display_text="[捂脸]",
+                count=3,
+                kind="platform_face",
+                with_text_message_count=2,
+                text_only_message_count=1,
+                asset_key="wechat:捂脸",
+            ),
+        ),
+    )
+    output_path = tmp_path / "echo-report.html"
+
+    export_echo_report_html(
+        EchoReportView(
+            title="Echo Report",
+            has_data=True,
+            expression_culture=culture,
+        ),
+        output_path,
+    )
+
+    html = output_path.read_text(encoding="utf-8")
+    assert "window.ECHO_ASSETS" in html
+    assert "wechat:捂脸" in html
+    assert "data:image/png;base64," in html
+    assert "D:" not in html
+    assert "references" not in html
+
+
+def test_expression_tokens_serialize_as_display_assets() -> None:
+    view = EchoReportView(
+        title="Echo Report",
+        has_data=True,
+        members=(
+            EchoMemberCard(
+                speaker_key="fictional-alice",
+                display_name="虚构 Alice",
+                is_viewer=False,
+                message_count=1,
+                message_share_percent=100.0,
+                average_length=1.0,
+                max_length=1,
+                active_period="",
+                top_words=("expression:捂脸",),
+            ),
+        ),
+        language_profile=EchoLanguageProfile(
+            mode="private_common",
+            available=True,
+            members=(
+                EchoLanguageMember(
+                    speaker_key="fictional-alice",
+                    display_name="虚构 Alice",
+                    heading="你常说",
+                    primary_words=("expression:捂脸",),
+                ),
+            ),
+            shared_words=(
+                EchoSharedWord(
+                    word="expression:旺柴",
+                    self_count=1,
+                    peer_count=0,
+                    emphasis="self",
+                ),
+            ),
+        ),
+    )
+
+    payload = echo_report_to_dict(view)
+
+    assert payload["members"][0]["top_words"] == [
+        {"asset_key": "wechat:捂脸"}
+    ]
+    assert payload["language_profile"]["members"][0]["primary_words"] == [
+        {"asset_key": "wechat:捂脸"}
+    ]
+    assert payload["language_profile"]["shared_words"][0]["word"] == {
+        "asset_key": "wechat:旺柴"
+    }
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert "expression:捂脸" not in serialized
+    assert "expression:旺柴" not in serialized
 
 
 def test_echo_report_html_inlines_current_brand_assets(tmp_path: Path) -> None:

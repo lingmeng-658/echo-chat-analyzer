@@ -247,14 +247,18 @@
       <p class="chapter-intro" id="expression-intro"></p>
 
       <dl class="expression-fields">
-        <div><dt>带表情的消息</dt><dd id="expression-message-count"></dd><small>含 emoji 或平台表情的消息数</small></div>
-        <div><dt>纯表情消息</dt><dd id="expression-only-count"></dd><small>只留下表情、没有文字的消息</small></div>
-        <div><dt>不同表情</dt><dd id="expression-unique-count"></dd><small>这段交流中出现过的表情种类</small></div>
+        <div><dt>带表达的消息</dt><dd id="expression-message-count"></dd><small>包含表达的消息数</small></div>
+        <div><dt>只用表达回应</dt><dd id="expression-only-count"></dd><small>只用表达、没有文字</small></div>
+        <div><dt>常用表达</dt><dd id="expression-unique-count"></dd><small>当前展示的常用表达数量</small></div>
       </dl>
 
       <div class="expression-top">
-        <h3>这段交流最常用的表情</h3>
+        <h3>这段交流最常用的表达</h3>
         <ul class="expression-list" id="expression-top-list"></ul>
+      </div>
+      <div class="expression-combos" id="expression-combos" hidden>
+        <h3>常一起出现的表达</h3>
+        <ul class="expression-combo-list" id="expression-combo-list"></ul>
       </div>
       <div class="expression-members" id="expression-members"></div>
       <span class="page-number">07</span>

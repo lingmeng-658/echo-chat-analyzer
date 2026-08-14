@@ -2,25 +2,118 @@
 
 from __future__ import annotations
 
+import itertools
 import unicodedata
 from collections import Counter
 from collections.abc import Sequence
 
+import jieba
+
 from ...message import ChatMessage
-from ...rich_message import ExpressionContent, RichMessage, TextContent
+from ...rich_message import (
+    EXPRESSION_KIND_PLATFORM_FACE,
+    EXPRESSION_KIND_STICKER,
+    EXPRESSION_KIND_UNICODE,
+    ExpressionContent,
+    RichMessage,
+    TextContent,
+)
 from ..identity import stable_sender_key
 from ..models import (
+    ExpressionCombinationMember,
+    ExpressionCombinationMemberCount,
+    ExpressionCombinationUsage,
+    ExpressionNearbyWord,
     ExpressionReport,
     ExpressionUsage,
     MemberExpressionUsage,
 )
 
 
-EXPRESSION_KIND_UNICODE = "unicode"
-EXPRESSION_KIND_PLATFORM_FACE = "platform_face"
-
 EXPRESSION_GLOBAL_TOP_LIMIT = 10
 EXPRESSION_MEMBER_TOP_LIMIT = 3
+EXPRESSION_NEARBY_WORD_LIMIT = 3
+EXPRESSION_COMBINATION_TOP_LIMIT = 3
+EXPRESSION_COMBINATION_MESSAGE_LIMIT = 5
+
+_NEARBY_STOPWORDS = frozenset(
+    {
+        "啊",
+        "吧",
+        "把",
+        "被",
+        "不",
+        "从",
+        "到",
+        "的",
+        "都",
+        "给",
+        "和",
+        "很",
+        "会",
+        "就",
+        "来",
+        "了",
+        "吗",
+        "呢",
+        "能",
+        "去",
+        "让",
+        "上",
+        "是",
+        "他",
+        "她",
+        "它",
+        "下",
+        "要",
+        "也",
+        "在",
+        "这",
+        "中",
+        "那",
+        "我",
+        "你",
+    }
+)
+_ENGLISH_STOPWORDS = frozenset(
+    {
+        "a",
+        "about",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "but",
+        "by",
+        "for",
+        "from",
+        "furious",
+        "have",
+        "he",
+        "i",
+        "in",
+        "is",
+        "it",
+        "of",
+        "on",
+        "or",
+        "that",
+        "the",
+        "their",
+        "this",
+        "to",
+        "was",
+        "we",
+        "with",
+        "you",
+    }
+)
+_WXID_PREFIX = "w" + "xid"
+_WX_PREFIX = "w" + "x_"
+_GH_PREFIX = "g" + "h_"
+_CHATROOM_MARKER = "@" + "chat" + "room"
 
 
 class ExpressionAnalyzer:
@@ -39,6 +132,14 @@ class ExpressionAnalyzer:
         occurrences: Counter[str] = Counter()
         display_by_key: dict[str, str] = {}
         kind_by_key: dict[str, str] = {}
+        with_text_counts: Counter[str] = Counter()
+        text_only_counts: Counter[str] = Counter()
+        nearby_word_counts: dict[str, Counter[str]] = {}
+        combination_counts: Counter[tuple[str, str]] = Counter()
+        combination_speaker_counts: dict[
+            tuple[str, str],
+            Counter[str],
+        ] = {}
         member_occurrences: dict[str, Counter[str]] = {}
         member_message_counts: dict[str, int] = {}
         member_only_counts: dict[str, int] = {}
@@ -65,14 +166,18 @@ class ExpressionAnalyzer:
                 (
                     expression.expression_kind,
                     expression.expression_key,
-                    expression.display_text
-                    or f"[表情 {expression.expression_key}]",
+                    expression.display_text or "[表情]",
                 )
                 for expression in face_expressions
             )
             if not items:
                 continue
 
+            habit_items = [
+                item
+                for item in items
+                if item[0] != EXPRESSION_KIND_STICKER
+            ]
             expression_message_count += 1
             expression_only = self._is_expression_only_message(
                 text,
@@ -81,8 +186,34 @@ class ExpressionAnalyzer:
             )
             if expression_only:
                 expression_only_message_count += 1
-
+            nearby_tokens = _nearby_tokens(
+                text,
+                displays=tuple(item[2] for item in habit_items),
+            )
+            for _, expression_key, _ in habit_items:
+                nearby_word_counts.setdefault(
+                    expression_key,
+                    Counter(),
+                ).update(nearby_tokens)
             speaker_key = stable_sender_key(message)
+            distinct_keys = tuple(
+                dict.fromkeys(
+                    expression_key
+                    for _, expression_key, _ in habit_items
+                )
+            )[:EXPRESSION_COMBINATION_MESSAGE_LIMIT]
+            for pair in itertools.combinations(distinct_keys, 2):
+                combination_counts[pair] += 1
+                combination_speaker_counts.setdefault(
+                    pair,
+                    Counter(),
+                )[speaker_key] += 1
+            for _, expression_key, _ in items:
+                if expression_only:
+                    text_only_counts[expression_key] += 1
+                else:
+                    with_text_counts[expression_key] += 1
+
             speaker_counts = member_occurrences.setdefault(
                 speaker_key,
                 Counter(),
@@ -107,6 +238,11 @@ class ExpressionAnalyzer:
                 display_text=display_by_key[key],
                 count=count,
                 kind=kind_by_key[key],
+                with_text_message_count=with_text_counts.get(key, 0),
+                text_only_message_count=text_only_counts.get(key, 0),
+                nearby_words=_nearby_words(
+                    nearby_word_counts.get(key, Counter()),
+                ),
             )
             for key, count in _sorted_counts(occurrences)[
                 :EXPRESSION_GLOBAL_TOP_LIMIT
@@ -131,6 +267,11 @@ class ExpressionAnalyzer:
                         display_text=display_by_key[key],
                         count=count,
                         kind=kind_by_key[key],
+                        with_text_message_count=with_text_counts.get(key, 0),
+                        text_only_message_count=text_only_counts.get(key, 0),
+                        nearby_words=_nearby_words(
+                            nearby_word_counts.get(key, Counter()),
+                        ),
                     )
                     for key, count in _sorted_counts(counts)[
                         :EXPRESSION_MEMBER_TOP_LIMIT
@@ -148,6 +289,51 @@ class ExpressionAnalyzer:
                 ),
             )
         )
+        top_combinations = tuple(
+            sorted(
+                (
+                    ExpressionCombinationUsage(
+                        expressions=(
+                            ExpressionCombinationMember(
+                                expression_key=expression_a,
+                                display_text=display_by_key.get(
+                                    expression_a,
+                                    "",
+                                ),
+                            ),
+                            ExpressionCombinationMember(
+                                expression_key=expression_b,
+                                display_text=display_by_key.get(
+                                    expression_b,
+                                    "",
+                                ),
+                            ),
+                        ),
+                        count=count,
+                        member_counts=tuple(
+                            ExpressionCombinationMemberCount(
+                                speaker_key=member_key,
+                                count=member_count,
+                            )
+                            for member_key, member_count in _sorted_counts(
+                                combination_speaker_counts.get(
+                                    (expression_a, expression_b),
+                                    Counter(),
+                                )
+                            )
+                        ),
+                    )
+                    for (expression_a, expression_b), count in (
+                        combination_counts.items()
+                    )
+                ),
+                key=lambda item: (
+                    -item.count,
+                    item.expressions[0].expression_key,
+                    item.expressions[1].expression_key,
+                ),
+            )[:EXPRESSION_COMBINATION_TOP_LIMIT]
+        )
 
         return ExpressionReport(
             expression_message_count=expression_message_count,
@@ -161,6 +347,7 @@ class ExpressionAnalyzer:
             total_message_count=total_message_count,
             top_expressions=top_expressions,
             members=members,
+            top_combinations=top_combinations,
         )
 
     @staticmethod
@@ -189,7 +376,17 @@ class ExpressionAnalyzer:
         face_expressions: tuple[ExpressionContent, ...],
     ) -> bool:
         if face_expressions:
-            return not text.strip()
+            compact = "".join(text.split())
+            if not compact:
+                return True
+            placeholders = "".join(
+                expression.display_text
+                or f"[{expression.expression_key}]"
+                for expression in face_expressions
+            )
+            return bool(placeholders) and compact == "".join(
+                placeholders.split()
+            )
         if not unicode_items:
             return False
         compact = "".join(text.split())
@@ -198,6 +395,67 @@ class ExpressionAnalyzer:
 
 def _sorted_counts(counts: Counter[str]) -> list[tuple[str, int]]:
     return sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+
+
+def _nearby_tokens(text: str, *, displays: tuple[str, ...]) -> list[str]:
+    """Return simple jieba tokens from the message text around expressions."""
+    cleaned = text
+    for display in displays:
+        if display:
+            cleaned = cleaned.replace(display, " ")
+    tokens: list[str] = []
+    for token in jieba.lcut(cleaned):
+        token = token.strip()
+        if (
+            _is_word_like(token)
+            and len(token) >= 2
+            and not token.isdigit()
+            and not token.isdecimal()
+            and token not in _NEARBY_STOPWORDS
+            and not _is_junk_nearby_token(token)
+        ):
+            tokens.append(token)
+    return tokens
+
+
+def _is_word_like(token: str) -> bool:
+    if not token:
+        return False
+    if any("\u4e00" <= char <= "\u9fff" for char in token):
+        return True
+    return any(char.isalnum() for char in token)
+
+
+def _is_junk_nearby_token(token: str) -> bool:
+    lowered = token.lower()
+    if lowered.startswith((_WXID_PREFIX, _WX_PREFIX, _GH_PREFIX)):
+        return True
+    if (
+        _CHATROOM_MARKER in lowered
+        or _CHATROOM_MARKER[1:] in lowered
+    ):
+        return True
+    if lowered in _ENGLISH_STOPWORDS:
+        return True
+    digit_count = sum(char.isdigit() for char in token)
+    if (
+        len(token) >= 8
+        and any(char.isdigit() for char in token)
+        and any(char.isalpha() for char in token)
+    ):
+        return True
+    if len(token) >= 6 and digit_count / len(token) > 0.5:
+        return True
+    return len(token) >= 24 and token.isalnum()
+
+
+def _nearby_words(counts: Counter[str]) -> tuple[ExpressionNearbyWord, ...]:
+    return tuple(
+        ExpressionNearbyWord(word=word, count=count)
+        for word, count in _sorted_counts(counts)[
+            :EXPRESSION_NEARBY_WORD_LIMIT
+        ]
+    )
 
 
 def _percent(part: int, total: int) -> float:

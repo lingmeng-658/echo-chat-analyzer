@@ -518,6 +518,264 @@ def test_echo_member_resolves_private_remark_and_nickname() -> None:
     assert member.contextual_name == "ZhangSan"
 
 
+def test_expression_culture_filters_one_time_and_caps_top_five() -> None:
+    presentation = _presentation()
+    models = _analysis_models()
+    top_items = [
+        models.ExpressionUsage(
+            expression_key=f"fictional-key-{index}",
+            display_text=f"fictional-{index}",
+            count=2,
+            kind="unicode",
+        )
+        for index in range(10)
+    ]
+    top_items[0] = models.ExpressionUsage(
+        expression_key="捂脸",
+        display_text="[捂脸]",
+        count=3,
+        kind="platform_face",
+        nearby_words=(
+            models.ExpressionNearbyWord(word="挂科", count=2),
+        ),
+    )
+    one_time_items = [
+        models.ExpressionUsage(
+            expression_key="one-time-a",
+            display_text="one-time-a",
+            count=1,
+            kind="unicode",
+        ),
+        models.ExpressionUsage(
+            expression_key="one-time-b",
+            display_text="one-time-b",
+            count=1,
+            kind="unicode",
+        ),
+    ]
+    sticker_item = models.ExpressionUsage(
+        expression_key="sticker-hidden",
+        display_text="[贴图]",
+        count=5,
+        kind="sticker",
+    )
+    report = models.ExpressionReport(
+        expression_message_count=12,
+        expression_only_message_count=2,
+        expression_only_rate=0.2,
+        unique_expression_count=12,
+        top_expressions=tuple([*top_items, *one_time_items, sticker_item]),
+    top_combinations=(
+            models.ExpressionCombinationUsage(
+                expressions=(
+                    models.ExpressionCombinationMember(
+                        expression_key="捂脸",
+                        display_text="[捂脸]",
+                    ),
+                    models.ExpressionCombinationMember(
+                        expression_key="旺柴",
+                        display_text="[旺柴]",
+                    ),
+                ),
+                count=2,
+                member_counts=(
+                    models.ExpressionCombinationMemberCount(
+                        speaker_key="fictional-member",
+                        count=2,
+                    ),
+                ),
+            ),
+            models.ExpressionCombinationUsage(
+                expressions=(
+                    models.ExpressionCombinationMember(
+                        expression_key="unknown-a",
+                        display_text="[未知A]",
+                    ),
+                    models.ExpressionCombinationMember(
+                        expression_key="unknown-b",
+                        display_text="[未知B]",
+                    ),
+                ),
+                count=5,
+                member_counts=(),
+            ),
+        ),
+        members=(
+            models.MemberExpressionUsage(
+                speaker_key="fictional-member",
+                expression_occurrence_count=12,
+                expression_message_count=10,
+                expression_share_percent=100.0,
+                expression_only_message_count=2,
+                top_expressions=(sticker_item,),
+            ),
+        ),
+    )
+
+    view = presentation.build_echo_report_view(
+        models.AnalysisReports(
+            expression=report,
+            user_profiles=models.UserProfileReport(
+                total_message_count=2,
+                speaker_count=1,
+                profiles=(
+                    models.UserProfile(
+                        speaker="Fictional Member",
+                        speaker_key="fictional-member",
+                        display_name="Fictional Member",
+                        message_count=2,
+                        message_share_percent=100.0,
+                        average_length=1.0,
+                        max_length=1,
+                    ),
+                ),
+            ),
+        ),
+        conversation_kind="group",
+    )
+
+    culture = view.expression_culture
+    assert culture is not None
+    assert len(culture.top_expressions) == 5
+    assert all(item.count >= 2 for item in culture.top_expressions)
+    assert all(item.kind != "sticker" for item in culture.top_expressions)
+    assert all(
+        item.expression_key != "sticker-hidden"
+        for item in culture.top_expressions
+    )
+    assert all(
+        item.expression_key not in {"one-time-a", "one-time-b"}
+        for item in culture.top_expressions
+    )
+    assert culture.members[0].top_expressions == ()
+    wechat_item = next(
+        item for item in culture.top_expressions if item.expression_key == "捂脸"
+    )
+    assert wechat_item.display_text == "捂脸"
+    assert wechat_item.asset_key == "wechat:捂脸"
+    assert wechat_item.nearby_words == ("挂科",)
+    assert culture.top_combinations[0].asset_keys == (
+        "wechat:捂脸",
+        "wechat:旺柴",
+    )
+    assert culture.top_combinations[0].count == 2
+    assert culture.top_combinations[0].common_members[0].display_name == (
+        "Fictional Member"
+    )
+    assert culture.top_combinations[0].common_members[0].count == 2
+    assert culture.top_combinations[0].common_members[0].share_percent == 100.0
+    assert all(
+        "unknown-a" not in item.asset_keys
+        for item in culture.top_combinations
+    )
+
+
+def test_expression_combination_common_members_filters_share_and_limits() -> None:
+    presentation = _presentation()
+    models = _analysis_models()
+    speaker_keys = [
+        "member-a",
+        "member-b",
+        "member-c",
+        "member-d",
+        "member-e",
+    ]
+    profiles = tuple(
+        models.UserProfile(
+            speaker=key,
+            speaker_key=key,
+            display_name=key,
+            message_count=1,
+            message_share_percent=20.0,
+            average_length=1.0,
+            max_length=1,
+        )
+        for key in speaker_keys
+    )
+    report = models.ExpressionReport(
+        expression_message_count=5,
+        expression_only_message_count=5,
+        expression_only_rate=1.0,
+        unique_expression_count=2,
+        top_combinations=(
+            models.ExpressionCombinationUsage(
+                expressions=(
+                    models.ExpressionCombinationMember(
+                        expression_key="捂脸",
+                        display_text="[捂脸]",
+                    ),
+                    models.ExpressionCombinationMember(
+                        expression_key="旺柴",
+                        display_text="[旺柴]",
+                    ),
+                ),
+                count=100,
+                member_counts=tuple(
+                    models.ExpressionCombinationMemberCount(
+                        speaker_key=key,
+                        count=20,
+                    )
+                    for key in speaker_keys
+                ),
+            ),
+        ),
+    )
+
+    view = presentation.build_echo_report_view(
+        models.AnalysisReports(
+            expression=report,
+            user_profiles=models.UserProfileReport(
+                total_message_count=5,
+                speaker_count=5,
+                profiles=profiles,
+            ),
+        ),
+        conversation_kind="group",
+    )
+
+    combo = view.expression_culture.top_combinations[0]
+    assert len(combo.common_members) == 4
+    assert all(member.share_percent >= 20.0 for member in combo.common_members)
+    assert combo.common_members[0].display_name == "member-a"
+
+
+def test_expression_without_asset_uses_friendly_fallback() -> None:
+    presentation = _presentation()
+    models = _analysis_models()
+    report = models.ExpressionReport(
+        expression_message_count=1,
+        expression_only_message_count=1,
+        expression_only_rate=1.0,
+        unique_expression_count=1,
+        top_expressions=(
+            models.ExpressionUsage(
+                expression_key="66",
+                display_text="[QQ表情 66]",
+                count=2,
+                kind="platform_face",
+            ),
+        ),
+        members=(
+            models.MemberExpressionUsage(
+                speaker_key="fictional-member",
+                expression_occurrence_count=2,
+                expression_message_count=2,
+                expression_share_percent=100.0,
+                expression_only_message_count=2,
+            ),
+        ),
+    )
+
+    culture = presentation.build_echo_report_view(
+        models.AnalysisReports(expression=report),
+        conversation_kind="group",
+    ).expression_culture
+
+    item = culture.top_expressions[0]
+    assert item.asset_key is None
+    assert item.display_text == "表情"
+
+
 def test_echo_member_never_uses_internal_id_when_name_exists() -> None:
     presentation = _presentation()
     models = _analysis_models()

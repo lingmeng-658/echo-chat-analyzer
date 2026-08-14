@@ -12,9 +12,10 @@ from ..analysis.models import (
     ActivityReport,
     AnalysisReports,
     ConversationReport,
-    DistinctiveWordAvailability,
-    ExpressionReport,
-    ExpressionUsage,
+                          DistinctiveWordAvailability,
+                          ExpressionCombinationUsage,
+                          ExpressionReport,
+                          ExpressionUsage,
     MessageLengthReport,
     UserProfile,
     UserProfileReport,
@@ -30,6 +31,7 @@ from .formatters import (
     format_percent,
     format_weekday,
 )
+from .expression_assets import resolve_wechat_asset_key
 from ..analysis.conversation_sessions import (
     ConversationSession,
 )
@@ -40,8 +42,10 @@ from .models import (
     ChartSeries,
     ConversationCard,
     DashboardView,
-    EchoMemberCard,
-    EchoExpressionCulture,
+                          EchoMemberCard,
+                          EchoExpressionCombination,
+                          EchoExpressionCombinationMember,
+                          EchoExpressionCulture,
     EchoExpressionItem,
     EchoMemberExpression,
     EchoLanguageMember,
@@ -72,6 +76,13 @@ ECHO_UNKNOWN_CONVERSATION_REASON = "当前会话类型无法确定，暂不展�
 ECHO_PRIVATE_SHARED_TOP_LIMIT = 8
 ECHO_PRIVATE_SIDE_TOP_LIMIT = 6
 ECHO_PRIVATE_SIDE_MIN_OCCURRENCE = 2
+ECHO_EXPRESSION_TOP_LIMIT = 5
+ECHO_EXPRESSION_MEMBER_TOP_LIMIT = 3
+ECHO_EXPRESSION_MIN_COUNT = 2
+ECHO_EXPRESSION_COMBINATION_TOP_LIMIT = 3
+ECHO_EXPRESSION_COMBINATION_MIN_COUNT = 2
+ECHO_EXPRESSION_COMBINATION_MEMBER_LIMIT = 4
+ECHO_EXPRESSION_COMBINATION_MEMBER_SHARE_MIN = 20.0
 
 
 class DashboardBuilder:
@@ -596,7 +607,10 @@ def _build_echo_expression_culture(
             expression_only_message_count=member.expression_only_message_count,
             top_expressions=tuple(
                 _to_echo_expression_item(item)
-                for item in member.top_expressions
+                for item in _display_expression_items(
+                    member.top_expressions,
+                    ECHO_EXPRESSION_MEMBER_TOP_LIMIT,
+                )
             ),
         )
         for member in report.members
@@ -609,8 +623,20 @@ def _build_echo_expression_culture(
         unique_expression_count=report.unique_expression_count,
         top_expressions=tuple(
             _to_echo_expression_item(item)
-            for item in report.top_expressions
+            for item in _display_expression_items(
+                report.top_expressions,
+                ECHO_EXPRESSION_TOP_LIMIT,
+            )
         ),
+        top_combinations=tuple(
+            _to_echo_expression_combination(item, member_by_key)
+            for item in report.top_combinations
+            if item.count >= ECHO_EXPRESSION_COMBINATION_MIN_COUNT
+            and all(
+                resolve_wechat_asset_key(member.expression_key)
+                for member in item.expressions
+            )
+        )[:ECHO_EXPRESSION_COMBINATION_TOP_LIMIT],
         members=culture_members,
         unavailable_reason=(
             "" if culture_members else "暂无可展示的表达文化。"
@@ -618,12 +644,77 @@ def _build_echo_expression_culture(
     )
 
 
+def _display_expression_items(
+    items,
+    limit: int,
+):
+    """Keep presentation limited to recurring non-sticker expressions."""
+    return [
+        item
+        for item in items
+        if item.count >= ECHO_EXPRESSION_MIN_COUNT
+        and item.kind != "sticker"
+    ][:limit]
+
+
 def _to_echo_expression_item(item: ExpressionUsage) -> EchoExpressionItem:
+    asset_key = resolve_wechat_asset_key(item.expression_key)
+    display_text = item.display_text or ""
+    if asset_key:
+        display_text = item.expression_key
+    if (
+        item.kind == "sticker"
+        and not asset_key
+        and (display_text in {"[贴图]", "[QQ贴图]"} or not display_text)
+    ):
+        display_text = "微信自定义表情"
+    if not asset_key and display_text.startswith("["):
+        display_text = "表情"
     return EchoExpressionItem(
         expression_key=item.expression_key,
-        display_text=item.display_text,
+        display_text=display_text,
         count=item.count,
         kind=item.kind,
+        with_text_message_count=item.with_text_message_count,
+        text_only_message_count=item.text_only_message_count,
+        asset_key=asset_key,
+        nearby_words=tuple(word.word for word in item.nearby_words[:5]),
+    )
+
+
+def _to_echo_expression_combination(
+    item: ExpressionCombinationUsage,
+    member_by_key: dict[str, EchoMemberCard],
+) -> EchoExpressionCombination:
+    total = item.count
+    common_members = []
+    for member_count in item.member_counts:
+        member = member_by_key.get(member_count.speaker_key)
+        if member is None:
+            continue
+        share_percent = (
+            round(member_count.count * 100.0 / total, 1)
+            if total > 0
+            else 0.0
+        )
+        if share_percent < ECHO_EXPRESSION_COMBINATION_MEMBER_SHARE_MIN:
+            continue
+        common_members.append(
+            EchoExpressionCombinationMember(
+                display_name=member.display_name,
+                count=member_count.count,
+                share_percent=share_percent,
+            )
+        )
+        if len(common_members) >= ECHO_EXPRESSION_COMBINATION_MEMBER_LIMIT:
+            break
+    return EchoExpressionCombination(
+        asset_keys=tuple(
+            resolve_wechat_asset_key(member.expression_key)
+            for member in item.expressions
+        ),
+        count=item.count,
+        common_members=tuple(common_members),
     )
 
 

@@ -245,6 +245,7 @@ def test_main_adapts_cli_configuration_to_application_service(
     [
         (AnalysisStatus.NO_VALID_TEXT, "没有有效文本"),
         (AnalysisStatus.NO_TOKENS, "有效文本未产生可统计词语"),
+        (AnalysisStatus.EXPRESSION_ONLY, "已生成表达文化报告"),
     ],
 )
 def test_main_displays_empty_analysis_status_without_top_words(

@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
@@ -74,6 +76,97 @@ def _write_qce_chat(path: Path) -> None:
                 "recalled": False,
                 "system": False,
             },
+        ],
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def _write_wechat_db_sticker_export(path: Path) -> None:
+    payload = {
+        "source": "wechat-db",
+        "conversation": {
+            "username": "wxid_fictional_room@chatroom",
+            "session_type": "group",
+        },
+        "messages": [
+            {
+                "local_id": 1,
+                "server_id": 9001,
+                "local_type": 47,
+                "create_time": 1704099600,
+                "message_content": '<msg><emoji md5="stickeronly"/></msg>',
+                "user_name": "wxid_fictional_sender",
+            },
+            {
+                "local_id": 2,
+                "server_id": 9002,
+                "local_type": 47,
+                "create_time": 1704099660,
+                "message_content": '<msg><emoji md5="stickeronly"/></msg>',
+                "user_name": "wxid_fictional_sender",
+            },
+        ],
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def _write_wechat_db_text_emoji_export(path: Path) -> None:
+    payload = {
+        "source": "wechat-db",
+        "conversation": {
+            "username": "wxid_fictional_room@chatroom",
+            "session_type": "group",
+        },
+        "messages": [
+            {
+                "local_id": 2,
+                "server_id": 9002,
+                "local_type": 1,
+                "create_time": 1704099600,
+                "message_content": "哈哈[捂脸]来了[旺柴]",
+                "user_name": "wxid_fictional_sender",
+            },
+            {
+                "local_id": 3,
+                "server_id": 9003,
+                "local_type": 1,
+                "create_time": 1704099660,
+                "message_content": "哈哈[捂脸]来了[旺柴]",
+                "user_name": "wxid_fictional_sender",
+            },
+        ],
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def _write_qce_market_face_chat(path: Path) -> None:
+    payload = {
+        "chatInfo": {
+            "groupCode": "fictional-market-face-group",
+            "name": "Fictional Market Face Group",
+            "type": "group",
+        },
+        "messages": [
+            {
+                "id": "fictional-market-face-1",
+                "timestamp": 1704099600,
+                "sender": {"uid": "u-1", "uin": "1", "name": "Fictional Alice"},
+                "type": "text",
+                "content": {
+                    "text": "来一个",
+                    "elements": [
+                        {
+                            "type": "market_face",
+                            "marketFaceElement": {
+                                "faceName": "[肘击]",
+                                "emojiId": "market-1",
+                            },
+                        }
+                    ],
+                },
+                "recalled": False,
+                "system": False,
+            }
         ],
     }
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -395,7 +488,7 @@ def test_execute_generates_echo_report_json_artifact(tmp_path: Path) -> None:
     report_path = output_directory / "echo-report.json"
     assert report_path.is_file()
     payload = json.loads(report_path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == "echo-report.v0.3"
+    assert payload["schema_version"] == "echo-report.v0.7"
 
 
 def test_expression_report_reaches_echo_pipeline_from_qce(
@@ -427,6 +520,135 @@ def test_expression_report_reaches_echo_pipeline_from_qce(
     )
     assert payload["expression_culture"] is not None
     assert payload["expression_culture"]["expression_message_count"] == 2
+
+
+def test_market_face_reaches_expression_report_from_qce(tmp_path: Path) -> None:
+    application = _application_module()
+    input_path = tmp_path / "fictional-market-face-chat.json"
+    output_directory = tmp_path / "private-output"
+    output_directory.mkdir()
+    _write_qce_market_face_chat(input_path)
+
+    result = application.AnalysisApplicationService().execute(
+        _request(application, tmp_path, input_path)
+    )
+
+    assert result.status is application.AnalysisStatus.COMPLETED
+    expression = result.reports.expression
+    assert expression is not None
+    assert expression.top_expressions[0].expression_key == "market-1"
+    assert expression.top_expressions[0].kind == "sticker"
+    assert expression.top_expressions[0].with_text_message_count == 1
+
+
+def test_sticker_only_chat_returns_expression_only_with_echo_artifacts(
+    tmp_path: Path,
+) -> None:
+    application = _application_module()
+    input_path = tmp_path / "sticker-only.json"
+    output_directory = tmp_path / "private-output"
+    output_directory.mkdir()
+    _write_wechat_db_sticker_export(input_path)
+
+    result = application.AnalysisApplicationService().execute(
+        _request(application, tmp_path, input_path)
+    )
+
+    assert result.status is application.AnalysisStatus.EXPRESSION_ONLY
+    assert result.valid_text_count == 0
+    assert result.reports.expression is not None
+    assert result.reports.expression.expression_message_count == 2
+    assert {artifact.kind for artifact in result.artifacts} == {
+        "echo_report_json",
+        "echo_report_html",
+    }
+    assert (output_directory / "wordcloud.png").exists() is False
+    payload = json.loads(
+        (output_directory / "echo-report.json").read_text(encoding="utf-8")
+    )
+    assert payload["expression_culture"]["expression_message_count"] == 2
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert "stickeronly" not in serialized
+    assert "md5" not in serialized
+    assert "expression_key" not in serialized
+    culture = payload["expression_culture"]
+    assert culture["top_expressions"] == []
+    assert all(
+        not member["top_expressions"] for member in culture["members"]
+    )
+    assert "微信自定义表情" not in serialized
+
+
+def test_wechat_text_official_emoji_reaches_expression_report(
+    tmp_path: Path,
+) -> None:
+    application = _application_module()
+    input_path = tmp_path / "wechat-text-emoji.json"
+    output_directory = tmp_path / "private-output"
+    output_directory.mkdir()
+    _write_wechat_db_text_emoji_export(input_path)
+
+    result = application.AnalysisApplicationService().execute(
+        _request(application, tmp_path, input_path)
+    )
+
+    assert result.status is application.AnalysisStatus.COMPLETED
+    expression = result.reports.expression
+    assert expression is not None
+    by_key = {item.expression_key: item for item in expression.top_expressions}
+    assert by_key["捂脸"].kind == "platform_face"
+    assert by_key["捂脸"].with_text_message_count == 2
+    assert by_key["旺柴"].expression_key == "旺柴"
+    profile_words = [
+        word.word
+        for profile in result.reports.user_profiles.profiles
+        for word in profile.top_words
+    ]
+    assert "哈哈" in profile_words
+    assert "expression:捂脸" in profile_words
+    assert "expression:旺柴" in profile_words
+    assert "捂脸" not in profile_words
+    payload = json.loads(
+        (output_directory / "echo-report.json").read_text(encoding="utf-8")
+    )
+    top = payload["expression_culture"]["top_expressions"]
+    assert any(item["asset_key"] == "wechat:捂脸" for item in top)
+    assert any(item["display_text"] == "捂脸" for item in top)
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert "[捂脸]" not in serialized
+    assert "expression_key" not in serialized
+
+
+def test_expression_only_failure_falls_back_without_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = _application_module()
+    service_module = importlib.import_module(
+        "qq_chat_analyzer.application.analysis_service"
+    )
+    input_path = tmp_path / "sticker-fallback.json"
+    output_directory = tmp_path / "private-output"
+    output_directory.mkdir()
+    _write_wechat_db_sticker_export(input_path)
+
+    def fail_echo_export(*args, **kwargs):
+        raise OSError("fictional export failure")
+
+    monkeypatch.setattr(
+        service_module,
+        "_export_echo_artifacts",
+        fail_echo_export,
+    )
+
+    result = application.AnalysisApplicationService().execute(
+        _request(application, tmp_path, input_path)
+    )
+
+    assert result.status is application.AnalysisStatus.NO_TOKENS
+    assert result.artifacts == ()
+    assert (output_directory / "echo-report.json").exists() is False
+    assert (output_directory / "echo-report.html").exists() is False
 
 
 def test_execute_generates_echo_report_html_artifact(tmp_path: Path) -> None:
@@ -463,6 +685,10 @@ def test_execute_generates_echo_report_html_artifact(tmp_path: Path) -> None:
     assert "fetch(" not in html
     assert "assets/branding" not in html
     assert "frontend/echo_report" not in html
+    assert "带表达的消息" in html
+    assert "这段交流最常用的表达" in html
+    assert "带表情的消息" not in html
+    assert "不同表情" not in html
 
 
 def test_echo_report_json_fields_are_correct(tmp_path: Path) -> None:

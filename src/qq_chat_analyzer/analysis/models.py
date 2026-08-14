@@ -292,6 +292,14 @@ class MessageCompositionReport:
 
 
 @dataclass(frozen=True, slots=True)
+class ExpressionNearbyWord:
+    """One word that often appears in the same message as an expression."""
+
+    word: str
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
 class ExpressionUsage:
     """One ranked expression occurrence with its display label."""
 
@@ -299,6 +307,37 @@ class ExpressionUsage:
     display_text: str
     count: int
     kind: str
+    with_text_message_count: int = 0
+    text_only_message_count: int = 0
+    nearby_words: tuple[ExpressionNearbyWord, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ExpressionCombinationMember:
+    """One side of an expression combination, kept source-neutral."""
+
+    expression_key: str
+    display_text: str
+
+
+@dataclass(frozen=True, slots=True)
+class ExpressionCombinationMemberCount:
+    """How often one sender used an expression combination."""
+
+    speaker_key: str
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class ExpressionCombinationUsage:
+    """Two distinct expressions that appeared in the same message."""
+
+    expressions: tuple[
+        ExpressionCombinationMember,
+        ExpressionCombinationMember,
+    ]
+    count: int
+    member_counts: tuple[ExpressionCombinationMemberCount, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,3 +364,4 @@ class ExpressionReport:
     total_message_count: int = 0
     top_expressions: tuple[ExpressionUsage, ...] = ()
     members: tuple[MemberExpressionUsage, ...] = ()
+    top_combinations: tuple[ExpressionCombinationUsage, ...] = ()

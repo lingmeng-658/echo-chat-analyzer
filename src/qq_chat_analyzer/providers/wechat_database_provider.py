@@ -315,7 +315,7 @@ class WeChatDatabaseProvider:
 
         table = message_table_name(cleaned_session)
         message_db = self._find_message_db(table)
-        conditions = ["m.local_type = 1"]
+        conditions = ["(m.local_type & 0xFFFFFFFF) IN (1, 47)"]
         if isinstance(start_time, int) and not isinstance(start_time, bool):
             conditions.append(f"m.create_time >= {start_time}")
         if isinstance(end_time, int) and not isinstance(end_time, bool):
@@ -324,7 +324,7 @@ class WeChatDatabaseProvider:
 
         sql = (
             "SELECT m.local_id, m.server_id, m.local_type, m.create_time, "
-            "m.message_content, n.user_name "
+            "m.message_content, m.WCDB_CT_message_content, n.user_name "
             f"FROM {table} AS m "
             "LEFT JOIN Name2Id AS n ON n.rowid = m.real_sender_id "
             f"WHERE {where_clause} ORDER BY m.create_time ASC"

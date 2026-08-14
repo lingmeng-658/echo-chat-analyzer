@@ -101,6 +101,19 @@ def test_wechat_clean_preserves_emojis_and_normal_text() -> None:
     ) == "[旺柴] 😂 [捂脸] 明天见"
 
 
+def test_wechat_clean_preserves_official_expression_markers() -> None:
+    assert clean_text(
+        "今天真的崩了[捂脸] [OK] 继续[旺柴]",
+        platform="wechat",
+    ) == "今天真的崩了[捂脸] [OK] 继续[旺柴]"
+
+
+def test_qq_clean_preserves_expression_placeholders() -> None:
+    assert clean_text("[QQ表情 66] 哈哈 [贴图]", platform="qq") == (
+        "[QQ表情 66] 哈哈 [贴图]"
+    )
+
+
 def test_wechat_clean_does_not_affect_other_platforms() -> None:
     assert clean_text("内部 wxid_test xa66c49rvh7212") == (
         "内部 wxid_test xa66c49rvh7212"
