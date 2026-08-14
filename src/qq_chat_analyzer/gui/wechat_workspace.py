@@ -35,6 +35,9 @@ _WECHAT_STATUS_CONNECTING = "正在连接微信..."
 _WECHAT_STATUS_CONNECTED = "微信已连接。"
 _WECHAT_CONNECTING = _WECHAT_STATUS_CONNECTING
 _WECHAT_CONNECT_FAILED = "微信连接未成功"
+_WECHAT_DISCONNECT_LABEL = "退出连接"
+_WECHAT_DISCONNECTING = "正在退出微信连接..."
+_WECHAT_DISCONNECT_FAILED = "微信退出连接失败"
 _WECHAT_CONNECT_RETRY_HINT = (
     "请保持微信电脑版打开，在余音中重新点击连接，并按提示完成微信登录。"
 )
@@ -132,6 +135,12 @@ class WeChatWorkspace(QWidget):
         self._wechat_connect_button.clicked.connect(self.connect_wechat)
         self._wechat_connect_button.setMinimumHeight(34)
         main_layout.addWidget(self._wechat_connect_button)
+
+        self._wechat_disconnect_button = QPushButton(_WECHAT_DISCONNECT_LABEL)
+        self._wechat_disconnect_button.setVisible(False)
+        self._wechat_disconnect_button.clicked.connect(self.disconnect_wechat)
+        self._wechat_disconnect_button.setMinimumHeight(34)
+        main_layout.addWidget(self._wechat_disconnect_button)
 
         self._wechat_setup_button = QPushButton(_WECHAT_SETUP_LABEL)
         self._wechat_setup_button.setVisible(False)
@@ -238,6 +247,7 @@ class WeChatWorkspace(QWidget):
             executor=self._executor,
         )
         self._sessions_loaded = False
+        self._wechat_disconnect_button.setVisible(False)
         self.session_panel.clear()
 
     def refresh_connection_status(
@@ -272,6 +282,7 @@ class WeChatWorkspace(QWidget):
         self.session_panel.show_disconnected_placeholder()
         self._wechat_connect_button.setVisible(True)
         self._wechat_setup_button.setVisible(True)
+        self._wechat_disconnect_button.setVisible(False)
         self.session_panel.update_analyze_enabled()
 
     def _show_connection_status(
@@ -299,6 +310,8 @@ class WeChatWorkspace(QWidget):
             self._show_wechat_guide()
         self._wechat_connect_button.setText(_WECHAT_CONNECT_LABEL)
         self._wechat_connect_button.setVisible(not available)
+        self._wechat_disconnect_button.setVisible(available)
+        self._wechat_disconnect_button.setEnabled(available)
 
         if load_sessions_on_ready:
             self.status_changed.emit(message)
@@ -512,6 +525,47 @@ class WeChatWorkspace(QWidget):
         self._wechat_connect_button.setText(_RESTART_CONNECTION_LABEL)
         self._wechat_connect_button.setEnabled(True)
         self._wechat_connect_button.setVisible(True)
+        self._wechat_disconnect_button.setVisible(False)
+
+    def disconnect_wechat(self) -> None:
+        """Release the current WeChat connection and return to reconnect."""
+        if self._connection_task is not None:
+            self.cancel_connection()
+            return
+        _LOGGER.info("[wechat gui] disconnect_wechat requested")
+        self._wechat_disconnect_button.setEnabled(False)
+        self._status_label.setVisible(True)
+        self._status_label.setText(_WECHAT_DISCONNECTING)
+        self._status_label.setToolTip("")
+        self._hide_wechat_guide()
+        self.session_panel.clear()
+        self.status_changed.emit(_WECHAT_DISCONNECTING)
+        self._connection_task = self._executor(
+            self._facade.disconnect_wechat,
+            on_success=self._after_wechat_disconnect,
+            on_error=lambda code, message: self._handle_wechat_disconnect_error(
+                code,
+                message,
+            ),
+            on_finished=self._finish_wechat_disconnect,
+        )
+
+    def _after_wechat_disconnect(self, status: Any) -> None:
+        self._show_connection_status(status, False)
+
+    def _finish_wechat_disconnect(self) -> None:
+        self._connection_task = None
+        self._wechat_disconnect_button.setEnabled(True)
+
+    def _handle_wechat_disconnect_error(self, code: str, message: str) -> None:
+        self._status_label.setText(
+            _DISCONNECTED_PREFIX + _WECHAT_DISCONNECT_FAILED
+        )
+        self._status_label.setToolTip(message)
+        self._status_label.setVisible(True)
+        self.session_panel.show_disconnected_placeholder()
+        self._set_restart_action()
+        self.status_changed.emit(message)
 
     def cancel_connection(self) -> None:
         """Cancel an in-flight WeChat connection."""
@@ -524,6 +578,7 @@ class WeChatWorkspace(QWidget):
         self._hide_wechat_guide()
         self._wechat_connect_button.setText(_WECHAT_CONNECT_LABEL)
         self._wechat_connect_button.setEnabled(True)
+        self._wechat_disconnect_button.setVisible(False)
         self._status_label.setText("连接已取消，可以重新开始。")
         self._status_label.setVisible(True)
         self.status_changed.emit("连接已取消，可以重新开始。")
@@ -549,6 +604,7 @@ class WeChatWorkspace(QWidget):
         self._status_label.setVisible(True)
         self._hide_wechat_guide()
         self._wechat_connect_button.setVisible(False)
+        self._wechat_disconnect_button.setVisible(True)
 
     def _handle_session_error(self, code: str, message: str) -> None:
         self._sessions_loaded = False

@@ -240,6 +240,19 @@ class _StubQQAuthBridge:
         self.qr_ready_calls += 1
         return self.qr_ready
 
+    def disconnect(self):
+        self.calls.append(2)
+        if self._snapshot is not None:
+            return self._snapshot
+        connection = importlib.import_module(
+            "qq_chat_analyzer.application.connection"
+        )
+        return connection.ConnectionSnapshot(
+            state=connection.ConnectionState.DISCONNECTED,
+            source="qq",
+            message="QQ 尚未连接。",
+        )
+
 
 class _RecordingProcessRegistry:
     def __init__(self):
@@ -258,6 +271,19 @@ class _StubWeChatConnectionService:
 
     def check_status(self):
         self.check_calls += 1
+        if self._error is not None:
+            raise self._error
+        return self._status
+
+
+class _StubWeChatSetupService:
+    def __init__(self, status=None, error=None):
+        self._status = status
+        self._error = error
+        self.disconnect_calls = 0
+
+    def disconnect(self):
+        self.disconnect_calls += 1
         if self._error is not None:
             raise self._error
         return self._status
@@ -638,6 +664,47 @@ def test_shutdown_qq_runtime_terminates_recorded_processes() -> None:
     facade.shutdown_qq_runtime()
 
     assert registry.terminate_calls == 1
+
+
+def test_disconnect_qq_delegates_to_the_auth_bridge() -> None:
+    bridge = _StubQQAuthBridge()
+    facade = _facade(qq_auth_bridge=bridge)
+
+    result = facade.disconnect_qq()
+
+    assert bridge.calls == [2]
+    connection = importlib.import_module(
+        "qq_chat_analyzer.application.connection"
+    )
+    assert result.state is connection.ConnectionState.DISCONNECTED
+
+
+def test_disconnect_wechat_delegates_to_the_setup_service() -> None:
+    module = _facade_module()
+    status = module.WeChatConnectionStatus(
+        available=False,
+        data_found=True,
+        db_key_available=False,
+        runtime_available=True,
+        message="等待微信登录",
+        action_hint="",
+    )
+    setup = _StubWeChatSetupService(status=status)
+    facade = _facade(wechat_setup_service=setup)
+
+    assert facade.disconnect_wechat() is status
+    assert setup.disconnect_calls == 1
+
+
+def test_disconnect_wechat_translates_setup_failures() -> None:
+    setup = _StubWeChatSetupService(error=RuntimeError("boom"))
+    facade = _facade(wechat_setup_service=setup)
+
+    with pytest.raises(_facade_module().FacadeError) as caught:
+        facade.disconnect_wechat()
+
+    assert caught.value.public_message
+    assert "Traceback" not in caught.value.public_message
 
 
 def test_list_sessions_converts_wechat_sessions_into_session_info() -> None:

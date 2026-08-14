@@ -232,6 +232,18 @@ class QQAuthBridge:
             self._qr_ready_logged = False
         return fresh
 
+    def disconnect(self) -> ConnectionSnapshot:
+        """Stop the LCA-owned QQ session and return a disconnected snapshot.
+
+        Runtime files and the stored QQ configuration are left untouched; only
+        the running login session is stopped so a different account can start
+        a fresh QR flow.
+        """
+        _LOGGER.info("[qq auth] disconnect requested")
+        self._terminate_runtime_sessions()
+        self._reset_auth_session()
+        return self._manager_instance().disconnect()
+
     # ---------------------------------------------------------------- internals
 
     def _manager_instance(self) -> QQConnectionManager:
@@ -281,6 +293,38 @@ class QQAuthBridge:
         if not callable(poll):
             return True
         return poll() is None
+
+    def _terminate_runtime_sessions(self) -> None:
+        """Stop owned processes and bundled runtime sessions, best-effort."""
+        try:
+            self._process_registry.terminate_all()
+        except Exception as error:
+            _LOGGER.warning(
+                "[qq auth] disconnect process cleanup failed error=%s",
+                type(error).__name__,
+            )
+        config = self._environment_config()
+        if config is None:
+            return
+        directory = _path_value(getattr(config, "runtime_directory", None))
+        if directory is None:
+            return
+        cleaner = self._runtime_cleaner or terminate_bundled_runtime_sessions
+        try:
+            cleaner(directory)
+        except Exception as error:
+            _LOGGER.warning(
+                "[qq auth] disconnect runtime cleanup failed error=%s",
+                type(error).__name__,
+            )
+
+    def _reset_auth_session(self) -> None:
+        """Forget the current launcher/QR session so the next login is fresh."""
+        self._auth_launch_started = False
+        self._launched_process = None
+        self._qr_baseline = None
+        self._qr_session_started_at = None
+        self._qr_ready_logged = False
 
     def _recover_environment_config(self) -> Any:
         """Persist the effective default config, then return it for launch.

@@ -146,6 +146,8 @@ class StubFacade:
         self.get_qq_connection_snapshot_calls: list[object] = []
         self.shutdown_qq_runtime_calls: list[object] = []
         self.shutdown_calls: list[object] = []
+        self.disconnect_qq_calls: list[object] = []
+        self.disconnect_wechat_calls: list[object] = []
         self.get_session_message_range_calls: list[tuple] = []
         self.analyze_session_calls: list[tuple] = []
         self.analyze_file_calls: list[tuple] = []
@@ -307,6 +309,36 @@ class StubFacade:
 
     def shutdown(self):
         self.shutdown_calls.append(1)
+
+    def disconnect_qq(self):
+        self.disconnect_qq_calls.append(1)
+        if self._connection_error is not None:
+            raise self._connection_error
+        module = _facade_module()
+        self._connection_status = module.QQConnectionStatus(
+            available=False,
+            qce_running=False,
+            authenticated=False,
+            version="",
+            message="QQ 尚未连接。",
+            action_hint="",
+        )
+        return self._qq_snapshot()
+
+    def disconnect_wechat(self):
+        self.disconnect_wechat_calls.append(1)
+        if self._connection_error is not None:
+            raise self._connection_error
+        module = _facade_module()
+        self._connection_status = module.WeChatConnectionStatus(
+            available=False,
+            data_found=True,
+            db_key_available=False,
+            runtime_available=True,
+            message="等待微信登录",
+            action_hint="",
+        )
+        return self._connection_status
 
     def _qq_snapshot(self):
         """Map the stubbed QQ status onto the connection lifecycle model."""
@@ -4767,6 +4799,68 @@ def test_wechat_workspace_shows_connect_button_when_disconnected(
     assert window.wechat_workspace._wechat_connect_button.isVisibleTo(window) is True
     assert window.wechat_workspace._wechat_connect_button.isEnabled()
     assert window.wechat_workspace.session_panel._sessions_ready is False
+
+
+def test_qq_workspace_disconnect_returns_to_disconnected(
+    qt_app, sources
+) -> None:
+    """Connected QQ workspace offers logout and returns to disconnected."""
+    from qq_chat_analyzer.gui.main_window import QQ_WORKSPACE_INDEX
+    module = _facade_module()
+    connected = module.QQConnectionStatus(
+        available=True,
+        qce_running=True,
+        authenticated=True,
+        version="4.1.0",
+        message="QQ 已连接。",
+        action_hint="",
+    )
+    facade = StubFacade(sources=sources, connection_status=connected)
+    window = _main_window(qt_app, facade)
+    window.navigate_to_qq()
+    _drain(window)
+
+    assert window.stack.currentIndex() == QQ_WORKSPACE_INDEX
+    assert window.qq_workspace._qq_disconnect_button.isVisibleTo(window) is True
+    assert window.qq_workspace._qq_connect_button.isVisibleTo(window) is False
+
+    window.qq_workspace._qq_disconnect_button.click()
+    _drain(window)
+
+    assert facade.disconnect_qq_calls == [1]
+    assert window.qq_workspace._qq_connect_button.isVisibleTo(window) is True
+    assert window.qq_workspace._qq_disconnect_button.isVisibleTo(window) is False
+
+
+def test_wechat_workspace_disconnect_returns_to_disconnected(
+    qt_app, sources
+) -> None:
+    """Connected WeChat workspace offers logout and returns to disconnected."""
+    from qq_chat_analyzer.gui.main_window import WECHAT_WORKSPACE_INDEX
+    module = _facade_module()
+    connected = module.WeChatConnectionStatus(
+        available=True,
+        data_found=True,
+        db_key_available=True,
+        runtime_available=True,
+        message="微信已连接。",
+        action_hint="",
+    )
+    facade = StubFacade(sources=sources, connection_status=connected)
+    window = _main_window(qt_app, facade)
+    window.navigate_to_wechat()
+    _drain(window)
+
+    assert window.stack.currentIndex() == WECHAT_WORKSPACE_INDEX
+    assert window.wechat_workspace._wechat_disconnect_button.isVisibleTo(window) is True
+    assert window.wechat_workspace._wechat_connect_button.isVisibleTo(window) is False
+
+    window.wechat_workspace._wechat_disconnect_button.click()
+    _drain(window)
+
+    assert facade.disconnect_wechat_calls == [1]
+    assert window.wechat_workspace._wechat_connect_button.isVisibleTo(window) is True
+    assert window.wechat_workspace._wechat_disconnect_button.isVisibleTo(window) is False
 
 
 def test_qq_connection_does_not_crash_without_explicit_executor(

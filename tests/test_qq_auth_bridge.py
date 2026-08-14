@@ -531,6 +531,45 @@ def test_start_auth_flow_stops_previous_runtime_before_relaunch(
     assert events == [f"clean:{tmp_path}", "launch"]
 
 
+def test_disconnect_stops_runtime_and_returns_disconnected(
+    tmp_path: Path,
+) -> None:
+    module = _connection_module()
+    events: list[str] = []
+
+    class _RecordingRegistry:
+        def __init__(self) -> None:
+            self.terminate_calls = 0
+
+        def terminate_all(self) -> int:
+            self.terminate_calls += 1
+            return 1
+
+    def cleaner(directory: Path) -> None:
+        events.append(f"clean:{directory}")
+
+    registry = _RecordingRegistry()
+    setup = _StubSetupService(
+        config=_runtime_config(tmp_path),
+        runtime_status=_runtime_status("running"),
+    )
+    service = _StubConnectionService(
+        _status(available=False, qce_running=True, authenticated=True)
+    )
+    bridge = _bridge(
+        setup_service=setup,
+        connection_service=service,
+        process_registry=registry,
+        runtime_cleaner=cleaner,
+    )
+
+    snapshot = bridge.disconnect()
+
+    assert snapshot.state is module.ConnectionState.DISCONNECTED
+    assert registry.terminate_calls == 1
+    assert events == [f"clean:{tmp_path}"]
+
+
 def test_start_auth_flow_does_not_clean_runtime_when_reusing_launcher(
     tmp_path: Path,
 ) -> None:

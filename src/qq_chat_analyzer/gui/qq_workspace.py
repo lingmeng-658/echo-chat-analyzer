@@ -27,6 +27,9 @@ _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.qq_workspace")
 _QQ_CONNECT_LABEL = "连接QQ"
 _QQ_CONNECTING = "正在准备QQ连接环境，请稍候..."
 _QQ_CONNECT_FAILED = "QQ 连接失败"
+_QQ_DISCONNECT_LABEL = "退出连接"
+_QQ_DISCONNECTING = "正在退出QQ连接..."
+_QQ_DISCONNECT_FAILED = "QQ退出连接失败"
 _CANCEL_CONNECTION_LABEL = "取消连接"
 _RESTART_CONNECTION_LABEL = "重新开始"
 _CONNECTION_CANCELLED = "连接已取消，可以重新开始。"
@@ -126,6 +129,12 @@ class QQWorkspace(QWidget):
         self._qq_connect_button.setMinimumHeight(34)
         main_layout.addWidget(self._qq_connect_button)
 
+        self._qq_disconnect_button = QPushButton(_QQ_DISCONNECT_LABEL)
+        self._qq_disconnect_button.setVisible(False)
+        self._qq_disconnect_button.clicked.connect(self.disconnect_qq)
+        self._qq_disconnect_button.setMinimumHeight(34)
+        main_layout.addWidget(self._qq_disconnect_button)
+
         self._qq_qrcode_label = QLabel("")
         self._qq_qrcode_label.setAlignment(
             Qt.AlignmentFlag.AlignCenter
@@ -167,6 +176,7 @@ class QQWorkspace(QWidget):
         self._stop_qq_status_polling()
         self._hide_qq_qrcode()
         self._hide_qq_login_guide()
+        self._qq_disconnect_button.setVisible(False)
         self.session_panel.clear()
 
     def refresh_connection_status(
@@ -244,6 +254,9 @@ class QQWorkspace(QWidget):
             self._qq_connect_button.setText(_RESTART_CONNECTION_LABEL)
         self._qq_connect_button.setEnabled(not _snapshot_in_progress(snapshot))
         self._qq_connect_button.setToolTip("")
+        self._qq_disconnect_button.setVisible(state == _QQ_STATE_CONNECTED)
+        self._qq_disconnect_button.setEnabled(state == _QQ_STATE_CONNECTED)
+        self._qq_disconnect_button.setToolTip("")
         self.session_panel.update_analyze_enabled()
 
         if load_sessions_on_ready:
@@ -460,6 +473,35 @@ class QQWorkspace(QWidget):
         self._qq_connect_button.setText(_RESTART_CONNECTION_LABEL)
         self._qq_connect_button.setEnabled(True)
         self._qq_connect_button.setVisible(True)
+        self._qq_disconnect_button.setVisible(False)
+
+    def disconnect_qq(self) -> None:
+        """Stop the current QQ session and return to a reconnectable page."""
+        if self._qq_connect_in_flight:
+            self.cancel_connection()
+            return
+        _LOGGER.info("[qq gui] disconnect_qq requested")
+        self._stop_qq_status_polling()
+        self._hide_qq_qrcode()
+        self._hide_qq_login_guide()
+        self._qq_disconnect_button.setEnabled(False)
+        self._status_label.setVisible(True)
+        self._status_label.setText(_QQ_DISCONNECTING)
+        self._status_label.setToolTip("")
+        self.session_panel.clear()
+        self.status_changed.emit(_QQ_DISCONNECTING)
+        self._executor(
+            self._facade.disconnect_qq,
+            on_success=lambda snapshot: self._show_qq_status(snapshot, False),
+            on_error=lambda code, message: self._handle_qq_disconnect_error(
+                code,
+                message,
+            ),
+        )
+
+    def _handle_qq_disconnect_error(self, code: str, message: str) -> None:
+        self._qq_disconnect_button.setEnabled(True)
+        self._show_qq_error(_QQ_DISCONNECT_FAILED, message)
 
     def cancel_connection(self) -> None:
         """Cancel the active source task and return to a reconnectable page."""
@@ -480,6 +522,7 @@ class QQWorkspace(QWidget):
         self._hide_qq_login_guide()
         self._qq_connect_button.setText(_QQ_CONNECT_LABEL)
         self._qq_connect_button.setEnabled(True)
+        self._qq_disconnect_button.setVisible(False)
         self._status_label.setText(_CONNECTION_CANCELLED)
         self._status_label.setVisible(True)
         self.status_changed.emit(_CONNECTION_CANCELLED)

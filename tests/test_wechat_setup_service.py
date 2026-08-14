@@ -61,7 +61,11 @@ class _StubKeyService:
         self.key = key
         self.error = error
         self.calls = 0
+        self.clear_calls = 0
         self._progress = progress_callback
+
+    def clear(self) -> None:
+        self.clear_calls += 1
 
     def acquire(self, progress=None) -> str:
         self.calls += 1
@@ -703,3 +707,47 @@ def test_acquire_db_key_accepts_progress_callback(tmp_path: Path) -> None:
     assert len(seen) == 2
     assert seen[0] == "helper line 1"
     assert seen[1] == "helper line 2"
+
+
+def test_disconnect_clears_key_but_keeps_environment(tmp_path: Path) -> None:
+    target = tmp_path / "wechat.json"
+    WeChatEnvironmentConfigWriter(target).save(_config(tmp_path))
+    key_service = _StubKeyService(key="g" * 64)
+    factory = _CountingFactory()
+    sentinel = object()
+    service = WeChatSetupService(
+        config_loader=WeChatEnvironmentConfigLoader(target),
+        config_writer=WeChatEnvironmentConfigWriter(target),
+        provider_factory=factory,
+        connection_service=_StubConnectionService(sentinel),
+        key_service=key_service,
+    )
+
+    result = service.disconnect()
+
+    stored = WeChatEnvironmentConfigLoader(target).load()
+    assert result is sentinel
+    assert stored.data_root == _config(tmp_path).data_root
+    assert stored.db_key is None
+    assert stored.wcdb_cli_path == _config(tmp_path).wcdb_cli_path
+    assert stored.wcdb_dll_path == _config(tmp_path).wcdb_dll_path
+    assert factory.invalidations == 1
+    assert key_service.clear_calls == 1
+
+
+def test_disconnect_without_config_is_a_noop(tmp_path: Path) -> None:
+    target = tmp_path / "wechat.json"
+    key_service = _StubKeyService()
+    factory = _CountingFactory()
+    service = WeChatSetupService(
+        config_loader=WeChatEnvironmentConfigLoader(target),
+        config_writer=WeChatEnvironmentConfigWriter(target),
+        provider_factory=factory,
+        key_service=key_service,
+    )
+
+    service.disconnect()
+
+    assert target.exists() is False
+    assert factory.invalidations == 0
+    assert key_service.clear_calls == 1

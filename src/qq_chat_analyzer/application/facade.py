@@ -443,6 +443,26 @@ class ChatAnalyzerFacade:
         except Exception:
             pass
 
+    def disconnect_qq(self) -> ConnectionSnapshot:
+        """Log out the current QQ account and stop LCA-owned runtime sessions.
+
+        The runtime files and stored QQ configuration are preserved; only the
+        active login session is stopped so a different account can scan a
+        fresh QR code.
+        """
+        return self._require_qq_auth_bridge().disconnect()
+
+    def disconnect_wechat(self) -> WeChatConnectionStatus | None:
+        """Log out the current WeChat account without deleting local data.
+
+        The database key is released from the stored environment and the
+        provider cache is dropped; the data root and database files stay
+        untouched.
+        """
+        service = self._require_setup_service()
+        with _translated_errors(ChatSource.WECHAT):
+            return service.disconnect()
+
     def get_wechat_setup_status(self) -> WeChatSetupStatus:
         """Report whether the WeChat environment config is usable."""
         service = self._require_setup_service()
