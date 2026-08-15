@@ -29,9 +29,16 @@ from ..application.facade import WeChatEnvironmentConfig
 
 DATA_ROOT_LABEL = "微信数据位置"
 DATA_ROOT_HINT = (
-    "如果未能自动识别微信数据目录，请进入微信，"
-    "从“左下角的按键“三”→ 设置 → 存储位置”处获取微信存储位置，并手动填入。\n"
-    "填写完成后，请退出微信到未登录界面。"
+    "未在常用位置找到微信数据位置。如果未能自动识别微信数据目录，请进入微信："
+    "设置 → 存储位置。\n"
+    "重要：查看位置完成后，请按顺序操作：\n"
+    "1. 退出微信；\n"
+    "2. 重新打开微信，使微信回到登录界面；\n"
+    "3. 返回 Echo 填写路径；\n"
+    "4. 点击 Save；\n"
+    "5. Save 后 Echo 会立即开始等待微信登录；\n"
+    "6. 此时再从微信登录界面登录。\n"
+    "请在点击 Save 前完成退出微信并重新打开至登录界面的操作。"
 )
 BROWSE_CAPTION = "选择微信存储文件夹"
 
@@ -67,6 +74,7 @@ class WeChatSetupDialog(QDialog):
 
         self._hint_label = QLabel(DATA_ROOT_HINT)
         self._hint_label.setWordWrap(True)
+        self._hint_label.setStyleSheet("color: #b42318; font-weight: 600;")
 
         self._status_label = QLabel(self._status_text(setup_status))
         self._status_label.setWordWrap(True)

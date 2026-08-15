@@ -51,6 +51,9 @@ document.documentElement.classList.add("js-ready");
 
   function appendExpressionEntry(list, item) {
     var entry = document.createElement("li");
+    var fallback = document.createElement("span");
+    fallback.className = "expression-fallback";
+    fallback.textContent = item.display_text || "表情";
     var assetSrc =
       item.asset_key &&
       window.ECHO_ASSETS &&
@@ -64,12 +67,12 @@ document.documentElement.classList.add("js-ready");
       img.loading = "lazy";
       if (img.addEventListener) {
         img.addEventListener("error", function () {
-          img.style.display = "none";
+          img.replaceWith(fallback);
         });
       }
       entry.appendChild(img);
     } else {
-      entry.textContent = item.display_text;
+      entry.appendChild(fallback);
     }
     var count = document.createElement("strong");
     count.textContent = formatCount(item.count) + " 次";
@@ -505,7 +508,10 @@ document.documentElement.classList.add("js-ready");
     list.className = "voice-words";
     (words || []).forEach(function (word) {
       var item = document.createElement("li");
-      appendInlineWord(item, word);
+      var token = document.createElement("span");
+      token.className = "voice-word-token";
+      appendInlineWord(token, word);
+      item.appendChild(token);
       list.appendChild(item);
     });
     parent.appendChild(list);
@@ -521,7 +527,12 @@ document.documentElement.classList.add("js-ready");
         var img = document.createElement("img");
         img.className = "voice-expression";
         img.src = src;
-        img.alt = "";
+        img.alt = word.text || "表情";
+        if (img.addEventListener) {
+          img.addEventListener("error", function () {
+            img.replaceWith(document.createTextNode(word.text || "表情"));
+          });
+        }
         container.appendChild(img);
         return;
       }
@@ -730,6 +741,14 @@ document.documentElement.classList.add("js-ready");
           img.src = window.ECHO_ASSETS[assetKey];
           img.alt = "";
           img.loading = "lazy";
+          if (img.addEventListener) {
+            img.addEventListener("error", function () {
+              entry.remove();
+              if (!expressionComboList.children.length && expressionCombos) {
+                expressionCombos.hidden = true;
+              }
+            });
+          }
           images.appendChild(img);
         });
         entry.appendChild(images);

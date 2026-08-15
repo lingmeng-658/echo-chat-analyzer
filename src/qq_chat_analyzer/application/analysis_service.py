@@ -36,8 +36,10 @@ from ..exporters import (
     generate_wordcloud,
 )
 from ..message import ChatMessage
+from ..message_quality_filter import apply_message_quality_filter
 from ..rich_message import ExpressionContent, RichMessage
 from ..presentation import (
+    EchoReportView,
     build_echo_report_view,
     export_echo_report_html,
     export_echo_report_json,
@@ -108,7 +110,10 @@ class AnalysisApplicationService:
         if request.scope.mode is not AnalysisScopeMode.ALL:
             processed_message_count = len(scoped_messages)
         filtering_result = run_smart_profile(scoped_messages)
-        kept_messages = filtering_result.kept_messages
+        quality_result = apply_message_quality_filter(
+            filtering_result.kept_messages
+        )
+        kept_messages = quality_result.kept_messages
         diagnostic_counts = AnalysisDiagnosticCounts(
             raw_message_count=outcome.processed_message_count,
             imported_message_count=len(parsed_messages),
@@ -209,7 +214,7 @@ class AnalysisApplicationService:
         )
 
         try:
-            _export_artifacts(
+            echo_report_view = _export_artifacts(
                 request,
                 ranked_words,
                 speaker_summaries,
@@ -221,6 +226,12 @@ class AnalysisApplicationService:
         except (OSError, ValueError):
             raise ArtifactGenerationFailed() from None
 
+        _LOGGER.info(
+            "[analysis] echo artifacts exported echo_view=%s "
+            "conversation_type=%s",
+            echo_report_view is not None,
+            conversation_type,
+        )
         return AnalysisResultDTO(
             status=AnalysisStatus.COMPLETED,
             processed_message_count=processed_message_count,
@@ -235,6 +246,7 @@ class AnalysisApplicationService:
                 for kind, filename in _ARTIFACT_FILENAMES.items()
             ),
             reports=reports,
+            echo_report_view=echo_report_view,
         )
 
 
@@ -301,7 +313,7 @@ def _expression_only_result(
             conversation_type=conversation_type,
             rich_messages=rich_messages,
         )
-        _export_echo_artifacts(
+        echo_report_view = _export_echo_artifacts(
             request,
             reports,
             viewer_speaker_key=_viewer_speaker_key(
@@ -336,6 +348,7 @@ def _expression_only_result(
         diagnostic_counts=diagnostic_counts,
         artifacts=_ECHO_ARTIFACTS,
         reports=reports,
+        echo_report_view=echo_report_view,
     )
 
 
@@ -534,7 +547,7 @@ def _export_artifacts(
     *,
     viewer_speaker_key: str | None,
     conversation_kind: str,
-) -> None:
+) -> EchoReportView:
     output_directory = request.output_directory
     export_word_frequency_csv(
         ranked_words,
@@ -567,7 +580,7 @@ def _export_artifacts(
         str(output_directory / _ARTIFACT_FILENAMES["wordcloud"]),
         request.font_path,
     )
-    _export_echo_artifacts(
+    return _export_echo_artifacts(
         request,
         reports,
         viewer_speaker_key=viewer_speaker_key,
@@ -581,7 +594,7 @@ def _export_echo_artifacts(
     *,
     viewer_speaker_key: str | None,
     conversation_kind: str,
-) -> None:
+) -> EchoReportView:
     """Write the Echo JSON and self-contained HTML report artifacts."""
     output_directory = request.output_directory
     view = build_echo_report_view(
@@ -597,3 +610,4 @@ def _export_echo_artifacts(
         view,
         str(output_directory / _ARTIFACT_FILENAMES["echo_report_html"]),
     )
+    return view

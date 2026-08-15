@@ -9,6 +9,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from ..analysis.models import AnalysisReports
+from ..presentation.models import EchoReportView
 from .scope_filter import AnalysisScope
 
 
@@ -90,3 +91,4 @@ class AnalysisResultDTO:
         default_factory=AnalysisReports,
         repr=False,
     )
+    echo_report_view: EchoReportView | None = field(default=None, repr=False)

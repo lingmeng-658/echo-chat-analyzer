@@ -45,23 +45,33 @@ _WECHAT_DISCONNECT_LABEL = "退出连接"
 _WECHAT_DISCONNECTING = "正在退出微信连接..."
 _WECHAT_DISCONNECT_FAILED = "微信退出连接失败"
 _WECHAT_CONNECT_RETRY_HINT = (
-    "请保持微信电脑版打开，在余音中重新点击连接，并按提示完成微信登录。"
+    "请退出并重新打开微信，保持在登录界面后返回 Echo 重试连接。"
 )
-_WECHAT_GUIDE_STATUS = "正在准备微信连接"
-_WECHAT_GUIDE_KEY = "等待微信登录"
+_WECHAT_GUIDE_STATUS = "微信连接准备中，正在等待一次新的微信登录事件。"
+_WECHAT_GUIDE_KEY = "请从微信登录界面登录"
 _WECHAT_GUIDE_WARNING = (
-    "请进入微信，余音会捕捉登录这一刻的“声音”。"
+    "Echo 会在登录瞬间获取连接信息。"
+    "如果微信已经登录，请退出微信，重新打开至登录界面，"
+    "返回 Echo 重新连接微信；连接开始后，再从登录界面登录。"
 )
 _WECHAT_GUIDE_NOTE = (
     "聊天数据仅在本机读取，不上传、不保存额外副本。"
 )
 _WECHAT_GUIDE_DIRECTORY_MISSING = (
-    "如果未能自动识别微信数据目录，请进入微信，"
-    "从“左下角的按键“三”→ 设置 → 存储位置”处获取微信存储位置，并手动填入。\n"
-    "填写完成后，请退出微信到未登录界面。"
+    "未在常用位置找到微信数据位置。请进入微信：设置 → 存储位置。"
 )
-_WECHAT_DETECTED = "✓ 已检测到微信聊天记录位置"
-_WECHAT_NOT_DETECTED = "未自动识别到微信存储位置"
+_WECHAT_GUIDE_DIRECTORY_NOTE = (
+    "重要：查看位置完成后，请按顺序操作：\n"
+    "1. 退出微信；\n"
+    "2. 重新打开微信，使微信回到登录界面；\n"
+    "3. 返回 Echo 填写路径；\n"
+    "4. 点击 Save；\n"
+    "5. Save 后 Echo 会立即开始等待微信登录；\n"
+    "6. 此时再从微信登录界面登录。\n"
+    "请在点击 Save 前完成退出微信并重新打开至登录界面的操作。"
+)
+_WECHAT_DETECTED = "✓ 已检测到微信数据位置，无需手动选择路径。"
+_WECHAT_NOT_DETECTED = "未在常用位置找到微信数据位置。"
 _WECHAT_MULTIPLE_DETECTED = (
     "检测到多个微信聊天记录位置，请选择其中一个。"
 )
@@ -326,17 +336,22 @@ class WeChatWorkspace(QWidget):
         include_directory_help: bool = False,
     ) -> None:
         """Render the first-time WeChat connection guide with plain-text labels."""
-        status_parts = [_WECHAT_GUIDE_STATUS]
         if include_directory_help:
-            status_parts.append(_WECHAT_GUIDE_DIRECTORY_MISSING)
-        self._wechat_guide_label.setText("\n\n".join(status_parts))
+            self._wechat_guide_label.setText(_WECHAT_GUIDE_DIRECTORY_MISSING)
+            self._wechat_guide_note_label.setText(_WECHAT_GUIDE_DIRECTORY_NOTE)
+            self._wechat_guide_note_label.setStyleSheet(GUIDE_STYLE_EMPHASIS)
+            self._wechat_guide_key_label.clear()
+            self._wechat_guide_key_label.setVisible(False)
+        else:
+            self._wechat_guide_label.setText(_WECHAT_GUIDE_STATUS)
+            self._wechat_guide_note_label.setText(
+                f"{_WECHAT_GUIDE_KEY}\n\n{_WECHAT_GUIDE_NOTE}"
+            )
+            self._wechat_guide_note_label.setStyleSheet(GUIDE_STYLE)
+            self._wechat_guide_key_label.setText(_WECHAT_GUIDE_WARNING)
+            self._wechat_guide_key_label.setVisible(True)
         self._wechat_guide_label.setVisible(True)
-        self._wechat_guide_note_label.setText(
-            f"{_WECHAT_GUIDE_KEY}\n\n{_WECHAT_GUIDE_NOTE}"
-        )
         self._wechat_guide_note_label.setVisible(True)
-        self._wechat_guide_key_label.setText(_WECHAT_GUIDE_WARNING)
-        self._wechat_guide_key_label.setVisible(True)
 
         self._refresh_wechat_guide_image()
 
@@ -473,7 +488,12 @@ class WeChatWorkspace(QWidget):
             stage = _WECHAT_READING_DATABASE
             self.session_panel.show_reading_placeholder()
         elif "登录" in message:
-            stage = _WECHAT_WAITING_LOGIN
+            stage = (
+                "等待微信登录：当前等待的是一次新的微信登录事件。"
+                "请从微信登录界面登录，Echo 会在登录瞬间获取连接信息。"
+                "如果微信已经登录，请退出微信，重新打开至登录界面，"
+                "返回 Echo 重新连接微信；连接开始后，再从登录界面登录。"
+            )
             self.session_panel.show_connecting_placeholder()
         else:
             stage = _WECHAT_KEY_ACQUIRING

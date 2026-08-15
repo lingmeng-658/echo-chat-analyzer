@@ -359,6 +359,10 @@ def _result_with_echo_artifact(message_count: int = 2):
         _result(message_count),
         artifacts=(
             dto.ArtifactDTO(
+                kind="echo_report_json",
+                filename="echo-report.json",
+            ),
+            dto.ArtifactDTO(
                 kind="echo_report_html",
                 filename="echo-report.html",
             ),
@@ -1175,8 +1179,18 @@ def test_default_output_keeps_generated_echo_report_after_return(
     class _WritingAnalysisService(_StubAnalysisService):
         def execute(self, request):
             self.requests.append(request)
-            report_path = request.output_directory / "echo-report.html"
-            report_path.write_text("<html>fictional echo</html>", encoding="utf-8")
+            (request.output_directory / "echo-report.html").write_text(
+                "<html>fictional echo</html>",
+                encoding="utf-8",
+            )
+            (request.output_directory / "echo-report.json").write_text(
+                '{"schema_version": "echo-report.v0.7"}',
+                encoding="utf-8",
+            )
+            (request.output_directory / "raw-chat-export.json").write_text(
+                '{"messages": []}',
+                encoding="utf-8",
+            )
             return _result_with_echo_artifact()
 
     facade = _facade(analysis_service=_WritingAnalysisService())
@@ -1184,10 +1198,22 @@ def test_default_output_keeps_generated_echo_report_after_return(
     outcome = facade.analyze_file(_export_file(tmp_path))
 
     assert outcome.report_path is not None
+    assert outcome.report_directory is not None
     assert outcome.report_path.name == "echo-report.html"
     assert outcome.report_path.is_file()
-    assert outcome.artifact_directory == outcome.report_path.parent
-    assert outcome.report_path.is_relative_to(
+    assert outcome.report_path == (
+        outcome.report_directory / "echo-report.html"
+    )
+    assert outcome.report_directory.name.startswith("Echo_Report_")
+    assert (outcome.report_directory / "echo-report.json").is_file()
+    assert (outcome.report_directory / "README.txt").is_file()
+    assert not (outcome.report_directory / "raw-chat-export.json").exists()
+    assert outcome.artifact_directory != outcome.report_directory
+    assert outcome.artifact_directory is not None
+    assert outcome.artifact_directory.is_relative_to(
+        local_app_data / "LocalChatAnalyzer" / "reports"
+    )
+    assert outcome.report_directory.is_relative_to(
         local_app_data / "LocalChatAnalyzer" / "reports"
     )
 
@@ -1238,6 +1264,8 @@ def test_real_analysis_report_survives_facade_return(tmp_path: Path) -> None:
 
     assert outcome.report_path is not None
     assert Path(outcome.report_path).is_file()
+    assert outcome.echo_report_view is not None
+    assert outcome.echo_report_view.total_message_count > 0
 
 
 def test_second_analysis_updates_to_the_latest_generated_report(
@@ -1248,9 +1276,12 @@ def test_second_analysis_updates_to_the_latest_generated_report(
     class _WritingAnalysisService(_StubAnalysisService):
         def execute(self, request):
             self.requests.append(request)
-            report_path = request.output_directory / "echo-report.html"
-            report_path.write_text(
+            (request.output_directory / "echo-report.html").write_text(
                 f"<html>report {len(self.requests)}</html>",
+                encoding="utf-8",
+            )
+            (request.output_directory / "echo-report.json").write_text(
+                '{"schema_version": "echo-report.v0.7"}',
                 encoding="utf-8",
             )
             return _result_with_echo_artifact()
@@ -1264,13 +1295,60 @@ def test_second_analysis_updates_to_the_latest_generated_report(
     assert second.report_path.is_file()
     assert second.report_path != first.report_path
     assert first.report_path is not None
-    assert not first.report_path.exists()
+    assert first.report_path.exists()
+    assert first.artifact_directory is not None
+    assert not first.artifact_directory.exists()
     assert second.report_path.read_text(encoding="utf-8") == (
         "<html>report 2</html>"
     )
 
 
-def test_shutdown_cleans_the_current_temporary_report(tmp_path: Path) -> None:
+def test_shutdown_cleans_scratch_but_keeps_packaged_report(
+    tmp_path: Path,
+) -> None:
+    class _WritingAnalysisService(_StubAnalysisService):
+        def execute(self, request):
+            self.requests.append(request)
+            (request.output_directory / "echo-report.html").write_text(
+                "<html>fictional echo</html>",
+                encoding="utf-8",
+            )
+            (request.output_directory / "echo-report.json").write_text(
+                '{"schema_version": "echo-report.v0.7"}',
+                encoding="utf-8",
+            )
+            return _result_with_echo_artifact()
+
+    facade = _facade(analysis_service=_WritingAnalysisService())
+    outcome = facade.analyze_file(_export_file(tmp_path))
+    assert outcome.report_path is not None
+    assert outcome.report_directory is not None
+    assert outcome.artifact_directory is not None
+    scratch_directory = outcome.artifact_directory
+    packaged_directory = outcome.report_directory
+
+    facade.shutdown()
+
+    assert not scratch_directory.exists()
+    assert packaged_directory.exists()
+    assert outcome.report_path.exists()
+
+
+def test_missing_echo_artifact_returns_no_report_path(tmp_path: Path) -> None:
+    facade = _facade(analysis_service=_StubAnalysisService(result=_result()))
+
+    outcome = facade.analyze_file(_export_file(tmp_path))
+
+    assert outcome.report_path is None
+    assert outcome.report_directory is None
+
+
+def test_echo_packaging_failure_falls_back_to_generated_report(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _facade_module()
+
     class _WritingAnalysisService(_StubAnalysisService):
         def execute(self, request):
             self.requests.append(request)
@@ -1280,24 +1358,172 @@ def test_shutdown_cleans_the_current_temporary_report(tmp_path: Path) -> None:
             )
             return _result_with_echo_artifact()
 
+    def _failing_package(*args, **kwargs):
+        raise OSError("fictional packaging failure")
+
+    monkeypatch.setattr(module, "package_echo_report", _failing_package)
     facade = _facade(analysis_service=_WritingAnalysisService())
+
     outcome = facade.analyze_file(_export_file(tmp_path))
+
     assert outcome.report_path is not None
-    report_path = outcome.report_path
-    report_directory = report_path.parent
-
-    facade.shutdown()
-
-    assert not report_path.exists()
-    assert not report_directory.exists()
+    assert outcome.report_path.name == "echo-report.html"
+    assert outcome.report_path.is_file()
+    assert outcome.report_directory is None
+    assert outcome.artifact_directory == outcome.report_path.parent
 
 
-def test_missing_echo_artifact_returns_no_report_path(tmp_path: Path) -> None:
-    facade = _facade(analysis_service=_StubAnalysisService(result=_result()))
+def _share_outcome(
+    tmp_path: Path,
+    *,
+    report_directory: bool = True,
+    echo_view: object | None = None,
+):
+    module = _facade_module()
+    presentation = importlib.import_module("qq_chat_analyzer.presentation")
+    view = echo_view
+    if view is None:
+        view = presentation.EchoReportView(
+            title="Echo Report",
+            has_data=True,
+            conversation_kind="private",
+            conversation_name="你和 TA",
+            total_message_count=100,
+        )
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    if report_directory:
+        packaged = tmp_path / "Echo_Report_20260815_143012"
+        packaged.mkdir()
+    else:
+        packaged = None
+    return module.AnalysisOutcome(
+        view=presentation.DashboardView(title="虚构报告"),
+        result=_result(),
+        source=module.ChatSource.LOCAL_FILE,
+        artifact_directory=scratch,
+        report_directory=packaged,
+        echo_report_view=view,
+    )
 
-    outcome = facade.analyze_file(_export_file(tmp_path))
 
-    assert outcome.report_path is None
+def test_generate_share_image_writes_png_into_report_directory(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _facade_module()
+    outcome = _share_outcome(tmp_path)
+    facade = _facade()
+
+    def _fake_render(html, path, **kwargs):
+        Path(path).write_bytes(b"fake-share-png")
+        return Path(path)
+
+    monkeypatch.setattr(module, "render_share_html_to_png", _fake_render)
+
+    result = facade.generate_share_image(outcome)
+
+    assert outcome.report_directory is not None
+    assert result == outcome.report_directory / "echo-share.png"
+    assert result.is_file()
+    assert result.read_bytes() == b"fake-share-png"
+
+
+def test_generate_share_image_falls_back_to_artifact_directory(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _facade_module()
+    outcome = _share_outcome(tmp_path, report_directory=False)
+    facade = _facade()
+
+    def _fake_render(html, path, **kwargs):
+        Path(path).write_bytes(b"fake-share-png")
+        return Path(path)
+
+    monkeypatch.setattr(module, "render_share_html_to_png", _fake_render)
+
+    result = facade.generate_share_image(outcome)
+
+    assert outcome.artifact_directory is not None
+    assert result == outcome.artifact_directory / "echo-share.png"
+    assert result.is_file()
+
+
+def test_generate_share_image_uses_existing_echo_view(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _facade_module()
+    presentation = importlib.import_module("qq_chat_analyzer.presentation")
+    view = presentation.EchoReportView(
+        title="Echo Report",
+        has_data=True,
+        conversation_kind="private",
+        conversation_name="你和 TA",
+        total_message_count=200,
+    )
+    outcome = _share_outcome(tmp_path, echo_view=view)
+    facade = _facade()
+    captured: dict[str, str] = {}
+
+    def _fake_render(html, path, **kwargs):
+        captured["html"] = html
+        Path(path).write_bytes(b"fake-share-png")
+        return Path(path)
+
+    monkeypatch.setattr(module, "render_share_html_to_png", _fake_render)
+
+    facade.generate_share_image(outcome)
+
+    assert "你和 TA" in captured["html"]
+    assert "200" in captured["html"]
+
+
+def test_generate_share_image_without_result_raises_facade_error(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    dto = _dto()
+    empty_result = dto.AnalysisResultDTO(
+        status=dto.AnalysisStatus.NO_VALID_TEXT,
+        processed_message_count=0,
+        valid_text_count=0,
+        reports=None,
+    )
+    outcome = module.AnalysisOutcome(
+        view=importlib.import_module(
+            "qq_chat_analyzer.presentation"
+        ).DashboardView(title="虚构报告"),
+        result=empty_result,
+        source=module.ChatSource.LOCAL_FILE,
+    )
+    facade = _facade()
+
+    with pytest.raises(module.FacadeError) as exc:
+        facade.generate_share_image(outcome)
+
+    assert exc.value.code == "share_image_unavailable"
+
+
+def test_generate_share_image_translates_render_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _facade_module()
+    outcome = _share_outcome(tmp_path)
+    facade = _facade()
+
+    def _failing_render(html, path, **kwargs):
+        raise module.ShareImageRenderError("fictional render failure")
+
+    monkeypatch.setattr(module, "render_share_html_to_png", _failing_render)
+
+    with pytest.raises(module.FacadeError) as exc:
+        facade.generate_share_image(outcome)
+
+    assert exc.value.code == "share_image_generation_failed"
+    assert exc.value.public_message == "分享图片生成失败，请稍后重试。"
 
 
 def test_qq_and_wechat_share_the_same_retained_report_contract(
@@ -1310,6 +1536,10 @@ def test_qq_and_wechat_share_the_same_retained_report_contract(
             self.requests.append(request)
             (request.output_directory / "echo-report.html").write_text(
                 "<html>fictional source-neutral report</html>",
+                encoding="utf-8",
+            )
+            (request.output_directory / "echo-report.json").write_text(
+                '{"schema_version": "echo-report.v0.7"}',
                 encoding="utf-8",
             )
             return _result_with_echo_artifact()
@@ -1335,6 +1565,10 @@ def test_qq_and_wechat_share_the_same_retained_report_contract(
     assert qq_outcome.report_path.name == "echo-report.html"
     assert wechat_outcome.report_path.name == "echo-report.html"
     assert wechat_outcome.report_path.is_file()
+    assert qq_outcome.report_directory is not None
+    assert wechat_outcome.report_directory is not None
+    assert qq_outcome.report_directory.is_dir()
+    assert wechat_outcome.report_directory.is_dir()
 
 
 def test_analyze_file_forwards_speaker_names_and_viewer_key(
@@ -2068,7 +2302,8 @@ def test_analyze_session_hides_the_intermediate_export_file(
     public_values = [
         getattr(outcome, field.name)
         for field in dataclasses.fields(outcome)
-        if field.name not in {"artifact_directory", "report_path"}
+        if field.name
+        not in {"artifact_directory", "report_path", "report_directory"}
     ]
     assert not any(isinstance(value, Path) for value in public_values)
     assert not hasattr(outcome, "export_path")

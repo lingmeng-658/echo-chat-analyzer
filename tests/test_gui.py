@@ -112,6 +112,8 @@ class StubFacade:
         remove_snapshot_error=None,
         remove_all_snapshots_error=None,
         clear_history_error=None,
+        share_image_path=None,
+        share_image_error=None,
     ):
         self._sources = tuple(sources)
         self._sessions = list(sessions)
@@ -136,6 +138,8 @@ class StubFacade:
         self._remove_snapshot_error = remove_snapshot_error
         self._remove_all_snapshots_error = remove_all_snapshots_error
         self._clear_history_error = clear_history_error
+        self._share_image_path = share_image_path
+        self._share_image_error = share_image_error
         self.list_sessions_calls: list[object] = []
         self.get_connection_status_calls: list[object] = []
         self.get_wechat_setup_status_calls: list[object] = []
@@ -166,6 +170,7 @@ class StubFacade:
         self.remove_snapshot_calls: list[object] = []
         self.remove_all_snapshots_calls: list[object] = []
         self.get_snapshot_storage_usage_calls: list[object] = []
+        self.generate_share_image_calls: list[object] = []
 
     def list_analysis_history(self):
         self.list_analysis_history_calls.append(1)
@@ -249,6 +254,12 @@ class StubFacade:
         if self._snapshot_error is not None:
             raise self._snapshot_error
         return self._snapshot_storage_usage
+
+    def generate_share_image(self, outcome):
+        self.generate_share_image_calls.append(outcome)
+        if self._share_image_error is not None:
+            raise self._share_image_error
+        return self._share_image_path
 
     def list_sources(self):
         return self._sources
@@ -567,11 +578,13 @@ class _StubOutcome:
         history_saved=None,
         data_acquired_at=None,
         report_path=None,
+        report_directory=None,
     ):
         self.view = view
         self.history_saved = history_saved
         self.data_acquired_at = data_acquired_at
         self.report_path = report_path
+        self.report_directory = report_directory
 
 
 def _analysis_page(
@@ -2152,14 +2165,12 @@ def test_wechat_not_detected_shows_directory_help(qt_app) -> None:
     assert page._wechat_setup_dialog is not None
     dialog = page._wechat_setup_dialog
     assert "如果未能自动识别微信数据目录" in dialog._hint_label.text()
-    assert "填写完成后，请退出微信到未登录界面" in dialog._hint_label.text()
+    assert "重新打开微信，使微信回到登录界面" in dialog._hint_label.text()
+    assert "Save 后 Echo 会立即开始等待微信登录" in dialog._hint_label.text()
     assert "\u5982\u679c\u672a\u80fd\u81ea\u52a8\u8bc6\u522b\u5fae\u4fe1\u6570\u636e\u76ee\u5f55" in (
         page._wechat_guide_label.text()
     )
     assert "\u5b58\u50a8\u4f4d\u7f6e" in page._wechat_guide_label.text()
-    assert "\u586b\u5199\u5b8c\u6210\u540e\uff0c\u8bf7\u9000\u51fa\u5fae\u4fe1\u5230\u672a\u767b\u5f55\u754c\u9762" in (
-        page._wechat_guide_label.text()
-    )
 
 
 def test_saving_wechat_environment_refreshes_status(qt_app) -> None:
@@ -3074,6 +3085,24 @@ def test_echo_entry_reopens_the_latest_outcome_report_path(
     ]
 
 
+def test_duplicate_show_outcome_opens_echo_only_once(
+    qt_app,
+    sources,
+    tmp_path,
+) -> None:
+    report_path = tmp_path / "echo-report.html"
+    report_path.write_text("<html>fictional report</html>", encoding="utf-8")
+    opened: list[Path] = []
+    window = _main_window(qt_app, StubFacade(sources=sources))
+    window._report_opener = lambda path: opened.append(path) or True
+    outcome = _StubOutcome(_dashboard_view(), report_path=report_path)
+
+    window.show_outcome(outcome)
+    window.show_outcome(outcome)
+
+    assert opened == [report_path.resolve()]
+
+
 def test_default_echo_opener_uses_windows_file_association(
     qt_app,
     tmp_path,
@@ -3117,6 +3146,52 @@ def test_default_echo_opener_uses_local_file_url_outside_windows(
     assert opened_urls[0].toLocalFile() == str(report_path).replace("\\", "/")
 
 
+def test_default_directory_opener_uses_windows_file_association(
+    qt_app,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    module = importlib.import_module("qq_chat_analyzer.gui.main_window")
+    report_directory = (tmp_path / "Echo_Report_20260815_143012").resolve()
+    report_directory.mkdir()
+    opened_paths = []
+    monkeypatch.setattr(module.os, "name", "nt")
+    monkeypatch.setattr(
+        module.os,
+        "startfile",
+        lambda path: opened_paths.append(path),
+        raising=False,
+    )
+
+    assert module._open_directory_path(report_directory) is True
+    assert opened_paths == [str(report_directory)]
+
+
+def test_default_directory_opener_uses_local_file_url_outside_windows(
+    qt_app,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    module = importlib.import_module("qq_chat_analyzer.gui.main_window")
+    report_directory = (tmp_path / "Echo_Report_20260815_143012").resolve()
+    report_directory.mkdir()
+    opened_urls = []
+    monkeypatch.setattr(module.os, "name", "posix")
+    monkeypatch.setattr(
+        module.QDesktopServices,
+        "openUrl",
+        lambda url: opened_urls.append(url) or True,
+    )
+
+    assert module._open_directory_path(report_directory) is True
+    assert len(opened_urls) == 1
+    assert opened_urls[0].isLocalFile()
+    assert opened_urls[0].toLocalFile() == str(report_directory).replace(
+        "\\",
+        "/",
+    )
+
+
 def test_missing_report_and_failed_analysis_leave_echo_entry_unavailable(
     qt_app,
     sources,
@@ -3136,12 +3211,16 @@ def test_missing_report_and_failed_analysis_leave_echo_entry_unavailable(
 
     assert not window._open_echo_button.isVisibleTo(window)
     assert not window._open_echo_button.isEnabled()
+    assert not window._generate_share_button.isVisibleTo(window)
+    assert not window._generate_share_button.isEnabled()
 
     report_path.unlink()
     window.show_outcome(_StubOutcome(_dashboard_view(), report_path=report_path))
 
     assert not window._open_echo_button.isVisibleTo(window)
     assert not window._open_echo_button.isEnabled()
+    assert not window._generate_share_button.isVisibleTo(window)
+    assert not window._generate_share_button.isEnabled()
 
 
 def test_echo_open_failure_is_recoverable_and_does_not_crash(
@@ -3170,6 +3249,199 @@ def test_echo_open_failure_is_recoverable_and_does_not_crash(
     assert "无法打开" in window.analysis_page._status_label.text()
     assert window._open_echo_button.isVisibleTo(window)
     assert window.stack.currentIndex() == QQ_WORKSPACE_INDEX
+
+
+def test_successful_outcome_exposes_report_directory_button(
+    qt_app,
+    sources,
+    tmp_path,
+) -> None:
+    report_directory = tmp_path / "Echo_Report_20260815_143012"
+    report_directory.mkdir()
+    report_path = report_directory / "echo-report.html"
+    report_path.write_text("<html>fictional report</html>", encoding="utf-8")
+    opened: list[Path] = []
+    window = _main_window(qt_app, StubFacade(sources=sources))
+    window._report_opener = lambda path: opened.append(path) or True
+    window._directory_opener = lambda path: opened.append(path) or True
+
+    window.show_outcome(
+        _StubOutcome(
+            _dashboard_view(),
+            report_path=report_path,
+            report_directory=report_directory,
+        )
+    )
+
+    assert window._current_report_directory == report_directory.resolve()
+    assert window._open_report_directory_button.isVisibleTo(window)
+    assert window._open_report_directory_button.isEnabled()
+    window._open_report_directory_button.click()
+
+    assert opened == [report_path.resolve(), report_directory.resolve()]
+
+
+def test_report_directory_button_falls_back_to_report_parent(
+    qt_app,
+    sources,
+    tmp_path,
+) -> None:
+    report_path = tmp_path / "echo-report.html"
+    report_path.write_text("<html>fictional report</html>", encoding="utf-8")
+    opened: list[Path] = []
+    window = _main_window(qt_app, StubFacade(sources=sources))
+    window._report_opener = lambda path: True
+    window._directory_opener = lambda path: opened.append(path) or True
+
+    window.show_outcome(_StubOutcome(_dashboard_view(), report_path=report_path))
+
+    assert window._current_report_directory == report_path.resolve().parent
+    window._open_report_directory_button.click()
+    assert opened == [report_path.resolve().parent]
+
+
+def test_report_directory_open_failure_is_recoverable(
+    qt_app,
+    sources,
+    tmp_path,
+) -> None:
+    report_directory = tmp_path / "Echo_Report_20260815_143012"
+    report_directory.mkdir()
+    report_path = report_directory / "echo-report.html"
+    report_path.write_text("<html>fictional report</html>", encoding="utf-8")
+
+    def _failing_directory_opener(path):
+        raise OSError("fictional directory open failure")
+
+    window = _main_window(qt_app, StubFacade(sources=sources))
+    window._report_opener = lambda path: True
+    window._directory_opener = _failing_directory_opener
+
+    window.show_outcome(
+        _StubOutcome(
+            _dashboard_view(),
+            report_path=report_path,
+            report_directory=report_directory,
+        )
+    )
+    window.open_echo_report_directory()
+
+    assert "无法打开报告目录" in window.analysis_page._status_label.text()
+    assert window._open_report_directory_button.isVisibleTo(window)
+
+
+def test_generate_share_button_creates_and_opens_share_image(
+    qt_app,
+    sources,
+    tmp_path,
+) -> None:
+    report_path = tmp_path / "echo-report.html"
+    report_path.write_text("<html>fictional report</html>", encoding="utf-8")
+    share_path = tmp_path / "echo-share.png"
+    share_path.write_bytes(b"fictional-share-png")
+    opened: list[Path] = []
+    outcome = _StubOutcome(_dashboard_view(), report_path=report_path)
+    facade = StubFacade(sources=sources, share_image_path=share_path)
+    window = _main_window(qt_app, facade)
+    window._report_opener = lambda path: True
+    window._image_opener = lambda path: opened.append(path) or True
+
+    window.show_outcome(outcome)
+
+    assert window._generate_share_button.isVisibleTo(window)
+    assert window._generate_share_button.isEnabled()
+    window._generate_share_button.click()
+
+    assert facade.generate_share_image_calls == [outcome]
+    assert window.analysis_page._status_label.text() == "分享图片已生成"
+    assert opened == [share_path.resolve()]
+
+
+def test_generate_share_failure_shows_public_message(
+    qt_app,
+    sources,
+    tmp_path,
+) -> None:
+    module = _facade_module()
+    report_path = tmp_path / "echo-report.html"
+    report_path.write_text("<html>fictional report</html>", encoding="utf-8")
+    facade = StubFacade(
+        sources=sources,
+        share_image_error=module.FacadeError(
+            code="share_image_generation_failed",
+            public_message="分享图片生成失败，请稍后重试。",
+        ),
+    )
+    window = _main_window(qt_app, facade)
+    window._report_opener = lambda path: True
+
+    window.show_outcome(_StubOutcome(_dashboard_view(), report_path=report_path))
+    window._generate_share_button.click()
+
+    assert window.analysis_page._status_label.text() == (
+        "分享图片生成失败，请稍后重试。"
+    )
+    assert window._generate_share_button.isEnabled()
+
+
+def test_generate_share_without_outcome_shows_visible_error(
+    qt_app,
+    sources,
+) -> None:
+    window = _main_window(qt_app, StubFacade(sources=sources))
+
+    window.generate_share_image()
+
+    assert window.analysis_page._status_label.text() == (
+        "暂时没有可生成分享图片的分析结果。"
+    )
+
+
+def test_generate_share_without_facade_method_shows_visible_error(
+    qt_app,
+    sources,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delattr(StubFacade, "generate_share_image")
+    report_path = tmp_path / "echo-report.html"
+    report_path.write_text("<html>fictional report</html>", encoding="utf-8")
+    window = _main_window(qt_app, StubFacade(sources=sources))
+    window._report_opener = lambda path: True
+
+    window.show_outcome(_StubOutcome(_dashboard_view(), report_path=report_path))
+    window.generate_share_image()
+
+    assert window.analysis_page._status_label.text() == (
+        "暂时没有可生成分享图片的分析结果。"
+    )
+
+
+def test_generate_share_executor_submission_failure_is_visible(
+    qt_app,
+    sources,
+    tmp_path,
+) -> None:
+    report_path = tmp_path / "echo-report.html"
+    report_path.write_text("<html>fictional report</html>", encoding="utf-8")
+
+    def _failing_executor(*args, **kwargs):
+        raise RuntimeError("fictional executor failure")
+
+    window = _main_window(
+        qt_app,
+        StubFacade(sources=sources),
+        executor=_failing_executor,
+    )
+    window._report_opener = lambda path: True
+
+    window.show_outcome(_StubOutcome(_dashboard_view(), report_path=report_path))
+    window._generate_share_button.click()
+
+    assert window.analysis_page._status_label.text() == (
+        "分享图片生成失败，请稍后重试。"
+    )
+    assert window._generate_share_button.isEnabled()
 
 
 @pytest.mark.parametrize(

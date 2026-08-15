@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from datetime import datetime
@@ -30,15 +31,25 @@ from .local_data_page import LocalDataPage
 from .qq_workspace import QQWorkspace
 from .theme import WINDOW_TITLE_STYLE
 from .wechat_workspace import WeChatWorkspace
+from .workers import submit
 
 
 WINDOW_TITLE = "\u4f59\u97f3 Echo"
 _HOME_LABEL = "\u9996\u9875"
 _BACK_LABEL = "\u8fd4\u56de\u9009\u62e9"
 _OPEN_ECHO_LABEL = "\u67e5\u770b Echo"
+_OPEN_REPORT_DIRECTORY_LABEL = "\u6253\u5f00\u62a5\u544a\u6240\u5728\u76ee\u5f55"
+_GENERATE_SHARE_LABEL = "\u751f\u6210\u5206\u4eab\u56fe\u7247"
 _ERROR_TITLE = "\u5206\u6790\u5931\u8d25"
 _PREPARING = "\u6b63\u5728\u51c6\u5907..."
 _CANCEL_ANALYSIS = "\u53d6\u6d88\u5206\u6790"
+_REPORT_DIRECTORY_OPEN_FAILED = "\u65e0\u6cd5\u6253\u5f00\u62a5\u544a\u76ee\u5f55\u3002"
+_SHARE_GENERATING = "\u6b63\u5728\u751f\u6210\u5206\u4eab\u56fe\u7247..."
+_SHARE_READY = "\u5206\u4eab\u56fe\u7247\u5df2\u751f\u6210"
+_SHARE_UNAVAILABLE = "\u6682\u65f6\u6ca1\u6709\u53ef\u751f\u6210\u5206\u4eab\u56fe\u7247\u7684\u5206\u6790\u7ed3\u679c\u3002"
+_SHARE_SUBMIT_FAILED = "\u5206\u4eab\u56fe\u7247\u751f\u6210\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002"
+
+_LOGGER = logging.getLogger("qq_chat_analyzer.desktop.main_window")
 
 HOME_PAGE_INDEX = 0
 QQ_WORKSPACE_INDEX = 1
@@ -57,13 +68,22 @@ class MainWindow(QMainWindow):
         facade: Any,
         parent: QWidget | None = None,
         executor: Any = None,
+        directory_opener: Any = None,
+        image_opener: Any = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(WINDOW_TITLE)
         self.setWindowIcon(QIcon(str(default_echo_icon_path())))
         self._facade = facade
+        self._executor = executor or submit
         self._current_report_path: Path | None = None
+        self._current_report_directory: Path | None = None
+        self._current_outcome: Any = None
+        self._current_share_image_path: Path | None = None
+        self._auto_opened_outcome_key: tuple[int, str] | None = None
         self._report_opener = _open_report_path
+        self._directory_opener = directory_opener or _open_directory_path
+        self._image_opener = image_opener or _open_image_path
         self._active_source: str | None = None
 
         container = QWidget()
@@ -114,7 +134,24 @@ class MainWindow(QMainWindow):
         self._open_echo_button.setEnabled(False)
         self._open_echo_button.setVisible(False)
         self._open_echo_button.clicked.connect(self.open_echo_report)
-        layout.addWidget(self._open_echo_button)
+        self._open_report_directory_button = QPushButton(
+            _OPEN_REPORT_DIRECTORY_LABEL
+        )
+        self._open_report_directory_button.setEnabled(False)
+        self._open_report_directory_button.setVisible(False)
+        self._open_report_directory_button.clicked.connect(
+            self.open_echo_report_directory
+        )
+        self._generate_share_button = QPushButton(_GENERATE_SHARE_LABEL)
+        self._generate_share_button.setEnabled(False)
+        self._generate_share_button.setVisible(False)
+        self._generate_share_button.clicked.connect(self.generate_share_image)
+        report_actions_layout = QHBoxLayout()
+        report_actions_layout.addWidget(self._open_echo_button)
+        report_actions_layout.addWidget(self._open_report_directory_button)
+        report_actions_layout.addWidget(self._generate_share_button)
+        report_actions_layout.addStretch(1)
+        layout.addLayout(report_actions_layout)
 
         self._back_button = QPushButton(_BACK_LABEL)
         self._back_button.setVisible(False)
@@ -254,7 +291,16 @@ class MainWindow(QMainWindow):
 
     def show_outcome(self, outcome: Any) -> None:
         """Finish one analysis, open Echo, and return to the active workspace."""
-        self._set_echo_report_path(getattr(outcome, "report_path", None))
+        self._current_outcome = outcome
+        _LOGGER.info(
+            "[gui] show_outcome report_path=%s report_directory=%s",
+            getattr(outcome, "report_path", None),
+            getattr(outcome, "report_directory", None),
+        )
+        self._set_echo_report_path(
+            getattr(outcome, "report_path", None),
+            getattr(outcome, "report_directory", None),
+        )
         history_saved = getattr(outcome, "history_saved", None)
         if history_saved is True:
             status_message = "\u5206\u6790\u5df2\u4fdd\u5b58"
@@ -272,7 +318,16 @@ class MainWindow(QMainWindow):
                 f"{data_acquired_at.isoformat(sep=' ', timespec='minutes')}"
             )
         self.analysis_page._status_label.setText(status_message)
-        if self._current_report_path is not None:
+        outcome_key = (
+            id(outcome),
+            str(getattr(outcome, "report_path", "")),
+        )
+        if (
+            self._current_report_path is not None
+            and self._auto_opened_outcome_key != outcome_key
+        ):
+            _LOGGER.info("[gui] show_outcome opening echo report once")
+            self._auto_opened_outcome_key = outcome_key
             self.open_echo_report()
         self._return_to_workspace_after_success()
 
@@ -292,6 +347,7 @@ class MainWindow(QMainWindow):
     def open_echo_report(self) -> None:
         """Open the report from the latest successful outcome."""
         report_path = self._current_report_path
+        _LOGGER.info("[gui] open_echo_report path=%s", report_path)
         if report_path is None or not _is_file(report_path):
             self._clear_echo_report_entry()
             return
@@ -304,7 +360,111 @@ class MainWindow(QMainWindow):
                 "\u65e0\u6cd5\u6253\u5f00 Echo \u62a5\u544a\u3002"
             )
 
-    def _set_echo_report_path(self, report_path: Any) -> None:
+    def open_echo_report_directory(self) -> None:
+        """Open the directory containing the latest successful report."""
+        directory = self._current_report_directory
+        if directory is None or not _is_directory(directory):
+            self._clear_echo_report_entry()
+            return
+        try:
+            opened = self._directory_opener(directory)
+        except Exception:
+            opened = False
+        if opened is False:
+            self.analysis_page._status_label.setText(
+                _REPORT_DIRECTORY_OPEN_FAILED
+            )
+
+    def generate_share_image(self) -> None:
+        """Generate a shareable Echo overview card for the latest outcome."""
+        _LOGGER.info("[gui] share button clicked")
+        outcome = self._current_outcome
+        _LOGGER.info("[gui] outcome exists=%s", outcome is not None)
+        generate = getattr(self._facade, "generate_share_image", None)
+        if outcome is None or not callable(generate):
+            _LOGGER.warning(
+                "[gui] Share image requested without a usable outcome or facade "
+                "method (outcome=%s, facade_method=%s).",
+                outcome is not None,
+                callable(generate),
+            )
+            self.analysis_page._status_label.setText(_SHARE_UNAVAILABLE)
+            return
+        _LOGGER.info(
+            "[gui] Share image generation started for outcome report_directory=%s "
+            "echo_view=%s.",
+            getattr(outcome, "report_directory", None),
+            getattr(outcome, "echo_report_view", None) is not None,
+        )
+        self.analysis_page._status_label.setText(_SHARE_GENERATING)
+        self._generate_share_button.setEnabled(False)
+        try:
+            self._executor(
+                lambda: generate(outcome),
+                on_success=self._on_share_image_generated,
+                on_error=self._on_share_image_failed,
+                on_finished=lambda: self._generate_share_button.setEnabled(True),
+            )
+        except Exception:
+            _LOGGER.exception(
+                "Share image worker could not be submitted."
+            )
+            self._generate_share_button.setEnabled(True)
+            self.analysis_page._status_label.setText(_SHARE_SUBMIT_FAILED)
+
+    def _on_share_image_generated(self, image_path: Any) -> None:
+        try:
+            self._current_share_image_path = Path(image_path).resolve()
+        except (OSError, TypeError, ValueError):
+            self._current_share_image_path = None
+        _LOGGER.info(
+            "[gui] success image input=%s resolved=%s",
+            image_path,
+            self._current_share_image_path,
+        )
+        self.analysis_page._status_label.setText(_SHARE_READY)
+        share_image_exists = (
+            self._current_share_image_path is not None
+            and _is_file(self._current_share_image_path)
+        )
+        print(f"[share-open] path={self._current_share_image_path}")
+        print(f"[share-open] exists={share_image_exists}")
+        if self._current_share_image_path is None:
+            return
+        if not _is_file(self._current_share_image_path):
+            _LOGGER.error(
+                "[gui] Share image path does not exist or is not a file: %s.",
+                self._current_share_image_path,
+            )
+            return
+
+        try:
+            opened = self._image_opener(self._current_share_image_path)
+        except Exception:
+            _LOGGER.exception(
+                "[gui] Share image was generated but could not be opened: %s.",
+                self._current_share_image_path,
+            )
+        else:
+            if opened is False:
+                _LOGGER.error(
+                    "[gui] Share image opener rejected path: %s.",
+                    self._current_share_image_path,
+                )
+
+    def _on_share_image_failed(self, code: str, message: str) -> None:
+        _LOGGER.warning(
+            "[gui] Share image generation failed code=%s message=%s",
+            code,
+            message,
+        )
+        self.analysis_page._status_label.setText(message)
+
+    def _set_echo_report_path(
+        self,
+        report_path: Any,
+        report_directory: Any = None,
+    ) -> None:
         try:
             candidate = Path(report_path).resolve()
         except (OSError, TypeError, ValueError):
@@ -312,13 +472,38 @@ class MainWindow(QMainWindow):
             return
         available = _is_file(candidate)
         self._current_report_path = candidate if available else None
+        directory = None
+        if available:
+            if report_directory is not None:
+                try:
+                    directory = Path(report_directory).resolve()
+                except (OSError, TypeError, ValueError):
+                    directory = None
+                if directory is not None and not _is_directory(directory):
+                    directory = None
+            if directory is None:
+                directory = candidate.parent
+        self._current_report_directory = directory
         self._open_echo_button.setEnabled(available)
         self._open_echo_button.setVisible(available)
+        directory_available = directory is not None
+        self._open_report_directory_button.setEnabled(directory_available)
+        self._open_report_directory_button.setVisible(directory_available)
+        self._generate_share_button.setEnabled(available)
+        self._generate_share_button.setVisible(False)
 
     def _clear_echo_report_entry(self) -> None:
         self._current_report_path = None
+        self._current_report_directory = None
+        self._current_outcome = None
+        self._current_share_image_path = None
+        self._auto_opened_outcome_key = None
         self._open_echo_button.setEnabled(False)
         self._open_echo_button.setVisible(False)
+        self._open_report_directory_button.setEnabled(False)
+        self._open_report_directory_button.setVisible(False)
+        self._generate_share_button.setEnabled(False)
+        self._generate_share_button.setVisible(False)
 
     # ---------------------------------------------------------------- error handling
 
@@ -364,13 +549,46 @@ def _is_file(path: Path) -> bool:
         return False
 
 
-def _open_report_path(path: Path) -> bool:
-    """Open one local HTML file with the operating system browser."""
+def _is_directory(path: Path) -> bool:
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
+
+
+def _open_local_path(path: Path) -> bool:
+    """Open one local file or directory with the operating system."""
     resolved_path = path.resolve()
     if os.name == "nt":
         os.startfile(str(resolved_path))
         return True
     return QDesktopServices.openUrl(QUrl.fromLocalFile(str(resolved_path)))
+
+
+def _open_image_path(path: Path) -> bool:
+    """Open one resolved local image with the operating system."""
+    resolved_path = path.resolve()
+    if not _is_file(resolved_path):
+        _LOGGER.error(
+            "[gui] Refusing to open missing share image: %s.",
+            resolved_path,
+        )
+        return False
+    print(f"[share-open] opening={resolved_path}")
+    if os.name == "nt":
+        os.startfile(str(resolved_path))
+        return True
+    return QDesktopServices.openUrl(QUrl.fromLocalFile(str(resolved_path)))
+
+
+def _open_report_path(path: Path) -> bool:
+    """Open one local HTML file with the operating system browser."""
+    return _open_local_path(path)
+
+
+def _open_directory_path(path: Path) -> bool:
+    """Open one local directory in the operating system file manager."""
+    return _open_local_path(path)
 
 
 def _qq_source() -> Any:

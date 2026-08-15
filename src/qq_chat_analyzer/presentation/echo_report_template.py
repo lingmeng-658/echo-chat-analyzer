@@ -428,10 +428,31 @@ h1, h2, h3, p { margin-top: 0; }
 .voice-descriptor { margin: 13px 0 0 40px; color: var(--muted); font: 14px/1.8 var(--serif); }
 .voice-words { display: flex; flex-wrap: wrap; gap: 12px 28px; margin: 34px 0 0 40px; padding: 0; list-style: none; }
 .voice-words li { position: relative; color: var(--ink); font: 400 clamp(25px, 4vw, 39px)/1.25 var(--serif); letter-spacing: -.02em; }
+.voice-word-token {
+  display: inline-flex;
+  min-height: 1.12em;
+  align-items: center;
+  line-height: 1;
+  vertical-align: middle;
+}
+.voice-word-token .voice-expression {
+  display: block;
+  width: 1.28em;
+  height: 1.28em;
+  flex: 0 0 1.28em;
+  margin-right: 0;
+  object-fit: contain;
+  vertical-align: middle;
+}
 .voice-words li::after { margin-left: 28px; color: var(--accent-soft); content: "／"; font-size: .56em; vertical-align: .18em; }
 .voice-words li:last-child::after { content: ""; }
-.mode-private .voice-words { display: block; margin-top: 42px; }
-.mode-private .voice-words li { margin: 0 0 18px; font-size: clamp(28px, 4.4vw, 44px); }
+.mode-private .voice-words {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  margin-top: 42px;
+}
+.mode-private .voice-words li { margin: 0; font-size: 30px; }
 .mode-private .voice-words li::after { content: ""; }
 .voice-context { margin: 30px 0 0 40px; color: var(--faint); font: 13px/1.8 var(--serif); }
 .language-unavailable { margin: 0; padding: 52px 0; color: var(--muted); font: 17px/2 var(--serif); border-bottom: 1px solid var(--rule); }
@@ -535,10 +556,12 @@ h1, h2, h3, p { margin-top: 0; }
   vertical-align: -7px;
 }
 .voice-expression {
-  width: 24px;
-  height: 24px;
-  margin-right: 4px;
-  vertical-align: -5px;
+  display: inline-block;
+  width: 1.28em;
+  height: 1.28em;
+  margin-right: .14em;
+  object-fit: contain;
+  vertical-align: -.26em;
 }
 .expression-list li .expression-name {
   margin-right: 6px;
@@ -590,7 +613,14 @@ h1, h2, h3, p { margin-top: 0; }
 .expression-combo-images {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+}
+.expression-combo-images .expression-asset {
+  display: inline-block;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  object-fit: contain;
 }
 .expression-combo-item strong {
   margin-left: 0;
@@ -1285,7 +1315,10 @@ document.documentElement.classList.add("js-ready");
     list.className = "voice-words";
     (words || []).forEach(function (word) {
       var item = document.createElement("li");
-      appendInlineWord(item, word);
+      var token = document.createElement("span");
+      token.className = "voice-word-token";
+      appendInlineWord(token, word);
+      item.appendChild(token);
       list.appendChild(item);
     });
     parent.appendChild(list);
