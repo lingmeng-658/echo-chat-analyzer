@@ -18,6 +18,7 @@ resources = (
     project_root / "wechat_login_guide.png",
 )
 echo_icon = project_root / "assets/branding/echo/echo_icon.ico"
+windows_exe_icon = project_root / "branding/Echo.ico"
 echo_favicon = project_root / "assets/branding/echo/echo_icon_32.png"
 echo_report_logo = project_root / "assets/branding/echo/echo_wordmark_with_slogan.png"
 echo_expression_assets = project_root / "frontend/echo_report/wechat-emojis"
@@ -56,7 +57,7 @@ exe = EXE(
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
-    icon=str(echo_icon),
+    icon=str(windows_exe_icon),
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
