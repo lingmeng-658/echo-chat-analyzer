@@ -2164,13 +2164,24 @@ def test_wechat_not_detected_shows_directory_help(qt_app) -> None:
     )
     assert page._wechat_setup_dialog is not None
     dialog = page._wechat_setup_dialog
-    assert "如果未能自动识别微信数据目录" in dialog._hint_label.text()
-    assert "重新打开微信，使微信回到登录界面" in dialog._hint_label.text()
+    assert "如未在常用位置找到微信数据位置" in dialog._hint_label.text()
+    assert "右键 xwechat_files，选择 复制地址" in dialog._hint_label.text()
+    assert "重新打开微信，使微信回到登录界面（如图片所示）" in (
+        dialog._hint_label.text()
+    )
     assert "Save 后 Echo 会立即开始等待微信登录" in dialog._hint_label.text()
-    assert "\u5982\u679c\u672a\u80fd\u81ea\u52a8\u8bc6\u522b\u5fae\u4fe1\u6570\u636e\u76ee\u5f55" in (
+    assert dialog._data_root_edit.placeholderText() == (
+        "请粘贴微信数据目录路径（xwechat_files）"
+    )
+    assert "\u5982\u672a\u5728\u5e38\u7528\u4f4d\u7f6e\u627e\u5230\u5fae\u4fe1\u6570\u636e\u4f4d\u7f6e" in (
         page._wechat_guide_label.text()
     )
-    assert "\u5b58\u50a8\u4f4d\u7f6e" in page._wechat_guide_label.text()
+    assert "\u8bbe\u7f6e \u2192 \u5b58\u50a8\u4f4d\u7f6e \u2192 \u66f4\u6539" in (
+        page._wechat_guide_label.text()
+    )
+    assert "右键 xwechat_files，选择 复制地址" in (
+        page._wechat_guide_label.text()
+    )
 
 
 def test_saving_wechat_environment_refreshes_status(qt_app) -> None:

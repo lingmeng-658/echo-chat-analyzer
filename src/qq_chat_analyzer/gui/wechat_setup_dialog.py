@@ -28,17 +28,16 @@ from PySide6.QtWidgets import (
 from ..application.facade import WeChatEnvironmentConfig
 
 DATA_ROOT_LABEL = "微信数据位置"
+DATA_ROOT_PLACEHOLDER = "请粘贴微信数据目录路径（xwechat_files）"
 DATA_ROOT_HINT = (
-    "未在常用位置找到微信数据位置。如果未能自动识别微信数据目录，请进入微信："
-    "设置 → 存储位置。\n"
-    "重要：查看位置完成后，请按顺序操作：\n"
-    "1. 退出微信；\n"
-    "2. 重新打开微信，使微信回到登录界面；\n"
-    "3. 返回 Echo 填写路径；\n"
-    "4. 点击 Save；\n"
-    "5. Save 后 Echo 会立即开始等待微信登录；\n"
-    "6. 此时再从微信登录界面登录。\n"
-    "请在点击 Save 前完成退出微信并重新打开至登录界面的操作。"
+    "如未在常用位置找到微信数据位置，请按以下步骤获取微信数据目录：\n"
+    "1. 进入微信：设置 → 存储位置 → 更改；\n"
+    "2. 右键 xwechat_files，选择 复制地址；\n"
+    "3. 彻底退出微信，并重新打开微信，使微信回到登录界面（如图片所示）；\n"
+    "4. 返回 Echo，将复制的地址直接粘贴到上方输入框；\n"
+    "5. 点击 Save；\n"
+    "6. Save 后 Echo 会立即开始等待微信登录；\n"
+    "7. 此时再从微信登录界面登录。"
 )
 BROWSE_CAPTION = "选择微信存储文件夹"
 
@@ -59,7 +58,7 @@ class WeChatSetupDialog(QDialog):
         self.setMinimumWidth(520)
 
         self._data_root_edit = QLineEdit()
-        self._data_root_edit.setPlaceholderText(DATA_ROOT_HINT)
+        self._data_root_edit.setPlaceholderText(DATA_ROOT_PLACEHOLDER)
         self._data_root_edit.setToolTip(DATA_ROOT_HINT)
         self._data_root_combo: QComboBox | None = None
         self._use_data_roots = bool(data_roots)
