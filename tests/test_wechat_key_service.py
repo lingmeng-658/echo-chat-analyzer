@@ -704,11 +704,33 @@ def test_acquire_logs_never_contain_the_key(
     key = "cd34" * 16
     caplog.set_level(
         logging.INFO,
-        logger="qq_chat_analyzer.application.wechat_key_service",
+        logger="qq_chat_analyzer.desktop.wechat_key_service",
     )
     service = _service(tmp_path, api=_FakeHookApi(key=key), pids=[1000])
     service.acquire()
     assert key not in caplog.text
+    assert "wechat.connect.start" in caplog.text
+    assert "wechat.key.capture success=true" in caplog.text
+
+
+def test_acquire_failure_logs_safe_event_only(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    module = _module()
+    caplog.set_level(
+        logging.INFO,
+        logger="qq_chat_analyzer.desktop.wechat_key_service",
+    )
+    service = _service(tmp_path, api=_FakeHookApi(key=None), pids=[])
+
+    with pytest.raises(module.WeChatKeyUnavailable):
+        service.acquire()
+
+    assert "wechat.connect.start" in caplog.text
+    assert "wechat.key.capture success=false error_type=WeChatKeyUnavailable" in (
+        caplog.text
+    )
+    assert "hook denied" not in caplog.text
 
 
 def test_acquire_failure_does_not_expose_key(tmp_path: Path) -> None:

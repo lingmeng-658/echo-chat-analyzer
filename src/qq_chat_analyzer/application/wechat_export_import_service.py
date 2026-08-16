@@ -21,6 +21,7 @@ optional time window, hand back a path to a finished export document.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -29,6 +30,11 @@ from .errors import ApplicationServiceError
 from .import_outcome import ImportOutcome
 from .import_request import ImportRequest
 from .import_service import ImportService
+
+
+_LOGGER = logging.getLogger(
+    "qq_chat_analyzer.desktop.wechat_export_import_service"
+)
 
 
 WECHAT_PLATFORM = "wechat"
@@ -118,9 +124,16 @@ class WeChatExportImportService:
     def execute(self, request: WeChatExportImportRequest) -> ImportOutcome:
         export_path = self.export_only(request)
 
-        return self._import_service.execute(
-            ImportRequest(input_path=export_path, platform=WECHAT_PLATFORM)
-        )
+        try:
+            return self._import_service.execute(
+                ImportRequest(input_path=export_path, platform=WECHAT_PLATFORM)
+            )
+        except Exception as error:
+            _LOGGER.warning(
+                "wechat.import.failed error_type=%s",
+                type(error).__name__,
+            )
+            raise
 
     def list_sessions(self) -> list[Any]:
         """Delegate session listing to the injected provider.

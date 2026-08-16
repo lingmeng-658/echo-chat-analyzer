@@ -3,8 +3,8 @@
 This service wraps the verified ``wx_key.dll`` hook surface:
 ``InitializeHook(pid)``, ``PollKeyData(buffer, size)``, and
 ``CleanupHook()``. It never reads databases and never prints the key.
-Development logs record flow milestones and the raw helper diagnostics, but
-never the key value itself. Callers inject fake process finders and DLL
+Development logs record only flow milestones and safe error types, never the
+key value or raw helper output. Callers inject fake process finders and DLL
 adapters in tests so no real WeChat process or native library is ever touched.
 """
 
@@ -125,10 +125,24 @@ class WeChatKeyService:
         progress: Callable[[str], None] | None = None,
     ) -> str:
         """Return one 64-hex database key, raising a user-safe error."""
-        _LOGGER.info(
-            "[wechat] start acquire key thread=%s",
-            threading.current_thread().name,
-        )
+        _LOGGER.info("wechat.connect.start")
+        try:
+            key = self._acquire(timeout=timeout, progress=progress)
+        except Exception as error:
+            _LOGGER.warning(
+                "wechat.key.capture success=false error_type=%s",
+                type(error).__name__,
+            )
+            raise
+        _LOGGER.info("wechat.key.capture success=true")
+        return key
+
+    def _acquire(
+        self,
+        timeout: float | None = None,
+        progress: Callable[[str], None] | None = None,
+    ) -> str:
+        """Return one 64-hex database key, raising a user-safe error."""
         _clear_key_environment()
         if not self._dll_path.is_file():
             raise WeChatKeyUnavailable(
@@ -204,7 +218,6 @@ class WeChatKeyService:
         timeout_seconds = self._timeout if timeout is None else timeout
         command, options = self._build_helper_invocation(timeout_seconds)
 
-        _LOGGER.info("[wechat] helper started")
         if self._subprocess_runner is not None:
             return self._run_helper_buffered(command, options)
         return self._run_helper_streaming(command, options, progress)
@@ -290,10 +303,6 @@ class WeChatKeyService:
         launch failures because they need different user guidance.
         """
         launcher = self._process_launcher or subprocess.Popen
-        _LOGGER.info(
-            "[wechat] run_helper_streaming start thread=%s",
-            threading.current_thread().name,
-        )
         popen_options = dict(options)
         wait_timeout = popen_options.pop("timeout")
         popen_options["stdout"] = subprocess.PIPE
@@ -361,7 +370,6 @@ class WeChatKeyService:
                 code=_helper_failure_code("\n".join(recent_errors)),
             )
         key = self._finalize_key(stdout)
-        _LOGGER.info("[wechat] key received length=%d", len(key))
         self._report_progress(_KEY_RECEIVED_MESSAGE, progress)
         return key
 
@@ -374,23 +382,17 @@ class WeChatKeyService:
         """Turn helper stderr lines into user-safe progress, never raising."""
         if stream is None:
             return
-        _LOGGER.info(
-            "[wechat] stderr reader thread=%s",
-            threading.current_thread().name,
-        )
         try:
             while True:
                 line = stream.readline()
                 if not line:
                     break
-                _LOGGER.info("[wechat] reader processing stderr line")
                 text = str(line).strip()
                 if not text:
                     continue
                 if len(recent_errors) >= _MAX_RETAINED_ERROR_LINES:
                     recent_errors.pop(0)
                 recent_errors.append(text)
-                _LOGGER.info("[wechat] helper stderr received: %s", text)
                 self._report_progress(text, progress)
         except Exception:
             return
@@ -406,14 +408,12 @@ class WeChatKeyService:
         message = _progress_message(line)
         if message is None:
             return
-        _LOGGER.info("[wechat] progress emitted: %s", message)
-        _LOGGER.info("[wechat] progress callback before")
         try:
             callback(message)
-            _LOGGER.info("[wechat] progress callback after")
         except Exception as error:
             _LOGGER.warning(
-                "[wechat] progress callback failed: %s", repr(error)
+                "wechat.progress.callback success=false error_type=%s",
+                type(error).__name__,
             )
             return
 

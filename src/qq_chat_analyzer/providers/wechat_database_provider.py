@@ -361,62 +361,53 @@ class WeChatDatabaseProvider:
         environment[DB_KEY_ENVIRONMENT_VARIABLE] = self._resolve_key()
         database_type = _database_type(db_path)
         _LOGGER.info(
-            "[wechat db] query started database_type=%s database_file=%s "
-            "database_path=%s query_stage=%s wcdb_stage=invoke",
+            "wechat.wcdb.start database_type=%s query_stage=%s",
             database_type,
-            db_path.name,
-            db_path,
             query_stage,
         )
 
         try:
             completed = self._runner(command, self._timeout, environment)
         except FileNotFoundError as error:
-            _log_query_exception(db_path, query_stage, error)
+            _log_query_exception(database_type, query_stage, error)
             raise WcdbHelperNotFound() from error
         except subprocess.TimeoutExpired as error:
-            _log_query_exception(db_path, query_stage, error)
+            _log_query_exception(database_type, query_stage, error)
             raise QueryFailed(
                 "\u8bfb\u53d6\u5fae\u4fe1\u6570\u636e\u8d85\u65f6\uff0c\u8bf7\u91cd\u8bd5\u3002"
             ) from error
         except Exception as error:
-            _log_query_exception(db_path, query_stage, error)
+            _log_query_exception(database_type, query_stage, error)
             raise QueryFailed() from error
 
         stdout = getattr(completed, "stdout", "") or ""
-        stderr = _safe_diagnostic_text(
-            getattr(completed, "stderr", ""),
-            secrets=(environment[DB_KEY_ENVIRONMENT_VARIABLE],),
-        )
         returncode = getattr(completed, "returncode", None)
         payload = _parse_result(stdout)
         if payload is None:
             _log_query_failure(
-                db_path,
+                database_type,
                 query_stage,
                 wcdb_stage="parse_result",
                 returncode=returncode,
-                stderr=stderr,
                 error_type="QueryFailed",
-                helper_error="invalid helper output",
             )
             raise QueryFailed()
         if payload.get("ok") is not True:
             _log_query_failure(
-                db_path,
+                database_type,
                 query_stage,
                 wcdb_stage=_safe_stage(payload.get("stage")),
                 returncode=returncode,
-                stderr=stderr,
                 error_type="QueryFailed",
-                helper_error=_safe_diagnostic_text(
-                    payload.get("error"),
-                    secrets=(environment[DB_KEY_ENVIRONMENT_VARIABLE],),
-                ),
             )
             raise QueryFailed()
 
         rows = payload.get("rows")
+        _LOGGER.info(
+            "wechat.wcdb.success database_type=%s query_stage=%s",
+            database_type,
+            query_stage,
+        )
         return rows if isinstance(rows, list) else []
 
     def _resolve_key(self) -> str:
@@ -487,11 +478,17 @@ class WeChatDatabaseProvider:
         return account_directory
 
     def _session_db_path(self) -> Path:
-        root = self._resolve_data_root()
+        try:
+            root = self._resolve_data_root()
+        except DatabaseNotFound:
+            _LOGGER.warning("wechat.database.discovery success=false")
+            raise
         for candidate in _iter_db_directories(root):
             session_db = candidate / SESSION_DB_NAME
             if session_db.is_file():
+                _LOGGER.info("wechat.database.discovery success=true")
                 return session_db
+        _LOGGER.warning("wechat.database.discovery success=false")
         raise DatabaseNotFound()
 
     def _find_message_db(self, table: str) -> Path:
@@ -673,61 +670,34 @@ def _safe_stage(value: Any) -> str:
     return text[:80] or "unknown"
 
 
-def _safe_diagnostic_text(
-    value: Any,
-    limit: int = 2000,
-    *,
-    secrets: Sequence[str] = (),
-) -> str:
-    """Normalize native diagnostics without logging commands or environment."""
-    text = str(value or "").strip().replace("\r", " ").replace("\n", " | ")
-    for secret in secrets:
-        if secret:
-            text = text.replace(secret, "[REDACTED]")
-    return text[:limit]
-
-
 def _log_query_failure(
-    db_path: Path,
+    database_type: str,
     query_stage: str,
     *,
     wcdb_stage: str,
     returncode: Any,
-    stderr: str,
     error_type: str,
-    helper_error: str,
 ) -> None:
     _LOGGER.error(
-        "[wechat db] query failed database_type=%s database_file=%s "
-        "database_path=%s query_stage=%s wcdb_stage=%s returncode=%s "
-        "stderr=%s error_type=%s helper_error=%s",
-        _database_type(db_path),
-        db_path.name,
-        db_path,
+        "wechat.wcdb.failed database_type=%s query_stage=%s "
+        "wcdb_stage=%s returncode=%s error_type=%s",
+        database_type,
         query_stage,
         wcdb_stage,
         returncode,
-        stderr,
         error_type,
-        helper_error,
     )
 
 
 def _log_query_exception(
-    db_path: Path,
+    database_type: str,
     query_stage: str,
     error: Exception,
 ) -> None:
-    # Do not attach ``exc_info``: third-party/native exception messages may
-    # echo environment values. The exception class is sufficient diagnosis
-    # and cannot expose the database key.
     _LOGGER.error(
-        "[wechat db] query invocation failed database_type=%s "
-        "database_file=%s database_path=%s query_stage=%s "
+        "wechat.wcdb.failed database_type=%s query_stage=%s "
         "wcdb_stage=invoke original_error_type=%s",
-        _database_type(db_path),
-        db_path.name,
-        db_path,
+        database_type,
         query_stage,
         type(error).__name__,
     )

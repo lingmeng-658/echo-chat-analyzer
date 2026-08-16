@@ -7,6 +7,7 @@ fictional export document, mirroring test_qq_export_import_service.py.
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -225,6 +226,30 @@ def test_execute_reuses_the_injected_import_service(tmp_path: Path) -> None:
 
     assert len(import_service.requests) == 1
     assert import_service.requests[0].platform == "wechat"
+
+
+def test_execute_logs_import_failure_without_exception_message(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _FailingImportService(ImportService):
+        def execute(self, request):
+            raise RuntimeError("fictional secret import detail")
+
+    service = WeChatExportImportService(
+        _StubProvider(),
+        _FailingImportService(),
+    )
+
+    with caplog.at_level(
+        logging.WARNING,
+        logger="qq_chat_analyzer.desktop.wechat_export_import_service",
+    ):
+        with pytest.raises(RuntimeError):
+            service.execute(_request(tmp_path))
+
+    assert "wechat.import.failed error_type=RuntimeError" in caplog.text
+    assert "fictional secret import detail" not in caplog.text
 
 
 def test_empty_conversation_imports_without_messages(tmp_path: Path) -> None:

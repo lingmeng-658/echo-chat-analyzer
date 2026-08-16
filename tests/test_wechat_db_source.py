@@ -966,6 +966,46 @@ def test_missing_data_root_raises_database_not_found(tmp_path: Path) -> None:
         provider.list_sessions()
 
 
+def test_database_discovery_logs_success_without_paths(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    provider = _provider(
+        tmp_path,
+        lambda *args: _FakeCompleted(stdout=_helper_result([])),
+    )
+
+    with caplog.at_level(
+        "INFO",
+        logger="qq_chat_analyzer.providers.wechat_database_provider",
+    ):
+        session_db = provider._session_db_path()
+
+    assert session_db.is_file()
+    assert "wechat.database.discovery success=true" in caplog.text
+    assert str(tmp_path) not in caplog.text
+
+
+def test_database_discovery_logs_failure_without_paths(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    provider = WeChatDatabaseProvider(
+        data_root=tmp_path / "absent",
+        db_key=FICTIONAL_KEY,
+    )
+
+    with caplog.at_level(
+        "INFO",
+        logger="qq_chat_analyzer.providers.wechat_database_provider",
+    ):
+        with pytest.raises(DatabaseNotFound):
+            provider._session_db_path()
+
+    assert "wechat.database.discovery success=false" in caplog.text
+    assert str(tmp_path) not in caplog.text
+
+
 def test_unknown_session_raises_session_not_found(tmp_path: Path) -> None:
     def runner(command, timeout, environment):
         return _FakeCompleted(stdout=_helper_result([]))
@@ -1036,14 +1076,15 @@ def test_query_failure_logs_safe_wcdb_diagnostics(
             provider.list_sessions()
 
     logs = caplog.text
+    assert "wechat.wcdb.failed" in logs
     assert "database_type=session" in logs
-    assert "database_file=session.db" in logs
-    assert "database_path=" in logs
+    assert "database_file=" not in logs
+    assert "database_path=" not in logs
     assert "query_stage=session_list" in logs
     assert "wcdb_stage=open" in logs
     assert "returncode=17" in logs
-    assert "stderr=native stderr: open failed [REDACTED]" in logs
-    assert "helper_error=cipher open failed [REDACTED]" in logs
+    assert "stderr=" not in logs
+    assert "helper_error=" not in logs
     assert "error_type=QueryFailed" in logs
     assert secret_key not in logs
     assert "WX_DB_KEY" not in logs

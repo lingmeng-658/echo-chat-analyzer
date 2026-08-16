@@ -15,35 +15,48 @@ import pytest
 SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC_ROOT))
 
+from qq_chat_analyzer import diagnostics as diagnostics_module
+
 
 def _desktop_runtime():
     return importlib.import_module("qq_chat_analyzer.gui.desktop_runtime")
 
 
-def test_user_data_dir_uses_local_app_data(
+@pytest.fixture(autouse=True)
+def _isolated_diagnostic_loggers() -> None:
+    names = (
+        diagnostics_module.LOGGER_NAME,
+        "qq_chat_analyzer.desktop",
+        "qq_chat_analyzer.providers.wechat_database_provider",
+    )
+    states = []
+    for name in names:
+        logger = logging.getLogger(name)
+        states.append((logger, logger.handlers[:], logger.level, logger.propagate))
+        logger.handlers.clear()
+        logger.setLevel(logging.NOTSET)
+        logger.propagate = True
+    yield
+    for logger, original_handlers, original_level, original_propagate in states:
+        for handler in tuple(logger.handlers):
+            if handler not in original_handlers:
+                handler.close()
+        logger.handlers[:] = original_handlers
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
+
+
+def test_log_directory_is_created_under_echo_root(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     module = _desktop_runtime()
-    local = tmp_path / "Local"
-    local.mkdir(parents=True)
-    monkeypatch.setenv("LOCALAPPDATA", str(local))
-
-    assert module.user_data_dir() == local / "LocalChatAnalyzer"
-
-
-def test_log_directory_is_created_under_user_data(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    module = _desktop_runtime()
-    local = tmp_path / "Local"
-    local.mkdir(parents=True)
-    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    root = tmp_path / "Echo"
+    monkeypatch.setattr(diagnostics_module, "runtime_root", lambda: root)
 
     directory = module.log_directory()
 
-    assert directory == local / "LocalChatAnalyzer" / "logs"
+    assert directory == root / "logs"
     assert directory.is_dir()
 
 
@@ -52,13 +65,12 @@ def test_configure_logging_creates_file_handler(
     tmp_path: Path,
 ) -> None:
     module = _desktop_runtime()
-    local = tmp_path / "Local"
-    local.mkdir(parents=True)
-    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    root = tmp_path / "Echo"
+    monkeypatch.setattr(diagnostics_module, "runtime_root", lambda: root)
 
     logger = module.configure_logging()
 
-    assert (local / "LocalChatAnalyzer" / "logs" / "desktop.log").is_file()
+    assert (root / "logs" / "echo.log").is_file()
     assert any(
         isinstance(handler, logging.FileHandler) for handler in logger.handlers
     )
@@ -69,9 +81,8 @@ def test_desktop_log_is_written_as_utf8(
     tmp_path: Path,
 ) -> None:
     module = _desktop_runtime()
-    local = tmp_path / "Local"
-    local.mkdir(parents=True)
-    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    root = tmp_path / "Echo"
+    monkeypatch.setattr(diagnostics_module, "runtime_root", lambda: root)
     logger = logging.getLogger(module.LOGGER_NAME)
     original_handlers = logger.handlers[:]
     original_level = logger.level
@@ -83,7 +94,7 @@ def test_desktop_log_is_written_as_utf8(
         for handler in logger.handlers:
             handler.flush()
 
-        log_path = local / "LocalChatAnalyzer" / "logs" / "desktop.log"
+        log_path = root / "logs" / "echo.log"
         text = log_path.read_bytes().decode("utf-8")
         assert "正在加载 NapCat..." in text
         assert "姝ｅ湪鍔犺浇" not in text
@@ -100,9 +111,8 @@ def test_wechat_database_provider_diagnostics_are_written_to_desktop_log(
     tmp_path: Path,
 ) -> None:
     module = _desktop_runtime()
-    local = tmp_path / "Local"
-    local.mkdir(parents=True)
-    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    root = tmp_path / "Echo"
+    monkeypatch.setattr(diagnostics_module, "runtime_root", lambda: root)
     desktop_logger = logging.getLogger(module.LOGGER_NAME)
     provider_logger = logging.getLogger(
         "qq_chat_analyzer.providers.wechat_database_provider"
@@ -117,15 +127,13 @@ def test_wechat_database_provider_diagnostics_are_written_to_desktop_log(
         module.configure_logging()
         module.configure_logging()
         provider_logger.info(
-            "[wechat db] query failed wcdb_stage=open error_type=RuntimeError"
+            "wechat.wcdb.failed wcdb_stage=open error_type=RuntimeError"
         )
         for handler in provider_logger.handlers:
             handler.flush()
 
-        log_text = (
-            local / "LocalChatAnalyzer" / "logs" / "desktop.log"
-        ).read_text(encoding="utf-8")
-        assert log_text.count("[wechat db] query failed") == 1
+        log_text = (root / "logs" / "echo.log").read_text(encoding="utf-8")
+        assert log_text.count("wechat.wcdb.failed") == 1
         assert "wcdb_stage=open" in log_text
     finally:
         for handler in desktop_logger.handlers + provider_logger.handlers:
@@ -193,6 +201,11 @@ def test_headless_analysis_mode_writes_outcome(
     local = tmp_path / "Local"
     local.mkdir(parents=True)
     monkeypatch.setenv("LOCALAPPDATA", str(local))
+    monkeypatch.setattr(
+        diagnostics_module,
+        "runtime_root",
+        lambda: tmp_path / "Echo",
+    )
 
     class _FakeResult:
         processed_message_count = 4

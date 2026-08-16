@@ -2,8 +2,8 @@
 
 This module keeps the desktop entry point safe on machines without a Python
 environment: startup failures and analysis errors are written to
-``%LOCALAPPDATA%/LocalChatAnalyzer/logs/`` and users only ever see a safe
-message, never a traceback.
+``Echo/logs/echo.log`` next to the packaged executable (or the development
+root) and users only ever see a safe message, never a traceback.
 """
 
 from __future__ import annotations
@@ -15,13 +15,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ..logging_config import attach_desktop_diagnostic_handlers
-from ..resources import user_data_dir
+from ..diagnostics import configure_diagnostics, log_path
 
 
 LOGGER_NAME = "qq_chat_analyzer.desktop"
-LOG_FILENAME = "desktop.log"
-LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
 STARTUP_FAILED_MESSAGE = (
     "\u5e94\u7528\u542f\u52a8\u5931\u8d25\uff0c\u8be6\u60c5\u5df2\u5199\u5165"
@@ -35,24 +32,15 @@ UNEXPECTED_ERROR_MESSAGE = (
 
 def log_directory() -> Path:
     """Return the user-writable logs directory, creating it."""
-    directory = user_data_dir() / "logs"
+    directory = log_path().parent
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 
 
 def configure_logging() -> logging.Logger:
     """Configure a minimal file logger and return the desktop logger."""
-    logger = logging.getLogger(LOGGER_NAME)
-    logger.setLevel(logging.INFO)
-    if not logger.handlers:
-        handler = logging.FileHandler(
-            log_directory() / LOG_FILENAME,
-            encoding="utf-8",
-        )
-        handler.setFormatter(logging.Formatter(LOG_FORMAT))
-        logger.addHandler(handler)
-    attach_desktop_diagnostic_handlers(logger.handlers)
-    return logger
+    configure_diagnostics()
+    return logging.getLogger(LOGGER_NAME)
 
 
 def install_global_exception_handler() -> None:
@@ -88,7 +76,7 @@ def log_startup(version: str) -> None:
     """Record one startup line with version and timestamp."""
     logger = logging.getLogger(LOGGER_NAME)
     logger.info(
-        "startup version=%s python=%s platform=%s at %s",
+        "Echo started version=%s python=%s platform=%s at %s",
         version,
         sys.version.split()[0],
         sys.platform,
