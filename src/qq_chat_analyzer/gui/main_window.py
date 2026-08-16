@@ -518,8 +518,8 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------------- lifecycle
 
     def closeEvent(self, event: Any) -> None:
-        """Clean up QQ processes and transient artifacts before the window closes."""
-        shutdown_workers(wait_ms=3000)
+        """Close quickly, cancelling background work without blocking."""
+        shutdown_workers()
         shutdown = getattr(self._facade, "shutdown_qq_runtime", None)
         if callable(shutdown):
             threading.Thread(
@@ -530,10 +530,12 @@ class MainWindow(QMainWindow):
             ).start()
         shutdown = getattr(self._facade, "shutdown", None)
         if callable(shutdown):
-            try:
-                shutdown()
-            except Exception:
-                pass
+            threading.Thread(
+                target=_best_effort_shutdown,
+                args=(shutdown,),
+                name="echo-facade-shutdown",
+                daemon=True,
+            ).start()
         super().closeEvent(event)
         _quit_application()
 

@@ -751,22 +751,25 @@ def test_worker_shutdown_cancels_pending_workers(qt_app) -> None:
     assert workers._PENDING == set()
 
 
-def test_worker_shutdown_supports_bounded_wait(
+def test_worker_shutdown_is_non_blocking_and_clears_pool(
     qt_app,
     monkeypatch,
 ) -> None:
     workers = importlib.import_module("qq_chat_analyzer.gui.workers")
     pool = QThreadPool.globalInstance()
+    clears: list[int] = []
     waits: list[int] = []
+    monkeypatch.setattr(pool, "clear", lambda: clears.append(1))
     monkeypatch.setattr(
         pool,
         "waitForDone",
         lambda timeout: waits.append(timeout) or True,
     )
 
-    workers.shutdown(wait_ms=2500)
+    workers.shutdown()
 
-    assert waits == [2500]
+    assert clears == [1]
+    assert waits == []
 
 
 def test_wechat_workspace_cancel_restores_connect_and_ignores_stale_finish(
@@ -1111,13 +1114,13 @@ def test_main_window_close_cancels_background_workers(
     monkeypatch.setattr(
         main_window,
         "shutdown_workers",
-        lambda wait_ms=0: calls.append(wait_ms),
+        lambda: calls.append(1),
     )
     window = _main_window(qt_app, StubFacade(sources=sources))
 
     window.close()
 
-    assert calls == [3000]
+    assert calls == [1]
 
 
 def test_main_window_close_quits_application(
@@ -1149,6 +1152,9 @@ def test_main_window_qq_cleanup_thread_is_daemon(
         def shutdown_qq_runtime(self):
             time.sleep(1.0)
 
+        def shutdown(self):
+            time.sleep(1.0)
+
     window = _main_window(
         qt_app,
         _SlowShutdownFacade(sources=sources),
@@ -1164,9 +1170,20 @@ def test_main_window_qq_cleanup_thread_is_daemon(
         ),
         None,
     )
+    facade_thread = next(
+        (
+            candidate
+            for candidate in threading.enumerate()
+            if candidate.name == "echo-facade-shutdown"
+        ),
+        None,
+    )
     assert thread is not None
     assert thread.daemon is True
+    assert facade_thread is not None
+    assert facade_thread.daemon is True
     thread.join(timeout=2.0)
+    facade_thread.join(timeout=2.0)
 
 
 def test_main_window_has_minimum_size(qt_app, sources) -> None:

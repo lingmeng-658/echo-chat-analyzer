@@ -7,7 +7,10 @@ with stubs.
 
 from __future__ import annotations
 
+import os
 import sys
+import threading
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -167,13 +170,34 @@ def main(argv: list[str] | None = None) -> int:
         window = MainWindow(build_facade())
         window.resize(960, 720)
         window.show()
-        return app.exec()
+        exit_code = app.exec()
+        _guard_exit_after_event_loop(exit_code)
+        return exit_code
     except Exception as error:
         configure_logging().exception("desktop startup failed", exc_info=error)
         app = QApplication.instance()
         if app is not None:
             QMessageBox.critical(None, "\u9519\u8bef", STARTUP_FAILED_MESSAGE)
         return 1
+
+
+def _guard_exit_after_event_loop(exit_code: int) -> None:
+    """Last-resort process exit guard once the Qt event loop has ended.
+
+    Normal cleanup still runs first. This daemon only fires if teardown is
+    still stuck after a short grace period, so a hung Qt/thread-pool shutdown
+    cannot leave an invisible Echo process behind.
+    """
+
+    def _watchdog() -> None:
+        time.sleep(1.0)
+        os._exit(exit_code)
+
+    threading.Thread(
+        target=_watchdog,
+        name="echo-exit-watchdog",
+        daemon=True,
+    ).start()
 
 
 def _run_headless_analysis(arguments: list[str]) -> int:
