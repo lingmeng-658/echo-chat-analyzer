@@ -241,10 +241,16 @@ def submit(
     return worker
 
 
-def shutdown() -> None:
-    """Cancel every pending worker, typically while the window is closing."""
+def shutdown(wait_ms: int = 0) -> None:
+    """Cancel every pending worker, optionally waiting for a bounded time.
+
+    ``wait_ms`` is deliberately finite: shutdown must never block the app
+    from exiting while a worker is stuck in a long-running call.
+    """
     for worker in tuple(_PENDING):
         worker.cancel()
+    if wait_ms > 0:
+        QThreadPool.globalInstance().waitForDone(wait_ms)
 
 
 def run_inline(

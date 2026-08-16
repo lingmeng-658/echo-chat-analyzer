@@ -398,8 +398,7 @@ class WeChatWorkspace(QWidget):
     ) -> None:
         """Connect WeChat in one click, asking for a directory only if needed."""
         if self._connection_task is not None:
-            if self._wechat_connect_button.text() == _CANCEL_CONNECTION_LABEL:
-                self.cancel_connection()
+            self.cancel_connection()
             return
 
         detect_roots = detect_data_roots or self._facade.detect_wechat_data_roots
@@ -431,8 +430,8 @@ class WeChatWorkspace(QWidget):
 
     def _start_wechat_connect(self, config: Any) -> None:
         """Run save-then-key for one config, off the UI thread."""
-        self._wechat_connect_button.setText(_WECHAT_CONNECT_LABEL)
-        self._wechat_connect_button.setEnabled(False)
+        self._wechat_connect_button.setText(_CANCEL_CONNECTION_LABEL)
+        self._wechat_connect_button.setEnabled(True)
         self._status_label.setVisible(True)
         self._status_label.setText(_WECHAT_CONNECTING)
         self._status_label.setToolTip("")
@@ -469,11 +468,6 @@ class WeChatWorkspace(QWidget):
         self._wechat_connect_button.setEnabled(True)
         connected = self._status_label.text().startswith(_CONNECTED_PREFIX)
         self._wechat_connect_button.setVisible(not connected)
-        if (
-            not connected
-            and self._wechat_connect_button.text() == _CANCEL_CONNECTION_LABEL
-        ):
-            self._wechat_connect_button.setText(_RESTART_CONNECTION_LABEL)
 
     def _after_wechat_key_acquired(self, status: Any) -> None:
         self._show_connection_status(
@@ -592,7 +586,9 @@ class WeChatWorkspace(QWidget):
         self._wechat_connect_pending = False
         self._hide_wechat_guide()
         self._wechat_connect_button.setText(_WECHAT_CONNECT_LABEL)
-        self._wechat_connect_button.setEnabled(True)
+        self._wechat_connect_button.setEnabled(
+            self._connection_task is None
+        )
         self._wechat_disconnect_button.setVisible(False)
         self._status_label.setText("连接已取消，可以重新开始。")
         self._status_label.setVisible(True)

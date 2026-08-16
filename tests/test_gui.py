@@ -751,6 +751,24 @@ def test_worker_shutdown_cancels_pending_workers(qt_app) -> None:
     assert workers._PENDING == set()
 
 
+def test_worker_shutdown_supports_bounded_wait(
+    qt_app,
+    monkeypatch,
+) -> None:
+    workers = importlib.import_module("qq_chat_analyzer.gui.workers")
+    pool = QThreadPool.globalInstance()
+    waits: list[int] = []
+    monkeypatch.setattr(
+        pool,
+        "waitForDone",
+        lambda timeout: waits.append(timeout) or True,
+    )
+
+    workers.shutdown(wait_ms=2500)
+
+    assert waits == [2500]
+
+
 def test_wechat_workspace_blocks_new_connect_until_task_finishes(
     qt_app,
 ) -> None:
@@ -766,17 +784,20 @@ def test_wechat_workspace_blocks_new_connect_until_task_finishes(
 
     workspace.connect_wechat()
     assert executor.submission_count == 1
-    assert workspace._wechat_connect_button.isEnabled() is False
-
-    workspace.cancel_connection()
-    assert executor.cancelled is True
+    assert workspace._wechat_connect_button.text() == "取消连接"
     assert workspace._wechat_connect_button.isEnabled() is True
+
+    workspace.connect_wechat()
+    assert executor.cancelled is True
+    assert workspace._wechat_connect_button.text() == "连接微信"
+    assert workspace._wechat_connect_button.isEnabled() is False
 
     workspace.connect_wechat()
     assert executor.submission_count == 1
 
     executor.fail("wechat_key_timeout", "Key 获取超时，请在微信登录时重试。")
     assert workspace._connection_task is None
+    assert workspace._wechat_connect_button.isEnabled() is True
 
     workspace.connect_wechat()
     assert executor.submission_count == 2
@@ -798,17 +819,20 @@ def test_analysis_page_wechat_blocks_new_connect_until_task_finishes(
         module.WeChatEnvironmentConfig(data_root="D:/fake_xwechat_files")
     )
     assert executor.submission_count == 1
-    assert page._wechat_connect_button.isEnabled() is False
-
-    page.cancel_connection()
-    assert executor.cancelled is True
+    assert page._wechat_connect_button.text() == "取消连接"
     assert page._wechat_connect_button.isEnabled() is True
+
+    page.connect_wechat()
+    assert executor.cancelled is True
+    assert page._wechat_connect_button.text() == "连接微信"
+    assert page._wechat_connect_button.isEnabled() is False
 
     page.connect_wechat()
     assert executor.submission_count == 1
 
     executor.fail("wechat_key_timeout", "Key 获取超时，请在微信登录时重试。")
     assert page._connection_task is None
+    assert page._wechat_connect_button.isEnabled() is True
 
     page.connect_wechat()
     assert executor.submission_count == 2
@@ -1083,6 +1107,26 @@ def test_main_window_close_cancels_background_workers(
     monkeypatch.setattr(
         main_window,
         "shutdown_workers",
+        lambda wait_ms=0: calls.append(wait_ms),
+    )
+    window = _main_window(qt_app, StubFacade(sources=sources))
+
+    window.close()
+
+    assert calls == [3000]
+
+
+def test_main_window_close_quits_application(
+    qt_app,
+    sources,
+    monkeypatch,
+) -> None:
+    """closeEvent explicitly ends the Qt event loop."""
+    main_window = importlib.import_module("qq_chat_analyzer.gui.main_window")
+    calls: list[int] = []
+    monkeypatch.setattr(
+        main_window,
+        "_quit_application",
         lambda: calls.append(1),
     )
     window = _main_window(qt_app, StubFacade(sources=sources))
@@ -1090,6 +1134,35 @@ def test_main_window_close_cancels_background_workers(
     window.close()
 
     assert calls == [1]
+
+
+def test_main_window_qq_cleanup_thread_is_daemon(
+    qt_app,
+    sources,
+) -> None:
+    """QQ shutdown cleanup must not keep the Python process alive."""
+    class _SlowShutdownFacade(StubFacade):
+        def shutdown_qq_runtime(self):
+            time.sleep(1.0)
+
+    window = _main_window(
+        qt_app,
+        _SlowShutdownFacade(sources=sources),
+    )
+
+    window.close()
+
+    thread = next(
+        (
+            candidate
+            for candidate in threading.enumerate()
+            if candidate.name == "echo-qq-shutdown"
+        ),
+        None,
+    )
+    assert thread is not None
+    assert thread.daemon is True
+    thread.join(timeout=2.0)
 
 
 def test_main_window_has_minimum_size(qt_app, sources) -> None:
@@ -3836,15 +3909,15 @@ def test_connecting_wechat_locks_sources_and_cancel_restores_selection(
     page._start_wechat_connect(
         module.WeChatEnvironmentConfig(data_root="D:/fictional_wechat")
     )
-    assert page._wechat_connect_button.text() == "连接微信"
-    assert page._wechat_connect_button.isEnabled() is False
+    assert page._wechat_connect_button.text() == "取消连接"
+    assert page._wechat_connect_button.isEnabled() is True
     assert all(not button.isEnabled() for button in page._source_buttons.values())
 
     page.cancel_connection()
 
     assert executor.cancelled is True
     assert page._wechat_connect_button.text() == "连接微信"
-    assert page._wechat_connect_button.isEnabled() is True
+    assert page._wechat_connect_button.isEnabled() is False
     assert all(button.isEnabled() for button in page._source_buttons.values())
 
 
@@ -5360,6 +5433,12 @@ def test_qq_workspace_connect_disables_button_until_finish(
     QTest.qWait(600)
     assert workspace._qq_connect_button.isEnabled() is True
     assert workspace._qq_connect_button.text() == "重新开始"
+
+    cancel_workspace = QQWorkspace(facade, executor=_DeferredExecutor())
+    cancel_workspace.connect_qq()
+    cancel_workspace.cancel_connection()
+    assert cancel_workspace._qq_connect_button.isEnabled() is True
+    assert cancel_workspace._qq_connect_button.text() == "连接QQ"
 
 
 def test_wechat_workspace_shows_connect_button_when_disconnected(

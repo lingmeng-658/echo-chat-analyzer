@@ -162,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
         from .main_window import MainWindow
 
         app = QApplication(arguments)
+        app.setQuitOnLastWindowClosed(True)
         app.setStyleSheet(BASE_QSS)
         window = MainWindow(build_facade())
         window.resize(960, 720)

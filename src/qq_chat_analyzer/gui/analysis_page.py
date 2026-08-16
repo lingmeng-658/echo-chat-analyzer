@@ -1059,8 +1059,7 @@ class AnalysisPage(QWidget):
         if self._selected_source is not ChatSource.WECHAT:
             return
         if self._connection_task is not None:
-            if self._wechat_connect_button.text() == _CANCEL_CONNECTION_LABEL:
-                self.cancel_connection()
+            self.cancel_connection()
             return
 
         detect_roots = detect_data_roots or self._facade.detect_wechat_data_roots
@@ -1093,8 +1092,8 @@ class AnalysisPage(QWidget):
     def _start_wechat_connect(self, config: Any) -> None:
         """Run save-then-key for one config, off the UI thread."""
         self._lock_sources(True)
-        self._wechat_connect_button.setText(_WECHAT_CONNECT_LABEL)
-        self._wechat_connect_button.setEnabled(False)
+        self._wechat_connect_button.setText(_CANCEL_CONNECTION_LABEL)
+        self._wechat_connect_button.setEnabled(True)
         self._status_label.setVisible(True)
         self._status_label.setText(_WECHAT_CONNECTING)
         self._status_label.setToolTip("")
@@ -1125,10 +1124,6 @@ class AnalysisPage(QWidget):
         if self._selected_source is ChatSource.WECHAT:
             connected = self._status_label.text().startswith(_CONNECTED_PREFIX)
             self._wechat_connect_button.setVisible(not connected)
-            if not connected and self._wechat_connect_button.text() == (
-                _CANCEL_CONNECTION_LABEL
-            ):
-                self._wechat_connect_button.setText(_RESTART_CONNECTION_LABEL)
 
     def cancel_connection(self) -> None:
         """Cancel the active source task and return to a reconnectable page."""
@@ -1155,7 +1150,10 @@ class AnalysisPage(QWidget):
         self._qq_connect_button.setText(_QQ_CONNECT_LABEL)
         self._wechat_connect_button.setText(_WECHAT_CONNECT_LABEL)
         self._qq_connect_button.setEnabled(True)
-        self._wechat_connect_button.setEnabled(True)
+        self._wechat_connect_button.setEnabled(
+            self._selected_source is not ChatSource.WECHAT
+            or self._connection_task is None
+        )
         self._status_label.setText(_CONNECTION_CANCELLED)
         self._status_label.setVisible(True)
         self.status_changed.emit(_CONNECTION_CANCELLED)

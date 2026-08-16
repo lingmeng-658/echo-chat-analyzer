@@ -12,6 +12,7 @@ from typing import Any
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (
+    QApplication,
     QSizePolicy,
     QHBoxLayout,
     QLabel,
@@ -518,14 +519,14 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: Any) -> None:
         """Clean up QQ processes and transient artifacts before the window closes."""
-        shutdown_workers()
+        shutdown_workers(wait_ms=3000)
         shutdown = getattr(self._facade, "shutdown_qq_runtime", None)
         if callable(shutdown):
             threading.Thread(
                 target=_best_effort_shutdown,
                 args=(shutdown,),
                 name="echo-qq-shutdown",
-                daemon=False,
+                daemon=True,
             ).start()
         shutdown = getattr(self._facade, "shutdown", None)
         if callable(shutdown):
@@ -534,6 +535,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
         super().closeEvent(event)
+        _quit_application()
 
 
 def _best_effort_shutdown(shutdown: Any) -> None:
@@ -542,6 +544,13 @@ def _best_effort_shutdown(shutdown: Any) -> None:
         shutdown()
     except Exception:
         pass
+
+
+def _quit_application() -> None:
+    """End the Qt event loop deterministically after the main window closes."""
+    app = QApplication.instance()
+    if app is not None:
+        app.quit()
 
 
 def _is_file(path: Path) -> bool:
