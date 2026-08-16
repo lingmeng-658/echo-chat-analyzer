@@ -25,14 +25,15 @@ def _module():
 def _xwechat_account(base: Path, wxid: str) -> Path:
     """Create one valid WeChat 4.x account directory."""
     account = base / "xwechat_files" / wxid
-    db_storage = account / "db_storage"
-    db_storage.mkdir(parents=True)
-    (db_storage / "session.db").write_bytes(b"fake")
+    message_dir = account / "db_storage" / "message"
+    message_dir.mkdir(parents=True)
+    (message_dir / "session.db").write_bytes(b"fake")
+    (message_dir / "message_0.db").write_bytes(b"fake")
     return account
 
 
 def _legacy_account(base: Path, wxid: str) -> Path:
-    """Create one valid WeChat 3.x account directory."""
+    """Create one WeChat 3.x candidate that Echo cannot read."""
     account = base / "WeChat Files" / wxid
     msg_dir = account / "Msg"
     msg_dir.mkdir(parents=True)
@@ -111,7 +112,9 @@ def test_custom_config_ignores_utf8_bom(tmp_path: Path) -> None:
     assert detected == [root]
 
 
-def test_legacy_wechat_files_config_detected(tmp_path: Path) -> None:
+def test_legacy_wechat_files_dir_is_candidate_but_not_valid(
+    tmp_path: Path,
+) -> None:
     module = _module()
     home = tmp_path / "home"
     appdata = tmp_path / "appdata"
@@ -124,9 +127,59 @@ def test_legacy_wechat_files_config_detected(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
+    candidates = module.candidate_wechat_data_roots(
+        home=home,
+        appdata=appdata,
+    )
     detected = module.detect_wechat_data_roots(home=home, appdata=appdata)
 
-    assert root in detected
+    assert root in candidates
+    assert root not in detected
+
+
+def test_valid_root_requires_session_and_message_databases(
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    account = tmp_path / "xwechat_files" / "wxid_partial"
+    message_dir = account / "db_storage" / "message"
+    message_dir.mkdir(parents=True)
+    (message_dir / "session.db").write_bytes(b"fake")
+
+    assert module.is_valid_wechat_data_root(account) is False
+    assert module.detect_wechat_data_roots(
+        home=tmp_path,
+        appdata=tmp_path / "appdata",
+    ) == []
+
+
+def test_empty_database_files_are_not_valid(tmp_path: Path) -> None:
+    module = _module()
+    account = tmp_path / "xwechat_files" / "wxid_empty"
+    message_dir = account / "db_storage" / "message"
+    message_dir.mkdir(parents=True)
+    (message_dir / "session.db").write_bytes(b"")
+    (message_dir / "message_0.db").write_bytes(b"")
+
+    assert module.is_valid_wechat_data_root(account) is False
+    assert module.detect_wechat_data_roots(
+        home=tmp_path,
+        appdata=tmp_path / "appdata",
+    ) == []
+
+
+def test_legacy_msg_only_directory_is_not_valid(tmp_path: Path) -> None:
+    module = _module()
+    legacy = tmp_path / "WeChat Files" / "wxid_old"
+    msg_dir = legacy / "Msg"
+    msg_dir.mkdir(parents=True)
+    (msg_dir / "MSG0.db").write_bytes(b"fake")
+
+    assert module.is_valid_wechat_data_root(legacy) is False
+    assert module.detect_wechat_data_roots(
+        home=tmp_path,
+        appdata=tmp_path / "appdata",
+    ) == []
 
 
 def test_no_valid_directories_returns_empty(tmp_path: Path) -> None:

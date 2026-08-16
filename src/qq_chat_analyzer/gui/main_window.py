@@ -31,6 +31,7 @@ from .local_data_page import LocalDataPage
 from .qq_workspace import QQWorkspace
 from .theme import WINDOW_TITLE_STYLE
 from .wechat_workspace import WeChatWorkspace
+from .workers import shutdown as shutdown_workers
 from .workers import submit
 
 
@@ -517,6 +518,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: Any) -> None:
         """Clean up QQ processes and transient artifacts before the window closes."""
+        shutdown_workers()
         shutdown = getattr(self._facade, "shutdown_qq_runtime", None)
         if callable(shutdown):
             threading.Thread(

@@ -643,6 +643,114 @@ def test_worker_forwards_analysis_progress_to_the_ui_callback() -> None:
     assert received == ["正在分析聊天内容..."]
 
 
+def test_cancelled_worker_stops_emitting_and_cleans_up(qt_app) -> None:
+    workers = importlib.import_module("qq_chat_analyzer.gui.workers")
+    started = threading.Event()
+    release = threading.Event()
+    successes: list[object] = []
+    errors: list[tuple[str, str]] = []
+    progress: list[str] = []
+
+    def operation(report):
+        report("step-1")
+        started.set()
+        release.wait(timeout=5)
+        report("step-2")
+        return "done"
+
+    workers.submit(
+        operation,
+        on_success=successes.append,
+        on_error=lambda code, message: errors.append((code, message)),
+        on_progress=progress.append,
+    )
+
+    assert started.wait(timeout=2)
+    for worker in workers._PENDING:
+        worker.cancel()
+    release.set()
+    _settle_workers()
+
+    assert progress == ["step-1"]
+    assert successes == []
+    assert errors == []
+    assert workers._PENDING == set()
+
+
+def test_worker_stops_when_signal_source_is_destroyed(qt_app) -> None:
+    workers = importlib.import_module("qq_chat_analyzer.gui.workers")
+    started = threading.Event()
+    progress_received = threading.Event()
+    successes: list[object] = []
+    errors: list[tuple[str, str]] = []
+    progress: list[str] = []
+
+    def operation(report):
+        report("step-1")
+        started.set()
+        progress_received.wait(timeout=5)
+        report("step-2")
+        return "done"
+
+    worker = workers.submit(
+        operation,
+        on_success=successes.append,
+        on_error=lambda code, message: errors.append((code, message)),
+        on_progress=lambda message: (
+            progress.append(message),
+            progress_received.set(),
+        ),
+    )
+
+    assert started.wait(timeout=2)
+    deadline = time.monotonic() + 2
+    while not progress_received.is_set() and time.monotonic() < deadline:
+        QApplication.processEvents()
+        time.sleep(0.01)
+    assert progress_received.is_set()
+    import shiboken6
+
+    shiboken6.delete(worker._callback_relay)
+    _settle_workers()
+
+    assert progress == ["step-1"]
+    assert successes == []
+    assert errors == []
+    assert workers._PENDING == set()
+
+
+def test_worker_shutdown_cancels_pending_workers(qt_app) -> None:
+    workers = importlib.import_module("qq_chat_analyzer.gui.workers")
+    started = threading.Event()
+    release = threading.Event()
+    successes: list[object] = []
+    errors: list[tuple[str, str]] = []
+    progress: list[str] = []
+
+    def operation(report):
+        started.set()
+        release.wait(timeout=5)
+        report("late")
+        return "done"
+
+    workers.submit(
+        operation,
+        on_success=successes.append,
+        on_error=lambda code, message: errors.append((code, message)),
+        on_progress=progress.append,
+    )
+
+    assert started.wait(timeout=2)
+    workers.shutdown()
+    release.set()
+    _settle_workers()
+
+    assert progress == []
+    assert successes == []
+    assert errors == []
+    assert workers._PENDING == set()
+
+
 class _DeferredExecutor:
     """Capture a facade call and let the test finish it manually."""
 
@@ -857,6 +965,26 @@ def test_main_window_close_survives_facade_shutdown_exception(qt_app, sources) -
         time.sleep(0.005)
 
     assert facade.shutdown_calls == [1]
+
+
+def test_main_window_close_cancels_background_workers(
+    qt_app,
+    sources,
+    monkeypatch,
+) -> None:
+    """closeEvent stops pending workers before facade cleanup starts."""
+    main_window = importlib.import_module("qq_chat_analyzer.gui.main_window")
+    calls: list[int] = []
+    monkeypatch.setattr(
+        main_window,
+        "shutdown_workers",
+        lambda: calls.append(1),
+    )
+    window = _main_window(qt_app, StubFacade(sources=sources))
+
+    window.close()
+
+    assert calls == [1]
 
 
 def test_main_window_has_minimum_size(qt_app, sources) -> None:

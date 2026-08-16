@@ -2,12 +2,13 @@
 
 Detection is deliberately cheap and conservative. It checks WeChat's default
 Documents locations first, then any custom storage parent WeChat itself has
-persisted, validates the WeChat data structure of every candidate account
-directory, and returns all valid candidates. When more than one account is
-found the caller is expected to let the user choose instead of guessing.
+persisted. Raw account directories are exposed as *candidates*; only roots
+whose database layout matches what the WeChat database provider can actually
+read are returned as *valid* roots. When more than one account is found the
+caller is expected to let the user choose instead of guessing.
 
 The detector only reads directory names and marker files; it never opens a
-database or a chat record.
+database or a chat record, and never runs WCDB queries.
 """
 
 from __future__ import annotations
@@ -25,7 +26,6 @@ ACCOUNT_PREFIXES = ("wxid_", "wx_")
 SESSION_DB_NAME = "session.db"
 MESSAGE_DB_GLOB = "message_*.db"
 DB_STORAGE_DIR_NAME = "db_storage"
-MSG_DIR_NAME = "Msg"
 
 
 def detect_wechat_data_roots(
@@ -40,6 +40,28 @@ def detect_wechat_data_roots(
     location. Duplicates are removed and only structurally valid roots are
     returned.
     """
+    return _unique_paths(
+        candidate
+        for candidate in candidate_wechat_data_roots(
+            home=home,
+            appdata=appdata,
+        )
+        if is_valid_wechat_data_root(candidate)
+    )
+
+
+def candidate_wechat_data_roots(
+    *,
+    home: Path | None = None,
+    appdata: Path | None = None,
+) -> list[Path]:
+    """Return every plausible WeChat account data directory found locally.
+
+    Candidates include old WeChat layouts that Echo cannot read. Callers that
+    must not present a stale directory as usable should use
+    :func:`detect_wechat_data_roots` or filter with
+    :func:`is_valid_wechat_data_root`.
+    """
     home_path = home or _default_home()
     appdata_path = appdata or _default_appdata()
     base_dirs: list[Path] = []
@@ -51,11 +73,7 @@ def detect_wechat_data_roots(
     for base in base_dirs:
         if not base.is_dir():
             continue
-        roots.extend(
-            candidate
-            for candidate in _expand_account_roots(base)
-            if is_valid_wechat_data_root(candidate)
-        )
+        roots.extend(_expand_account_roots(base))
     return _unique_paths(roots)
 
 
@@ -118,26 +136,56 @@ def registered_wechat_data_dirs() -> list[Path]:
 
 
 def is_valid_wechat_data_root(path: Path) -> bool:
-    """Return whether a directory has WeChat data structure markers."""
+    """Return whether a directory has usable WeChat databases.
+
+    A root is valid only when its provider-readable database directories
+    contain both ``session.db`` and at least one ``message_*.db``. Legacy
+    WeChat 3.x ``Msg`` folders are deliberately not valid because the bundled
+    provider cannot read them.
+    """
     if not path.is_dir():
         return False
-    if (path / SESSION_DB_NAME).is_file():
-        return True
-
-    db_storage = path / DB_STORAGE_DIR_NAME
-    if db_storage.is_dir() and (
-        (db_storage / SESSION_DB_NAME).is_file()
-        or any(db_storage.glob(MESSAGE_DB_GLOB))
-    ):
-        return True
-
-    msg_dir = path / MSG_DIR_NAME
-    if msg_dir.is_dir() and any(msg_dir.glob("*.db")):
-        return True
-    return False
+    db_directories = _provider_db_directories(path)
+    return (
+        any(
+            _is_non_empty_file(db_directory / SESSION_DB_NAME)
+            for db_directory in db_directories
+        )
+        and any(
+            any(
+                _is_non_empty_file(db_file)
+                for db_file in db_directory.glob(MESSAGE_DB_GLOB)
+            )
+            for db_directory in db_directories
+        )
+    )
 
 
 # ---------------------------------------------------------------- internals
+
+
+def _provider_db_directories(path: Path) -> list[Path]:
+    """Mirror the database directories the provider actually scans."""
+    directories: list[Path] = []
+    if (path / SESSION_DB_NAME).is_file() or any(
+        path.glob(MESSAGE_DB_GLOB)
+    ):
+        directories.append(path)
+
+    try:
+        storage_dirs = sorted(path.rglob(DB_STORAGE_DIR_NAME))
+    except OSError:
+        return directories
+    for candidate in storage_dirs:
+        if not candidate.is_dir():
+            continue
+        directories.append(candidate)
+        try:
+            children = sorted(candidate.iterdir())
+        except OSError:
+            children = []
+        directories.extend(child for child in children if child.is_dir())
+    return directories
 
 
 def _expand_account_roots(base: Path) -> list[Path]:
@@ -159,6 +207,13 @@ def _expand_account_roots(base: Path) -> list[Path]:
             if child.is_dir() and _looks_like_account_dir(child):
                 roots.append(child)
     return roots
+
+
+def _is_non_empty_file(path: Path) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
 
 
 def _looks_like_account_dir(path: Path) -> bool:
@@ -229,6 +284,7 @@ def _default_home() -> Path:
 
 
 __all__ = [
+    "candidate_wechat_data_roots",
     "configured_wechat_data_dirs",
     "default_wechat_data_dirs",
     "detect_single_wechat_data_root",

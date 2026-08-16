@@ -44,6 +44,19 @@ def _config(tmp_path: Path) -> WeChatEnvironmentConfig:
     )
 
 
+def _valid_wechat_root(
+    tmp_path: Path,
+    name: str = "wxid_fictional",
+) -> Path:
+    """Create one provider-readable WeChat 4.x account directory."""
+    root = tmp_path / "xwechat_files" / name
+    message_dir = root / "db_storage" / "message"
+    message_dir.mkdir(parents=True, exist_ok=True)
+    (message_dir / "session.db").write_text("fake", encoding="utf-8")
+    (message_dir / "message_0.db").write_text("fake", encoding="utf-8")
+    return root
+
+
 class _StubConnectionService:
     def __init__(self, status: object) -> None:
         self._status = status
@@ -250,7 +263,7 @@ def test_check_setup_exposes_config_path(tmp_path: Path) -> None:
 
 
 def test_detect_wechat_data_root_returns_detected_path(tmp_path: Path) -> None:
-    detected = tmp_path / "xwechat_files"
+    detected = _valid_wechat_root(tmp_path)
     service = WeChatSetupService(data_root_detector=lambda: detected)
 
     assert service.detect_wechat_data_root() == detected
@@ -282,7 +295,10 @@ def test_detect_wechat_data_root_uses_provider_default() -> None:
 def test_detect_wechat_data_roots_returns_injected_roots(
     tmp_path: Path,
 ) -> None:
-    roots = [tmp_path / "xwechat_files" / "wxid_a", tmp_path / "root_b"]
+    roots = [
+        _valid_wechat_root(tmp_path, "wxid_a"),
+        _valid_wechat_root(tmp_path, "wxid_b"),
+    ]
     service = WeChatSetupService(data_roots_detector=lambda: roots)
 
     assert service.detect_wechat_data_roots() == roots
@@ -292,11 +308,38 @@ def test_detect_wechat_data_roots_returns_injected_roots(
 def test_detect_wechat_data_root_returns_single_roots_value(
     tmp_path: Path,
 ) -> None:
-    root = tmp_path / "xwechat_files" / "wxid_single"
+    root = _valid_wechat_root(tmp_path, "wxid_single")
     service = WeChatSetupService(data_roots_detector=lambda: [root])
 
     assert service.detect_wechat_data_roots() == [root]
     assert service.detect_wechat_data_root() == root
+
+
+def test_detect_wechat_data_root_rejects_invalid_detector_result(
+    tmp_path: Path,
+) -> None:
+    legacy = tmp_path / "WeChat Files" / "wxid_old"
+    msg_dir = legacy / "Msg"
+    msg_dir.mkdir(parents=True)
+    (msg_dir / "MSG0.db").write_text("fake", encoding="utf-8")
+    service = WeChatSetupService(data_root_detector=lambda: legacy)
+
+    assert service.detect_wechat_data_root() is None
+
+
+def test_detect_wechat_data_roots_filters_invalid_injected_roots(
+    tmp_path: Path,
+) -> None:
+    legacy = tmp_path / "WeChat Files" / "wxid_old"
+    msg_dir = legacy / "Msg"
+    msg_dir.mkdir(parents=True)
+    (msg_dir / "MSG0.db").write_text("fake", encoding="utf-8")
+    valid = _valid_wechat_root(tmp_path, "wxid_valid")
+    service = WeChatSetupService(
+        data_roots_detector=lambda: [legacy, valid],
+    )
+
+    assert service.detect_wechat_data_roots() == [valid]
 
 
 def test_detect_wechat_data_roots_swallows_detector_errors() -> None:
@@ -314,8 +357,10 @@ def test_detect_wechat_data_roots_restores_saved_valid_root(
 ) -> None:
     target = tmp_path / "wechat.json"
     saved_root = tmp_path / "saved" / "wxid_fictional"
-    saved_root.mkdir(parents=True)
-    (saved_root / "session.db").write_text("fake", encoding="utf-8")
+    message_dir = saved_root / "db_storage" / "message"
+    message_dir.mkdir(parents=True)
+    (message_dir / "session.db").write_text("fake", encoding="utf-8")
+    (message_dir / "message_0.db").write_text("fake", encoding="utf-8")
     WeChatEnvironmentConfigWriter(target).save(
         WeChatEnvironmentConfig(data_root=saved_root, db_key="a" * 64)
     )
@@ -335,9 +380,7 @@ def test_invalid_saved_root_is_redetected_and_persisted(
 ) -> None:
     target = tmp_path / "wechat.json"
     stale_root = tmp_path / "moved" / "old"
-    detected_root = tmp_path / "current" / "wxid_fictional"
-    detected_root.mkdir(parents=True)
-    (detected_root / "session.db").write_text("fake", encoding="utf-8")
+    detected_root = _valid_wechat_root(tmp_path, "wxid_fictional")
     WeChatEnvironmentConfigWriter(target).save(
         WeChatEnvironmentConfig(data_root=stale_root, db_key="b" * 64)
     )

@@ -117,6 +117,33 @@ class FacadeWorker(QRunnable):
         self._cancelled = threading.Event()
         self.signals = WorkerSignals(signals_parent)
         self.setAutoDelete(False)
+        if signals_parent is not None:
+            signals_parent.destroyed.connect(
+                lambda _object=None: self.cancel()
+            )
+
+    def _emit(
+        self,
+        signal_name: str,
+        *args: Any,
+        allow_after_cancel: bool = False,
+    ) -> bool:
+        """Emit one worker signal unless the worker was stopped or died."""
+        if not allow_after_cancel and self._cancelled.is_set():
+            return False
+        try:
+            signal = getattr(self.signals, signal_name)
+            signal.emit(*args)
+        except RuntimeError as error:
+            message = str(error)
+            if (
+                "Signal source has been deleted" in message
+                or "deleted" in message.lower()
+            ):
+                self._cancelled.set()
+                return False
+            raise
+        return True
 
     @Slot()
     def run(self) -> None:
@@ -126,7 +153,9 @@ class FacadeWorker(QRunnable):
                 if self._cancelled.is_set():
                     raise _OperationCancelled
                 _WORKER_LOGGER.info("[wechat worker] emit progress: %s", message)
-                self.signals.progress.emit(message)
+                self._emit("progress", message)
+                if self._cancelled.is_set():
+                    raise _OperationCancelled
 
             result = _invoke(
                 self._operation,
@@ -142,19 +171,31 @@ class FacadeWorker(QRunnable):
                 error.code,
                 error.public_message,
             )
-            self.signals.failed.emit(error.code, error.public_message)
+            self._emit("failed", error.code, error.public_message)
         except Exception as error:
             if self._cancelled.is_set():
                 return
             _WORKER_LOGGER.exception("facade operation crashed", exc_info=error)
-            self.signals.failed.emit("unexpected_error", GENERIC_ERROR_MESSAGE)
+            self._emit(
+                "failed",
+                "unexpected_error",
+                GENERIC_ERROR_MESSAGE,
+            )
         else:
             if self._cancelled.is_set():
                 return
             _WORKER_LOGGER.info("[worker] facade operation succeeded")
-            self.signals.succeeded.emit(result)
+            self._emit("succeeded", result)
         finally:
-            self.signals.finished.emit()
+            emitted = self._emit(
+                "finished",
+                allow_after_cancel=True,
+            )
+            _PENDING.discard(self)
+            if not emitted:
+                relay = getattr(self, "_callback_relay", None)
+                if relay is not None:
+                    _RELAYS.discard(relay)
 
     def cancel(self) -> None:
         """Request cooperative cancellation and suppress late callbacks."""
@@ -198,6 +239,12 @@ def submit(
     _RELAYS.add(relay)
     (pool or QThreadPool.globalInstance()).start(worker)
     return worker
+
+
+def shutdown() -> None:
+    """Cancel every pending worker, typically while the window is closing."""
+    for worker in tuple(_PENDING):
+        worker.cancel()
 
 
 def run_inline(

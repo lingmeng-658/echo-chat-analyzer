@@ -152,7 +152,10 @@ class WeChatSetupService:
                 return None
             if detected is None:
                 return None
-            return Path(detected)
+            detected_path = Path(detected)
+            if is_valid_wechat_data_root(detected_path):
+                return detected_path
+            return None
         roots = self.detect_wechat_data_roots()
         if len(roots) == 1:
             return roots[0]
@@ -177,7 +180,7 @@ class WeChatSetupService:
             if value is None:
                 continue
             path = Path(value)
-            if path not in roots:
+            if is_valid_wechat_data_root(path) and path not in roots:
                 roots.append(path)
         if len(roots) == 1 and is_valid_wechat_data_root(roots[0]):
             self._persist_detected_data_root(roots[0])
