@@ -439,7 +439,7 @@ class WeChatWorkspace(QWidget):
         self.session_panel.show_connecting_placeholder()
         self.status_changed.emit(_WECHAT_CONNECTING)
 
-        self._connection_task = self._executor(
+        task = self._executor(
             lambda report: self._connect_wechat_operation(config, report),
             on_success=self._after_wechat_key_acquired,
             on_error=lambda code, message: self._handle_wechat_connect_error(
@@ -447,8 +447,9 @@ class WeChatWorkspace(QWidget):
                 message,
             ),
             on_progress=self._handle_wechat_connect_progress,
-            on_finished=self._finish_wechat_connect,
+            on_finished=lambda: self._finish_wechat_connect(task),
         )
+        self._connection_task = task
 
     def _connect_wechat_operation(
         self,
@@ -462,8 +463,10 @@ class WeChatWorkspace(QWidget):
             progress(_WECHAT_READING_DATABASE)
         return self._facade.get_connection_status(ChatSource.WECHAT)
 
-    def _finish_wechat_connect(self) -> None:
+    def _finish_wechat_connect(self, task: Any = None) -> None:
         """Clean up after the WeChat connection attempt."""
+        if task is not None and self._connection_task is not task:
+            return
         self._connection_task = None
         self._wechat_connect_button.setEnabled(True)
         connected = self._status_label.text().startswith(_CONNECTED_PREFIX)
@@ -581,14 +584,11 @@ class WeChatWorkspace(QWidget):
             cancel = getattr(self._connection_task, "cancel", None)
             if callable(cancel):
                 cancel()
-            # Keep the task reference until on_finished runs so a new
-            # connection cannot overlap the one that is still winding down.
+        self._connection_task = None
         self._wechat_connect_pending = False
         self._hide_wechat_guide()
         self._wechat_connect_button.setText(_WECHAT_CONNECT_LABEL)
-        self._wechat_connect_button.setEnabled(
-            self._connection_task is None
-        )
+        self._wechat_connect_button.setEnabled(True)
         self._wechat_disconnect_button.setVisible(False)
         self._status_label.setText("连接已取消，可以重新开始。")
         self._status_label.setVisible(True)

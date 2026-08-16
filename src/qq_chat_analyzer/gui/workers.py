@@ -250,7 +250,9 @@ def shutdown(wait_ms: int = 0) -> None:
     for worker in tuple(_PENDING):
         worker.cancel()
     if wait_ms > 0:
-        QThreadPool.globalInstance().waitForDone(wait_ms)
+        pool = QThreadPool.globalInstance()
+        pool.clear()
+        pool.waitForDone(wait_ms)
 
 
 def run_inline(

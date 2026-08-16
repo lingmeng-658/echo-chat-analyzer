@@ -769,7 +769,7 @@ def test_worker_shutdown_supports_bounded_wait(
     assert waits == [2500]
 
 
-def test_wechat_workspace_blocks_new_connect_until_task_finishes(
+def test_wechat_workspace_cancel_restores_connect_and_ignores_stale_finish(
     qt_app,
 ) -> None:
     from qq_chat_analyzer.gui.wechat_workspace import WeChatWorkspace
@@ -790,20 +790,22 @@ def test_wechat_workspace_blocks_new_connect_until_task_finishes(
     workspace.connect_wechat()
     assert executor.cancelled is True
     assert workspace._wechat_connect_button.text() == "连接微信"
-    assert workspace._wechat_connect_button.isEnabled() is False
-
-    workspace.connect_wechat()
-    assert executor.submission_count == 1
-
-    executor.fail("wechat_key_timeout", "Key 获取超时，请在微信登录时重试。")
-    assert workspace._connection_task is None
     assert workspace._wechat_connect_button.isEnabled() is True
+    assert workspace._connection_task is None
 
     workspace.connect_wechat()
     assert executor.submission_count == 2
 
+    workspace._connection_task = object()
+    stale_task = workspace._connection_task
+    workspace._finish_wechat_connect(executor)
+    assert workspace._connection_task is stale_task
 
-def test_analysis_page_wechat_blocks_new_connect_until_task_finishes(
+    workspace._finish_wechat_connect(stale_task)
+    assert workspace._connection_task is None
+
+
+def test_analysis_page_wechat_cancel_restores_connect_and_ignores_stale_finish(
     qt_app,
 ) -> None:
     module = _facade_module()
@@ -825,17 +827,19 @@ def test_analysis_page_wechat_blocks_new_connect_until_task_finishes(
     page.connect_wechat()
     assert executor.cancelled is True
     assert page._wechat_connect_button.text() == "连接微信"
-    assert page._wechat_connect_button.isEnabled() is False
-
-    page.connect_wechat()
-    assert executor.submission_count == 1
-
-    executor.fail("wechat_key_timeout", "Key 获取超时，请在微信登录时重试。")
-    assert page._connection_task is None
     assert page._wechat_connect_button.isEnabled() is True
+    assert page._connection_task is None
 
     page.connect_wechat()
     assert executor.submission_count == 2
+
+    page._connection_task = object()
+    stale_task = page._connection_task
+    page._finish_wechat_connect(executor)
+    assert page._connection_task is stale_task
+
+    page._finish_wechat_connect(stale_task)
+    assert page._connection_task is None
 
 
 @pytest.mark.parametrize(
@@ -3917,7 +3921,7 @@ def test_connecting_wechat_locks_sources_and_cancel_restores_selection(
 
     assert executor.cancelled is True
     assert page._wechat_connect_button.text() == "连接微信"
-    assert page._wechat_connect_button.isEnabled() is False
+    assert page._wechat_connect_button.isEnabled() is True
     assert all(button.isEnabled() for button in page._source_buttons.values())
 
 

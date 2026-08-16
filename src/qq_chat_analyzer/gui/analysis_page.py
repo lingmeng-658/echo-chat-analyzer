@@ -547,10 +547,7 @@ class AnalysisPage(QWidget):
         cancel = getattr(task, "cancel", None)
         if callable(cancel):
             cancel()
-        if self._selected_source is not ChatSource.WECHAT:
-            self._connection_task = None
-        # WeChat keeps the task reference until on_finished runs so a new
-        # connection cannot overlap the one that is still winding down.
+        self._connection_task = None
         self._qq_connect_in_flight = False
         self._wechat_connect_pending = False
         self._stop_qq_status_polling()
@@ -1101,7 +1098,7 @@ class AnalysisPage(QWidget):
         self._show_session_placeholder(_SESSION_CONNECTING_TITLE)
         self.status_changed.emit(_WECHAT_CONNECTING)
 
-        self._connection_task = self._executor(
+        task = self._executor(
             lambda report: self._connect_wechat_operation(config, report),
             on_success=self._after_wechat_key_acquired,
             on_error=lambda code, message: (
@@ -1114,10 +1111,13 @@ class AnalysisPage(QWidget):
                 if self._selected_source is ChatSource.WECHAT
                 else None
             ),
-            on_finished=self._finish_wechat_connect,
+            on_finished=lambda: self._finish_wechat_connect(task),
         )
+        self._connection_task = task
 
-    def _finish_wechat_connect(self) -> None:
+    def _finish_wechat_connect(self, task: Any = None) -> None:
+        if task is not None and self._connection_task is not task:
+            return
         self._connection_task = None
         self._lock_sources(False)
         self._wechat_connect_button.setEnabled(True)
@@ -1137,10 +1137,7 @@ class AnalysisPage(QWidget):
             shutdown = getattr(self._facade, "shutdown_qq_runtime", None)
             if callable(shutdown):
                 shutdown()
-        if self._selected_source is not ChatSource.WECHAT:
-            self._connection_task = None
-        # WeChat keeps the task reference until on_finished runs so a new
-        # connection cannot overlap the one that is still winding down.
+        self._connection_task = None
         self._qq_connect_in_flight = False
         self._wechat_connect_pending = False
         self._stop_qq_status_polling()
@@ -1150,10 +1147,7 @@ class AnalysisPage(QWidget):
         self._qq_connect_button.setText(_QQ_CONNECT_LABEL)
         self._wechat_connect_button.setText(_WECHAT_CONNECT_LABEL)
         self._qq_connect_button.setEnabled(True)
-        self._wechat_connect_button.setEnabled(
-            self._selected_source is not ChatSource.WECHAT
-            or self._connection_task is None
-        )
+        self._wechat_connect_button.setEnabled(True)
         self._status_label.setText(_CONNECTION_CANCELLED)
         self._status_label.setVisible(True)
         self.status_changed.emit(_CONNECTION_CANCELLED)
