@@ -292,6 +292,49 @@ def test_helper_key_unavailable_is_not_captured(tmp_path: Path):
     assert caught.value.code == "wechat_key_not_captured"
     assert "无法获取微信登录密钥" in caught.value.public_message
 
+
+def test_helper_early_runtime_failure_is_classified_and_logged(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A helper crash before process enumeration must not collapse silently."""
+    module = _module()
+    caplog.set_level(
+        logging.INFO,
+        logger="qq_chat_analyzer.desktop.wechat_key_service",
+    )
+    service = _helper_service(
+        tmp_path,
+        _Completed(
+            1,
+            stderr=(
+                "Error: Cannot find module 'koffi'\n"
+                "Require stack:\n"
+                "- D:\\secret\\install\\runtime\\wechat\\wx_key_helper.cjs\n"
+                "    at Module._resolveFilename "
+                "(node:internal/modules/cjs/loader.js:1:1)\n"
+            ),
+        ),
+    )
+
+    with pytest.raises(module.WeChatKeyUnavailable) as caught:
+        service.acquire()
+
+    assert caught.value.code == "wechat_environment_missing"
+    assert "微信连接组件加载失败" in caught.value.public_message
+    assert (
+        "wechat.key.capture success=false error_type=WeChatKeyUnavailable "
+        "code=wechat_environment_missing"
+    ) in caplog.text
+    assert "process_found=null process_count=null" in caplog.text
+    assert "hook_success=null" in caplog.text
+    assert "key_capture_success=false" in caplog.text
+    assert "wechat_process_incompatible" not in caplog.text
+    assert "koffi" not in caplog.text
+    assert "secret" not in caplog.text
+    assert "wx_key_helper.cjs" not in caplog.text
+    assert "ab12" * 16 not in caplog.text
+
+
 def test_helper_default_timeout_is_600_seconds(tmp_path: Path):
     calls = []
     def runner(command, **options):
@@ -850,6 +893,34 @@ def test_streaming_failure_uses_collected_stderr(tmp_path: Path):
     with pytest.raises(module.WeChatKeyUnavailable) as caught:
         service.acquire()
     assert "\u672a\u68c0\u6d4b\u5230\u5fae\u4fe1" in caught.value.public_message
+
+
+def test_streaming_early_runtime_failure_logs_stage_fields(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    module = _module()
+    caplog.set_level(
+        logging.INFO,
+        logger="qq_chat_analyzer.desktop.wechat_key_service",
+    )
+    proc = _FakePopen(
+        stdout="",
+        stderr_lines=("Error: Cannot find module 'koffi'",),
+        returncode=1,
+    )
+    service = _streaming_service(tmp_path, lambda *_a, **_k: proc)
+
+    with pytest.raises(module.WeChatKeyUnavailable) as caught:
+        service.acquire()
+
+    assert caught.value.code == "wechat_environment_missing"
+    assert "process_found=null process_count=null" in caplog.text
+    assert "hook_success=null" in caplog.text
+    assert "key_capture_success=false" in caplog.text
+    assert "wechat_process_incompatible" not in caplog.text
+    assert "koffi" not in caplog.text
+    assert "secret" not in caplog.text
+    assert "ab12" * 16 not in caplog.text
 
 
 def test_streaming_initialized_pid_without_key_reports_not_captured(

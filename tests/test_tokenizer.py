@@ -191,3 +191,12 @@ def test_ignores_expression_markers_for_language_tokens() -> None:
     assert "捂脸" not in tokens
     assert "旺柴" not in tokens
     assert "OK" not in tokens
+
+
+def test_expression_placeholders_never_become_language_words() -> None:
+    assert tokenize("哈哈 [表情]") == ["哈哈"]
+    assert tokenize("表情") == []
+    assert tokenize("[表情]") == []
+    assert tokenize("[动画表情]") == []
+    assert tokenize("哈哈 表情 继续") == ["哈哈", "继续"]
+    assert tokenize("这个表情不错") == ["这个", "表情", "不错"]

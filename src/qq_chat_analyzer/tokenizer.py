@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from pathlib import Path
 
 import jieba
@@ -25,8 +26,14 @@ _URL_PLACEHOLDER = "QQCHATURLPLACEHOLDER"
 _SINGLE_ASCII_LETTER_RE = re.compile(r"[A-Za-z]")
 _SHORT_INTEGER_RE = re.compile(r"[0-9]{1,2}")
 _DECK_QUANTITY_RE = re.compile(r"[0-9]+x", re.IGNORECASE)
+_GENERIC_EXPRESSION_PLACEHOLDER_RE = re.compile(
+    r"\[(?:QQ表情|QQ贴图|微信表情|贴图|表情|动画表情)[^\]]*\]"
+    r"|(?<![\u3400-\u9fffA-Za-z0-9])表情(?![\u3400-\u9fffA-Za-z0-9])",
+    re.IGNORECASE,
+)
 _EXPRESSION_PLACEHOLDER_RE = re.compile(
-    r"\[(?:QQ表情|QQ贴图|微信表情|贴图|表情)[^\]]*\]|"
+    _GENERIC_EXPRESSION_PLACEHOLDER_RE.pattern
+    + "|"
     + "|".join(
         re.escape(f"[{name}]")
         for name in OFFICIAL_WECHAT_EMOJI_NAMES
@@ -70,6 +77,14 @@ def tokenize(
         tokens.append(token)
 
     return tokens
+
+
+def iter_expression_placeholders(text: str) -> Iterator[str]:
+    """Yield generic export placeholder markers that are not real expressions."""
+    if not isinstance(text, str):
+        return
+    for match in _GENERIC_EXPRESSION_PLACEHOLDER_RE.finditer(text):
+        yield match.group(0)
 
 
 def _protect_hyphenated_ascii(text: str) -> tuple[str, dict[str, str]]:

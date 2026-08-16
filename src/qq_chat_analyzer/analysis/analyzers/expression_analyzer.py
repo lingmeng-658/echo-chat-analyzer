@@ -18,6 +18,7 @@ from ...rich_message import (
     RichMessage,
     TextContent,
 )
+from ...tokenizer import iter_expression_placeholders
 from ..identity import stable_sender_key
 from ..models import (
     ExpressionCombinationMember,
@@ -356,18 +357,32 @@ class ExpressionAnalyzer:
         rich_message: RichMessage | None,
     ) -> tuple[str, tuple[ExpressionContent, ...]]:
         if rich_message is None:
-            return message.text, ()
-        text = "".join(
-            content.text
-            for content in rich_message.contents
-            if isinstance(content, TextContent)
+            text = message.text
+            expressions: tuple[ExpressionContent, ...] = ()
+        else:
+            text = "".join(
+                content.text
+                for content in rich_message.contents
+                if isinstance(content, TextContent)
+            )
+            expressions = tuple(
+                content
+                for content in rich_message.contents
+                if isinstance(content, ExpressionContent)
+            )
+        placeholders = tuple(
+            ExpressionContent(
+                expression_kind=EXPRESSION_KIND_PLATFORM_FACE,
+                expression_key=placeholder,
+                display_text=placeholder,
+                source=message.platform,
+                position=position,
+            )
+            for position, placeholder in enumerate(
+                iter_expression_placeholders(text)
+            )
         )
-        expressions = tuple(
-            content
-            for content in rich_message.contents
-            if isinstance(content, ExpressionContent)
-        )
-        return text, expressions
+        return text, (*expressions, *placeholders)
 
     @staticmethod
     def _is_expression_only_message(

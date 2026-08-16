@@ -45,7 +45,7 @@ from ..presentation import (
     export_echo_report_json,
 )
 from ..smart_profile import run_smart_profile
-from ..tokenizer import tokenize
+from ..tokenizer import iter_expression_placeholders, tokenize
 from .dto import (
     AnalysisDiagnosticCounts,
     AnalysisRequestDTO,
@@ -428,6 +428,10 @@ def _expression_tokens(
         f"expression:{emoji}"
         for emoji in iter_emoji_clusters(message.text)
     ]
+    tokens.extend(
+        f"expression:{placeholder}"
+        for placeholder in iter_expression_placeholders(message.text)
+    )
     rich_message = (
         rich_by_id.get(message.message_id)
         if message.message_id is not None

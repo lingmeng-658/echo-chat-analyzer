@@ -334,7 +334,11 @@ class WeChatKeyService:
                 _helper_failure_message(result.stderr),
                 code=_helper_failure_code(result.stderr),
             )
-        return self._finalize_key(result.stdout)
+        try:
+            return self._finalize_key(result.stdout)
+        except WeChatKeyUnavailable:
+            _log_helper_diagnostics(result.stderr)
+            raise
 
     def _run_helper_streaming(
         self,
@@ -418,7 +422,11 @@ class WeChatKeyService:
                 _helper_failure_message(stderr),
                 code=_helper_failure_code(stderr),
             )
-        key = self._finalize_key(stdout)
+        try:
+            key = self._finalize_key(stdout)
+        except WeChatKeyUnavailable:
+            _log_helper_diagnostics("\n".join(recent_errors))
+            raise
         self._report_progress(_KEY_RECEIVED_MESSAGE, progress)
         return key
 
@@ -559,7 +567,7 @@ def _helper_failure_message(stderr: Any) -> str:
         return MESSAGE_HOOK_FAILED
     if "timeout" in detail:
         return MESSAGE_WAIT_TIMEOUT
-    if "dll" in detail or "load" in detail:
+    if _helper_runtime_failure(detail) or "dll" in detail or "load" in detail:
         return "微信连接组件加载失败，请重新安装余音后重试。"
     return "微信连接准备失败，请重试。"
 
@@ -571,6 +579,8 @@ def _helper_failure_code(stderr: Any) -> str:
         return "wechat_key_not_captured"
     if "initializehook" in detail and "-> true" not in detail:
         return "wechat_hook_failed"
+    if _helper_runtime_failure(detail):
+        return "wechat_environment_missing"
     if "timeout" in detail:
         return "wechat_key_timeout"
     if "dll" in detail or "load" in detail:
@@ -578,11 +588,25 @@ def _helper_failure_code(stderr: Any) -> str:
     return "wechat_process_incompatible"
 
 
+def _helper_runtime_failure(detail: str) -> bool:
+    """Tell helper bootstrap/environment failures from hook-stage failures."""
+    return (
+        "cannot find module" in detail
+        or "node_module_version" in detail
+        or "was compiled against" in detail
+        or ("koffi" in detail and ("error" in detail or "fail" in detail))
+        or ("spawn " in detail and "enoent" in detail)
+        or ("command failed" in detail and "powershell" in detail)
+    )
+
+
 def _log_helper_diagnostics(stderr: Any) -> None:
-    """Record safe helper milestones; helper details never enter logs."""
+    """Record safe helper milestones; helper details never enter logs.
+
+    Stages the helper never reached are logged as explicit ``null`` so a
+    failure can be attributed to the earliest missing milestone.
+    """
     text = str(stderr or "").lower()
-    if not text:
-        return
     match = _HELPER_PIDS_PATTERN.search(text)
     if match:
         count = sum(1 for item in match.group(1).split(",") if item.strip())
@@ -593,12 +617,15 @@ def _log_helper_diagnostics(stderr: Any) -> None:
         )
     elif "no weixin process" in text:
         _LOGGER.info("wechat.key.process process_found=false process_count=0")
+    else:
+        _LOGGER.info("wechat.key.process process_found=null process_count=null")
     if _HELPER_HOOK_SUCCESS_PATTERN.search(text):
         _LOGGER.info("wechat.key.hook hook_success=true")
-    if _HELPER_HOOK_FAILURE_PATTERN.search(text):
+    elif _HELPER_HOOK_FAILURE_PATTERN.search(text):
         _LOGGER.warning("wechat.key.hook hook_success=false")
-    if "key unavailable" in text:
-        _LOGGER.warning("wechat.key.capture key_capture_success=false")
+    else:
+        _LOGGER.info("wechat.key.hook hook_success=null")
+    _LOGGER.warning("wechat.key.capture key_capture_success=false")
 
 
 def _extract_key(buffer: Any) -> str | None:

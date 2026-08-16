@@ -139,6 +139,43 @@ def _write_wechat_db_text_emoji_export(path: Path) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
+def _write_wechat_expression_placeholder_export(path: Path) -> None:
+    payload = {
+        "source": "wechat-db",
+        "conversation": {
+            "username": "wxid_fictional_room@chatroom",
+            "session_type": "group",
+        },
+        "messages": [
+            {
+                "local_id": 4,
+                "server_id": 9004,
+                "local_type": 1,
+                "create_time": 1704099600,
+                "message_content": "哈哈 [表情]",
+                "user_name": "wxid_fictional_sender",
+            },
+            {
+                "local_id": 5,
+                "server_id": 9005,
+                "local_type": 1,
+                "create_time": 1704099660,
+                "message_content": "😂",
+                "user_name": "wxid_fictional_sender",
+            },
+            {
+                "local_id": 6,
+                "server_id": 9006,
+                "local_type": 1,
+                "create_time": 1704099720,
+                "message_content": "表情",
+                "user_name": "wxid_fictional_sender",
+            },
+        ],
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
 def _write_qce_market_face_chat(path: Path) -> None:
     payload = {
         "chatInfo": {
@@ -617,6 +654,33 @@ def test_wechat_text_official_emoji_reaches_expression_report(
     serialized = json.dumps(payload, ensure_ascii=False)
     assert "[捂脸]" not in serialized
     assert "expression_key" not in serialized
+
+
+def test_wechat_expression_placeholders_are_not_language_words(
+    tmp_path: Path,
+) -> None:
+    application = _application_module()
+    input_path = tmp_path / "wechat-expression-placeholder.json"
+    output_directory = tmp_path / "private-output"
+    output_directory.mkdir()
+    _write_wechat_expression_placeholder_export(input_path)
+
+    result = application.AnalysisApplicationService().execute(
+        _request(application, tmp_path, input_path)
+    )
+
+    assert result.status is application.AnalysisStatus.COMPLETED
+    assert result.reports.expression is not None
+    profile_words = [
+        word.word
+        for profile in result.reports.user_profiles.profiles
+        for word in profile.top_words
+    ]
+    assert "哈哈" in profile_words
+    assert "expression:😂" in profile_words
+    assert "expression:[表情]" in profile_words
+    assert "expression:表情" in profile_words
+    assert "表情" not in profile_words
 
 
 def test_expression_only_failure_falls_back_without_artifacts(
