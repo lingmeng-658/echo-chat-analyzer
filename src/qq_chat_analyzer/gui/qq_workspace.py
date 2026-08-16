@@ -376,8 +376,8 @@ class QQWorkspace(QWidget):
         started_at = time.monotonic()
         self._qq_waiting_auth_since = None
         self._qq_connect_in_flight = True
-        self._qq_connect_button.setText(_CANCEL_CONNECTION_LABEL)
-        self._qq_connect_button.setEnabled(True)
+        self._qq_connect_button.setText(_QQ_CONNECT_LABEL)
+        self._qq_connect_button.setEnabled(False)
         self._status_label.setVisible(True)
         self._status_label.setText(_QQ_CONNECTING)
         self._status_label.setToolTip("")
@@ -591,7 +591,10 @@ def _snapshot_hint(snapshot: Any) -> str:
 
 
 def _snapshot_in_progress(snapshot: Any) -> bool:
-    return _snapshot_state(snapshot) in _QQ_PROGRESS_STATES
+    return (
+        _snapshot_state(snapshot) in _QQ_PROGRESS_STATES
+        or _snapshot_state(snapshot) == _QQ_STATE_WAITING_AUTH
+    )
 
 
 def _qq_progress_copy(message: str) -> tuple[str, str]:

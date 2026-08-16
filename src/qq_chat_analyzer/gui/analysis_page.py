@@ -663,6 +663,7 @@ class AnalysisPage(QWidget):
                 self._show_wechat_guide()
             self._wechat_connect_button.setText(_WECHAT_CONNECT_LABEL)
             self._wechat_connect_button.setVisible(not available)
+            self._wechat_connect_button.setEnabled(True)
         elif source == ChatSource.QQ:
             self._status_label.setStyleSheet(STATUS_STYLE_BASE)
             self._qq_connect_button.setText(_QQ_CONNECT_LABEL)
@@ -948,8 +949,8 @@ class AnalysisPage(QWidget):
         started_at = time.monotonic()
         self._qq_connect_in_flight = True
         self._lock_sources(True)
-        self._qq_connect_button.setText(_CANCEL_CONNECTION_LABEL)
-        self._qq_connect_button.setEnabled(True)
+        self._qq_connect_button.setText(_QQ_CONNECT_LABEL)
+        self._qq_connect_button.setEnabled(False)
         self._status_label.setVisible(True)
         self._status_label.setText(_QQ_CONNECTING)
         self._status_label.setToolTip("")
@@ -1092,8 +1093,8 @@ class AnalysisPage(QWidget):
     def _start_wechat_connect(self, config: Any) -> None:
         """Run save-then-key for one config, off the UI thread."""
         self._lock_sources(True)
-        self._wechat_connect_button.setText(_CANCEL_CONNECTION_LABEL)
-        self._wechat_connect_button.setEnabled(True)
+        self._wechat_connect_button.setText(_WECHAT_CONNECT_LABEL)
+        self._wechat_connect_button.setEnabled(False)
         self._status_label.setVisible(True)
         self._status_label.setText(_WECHAT_CONNECTING)
         self._status_label.setToolTip("")
@@ -1804,7 +1805,10 @@ def _snapshot_hint(snapshot: Any) -> str:
 
 
 def _snapshot_in_progress(snapshot: Any) -> bool:
-    return _snapshot_state(snapshot) in _QQ_PROGRESS_STATES
+    return (
+        _snapshot_state(snapshot) in _QQ_PROGRESS_STATES
+        or _snapshot_state(snapshot) == _QQ_STATE_WAITING_AUTH
+    )
 
 
 def _default_qq_qrcode_path() -> Path:

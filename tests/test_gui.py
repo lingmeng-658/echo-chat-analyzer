@@ -766,9 +766,11 @@ def test_wechat_workspace_blocks_new_connect_until_task_finishes(
 
     workspace.connect_wechat()
     assert executor.submission_count == 1
+    assert workspace._wechat_connect_button.isEnabled() is False
 
     workspace.cancel_connection()
     assert executor.cancelled is True
+    assert workspace._wechat_connect_button.isEnabled() is True
 
     workspace.connect_wechat()
     assert executor.submission_count == 1
@@ -796,9 +798,11 @@ def test_analysis_page_wechat_blocks_new_connect_until_task_finishes(
         module.WeChatEnvironmentConfig(data_root="D:/fake_xwechat_files")
     )
     assert executor.submission_count == 1
+    assert page._wechat_connect_button.isEnabled() is False
 
     page.cancel_connection()
     assert executor.cancelled is True
+    assert page._wechat_connect_button.isEnabled() is True
 
     page.connect_wechat()
     assert executor.submission_count == 1
@@ -2038,7 +2042,7 @@ def test_qq_connect_remains_clickable_when_no_runtime_detected(
     assert facade.start_qq_auth_flow_calls == [1]
 
 
-def test_qq_connect_offers_cancel_while_connecting(qt_app, sources) -> None:
+def test_qq_connect_disables_button_while_connecting(qt_app, sources) -> None:
     module = _facade_module()
     status = _connection_status(
         available=True,
@@ -2064,8 +2068,8 @@ def test_qq_connect_offers_cancel_while_connecting(qt_app, sources) -> None:
     page._qq_connect_button.click()
 
     assert executor.operation is not None
-    assert page._qq_connect_button.isEnabled() is True
-    assert page._qq_connect_button.text() == "取消连接"
+    assert page._qq_connect_button.isEnabled() is False
+    assert page._qq_connect_button.text() == "连接QQ"
     assert (
         "\u6b63\u5728\u51c6\u5907QQ\u8fde\u63a5\u73af\u5883\uff0c\u8bf7\u7a0d\u5019"
         in page._status_label.text()
@@ -3808,7 +3812,8 @@ def test_connecting_qq_locks_sources_and_cancel_restores_selection(
     page.connect_qq()
 
     assert all(not button.isEnabled() for button in page._source_buttons.values())
-    assert page._qq_connect_button.text() == "取消连接"
+    assert page._qq_connect_button.text() == "连接QQ"
+    assert page._qq_connect_button.isEnabled() is False
 
     page.cancel_connection()
 
@@ -3831,13 +3836,15 @@ def test_connecting_wechat_locks_sources_and_cancel_restores_selection(
     page._start_wechat_connect(
         module.WeChatEnvironmentConfig(data_root="D:/fictional_wechat")
     )
-    assert page._wechat_connect_button.text() == "取消连接"
+    assert page._wechat_connect_button.text() == "连接微信"
+    assert page._wechat_connect_button.isEnabled() is False
     assert all(not button.isEnabled() for button in page._source_buttons.values())
 
     page.cancel_connection()
 
     assert executor.cancelled is True
     assert page._wechat_connect_button.text() == "连接微信"
+    assert page._wechat_connect_button.isEnabled() is True
     assert all(button.isEnabled() for button in page._source_buttons.values())
 
 
@@ -4342,7 +4349,7 @@ def test_waiting_auth_state_asks_the_user_to_log_in(
     text = page._status_label.text()
     assert "\u767b\u5f55" in text
     assert _disconnected_prefix() not in text
-    assert page._qq_connect_button.isEnabled() is True
+    assert page._qq_connect_button.isEnabled() is False
 
 
 def test_waiting_auth_is_visually_distinct_from_disconnected(
@@ -5331,6 +5338,28 @@ def test_qq_workspace_shows_connect_button_when_disconnected(
     assert window.qq_workspace._qq_connect_button.isVisibleTo(window) is True
     assert window.qq_workspace._qq_connect_button.isEnabled()
     assert window.qq_workspace.session_panel._sessions_ready is False
+
+
+def test_qq_workspace_connect_disables_button_until_finish(
+    qt_app,
+    sources,
+) -> None:
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+
+    facade = StubFacade(sources=sources)
+    executor = _DeferredExecutor()
+    workspace = QQWorkspace(facade, executor=executor)
+
+    workspace.connect_qq()
+    assert workspace._qq_connect_button.isEnabled() is False
+
+    executor.progress("等待QQ登录")
+    assert workspace._qq_connect_button.isEnabled() is False
+
+    executor.fail("qq_connect_failed", "QQ 连接失败")
+    QTest.qWait(600)
+    assert workspace._qq_connect_button.isEnabled() is True
+    assert workspace._qq_connect_button.text() == "重新开始"
 
 
 def test_wechat_workspace_shows_connect_button_when_disconnected(

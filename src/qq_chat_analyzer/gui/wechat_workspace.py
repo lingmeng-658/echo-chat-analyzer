@@ -305,6 +305,7 @@ class WeChatWorkspace(QWidget):
             self._show_wechat_guide()
         self._wechat_connect_button.setText(_WECHAT_CONNECT_LABEL)
         self._wechat_connect_button.setVisible(not available)
+        self._wechat_connect_button.setEnabled(True)
         self._wechat_disconnect_button.setVisible(available)
         self._wechat_disconnect_button.setEnabled(available)
 
@@ -430,8 +431,8 @@ class WeChatWorkspace(QWidget):
 
     def _start_wechat_connect(self, config: Any) -> None:
         """Run save-then-key for one config, off the UI thread."""
-        self._wechat_connect_button.setText(_CANCEL_CONNECTION_LABEL)
-        self._wechat_connect_button.setEnabled(True)
+        self._wechat_connect_button.setText(_WECHAT_CONNECT_LABEL)
+        self._wechat_connect_button.setEnabled(False)
         self._status_label.setVisible(True)
         self._status_label.setText(_WECHAT_CONNECTING)
         self._status_label.setToolTip("")
