@@ -397,7 +397,8 @@ class WeChatWorkspace(QWidget):
     ) -> None:
         """Connect WeChat in one click, asking for a directory only if needed."""
         if self._connection_task is not None:
-            self.cancel_connection()
+            if self._wechat_connect_button.text() == _CANCEL_CONNECTION_LABEL:
+                self.cancel_connection()
             return
 
         detect_roots = detect_data_roots or self._facade.detect_wechat_data_roots
@@ -510,7 +511,14 @@ class WeChatWorkspace(QWidget):
             "wechat_hook_failed": "正在获取权限时失败",
             "wechat_process_incompatible": "微信进程不兼容",
             "wechat_key_timeout": "Key 获取失败",
+            "wechat_key_unavailable": "Key 获取失败",
             "key_timeout": "Key 获取失败",
+            "database_not_found": _WECHAT_DATABASE_FAILED,
+            "wechat_database_error": _WECHAT_DATABASE_FAILED,
+            "wechat_invalid_environment": _WECHAT_DATABASE_FAILED,
+            "query_failed": _WECHAT_DATABASE_FAILED,
+            "wcdb_helper_not_found": _WECHAT_DATABASE_FAILED,
+            "wcdb_library_not_found": _WECHAT_DATABASE_FAILED,
         }
         if code not in titles and any(
             term in lowered for term in _WECHAT_INTERNAL_TERMS
@@ -578,7 +586,8 @@ class WeChatWorkspace(QWidget):
             cancel = getattr(self._connection_task, "cancel", None)
             if callable(cancel):
                 cancel()
-            self._connection_task = None
+            # Keep the task reference until on_finished runs so a new
+            # connection cannot overlap the one that is still winding down.
         self._wechat_connect_pending = False
         self._hide_wechat_guide()
         self._wechat_connect_button.setText(_WECHAT_CONNECT_LABEL)

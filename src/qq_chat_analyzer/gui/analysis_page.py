@@ -547,7 +547,10 @@ class AnalysisPage(QWidget):
         cancel = getattr(task, "cancel", None)
         if callable(cancel):
             cancel()
-        self._connection_task = None
+        if self._selected_source is not ChatSource.WECHAT:
+            self._connection_task = None
+        # WeChat keeps the task reference until on_finished runs so a new
+        # connection cannot overlap the one that is still winding down.
         self._qq_connect_in_flight = False
         self._wechat_connect_pending = False
         self._stop_qq_status_polling()
@@ -1055,7 +1058,8 @@ class AnalysisPage(QWidget):
         if self._selected_source is not ChatSource.WECHAT:
             return
         if self._connection_task is not None:
-            self.cancel_connection()
+            if self._wechat_connect_button.text() == _CANCEL_CONNECTION_LABEL:
+                self.cancel_connection()
             return
 
         detect_roots = detect_data_roots or self._facade.detect_wechat_data_roots
@@ -1137,7 +1141,10 @@ class AnalysisPage(QWidget):
             shutdown = getattr(self._facade, "shutdown_qq_runtime", None)
             if callable(shutdown):
                 shutdown()
-        self._connection_task = None
+        if self._selected_source is not ChatSource.WECHAT:
+            self._connection_task = None
+        # WeChat keeps the task reference until on_finished runs so a new
+        # connection cannot overlap the one that is still winding down.
         self._qq_connect_in_flight = False
         self._wechat_connect_pending = False
         self._stop_qq_status_polling()
@@ -1216,7 +1223,14 @@ class AnalysisPage(QWidget):
             "wechat_hook_failed": "\u6b63\u5728\u83b7\u53d6\u6743\u9650\u65f6\u5931\u8d25",
             "wechat_process_incompatible": "\u5fae\u4fe1\u8fdb\u7a0b\u4e0d\u517c\u5bb9",
             "wechat_key_timeout": "Key \u83b7\u53d6\u5931\u8d25",
+            "wechat_key_unavailable": "Key \u83b7\u53d6\u5931\u8d25",
             "key_timeout": "Key \u83b7\u53d6\u5931\u8d25",
+            "database_not_found": _WECHAT_DATABASE_FAILED,
+            "wechat_database_error": _WECHAT_DATABASE_FAILED,
+            "wechat_invalid_environment": _WECHAT_DATABASE_FAILED,
+            "query_failed": _WECHAT_DATABASE_FAILED,
+            "wcdb_helper_not_found": _WECHAT_DATABASE_FAILED,
+            "wcdb_library_not_found": _WECHAT_DATABASE_FAILED,
         }
         if code not in titles and any(
             term in lowered for term in _WECHAT_INTERNAL_TERMS

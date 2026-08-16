@@ -751,6 +751,107 @@ def test_worker_shutdown_cancels_pending_workers(qt_app) -> None:
     assert workers._PENDING == set()
 
 
+def test_wechat_workspace_blocks_new_connect_until_task_finishes(
+    qt_app,
+) -> None:
+    from qq_chat_analyzer.gui.wechat_workspace import WeChatWorkspace
+
+    module = _facade_module()
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        data_roots=["D:/fake_xwechat_files"],
+    )
+    executor = _DeferredExecutor()
+    workspace = WeChatWorkspace(facade, executor=executor)
+
+    workspace.connect_wechat()
+    assert executor.submission_count == 1
+
+    workspace.cancel_connection()
+    assert executor.cancelled is True
+
+    workspace.connect_wechat()
+    assert executor.submission_count == 1
+
+    executor.fail("wechat_key_timeout", "Key 获取超时，请在微信登录时重试。")
+    assert workspace._connection_task is None
+
+    workspace.connect_wechat()
+    assert executor.submission_count == 2
+
+
+def test_analysis_page_wechat_blocks_new_connect_until_task_finishes(
+    qt_app,
+) -> None:
+    module = _facade_module()
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        data_roots=["D:/fake_xwechat_files"],
+    )
+    executor = _DeferredExecutor()
+    page = _analysis_page(qt_app, facade, executor=executor)
+    page._selected_source = module.ChatSource.WECHAT
+
+    page._start_wechat_connect(
+        module.WeChatEnvironmentConfig(data_root="D:/fake_xwechat_files")
+    )
+    assert executor.submission_count == 1
+
+    page.cancel_connection()
+    assert executor.cancelled is True
+
+    page.connect_wechat()
+    assert executor.submission_count == 1
+
+    executor.fail("wechat_key_timeout", "Key 获取超时，请在微信登录时重试。")
+    assert page._connection_task is None
+
+    page.connect_wechat()
+    assert executor.submission_count == 2
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "database_not_found",
+        "wechat_database_error",
+        "wcdb_library_not_found",
+    ],
+)
+def test_wechat_database_connect_error_shows_database_stage(
+    qt_app,
+    code,
+) -> None:
+    from qq_chat_analyzer.gui.wechat_workspace import WeChatWorkspace
+
+    facade = StubFacade(sources=_wechat_available_sources())
+    workspace = WeChatWorkspace(facade)
+
+    workspace._handle_wechat_connect_error(code, "未找到有效微信数据库")
+
+    assert "微信数据库读取失败" in workspace._status_label.text()
+    assert "获取权限" not in workspace._status_label.text()
+
+
+def test_analysis_page_wechat_database_error_not_permission(
+    qt_app,
+) -> None:
+    module = _facade_module()
+    page = _analysis_page(
+        qt_app,
+        StubFacade(sources=_wechat_available_sources()),
+    )
+    page._selected_source = module.ChatSource.WECHAT
+
+    page._handle_wechat_connect_error(
+        "database_not_found",
+        "未找到有效微信数据目录",
+    )
+
+    assert "微信数据库读取失败" in page._status_label.text()
+    assert "获取权限" not in page._status_label.text()
+
+
 class _DeferredExecutor:
     """Capture a facade call and let the test finish it manually."""
 
