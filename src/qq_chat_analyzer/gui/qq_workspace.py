@@ -10,6 +10,7 @@ from typing import Any
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QFileDialog,
     QLabel,
     QPushButton,
     QVBoxLayout,
@@ -32,6 +33,13 @@ _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.qq_workspace")
 _QQ_CONNECT_LABEL = "连接QQ"
 _QQ_CONNECTING = "正在准备QQ连接环境，请稍候..."
 _QQ_CONNECT_FAILED = "QQ 连接失败"
+_QQ_PATH_PROMPT_TITLE = "选择 QQ.exe"
+_QQ_PATH_PROMPT_FILTER = "QQ 程序 (QQ.exe);;所有文件 (*)"
+_QQ_PATH_INVALID_TITLE = "QQ 路径无效"
+_QQ_PATH_INVALID_HINT = "请选择有效的 QQ.exe 文件。"
+_QQ_PATH_SAVING = "正在保存 QQ 路径..."
+_QQ_PATH_SAVED = "QQ 路径已保存，正在重新连接..."
+_QQ_PATH_SAVE_FAILED = "QQ 路径保存失败"
 _QQ_DISCONNECT_LABEL = "退出连接"
 _QQ_DISCONNECTING = "正在退出QQ连接..."
 _QQ_DISCONNECT_FAILED = "QQ退出连接失败"
@@ -105,6 +113,7 @@ class QQWorkspace(QWidget):
         self._executor = executor or submit
         self._qq_connect_in_flight = False
         self._connection_task: Any = None
+        self._qq_install_prompt_active = False
         self._last_qq_status_message = ""
         self._qq_waiting_auth_since: float | None = None
         self._qq_qrcode_path = _default_qq_qrcode_path()
@@ -251,6 +260,12 @@ class QQWorkspace(QWidget):
         self._qq_disconnect_button.setEnabled(state == _QQ_STATE_CONNECTED)
         self._qq_disconnect_button.setToolTip("")
         self.session_panel.update_analyze_enabled()
+
+        if (
+            state == _QQ_STATE_ERROR
+            and getattr(snapshot, "code", None) == "qq_install_path_missing"
+        ):
+            self._offer_qq_install_path_selection()
 
         if load_sessions_on_ready:
             self.status_changed.emit(message)
@@ -452,6 +467,63 @@ class QQWorkspace(QWidget):
 
     def _handle_qq_connect_error(self, code: str, message: str) -> None:
         self._show_qq_error(_qq_error_title(code), message)
+
+    def _offer_qq_install_path_selection(self) -> None:
+        """Ask the user for QQ.exe only when every automatic path failed."""
+        if self._qq_install_prompt_active:
+            return
+        self._qq_install_prompt_active = True
+        try:
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                _QQ_PATH_PROMPT_TITLE,
+                "",
+                _QQ_PATH_PROMPT_FILTER,
+            )
+        finally:
+            self._qq_install_prompt_active = False
+        if not path:
+            return
+        candidate = Path(path)
+        if (
+            not candidate.is_file()
+            or candidate.name.lower() != "qq.exe"
+        ):
+            self._show_qq_error(_QQ_PATH_INVALID_TITLE, _QQ_PATH_INVALID_HINT)
+            return
+        self._save_qq_install_path(candidate)
+
+    def _save_qq_install_path(self, path: Path) -> None:
+        """Persist the chosen QQ.exe through the facade, then retry."""
+        _LOGGER.info("[qq gui] saving user-selected QQ path path=%s", path)
+        self._status_label.setStyleSheet(STATUS_STYLE_BASE)
+        self._status_label.setText(_QQ_PATH_SAVING)
+        self._status_label.setToolTip("")
+        self._status_label.setVisible(True)
+        self._executor(
+            lambda: self._facade.set_qq_install_path(path),
+            on_success=lambda _status: self._after_qq_install_path_saved(),
+            on_error=self._handle_qq_install_path_save_error,
+        )
+
+    def _after_qq_install_path_saved(self) -> None:
+        """Reconnect immediately after the user-selected path is saved."""
+        self._status_label.setStyleSheet(STATUS_STYLE_BASE)
+        self._status_label.setText(_QQ_PATH_SAVED)
+        self._status_label.setToolTip("")
+        self._status_label.setVisible(True)
+        self.connect_qq()
+
+    def _handle_qq_install_path_save_error(
+        self,
+        code: str,
+        message: str,
+    ) -> None:
+        _LOGGER.warning(
+            "[qq gui] save QQ path failed code=%s",
+            code,
+        )
+        self._show_qq_error(_QQ_PATH_SAVE_FAILED, message)
 
     def _show_qq_error(self, title: str, message: str) -> None:
         self._status_label.setStyleSheet(STATUS_STYLE_ERROR)

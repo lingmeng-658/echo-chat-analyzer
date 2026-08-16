@@ -641,6 +641,30 @@ def test_window_launch_failure_returns_a_safe_error_snapshot() -> None:
     assert snapshot.action_hint
 
 
+def test_missing_qq_window_launch_reports_install_path_code() -> None:
+    module = _connection_module()
+    bridge = _bridge_module()
+    service = _StubConnectionService(
+        _status(available=False, qce_running=True, authenticated=False)
+    )
+    setup = _StubSetupService(runtime_status=_runtime_status())
+    launcher = _RecordingLauncher(
+        error=bridge.QQAuthWindowUnavailable(
+            bridge.MESSAGE_QQ_MISSING,
+            code=bridge.QQ_INSTALL_PATH_MISSING_CODE,
+        )
+    )
+
+    snapshot = _bridge(
+        setup_service=setup,
+        connection_service=service,
+        window_launcher=launcher,
+    ).start_auth_flow()
+
+    assert snapshot.state is module.ConnectionState.ERROR
+    assert snapshot.code == "qq_install_path_missing"
+
+
 def test_start_auth_flow_without_setup_service_reports_error() -> None:
     module = _connection_module()
 
@@ -1107,12 +1131,18 @@ class _FakeProcess:
         return None
 
 
-def test_default_launcher_rejects_a_missing_qq_install(tmp_path: Path) -> None:
+def test_default_launcher_rejects_a_missing_qq_install(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     bridge = _bridge_module()
+    monkeypatch.setattr(bridge, "_detect_qq_install_path", lambda: None)
     config = _runtime_config(tmp_path, with_qq_path=False)
 
-    with pytest.raises(bridge.QQAuthWindowUnavailable):
+    with pytest.raises(bridge.QQAuthWindowUnavailable) as excinfo:
         bridge.default_auth_window_launcher(config)
+
+    assert excinfo.value.code == "qq_install_path_missing"
 
 
 def test_resolve_qq_install_path_reads_the_saved_launcher_path(
@@ -1128,6 +1158,72 @@ def test_resolve_qq_install_path_reads_the_saved_launcher_path(
     resolved = bridge.resolve_qq_install_path(None, tmp_path)
 
     assert resolved == qq_path
+
+
+def test_resolve_qq_install_path_prefers_a_custom_configured_path(
+    tmp_path: Path,
+) -> None:
+    bridge = _bridge_module()
+    config_module = importlib.import_module(
+        "qq_chat_analyzer.application.qq_environment_config"
+    )
+    custom = tmp_path / "Custom Install" / "QQ.exe"
+    custom.parent.mkdir()
+    custom.write_text("fictional", encoding="utf-8")
+    saved = tmp_path / "saved-qq.exe"
+    saved.write_text("fictional", encoding="utf-8")
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "qq_path.txt").write_text(str(saved), encoding="utf-8")
+    config = config_module.QQEnvironmentConfig(qq_install_path=custom)
+
+    resolved = bridge.resolve_qq_install_path(config, tmp_path)
+
+    assert resolved == custom
+
+
+def test_resolve_qq_install_path_uses_python_detector_when_script_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = _bridge_module()
+    found = tmp_path / "Detected" / "QQ.exe"
+    found.parent.mkdir()
+    found.write_text("fictional", encoding="utf-8")
+    monkeypatch.setattr(bridge, "_detect_qq_install_path", lambda: found)
+
+    resolved = bridge.resolve_qq_install_path(None, tmp_path)
+
+    assert resolved == found
+
+
+def test_resolve_qq_install_path_returns_none_when_not_found(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = _bridge_module()
+    monkeypatch.setattr(bridge, "_detect_qq_install_path", lambda: None)
+
+    resolved = bridge.resolve_qq_install_path(None, tmp_path)
+
+    assert resolved is None
+
+
+def test_detect_qq_install_path_returns_first_existing_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = _bridge_module()
+    missing = tmp_path / "missing.exe"
+    found = tmp_path / "QQ.exe"
+    found.write_text("fictional", encoding="utf-8")
+    monkeypatch.setattr(
+        bridge,
+        "_qq_install_candidates",
+        lambda: [missing, found],
+    )
+
+    assert bridge._detect_qq_install_path() == found
 
 
 # ------------------------------------------------------------ config recovery

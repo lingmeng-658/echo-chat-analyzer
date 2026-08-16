@@ -32,13 +32,15 @@ class ConnectionSnapshot:
 
     ``state`` is the only field a caller should branch on. ``message`` and
     ``action_hint`` say what happened and what to do next, already worded for
-    a user. ``version`` is display-only and may be absent.
+    a user. ``code`` is an optional stable machine-readable reason for an
+    error state; ``version`` is display-only and may be absent.
     """
 
     state: ConnectionState
     source: str
     message: str
     action_hint: str = ""
+    code: str | None = None
     version: str | None = None
 
     @property

@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import subprocess
 import threading
 import time
@@ -65,6 +66,7 @@ MESSAGE_QQ_MISSING = (
     "\u672a\u68c0\u6d4b\u5230 QQ \u5ba2\u6237\u7aef\uff0c"
     "\u8bf7\u5148\u5b89\u88c5 QQ \u540e\u91cd\u8bd5\u3002"
 )
+QQ_INSTALL_PATH_MISSING_CODE = "qq_install_path_missing"
 MESSAGE_MAIN_MISSING = (
     "\u672a\u627e\u5230 QQ \u8fd0\u884c\u65f6\u5165\u53e3\uff0c"
     "\u8bf7\u786e\u8ba4\u8fd0\u884c\u73af\u5883\u5b8c\u6574\u540e\u91cd\u8bd5\u3002"
@@ -83,7 +85,13 @@ class QQAuthWindowUnavailable(Exception):
     code = "qq_auth_window_unavailable"
     public_message = MESSAGE_WINDOW_MISSING
 
-    def __init__(self, public_message: str | None = None) -> None:
+    def __init__(
+        self,
+        public_message: str | None = None,
+        *,
+        code: str | None = None,
+    ) -> None:
+        self.code = code or type(self).code
         self.public_message = public_message or type(self).public_message
         super().__init__(self.public_message)
 
@@ -176,6 +184,7 @@ class QQAuthBridge:
             return self._error_snapshot(
                 _public_message(error, MESSAGE_ERROR),
                 HINT_RETRY,
+                code=getattr(error, "code", None),
             )
         _LOGGER.info("[qq auth] login window launched")
         _report_progress(progress, PROGRESS_WAITING_LOGIN)
@@ -411,12 +420,18 @@ class QQAuthBridge:
             return None
 
     @staticmethod
-    def _error_snapshot(message: str, action_hint: str) -> ConnectionSnapshot:
+    def _error_snapshot(
+        message: str,
+        action_hint: str,
+        *,
+        code: str | None = None,
+    ) -> ConnectionSnapshot:
         return ConnectionSnapshot(
             state=ConnectionState.ERROR,
             source=SOURCE_QQ,
             message=message,
             action_hint=action_hint,
+            code=code,
         )
 
 
@@ -447,7 +462,10 @@ def default_auth_window_launcher(config: Any) -> Callable[[], None]:
     if not launcher.is_file():
         raise QQAuthWindowUnavailable(MESSAGE_WINDOW_MISSING)
     if qq_path is None or not qq_path.is_file():
-        raise QQAuthWindowUnavailable(MESSAGE_QQ_MISSING)
+        raise QQAuthWindowUnavailable(
+            MESSAGE_QQ_MISSING,
+            code=QQ_INSTALL_PATH_MISSING_CODE,
+        )
 
     return lambda: _launch_auth_window(
         runtime_directory,
@@ -463,8 +481,9 @@ def resolve_qq_install_path(
     """Resolve the QQ install executable for the bundled runtime.
 
     The environment config wins, then the path the launcher already saved in
-    ``config/qq_path.txt``, then the bundled ``find-qq.ps1`` detector. All
-    results are verified to exist before being returned.
+    ``config/qq_path.txt``, then the bundled ``find-qq.ps1`` detector, then a
+    Python registry/common-directory fallback. All results are verified to
+    exist before being returned.
     """
     configured = _path_value(getattr(config, "qq_install_path", None))
     if configured is not None and configured.is_file():
@@ -477,8 +496,10 @@ def resolve_qq_install_path(
 
     detector = directory / "find-qq.ps1"
     if detector.is_file():
-        return _detect_qq_path_with_script(detector)
-    return None
+        detected = _detect_qq_path_with_script(detector)
+        if detected is not None:
+            return detected
+    return _detect_qq_install_path()
 
 
 def _runtime_directory(config: Any) -> Path:
@@ -508,6 +529,157 @@ def _read_saved_qq_path(path: Path) -> Path | None:
         if resolved.is_file():
             return resolved
     return None
+
+
+def _detect_qq_install_path() -> Path | None:
+    """Return the first existing QQ.exe from registry/common locations."""
+    for candidate in _qq_install_candidates():
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _qq_install_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    if os.name == "nt":
+        try:
+            import winreg
+        except ImportError:
+            winreg = None
+        if winreg is not None:
+            candidates.extend(_registry_qq_install_candidates(winreg))
+    candidates.extend(_common_qq_install_candidates())
+    return candidates
+
+
+def _registry_qq_install_candidates(winreg: Any) -> list[Path]:
+    candidates: list[Path] = []
+    for root, subkey in (
+        (
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\QQ",
+        ),
+        (
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\QQ",
+        ),
+        (
+            winreg.HKEY_CURRENT_USER,
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\QQ",
+        ),
+    ):
+        values = _registry_values(winreg, root, subkey)
+        if not values:
+            continue
+        display = _strip_icon_index(values.get("DisplayIcon"))
+        if display:
+            candidates.append(Path(os.path.expandvars(display)))
+        location = _registry_text(values.get("InstallLocation"))
+        if location:
+            candidates.append(Path(os.path.expandvars(location)) / "QQ.exe")
+        uninstall = _registry_text(values.get("UninstallString"))
+        if uninstall:
+            command = uninstall.strip('"')
+            if command:
+                candidates.append(
+                    Path(os.path.expandvars(command)).parent / "QQ.exe"
+                )
+
+    for root, subkey in (
+        (
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\QQ.exe",
+        ),
+        (
+            winreg.HKEY_CURRENT_USER,
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\QQ.exe",
+        ),
+    ):
+        values = _registry_values(winreg, root, subkey)
+        if values:
+            default = _registry_text(values.get(""))
+            if default:
+                candidates.append(Path(os.path.expandvars(default)))
+
+    values = _registry_values(
+        winreg,
+        winreg.HKEY_CLASSES_ROOT,
+        r"Tencent\shell\open\command",
+    )
+    if values:
+        command = _registry_text(values.get(""))
+        if command:
+            match = re.search(r'"([^"]+)"', command)
+            if match:
+                directory = Path(match.group(1)).parent
+                for _ in range(6):
+                    candidates.append(directory / "QQ.exe")
+                    parent = directory.parent
+                    if parent == directory:
+                        break
+                    directory = parent
+    return candidates
+
+
+def _registry_values(winreg: Any, root: Any, subkey: str) -> dict[str, str]:
+    try:
+        with winreg.OpenKey(root, subkey) as key:
+            values: dict[str, str] = {}
+            index = 0
+            while True:
+                try:
+                    name, value, _ = winreg.EnumValue(key, index)
+                except OSError:
+                    break
+                text = _registry_text(value)
+                if text is not None:
+                    values[name] = text
+                index += 1
+            return values
+    except OSError:
+        return {}
+
+
+def _registry_text(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def _strip_icon_index(value: Any) -> str | None:
+    text = _registry_text(value)
+    if text is None:
+        return None
+    match = re.match(r"^(.*?),\s*\d+$", text)
+    if match:
+        return match.group(1).strip().strip('"') or None
+    return text.strip('"') or None
+
+
+def _common_qq_install_candidates() -> list[Path]:
+    roots: list[Path] = []
+    for name in (
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramW6432",
+        "LOCALAPPDATA",
+    ):
+        value = os.environ.get(name)
+        if value:
+            roots.append(Path(value))
+    if os.name == "nt":
+        system_drive = os.environ.get("SystemDrive", "C:")
+        roots.append(Path(system_drive) / "Program Files")
+        roots.append(Path(system_drive) / "Program Files (x86)")
+    roots.extend((Path("D:/Program Files"), Path("D:/Program Files (x86)")))
+    patterns = (
+        Path("Tencent/QQNT/QQ.exe"),
+        Path("Tencent/QQNT/Bin/QQ.exe"),
+        Path("Tencent/QQ/QQ.exe"),
+        Path("Tencent/QQ/Bin/QQ.exe"),
+    )
+    return [root / pattern for root in roots for pattern in patterns]
 
 
 def _detect_qq_path_with_script(script: Path) -> Path | None:

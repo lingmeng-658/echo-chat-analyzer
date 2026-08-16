@@ -399,6 +399,27 @@ class ChatAnalyzerFacade:
         with _translated_errors(ChatSource.QQ):
             return service.save_environment(config)
 
+    def set_qq_install_path(self, path: str | Path) -> Any:
+        """Persist a user-selected QQ.exe path as the first discovery source.
+
+        The GUI uses this only after automatic discovery failed; the next
+        connect attempt will prefer the saved path.
+        """
+        candidate = Path(path)
+        if not candidate.is_file():
+            raise FacadeError(
+                code="qq_install_path_invalid",
+                public_message="请选择有效的 QQ.exe 文件。",
+            )
+        service = self._require_qq_setup_service()
+        with _translated_errors(ChatSource.QQ):
+            config = service.get_environment_config()
+            if config is None:
+                config = QQEnvironmentConfig()
+            return service.save_environment(
+                replace(config, qq_install_path=candidate)
+            )
+
     def get_qq_runtime_status(self) -> Any:
         """Return the current QQ runtime lifecycle status."""
         service = self._require_qq_setup_service()

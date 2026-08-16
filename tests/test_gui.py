@@ -151,6 +151,7 @@ class StubFacade:
         self.get_qq_runtime_status_calls: list[object] = []
         self.get_qq_environment_config_calls: list[object] = []
         self.setup_qq_environment_calls: list[object] = []
+        self.set_qq_install_path_calls: list[object] = []
         self.start_qq_runtime_calls: list[object] = []
         self.connect_qq_calls: list[object] = []
         self.start_qq_auth_flow_calls: list[object] = []
@@ -311,6 +312,12 @@ class StubFacade:
 
     def setup_qq_environment(self, config):
         self.setup_qq_environment_calls.append(config)
+        if self._setup_error is not None:
+            raise self._setup_error
+        return None
+
+    def set_qq_install_path(self, path):
+        self.set_qq_install_path_calls.append(path)
         if self._setup_error is not None:
             raise self._setup_error
         return None
@@ -1654,7 +1661,7 @@ def test_wechat_connect_failure_surfaces_a_user_message(qt_app) -> None:
     )
 
     assert page._status_label.text() == (
-        "\U0001F534 Key \u83b7\u53d6\u5931\u8d25"
+        "\U0001F534 \u7b49\u5f85\u5fae\u4fe1\u767b\u5f55\u8d85\u65f6"
     )
     assert received == ["\u767b\u5f55\u8d85\u65f6\uff0c\u8bf7\u91cd\u65b0\u5c1d\u8bd5\u3002"]
 
@@ -1669,7 +1676,7 @@ def test_wechat_key_failure_does_not_claim_echo_needs_reinstall(qt_app) -> None:
     )
 
     visible = page._status_label.text()
-    assert "Key \u83b7\u53d6\u5931\u8d25" in visible
+    assert "\u7b49\u5f85\u5fae\u4fe1\u767b\u5f55\u8d85\u65f6" in visible
     assert "\u91cd\u65b0\u5b89\u88c5" not in visible
 
 
@@ -1679,11 +1686,18 @@ def test_wechat_hook_failure_keeps_the_classified_reason(qt_app) -> None:
 
     page._handle_wechat_connect_error(
         "wechat_hook_failed",
-        "\u5fae\u4fe1 Hook \u5931\u8d25\uff0c\u5f53\u524d\u5fae\u4fe1\u8fdb\u7a0b\u53ef\u80fd\u4e0d\u517c\u5bb9\u3002",
+        "无法获取微信登录密钥。\n可能原因：\n"
+        "- 微信版本或环境不支持\n"
+        "- 权限不足\n"
+        "- 微信未处于可连接状态",
     )
 
-    assert "Hook \u5931\u8d25" in (page._status_label.toolTip() or "")
-    assert "\u83b7\u53d6\u6743\u9650\u65f6\u5931\u8d25" in page._status_label.text()
+    tooltip = page._status_label.toolTip() or ""
+    assert "\u53ef\u80fd\u539f\u56e0" in tooltip
+    assert "\u5fae\u4fe1\u7248\u672c\u6216\u73af\u5883\u4e0d\u652f\u6301" in tooltip
+    assert "\u65e0\u6cd5\u83b7\u53d6\u5fae\u4fe1\u767b\u5f55\u5bc6\u94a5" in (
+        page._status_label.text()
+    )
 
 
 def test_selecting_qq_without_ready_status_does_not_load_sessions(
@@ -1880,7 +1894,9 @@ def test_qq_connection_errors_keep_the_real_stage(qt_app, sources, code, title) 
     [
         ("wechat_not_running", "微信未启动"),
         ("wechat_waiting_login", "等待微信登录"),
-        ("wechat_key_timeout", "Key 获取失败"),
+        ("wechat_key_timeout", "等待微信登录超时"),
+        ("wechat_key_not_captured", "无法获取微信登录密钥"),
+        ("wechat_hook_failed", "无法获取微信登录密钥"),
     ],
 )
 def test_wechat_connection_errors_keep_the_real_stage(qt_app, code, title) -> None:
@@ -5460,6 +5476,49 @@ def test_qq_workspace_connect_disables_button_until_finish(
     cancel_workspace.cancel_connection()
     assert cancel_workspace._qq_connect_button.isEnabled() is True
     assert cancel_workspace._qq_connect_button.text() == "连接QQ"
+
+
+def test_qq_workspace_offers_qq_exe_selection_when_install_path_missing(
+    qt_app,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+
+    module = importlib.import_module("qq_chat_analyzer.gui.qq_workspace")
+    qq_path = tmp_path / "QQ.exe"
+    qq_path.write_text("fictional", encoding="utf-8")
+    facade = StubFacade(sources=())
+    workspace = QQWorkspace(facade, executor=_inline_executor())
+    dialog_calls = []
+
+    def _fake_file_dialog(parent, title, directory, file_filter):
+        dialog_calls.append((title, file_filter))
+        return str(qq_path), ""
+
+    monkeypatch.setattr(
+        module.QFileDialog,
+        "getOpenFileName",
+        staticmethod(_fake_file_dialog),
+    )
+    snapshot = importlib.import_module(
+        "qq_chat_analyzer.application.connection.models"
+    ).ConnectionSnapshot(
+        state=importlib.import_module(
+            "qq_chat_analyzer.application.connection.models"
+        ).ConnectionState.ERROR,
+        source="qq",
+        message="未检测到 QQ 客户端。",
+        code="qq_install_path_missing",
+    )
+
+    workspace._show_qq_status(snapshot, load_sessions_on_ready=False)
+
+    assert facade.set_qq_install_path_calls == [qq_path]
+    assert facade.start_qq_auth_flow_calls == [1]
+    assert dialog_calls == [
+        (module._QQ_PATH_PROMPT_TITLE, module._QQ_PATH_PROMPT_FILTER)
+    ]
 
 
 def test_wechat_workspace_shows_connect_button_when_disconnected(

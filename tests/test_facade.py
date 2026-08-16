@@ -200,12 +200,22 @@ class _StubQQSetupService:
         self._connect_status = connect_status
         self.config_calls = 0
         self.connect_calls = 0
+        self.save_calls = 0
+        self.saved_configs: list[object] = []
 
     def get_environment_config(self):
         self.config_calls += 1
         if self._error is not None:
             raise self._error
         return self._config
+
+    def save_environment(self, config):
+        self.save_calls += 1
+        self.saved_configs.append(config)
+        if self._error is not None:
+            raise self._error
+        self._config = config
+        return self._connect_status
 
     def connect(self):
         self.connect_calls += 1
@@ -609,6 +619,25 @@ def test_facade_returns_qq_environment_config_for_prefill() -> None:
 
     assert facade.get_qq_environment_config() is config
     assert setup.config_calls == 1
+
+
+def test_set_qq_install_path_persists_the_selected_qq_exe(tmp_path: Path) -> None:
+    module = _facade_module()
+    qq_path = tmp_path / "QQ.exe"
+    qq_path.write_text("fictional", encoding="utf-8")
+    config = module.QQEnvironmentConfig(
+        runtime_directory=Path("D:/fake_runtime"),
+        qce_path=Path("D:/fake_qce_server.exe"),
+    )
+    setup = _StubQQSetupService(config=config)
+    facade = _facade(qq_setup_service=setup)
+
+    facade.set_qq_install_path(qq_path)
+
+    assert setup.save_calls == 1
+    assert setup.saved_configs[0].qq_install_path == qq_path
+    assert setup.saved_configs[0].runtime_directory == Path("D:/fake_runtime")
+    assert setup.saved_configs[0].qce_path == Path("D:/fake_qce_server.exe")
 
 
 def test_connect_qq_redirects_to_auth_flow() -> None:
