@@ -48,6 +48,12 @@ _HELPER_HOOK_SUCCESS_PATTERN = re.compile(
 _HELPER_HOOK_FAILURE_PATTERN = re.compile(
     r"initializehook\([^)]*\)\s*->\s*false", re.IGNORECASE
 )
+_HELPER_STAGE_PATTERN = re.compile(
+    r"helper_stage=(node_start|koffi_load|process_enumeration|dll_load)"
+)
+_HELPER_PROCESS_PATTERN = re.compile(
+    r"process_found=(true|false),\s*process_count=(\d+)", re.IGNORECASE
+)
 _COMPONENTS_READY_MESSAGE = (
     "\u5fae\u4fe1\u8fde\u63a5\u7ec4\u4ef6\u5df2\u51c6\u5907\u5b8c\u6210\uff0c"
     "\u8bf7\u73b0\u5728\u6253\u5f00\u5fae\u4fe1\u5e76\u767b\u5f55"
@@ -329,7 +335,7 @@ class WeChatKeyService:
                 "\u8bf7\u91cd\u8bd5\u3002"
             ) from None
         if result.returncode != 0:
-            _log_helper_diagnostics(result.stderr)
+            _log_helper_diagnostics(result.stderr, result.returncode)
             raise WeChatKeyUnavailable(
                 _helper_failure_message(result.stderr),
                 code=_helper_failure_code(result.stderr),
@@ -337,7 +343,7 @@ class WeChatKeyService:
         try:
             return self._finalize_key(result.stdout)
         except WeChatKeyUnavailable:
-            _log_helper_diagnostics(result.stderr)
+            _log_helper_diagnostics(result.stderr, result.returncode)
             raise
 
     def _run_helper_streaming(
@@ -417,7 +423,7 @@ class WeChatKeyService:
         stdout = "".join(stdout_lines)
         if process.returncode not in (0, None):
             stderr = "\n".join(recent_errors)
-            _log_helper_diagnostics(stderr)
+            _log_helper_diagnostics(stderr, process.returncode)
             raise WeChatKeyUnavailable(
                 _helper_failure_message(stderr),
                 code=_helper_failure_code(stderr),
@@ -425,7 +431,9 @@ class WeChatKeyService:
         try:
             key = self._finalize_key(stdout)
         except WeChatKeyUnavailable:
-            _log_helper_diagnostics("\n".join(recent_errors))
+            _log_helper_diagnostics(
+                "\n".join(recent_errors), process.returncode
+            )
             raise
         self._report_progress(_KEY_RECEIVED_MESSAGE, progress)
         return key
@@ -567,7 +575,12 @@ def _helper_failure_message(stderr: Any) -> str:
         return MESSAGE_HOOK_FAILED
     if "timeout" in detail:
         return MESSAGE_WAIT_TIMEOUT
-    if _helper_runtime_failure(detail) or "dll" in detail or "load" in detail:
+    if (
+        _helper_runtime_failure(detail)
+        or _last_helper_stage(detail) == "dll_load"
+        or "dll" in detail
+        or "load" in detail
+    ):
         return "微信连接组件加载失败，请重新安装余音后重试。"
     return "微信连接准备失败，请重试。"
 
@@ -579,7 +592,7 @@ def _helper_failure_code(stderr: Any) -> str:
         return "wechat_key_not_captured"
     if "initializehook" in detail and "-> true" not in detail:
         return "wechat_hook_failed"
-    if _helper_runtime_failure(detail):
+    if _helper_runtime_failure(detail) or _last_helper_stage(detail) == "dll_load":
         return "wechat_environment_missing"
     if "timeout" in detail:
         return "wechat_key_timeout"
@@ -600,15 +613,48 @@ def _helper_runtime_failure(detail: str) -> bool:
     )
 
 
-def _log_helper_diagnostics(stderr: Any) -> None:
+def _last_helper_stage(stderr: Any) -> str:
+    stages = _HELPER_STAGE_PATTERN.findall(str(stderr or "").lower())
+    return stages[-1] if stages else "unknown"
+
+
+def _helper_error_category(stage: str, exit_code: Any) -> str:
+    if stage == "dll_load":
+        return "dll_load_failed"
+    if stage == "process_enumeration":
+        return "process_enumeration_failed"
+    if stage in {"node_start", "koffi_load"}:
+        return "runtime_load_failed"
+    if isinstance(exit_code, int) and exit_code < 0:
+        return "native_process_exit"
+    return "helper_failed"
+
+
+def _log_helper_diagnostics(stderr: Any, exit_code: Any = None) -> None:
     """Record safe helper milestones; helper details never enter logs.
 
     Stages the helper never reached are logged as explicit ``null`` so a
     failure can be attributed to the earliest missing milestone.
     """
     text = str(stderr or "").lower()
+    stage = _last_helper_stage(text)
+    safe_exit_code = exit_code if isinstance(exit_code, int) else "unknown"
+    _LOGGER.warning(
+        "wechat.key.helper helper_exit_code=%s helper_stage=%s "
+        "helper_error_category=%s",
+        safe_exit_code,
+        stage,
+        _helper_error_category(stage, exit_code),
+    )
+    process_match = _HELPER_PROCESS_PATTERN.search(text)
     match = _HELPER_PIDS_PATTERN.search(text)
-    if match:
+    if process_match:
+        _LOGGER.info(
+            "wechat.key.process process_found=%s process_count=%d",
+            process_match.group(1).lower(),
+            int(process_match.group(2)),
+        )
+    elif match:
         count = sum(1 for item in match.group(1).split(",") if item.strip())
         _LOGGER.info(
             "wechat.key.process process_found=%s process_count=%d",
@@ -619,9 +665,9 @@ def _log_helper_diagnostics(stderr: Any) -> None:
         _LOGGER.info("wechat.key.process process_found=false process_count=0")
     else:
         _LOGGER.info("wechat.key.process process_found=null process_count=null")
-    if _HELPER_HOOK_SUCCESS_PATTERN.search(text):
+    if "hook_success=true" in text or _HELPER_HOOK_SUCCESS_PATTERN.search(text):
         _LOGGER.info("wechat.key.hook hook_success=true")
-    elif _HELPER_HOOK_FAILURE_PATTERN.search(text):
+    elif "hook_success=false" in text or _HELPER_HOOK_FAILURE_PATTERN.search(text):
         _LOGGER.warning("wechat.key.hook hook_success=false")
     else:
         _LOGGER.info("wechat.key.hook hook_success=null")

@@ -6,6 +6,11 @@
 // stderr, where WeChatKeyService maps them into a user-safe message.
 
 const { execFileSync } = require('node:child_process')
+const now = () => new Date().toISOString()
+const log = (message) => process.stderr.write(`${now()} ${message}\n`)
+
+log('helper_stage=node_start')
+log('helper_stage=koffi_load')
 const koffi = require('koffi')
 
 const POLL_INTERVAL_MS = 200
@@ -13,8 +18,6 @@ const STATUS_INTERVAL_MS = 5000
 const KEY_LENGTH = 64
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-const now = () => new Date().toISOString()
-const log = (message) => process.stderr.write(`${now()} ${message}\n`)
 
 function arg(name, fallback) {
   const index = process.argv.indexOf(name)
@@ -122,20 +125,20 @@ async function main() {
   if (!dll) throw new Error('missing dll path')
 
   const pidArg = Number(arg('--pid', NaN))
+  log('helper_stage=process_enumeration')
   const ids = Number.isFinite(pidArg) ? [pidArg] : pids()
+  log(`process_found=${ids.length > 0}, process_count=${ids.length}`)
 
-  log(`DLL: ${dll}`)
   log(`timeoutMs: ${timeoutMs}`)
 
+  log('helper_stage=dll_load')
   const funcs = bind(koffi.load(dll))
   log('exports loaded: InitializeHook, PollKeyData, CleanupHook')
-  log(`Weixin PIDs: ${ids.join(', ')}`)
 
   if (!ids.length) throw new Error('no Weixin process')
 
   const deadline = Date.now() + timeoutMs
   for (const [index, pid] of ids.entries()) {
-    log(`--- trying PID ${pid} ---`)
     const remainingPids = ids.length - index
     const pidDeadline = Date.now() + Math.max(0, Math.floor((deadline - Date.now()) / remainingPids))
     let hooked = false
@@ -144,7 +147,7 @@ async function main() {
     } catch (error) {
       log(`InitializeHook exception: ${error}`)
     }
-    log(`InitializeHook(${pid}) -> ${hooked}`)
+    log(`hook_success=${hooked}`)
 
     if (!hooked) {
       log(`InitializeHook error: ${errorText(funcs)}`)

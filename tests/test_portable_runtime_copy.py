@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import struct
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,8 @@ def _fictional_runtime(
     for relative in (
         "qq/qce-server.exe",
         "qq/napcat.mjs",
+        "qq/NapCatWinBootMain.exe",
+        "qq/NapCatWinBootHook.dll",
         "qq/static/qce/index.html",
         "wechat/wcdb_cli.exe",
         "wechat/WCDB.dll",
@@ -42,6 +45,10 @@ def _fictional_runtime(
         _write(
             runtime / "wechat/node_modules/koffi/index.js",
             "module.exports = { fictional: true }\n",
+        )
+        _write(
+            runtime
+            / "wechat/node_modules/koffi/build/koffi/win32_x64/koffi.node"
         )
     _write(
         runtime / "wechat/node_modules/koffi/nested/sentinel.txt",
@@ -65,9 +72,12 @@ def _fictional_runtime(
     return runtime
 
 
-def _copy_runtime(project_root: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [
+def _copy_runtime(
+    project_root: Path,
+    *,
+    msvc_runtime_directory: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    command = [
             "powershell.exe",
             "-NoProfile",
             "-ExecutionPolicy",
@@ -77,7 +87,13 @@ def _copy_runtime(project_root: Path) -> subprocess.CompletedProcess[str]:
             "-ProjectRootOverride",
             str(project_root),
             "-RuntimeOnly",
-        ],
+        ]
+    if msvc_runtime_directory is not None:
+        command.extend(
+            ["-MsvcRuntimeDirectoryOverride", str(msvc_runtime_directory)]
+        )
+    return subprocess.run(
+        command,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -106,6 +122,85 @@ def test_runtime_only_build_copies_complete_wechat_node_module(
     )
 
 
+def test_runtime_build_ships_wx_key_msvc_runtime_dependencies(
+    tmp_path: Path,
+) -> None:
+    """wx_key.dll must not rely on VC++ being installed system-wide."""
+    _fictional_runtime(tmp_path)
+
+    completed = _copy_runtime(tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    for runtime_name in ("wechat", "qq"):
+        portable_runtime = tmp_path / "dist/Echo/runtime" / runtime_name
+        for filename in (
+            "msvcp140.dll",
+            "vcruntime140.dll",
+            "vcruntime140_1.dll",
+        ):
+            dependency = portable_runtime / filename
+            assert dependency.is_file(), (
+                f"missing app-local native dependency: {runtime_name}/{filename}"
+            )
+            assert dependency.stat().st_size > 0
+
+
+def test_runtime_build_rejects_missing_msvc_runtime_dependency(
+    tmp_path: Path,
+) -> None:
+    _fictional_runtime(tmp_path)
+    incomplete_runtime = tmp_path / "fictional-msvc-runtime"
+    incomplete_runtime.mkdir()
+
+    completed = _copy_runtime(
+        tmp_path,
+        msvc_runtime_directory=incomplete_runtime,
+    )
+
+    assert completed.returncode != 0
+    assert "Required native runtime dependency is missing: msvcp140.dll" in (
+        completed.stderr + completed.stdout
+    )
+
+
+def test_runtime_build_enforces_minimum_msvc_runtime_version() -> None:
+    script = BUILD_SCRIPT.read_text(encoding="utf-8-sig")
+
+    assert '$MsvcRuntimeMinimumVersion = [Version]"14.43"' in script
+    assert "Native runtime dependency is too old" in script
+
+
+def _pe_machine(path: Path) -> int:
+    with path.open("rb") as binary:
+        assert binary.read(2) == b"MZ"
+        binary.seek(0x3C)
+        pe_offset = struct.unpack("<I", binary.read(4))[0]
+        binary.seek(pe_offset)
+        assert binary.read(4) == b"PE\0\0"
+        return struct.unpack("<H", binary.read(2))[0]
+
+
+def test_key_portable_native_binaries_are_x64() -> None:
+    portable = PROJECT_ROOT / "dist" / "Echo"
+    required = (
+        portable / "Echo.exe",
+        portable / "runtime/qq/qce-server.exe",
+        portable / "runtime/qq/NapCatWinBootMain.exe",
+        portable / "runtime/qq/NapCatWinBootHook.dll",
+        portable / "runtime/wechat/node.exe",
+        portable / "runtime/wechat/wcdb_cli.exe",
+        portable / "runtime/wechat/WCDB.dll",
+        portable / "runtime/wechat/wx_key.dll",
+        portable
+        / "runtime/wechat/node_modules/koffi/build/koffi/win32_x64/koffi.node",
+    )
+    missing = [str(path) for path in required if not path.is_file()]
+    if missing:
+        pytest.skip("built portable runtime is unavailable")
+
+    assert {_pe_machine(path) for path in required} == {0x8664}
+
+
 def test_runtime_build_rejects_koffi_without_entrypoint(tmp_path: Path) -> None:
     _fictional_runtime(tmp_path, koffi_index=False)
 
@@ -115,6 +210,40 @@ def test_runtime_build_rejects_koffi_without_entrypoint(tmp_path: Path) -> None:
     assert "runtime\\wechat\\node_modules\\koffi\\index.js" in (
         completed.stderr + completed.stdout
     )
+
+
+def test_runtime_build_rejects_missing_koffi_windows_addon(
+    tmp_path: Path,
+) -> None:
+    runtime = _fictional_runtime(tmp_path)
+    (
+        runtime
+        / "wechat/node_modules/koffi/build/koffi/win32_x64/koffi.node"
+    ).unlink()
+
+    completed = _copy_runtime(tmp_path)
+
+    assert completed.returncode != 0
+    assert "koffi\\build\\koffi\\win32_x64\\koffi.node" in (
+        completed.stderr + completed.stdout
+    )
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ["NapCatWinBootMain.exe", "NapCatWinBootHook.dll"],
+)
+def test_runtime_build_rejects_missing_qq_native_launcher(
+    tmp_path: Path,
+    filename: str,
+) -> None:
+    runtime = _fictional_runtime(tmp_path)
+    (runtime / "qq" / filename).unlink()
+
+    completed = _copy_runtime(tmp_path)
+
+    assert completed.returncode != 0
+    assert filename in completed.stderr + completed.stdout
 
 
 def test_runtime_build_rejects_missing_bundled_node(tmp_path: Path) -> None:

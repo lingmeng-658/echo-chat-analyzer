@@ -335,6 +335,40 @@ def test_helper_early_runtime_failure_is_classified_and_logged(
     assert "ab12" * 16 not in caplog.text
 
 
+def test_helper_dll_load_failure_logs_exit_code_and_stage(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    module = _module()
+    caplog.set_level(
+        logging.INFO,
+        logger="qq_chat_analyzer.desktop.wechat_key_service",
+    )
+    service = _helper_service(
+        tmp_path,
+        _Completed(
+            1,
+            stderr=(
+                "helper_stage=node_start\n"
+                "helper_stage=koffi_load\n"
+                "helper_stage=process_enumeration\n"
+                "helper_stage=dll_load\n"
+                "Error: Dynamic Linking Error: Win32 error 126\n"
+            ),
+        ),
+    )
+
+    with pytest.raises(module.WeChatKeyUnavailable):
+        service.acquire()
+
+    assert (
+        "wechat.key.helper helper_exit_code=1 helper_stage=dll_load "
+        "helper_error_category=dll_load_failed"
+    ) in caplog.text
+    assert "process_found=null process_count=null" in caplog.text
+    for leaked in ("Dynamic Linking Error", "Win32 error", "secret", "wx_key.dll"):
+        assert leaked not in caplog.text
+
+
 def test_helper_default_timeout_is_600_seconds(tmp_path: Path):
     calls = []
     def runner(command, **options):
@@ -637,6 +671,59 @@ def test_helper_source_uses_one_global_timeout_for_all_pids():
     loop = source.index("for (const [index, pid] of ids.entries())")
     deadline = source.index("const deadline = Date.now() + timeoutMs")
     assert deadline < loop
+
+
+def test_helper_stage_markers_precede_native_bootstrap_operations() -> None:
+    source = (
+        PROJECT_ROOT / "runtime" / "wechat" / "wx_key_helper.cjs"
+    ).read_text(encoding="utf-8")
+
+    assert source.index("helper_stage=node_start") < source.index("require('koffi')")
+    assert source.index("helper_stage=koffi_load") < source.index("require('koffi')")
+    assert source.index("helper_stage=process_enumeration") < source.index(": pids()")
+    assert source.index("helper_stage=dll_load") < source.index("koffi.load(dll)")
+
+
+@pytest.mark.skipif(
+    os.name != "nt"
+    or not (PROJECT_ROOT / "runtime" / "wechat" / "node.exe").is_file(),
+    reason="bundled Windows Node.js is required",
+)
+def test_bundled_helper_reaches_process_enumeration_before_dll_load(
+    tmp_path: Path,
+) -> None:
+    invalid_dll = tmp_path / "fictional-invalid.dll"
+    invalid_dll.write_bytes(b"not a native library")
+    completed = subprocess.run(
+        [
+            str(PROJECT_ROOT / "runtime" / "wechat" / "node.exe"),
+            str(PROJECT_ROOT / "runtime" / "wechat" / "wx_key_helper.cjs"),
+            "--dll",
+            str(invalid_dll),
+            "--pid",
+            "1",
+            "--timeout-ms",
+            "1",
+        ],
+        cwd=PROJECT_ROOT / "runtime" / "wechat",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    stderr = completed.stderr
+    markers = [
+        "helper_stage=node_start",
+        "helper_stage=koffi_load",
+        "helper_stage=process_enumeration",
+        "process_found=true, process_count=1",
+        "helper_stage=dll_load",
+    ]
+    positions = [stderr.index(marker) for marker in markers]
+    assert positions == sorted(positions)
 
 
 # --------------------------------------------------------------- streaming
