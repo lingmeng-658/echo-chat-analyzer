@@ -6,6 +6,7 @@
 // stderr, where WeChatKeyService maps them into a user-safe message.
 
 const { execFileSync } = require('node:child_process')
+const fs = require('node:fs')
 const now = () => new Date().toISOString()
 const log = (message) => process.stderr.write(`${now()} ${message}\n`)
 
@@ -24,9 +25,20 @@ function arg(name, fallback) {
   return index >= 0 ? process.argv[index + 1] : fallback
 }
 
+function powershellExecutable() {
+  const systemRoot = process.env.ECHO_WX_KEY_POWERSHELL_BASE || process.env.SystemRoot
+  if (systemRoot) {
+    const windowsPowerShell = `${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
+    if (fs.existsSync(windowsPowerShell)) {
+      return windowsPowerShell
+    }
+  }
+  return 'powershell.exe'
+}
+
 function pids() {
   const output = execFileSync(
-    'powershell.exe',
+    powershellExecutable(),
     ['-NoProfile', '-Command', '(Get-Process -Name Weixin -ErrorAction SilentlyContinue).Id'],
     { encoding: 'utf8', windowsHide: true }
   )
