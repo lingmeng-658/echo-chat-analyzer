@@ -315,6 +315,82 @@ def test_start_auth_flow_rejects_pre_existing_qrcode_until_session_update(
     assert bridge.is_qrcode_ready() is True
 
 
+def test_is_qrcode_ready_rejects_orphan_qrcode_without_auth_session(
+    tmp_path: Path,
+) -> None:
+    """A QR left by an old Echo/runtime session must not be shown yet."""
+    qr_path = tmp_path / "cache" / "qrcode.png"
+    qr_path.parent.mkdir()
+    qr_path.write_bytes(b"orphan-qr-from-old-session")
+    bridge = _bridge(qrcode_path=qr_path)
+
+    assert bridge.is_qrcode_ready() is False
+
+
+def test_is_qrcode_ready_accepts_qrcode_after_auth_session_starts(
+    tmp_path: Path,
+) -> None:
+    qr_path = tmp_path / "cache" / "qrcode.png"
+    qr_path.parent.mkdir()
+    setup = _StubSetupService(
+        connect_status=_status(
+            available=False,
+            qce_running=True,
+            authenticated=False,
+        ),
+        runtime_status=_runtime_status(),
+        config=_runtime_config(tmp_path),
+    )
+    service = _StubConnectionService(
+        _status(available=False, qce_running=True, authenticated=False)
+    )
+    bridge = _bridge(
+        setup_service=setup,
+        connection_service=service,
+        window_launcher=_RecordingLauncher(),
+        qrcode_path=qr_path,
+    )
+
+    assert bridge.is_qrcode_ready() is False
+    bridge.start_auth_flow()
+    assert bridge.is_qrcode_ready() is False
+
+    qr_path.write_bytes(b"fresh-qr-from-this-session")
+    assert bridge.is_qrcode_ready() is True
+
+
+def test_is_qrcode_ready_accepts_refreshed_qrcode_after_expiry(
+    tmp_path: Path,
+) -> None:
+    qr_path = tmp_path / "cache" / "qrcode.png"
+    qr_path.parent.mkdir()
+    setup = _StubSetupService(
+        connect_status=_status(
+            available=False,
+            qce_running=True,
+            authenticated=False,
+        ),
+        runtime_status=_runtime_status(),
+        config=_runtime_config(tmp_path),
+    )
+    service = _StubConnectionService(
+        _status(available=False, qce_running=True, authenticated=False)
+    )
+    bridge = _bridge(
+        setup_service=setup,
+        connection_service=service,
+        window_launcher=_RecordingLauncher(),
+        qrcode_path=qr_path,
+    )
+
+    bridge.start_auth_flow()
+    qr_path.write_bytes(b"first-qr")
+    assert bridge.is_qrcode_ready() is True
+
+    qr_path.write_bytes(b"refreshed-qr-after-expiry")
+    assert bridge.is_qrcode_ready() is True
+
+
 def test_start_auth_flow_logs_qr_baseline_and_acceptance_fingerprints(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,

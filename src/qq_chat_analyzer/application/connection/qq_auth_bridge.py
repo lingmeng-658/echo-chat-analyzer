@@ -125,6 +125,7 @@ class QQAuthBridge:
         self._runtime_cleaner = runtime_cleaner
         self._auth_launch_started = False
         self._launched_process: Any | None = None
+        self._qr_session_started = False
         self._qr_baseline: tuple[str, int, int] | None = None
         self._qr_session_started_at: float | None = None
         self._qr_ready_logged = False
@@ -211,10 +212,16 @@ class QQAuthBridge:
     def is_qrcode_ready(self) -> bool:
         """Return whether the QR cache belongs to the current auth session.
 
+        No QR file is accepted until this Echo instance has started its own
+        auth session; otherwise a QR left by an earlier runtime session would
+        be shown and scanned as if it were fresh.
+
         A fresh auth flow records the QR cache state before launching NapCat.
         Until the file changes, any pre-existing ``qrcode.png`` is treated as
         stale and must not be shown to the user.
         """
+        if not self._qr_session_started:
+            return False
         path = self._qrcode_cache_path()
         if path is None:
             return False
@@ -331,6 +338,7 @@ class QQAuthBridge:
         """Forget the current launcher/QR session so the next login is fresh."""
         self._auth_launch_started = False
         self._launched_process = None
+        self._qr_session_started = False
         self._qr_baseline = None
         self._qr_session_started_at = None
         self._qr_ready_logged = False
@@ -354,6 +362,7 @@ class QQAuthBridge:
 
     def _remember_qr_baseline(self) -> None:
         """Record the QR cache state that predates this auth session."""
+        self._qr_session_started = True
         self._qr_session_started_at = time.monotonic()
         self._qr_ready_logged = False
         path = self._qrcode_cache_path()

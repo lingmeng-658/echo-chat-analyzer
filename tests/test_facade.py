@@ -640,6 +640,17 @@ def test_set_qq_install_path_persists_the_selected_qq_exe(tmp_path: Path) -> Non
     assert setup.saved_configs[0].qce_path == Path("D:/fake_qce_server.exe")
 
 
+def test_facade_wires_stale_runtime_cleaner_into_qq_auth_bridge() -> None:
+    facade = _facade(
+        qq_setup_service=_StubQQSetupService(),
+        qq_connection_service=_StubQQConnectionService(),
+    )
+
+    bridge = facade._require_qq_auth_bridge()
+
+    assert callable(bridge._runtime_cleaner)
+
+
 def test_connect_qq_redirects_to_auth_flow() -> None:
     module = _facade_module()
     bridge = _StubQQAuthBridge()

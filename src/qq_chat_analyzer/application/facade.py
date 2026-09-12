@@ -1227,8 +1227,9 @@ class ChatAnalyzerFacade:
                 connection_service=self._optional_qq_connection_service(),
                 manager=self._require_qq_connection_manager(),
                 process_registry=self._require_qq_process_registry(),
-                # Temporary manual A/B: keep the cleaner available but skip it.
-                runtime_cleaner=None,
+                # A new auth session must not keep sharing the QR cache with
+                # a runtime left over from an earlier Echo instance.
+                runtime_cleaner=terminate_bundled_runtime_sessions,
             )
         return self._qq_auth_bridge
 
