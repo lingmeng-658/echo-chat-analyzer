@@ -837,6 +837,40 @@ def test_default_launcher_opens_the_runtime_login_window(
     assert "ECHO_MODE" not in spawned["kwargs"]["env"]
 
 
+def test_default_launcher_strips_napcat_quick_login_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Echo's bundled NapCat must stay QR-only, not quick-login.
+
+    Quick-login variables belong to other NapCat setups on the host; they must
+    not leak into the child env Echo hands to its own runtime launcher.
+    """
+    bridge = _bridge_module()
+    config = _runtime_config(tmp_path)
+    spawned = {}
+    monkeypatch.setattr(bridge.os, "name", "posix")
+    monkeypatch.setenv("NAPCAT_QUICK_ACCOUNT", "10001")
+    monkeypatch.setenv("NAPCAT_QUICK_PASSWORD", "fictional-password")
+    monkeypatch.setenv("NAPCAT_QUICK_PASSWORD_MD5", "fictional-md5-hash")
+
+    def _fake_popen(args, **kwargs):
+        spawned["kwargs"] = kwargs
+        return _FakeProcess(pid=4248)
+
+    monkeypatch.setattr(bridge.subprocess, "Popen", _fake_popen)
+
+    bridge.default_auth_window_launcher(config)()
+
+    child_env = spawned["kwargs"]["env"]
+    assert "NAPCAT_QUICK_ACCOUNT" not in child_env
+    assert "NAPCAT_QUICK_PASSWORD" not in child_env
+    assert "NAPCAT_QUICK_PASSWORD_MD5" not in child_env
+    assert child_env["NAPCAT_QQ_PATH"] == str(
+        (tmp_path / "QQ.exe").resolve()
+    )
+
+
 def _start_launcher_exit_fixture(tmp_path: Path, *, echo_mode: bool):
     runtime = tmp_path / "runtime" / "qq"
     runtime.mkdir(parents=True)

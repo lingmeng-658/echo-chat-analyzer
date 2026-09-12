@@ -802,6 +802,11 @@ def _launch_auth_window(
     )
     environment = os.environ.copy()
     environment.pop("ECHO_MODE", None)
+    # Quick-login credentials may belong to other NapCat setups on the host;
+    # these three variables must not leak into Echo's child process.
+    environment.pop("NAPCAT_QUICK_ACCOUNT", None)
+    environment.pop("NAPCAT_QUICK_PASSWORD", None)
+    environment.pop("NAPCAT_QUICK_PASSWORD_MD5", None)
     environment["NAPCAT_QQ_PATH"] = str(qq_path.resolve())
     launch_options = {
         "cwd": str(runtime_directory),
