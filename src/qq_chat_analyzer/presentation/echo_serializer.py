@@ -21,7 +21,7 @@ from .models import (
 )
 from .expression_assets import (
     expression_asset_data_uri,
-    resolve_wechat_asset_key,
+    resolve_expression_asset_key,
 )
 
 
@@ -55,11 +55,17 @@ def echo_report_to_dict(view: EchoReportView) -> dict[str, object]:
         "conversation_sessions": _conversation_sessions_to_dict(
             view.conversation_sessions
         ),
-        "language_profile": _language_profile_to_dict(view.language_profile),
+        "language_profile": _language_profile_to_dict(
+            view.language_profile,
+            view.expression_source,
+        ),
         "expression_culture": _expression_culture_to_dict(
             view.expression_culture
         ),
-        "members": [_member_to_dict(member) for member in view.members],
+        "members": [
+            _member_to_dict(member, view.expression_source)
+            for member in view.members
+        ],
     }
 
 
@@ -138,6 +144,7 @@ def _expression_combination_to_dict(
 
 def _language_profile_to_dict(
     profile: EchoLanguageProfile | None,
+    expression_source: str | None = None,
 ) -> dict[str, object] | None:
     if profile is None:
         return None
@@ -146,10 +153,12 @@ def _language_profile_to_dict(
         "available": profile.available,
         "unavailable_reason": profile.unavailable_reason,
         "shared_words": [
-            _shared_word_to_dict(word) for word in profile.shared_words
+            _shared_word_to_dict(word, expression_source)
+            for word in profile.shared_words
         ],
         "side_preference_words": [
-            _shared_word_to_dict(word) for word in profile.side_preference_words
+            _shared_word_to_dict(word, expression_source)
+            for word in profile.side_preference_words
         ],
         "members": [
             {
@@ -157,10 +166,12 @@ def _language_profile_to_dict(
                 "display_name": member.display_name,
                 "heading": member.heading,
                 "primary_words": [
-                    _word_to_display(word) for word in member.primary_words
+                    _word_to_display(word, expression_source)
+                    for word in member.primary_words
                 ],
                 "context_words": [
-                    _word_to_display(word) for word in member.context_words
+                    _word_to_display(word, expression_source)
+                    for word in member.context_words
                 ],
                 "expression_habits": _expression_habits_to_dict(
                     member.expression_habits
@@ -171,20 +182,29 @@ def _language_profile_to_dict(
     }
 
 
-def _shared_word_to_dict(word: object) -> dict[str, object]:
+def _shared_word_to_dict(
+    word: object,
+    expression_source: str | None = None,
+) -> dict[str, object]:
     return {
-        "word": _word_to_display(word.word),
+        "word": _word_to_display(word.word, expression_source),
         "self_count": word.self_count,
         "peer_count": word.peer_count,
         "emphasis": word.emphasis,
     }
 
 
-def _word_to_display(word: str) -> str | dict[str, str]:
+def _word_to_display(
+    word: str,
+    expression_source: str | None = None,
+) -> str | dict[str, str]:
     """Turn an expression token into a display-safe word entry."""
     if isinstance(word, str) and word.startswith("expression:"):
         expression_key = word[len("expression:") :]
-        asset_key = resolve_wechat_asset_key(expression_key)
+        asset_key = resolve_expression_asset_key(
+            expression_key,
+            expression_source,
+        )
         if asset_key:
             return {"asset_key": asset_key}
         if _is_emoji_expression(expression_key):
@@ -335,7 +355,10 @@ def export_echo_report_json(
     return destination
 
 
-def _member_to_dict(member: EchoMemberCard) -> dict[str, object]:
+def _member_to_dict(
+    member: EchoMemberCard,
+    expression_source: str | None = None,
+) -> dict[str, object]:
     return {
         "speaker_key": member.speaker_key,
         "display_name": member.display_name,
@@ -353,7 +376,10 @@ def _member_to_dict(member: EchoMemberCard) -> dict[str, object]:
             "hourly": _points_to_list(member.hourly_activity),
             "weekday": _points_to_list(member.weekday_activity),
         },
-        "top_words": [_word_to_display(word) for word in member.top_words],
+        "top_words": [
+            _word_to_display(word, expression_source)
+            for word in member.top_words
+        ],
     }
 
 

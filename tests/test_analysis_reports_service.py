@@ -788,3 +788,36 @@ def test_echo_report_json_fields_are_correct(tmp_path: Path) -> None:
         assert member["message_count"] >= 1
         assert member["average_length"] >= 0
         assert member["active_period"] is not None
+
+
+def test_normal_analysis_forwards_expression_source_for_echo_artifacts(
+    tmp_path: Path,
+) -> None:
+    """Regression: the normal analysis path must forward its platform source.
+
+    ``_export_artifacts`` already holds the authoritative platform, so the
+    normal (COMPLETED) path must hand it to ``_export_echo_artifacts`` instead
+    of raising ``TypeError`` for a missing ``expression_source``.
+    """
+    application = _application_module()
+    input_path = tmp_path / "wechat-normal-analysis.json"
+    output_directory = tmp_path / "private-output"
+    output_directory.mkdir()
+    _write_wechat_db_text_emoji_export(input_path)
+
+    result = application.AnalysisApplicationService().execute(
+        _request(application, tmp_path, input_path)
+    )
+
+    assert result.status is application.AnalysisStatus.COMPLETED
+    assert result.echo_report_view is not None
+    artifact_pairs = {
+        (artifact.kind, artifact.filename) for artifact in result.artifacts
+    }
+    assert ("echo_report_json", "echo-report.json") in artifact_pairs
+    assert ("echo_report_html", "echo-report.html") in artifact_pairs
+    payload = json.loads(
+        (output_directory / "echo-report.json").read_text(encoding="utf-8")
+    )
+    top = payload["expression_culture"]["top_expressions"]
+    assert any(item["asset_key"] == "wechat:捂脸" for item in top)

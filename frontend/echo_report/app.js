@@ -53,6 +53,9 @@ document.documentElement.classList.add("js-ready");
     var entry = document.createElement("li");
     var fallback = document.createElement("span");
     fallback.className = "expression-fallback";
+    if (item.kind === "unicode") {
+      fallback.className += " expression-emoji-fallback";
+    }
     fallback.textContent = item.display_text || "表情";
     var assetSrc =
       item.asset_key &&

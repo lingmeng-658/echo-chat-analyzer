@@ -31,7 +31,10 @@ from .formatters import (
     format_percent,
     format_weekday,
 )
-from .expression_assets import resolve_wechat_asset_key
+from .expression_assets import (
+    WECHAT_ASSET_PREFIX,
+    resolve_expression_asset_key,
+)
 from ..analysis.conversation_sessions import (
     ConversationSession,
 )
@@ -178,6 +181,7 @@ class EchoReportBuilder:
         viewer_speaker_key: str | None = None,
         conversation_kind: str = "unknown",
         title: str = ECHO_REPORT_TITLE,
+        expression_source: str | None = None,
     ) -> EchoReportView:
         reports = reports or AnalysisReports()
         activity = reports.activity
@@ -242,7 +246,9 @@ class EchoReportBuilder:
             expression_culture=_build_echo_expression_culture(
                 reports.expression,
                 members=members,
+                expression_source=expression_source,
             ),
+            expression_source=expression_source,
             empty_description="" if has_data else EMPTY_DESCRIPTION,
             active_days=(reports.activity.active_days if reports.activity else 0),
             average_messages_per_active_day=(
@@ -588,6 +594,7 @@ def _build_echo_expression_culture(
     report: ExpressionReport | None,
     *,
     members: tuple[EchoMemberCard, ...] = (),
+    expression_source: str | None = None,
 ) -> EchoExpressionCulture | None:
     """Map the core expression report into the Echo expression chapter."""
     if report is None or report.expression_message_count <= 0:
@@ -606,7 +613,7 @@ def _build_echo_expression_culture(
             expression_share_percent=member.expression_share_percent,
             expression_only_message_count=member.expression_only_message_count,
             top_expressions=tuple(
-                _to_echo_expression_item(item)
+                _to_echo_expression_item(item, expression_source)
                 for item in _display_expression_items(
                     member.top_expressions,
                     ECHO_EXPRESSION_MEMBER_TOP_LIMIT,
@@ -622,18 +629,25 @@ def _build_echo_expression_culture(
         expression_only_rate=report.expression_only_rate,
         unique_expression_count=report.unique_expression_count,
         top_expressions=tuple(
-            _to_echo_expression_item(item)
+            _to_echo_expression_item(item, expression_source)
             for item in _display_expression_items(
                 report.top_expressions,
                 ECHO_EXPRESSION_TOP_LIMIT,
             )
         ),
         top_combinations=tuple(
-            _to_echo_expression_combination(item, member_by_key)
+            _to_echo_expression_combination(
+                item,
+                member_by_key,
+                expression_source,
+            )
             for item in report.top_combinations
             if item.count >= ECHO_EXPRESSION_COMBINATION_MIN_COUNT
             and all(
-                resolve_wechat_asset_key(member.expression_key)
+                resolve_expression_asset_key(
+                    member.expression_key,
+                    expression_source,
+                )
                 for member in item.expressions
             )
         )[:ECHO_EXPRESSION_COMBINATION_TOP_LIMIT],
@@ -657,10 +671,16 @@ def _display_expression_items(
     ][:limit]
 
 
-def _to_echo_expression_item(item: ExpressionUsage) -> EchoExpressionItem:
-    asset_key = resolve_wechat_asset_key(item.expression_key)
+def _to_echo_expression_item(
+    item: ExpressionUsage,
+    expression_source: str | None,
+) -> EchoExpressionItem:
+    asset_key = resolve_expression_asset_key(
+        item.expression_key,
+        expression_source,
+    )
     display_text = item.display_text or ""
-    if asset_key:
+    if asset_key and asset_key.startswith(WECHAT_ASSET_PREFIX):
         display_text = item.expression_key
     if (
         item.kind == "sticker"
@@ -685,6 +705,7 @@ def _to_echo_expression_item(item: ExpressionUsage) -> EchoExpressionItem:
 def _to_echo_expression_combination(
     item: ExpressionCombinationUsage,
     member_by_key: dict[str, EchoMemberCard],
+    expression_source: str | None,
 ) -> EchoExpressionCombination:
     total = item.count
     common_members = []
@@ -710,7 +731,10 @@ def _to_echo_expression_combination(
             break
     return EchoExpressionCombination(
         asset_keys=tuple(
-            resolve_wechat_asset_key(member.expression_key)
+            resolve_expression_asset_key(
+                member.expression_key,
+                expression_source,
+            )
             for member in item.expressions
         ),
         count=item.count,
@@ -753,6 +777,7 @@ def build_echo_report_view(
     viewer_speaker_key: str | None = None,
     conversation_kind: str = "unknown",
     title: str = ECHO_REPORT_TITLE,
+    expression_source: str | None = None,
 ) -> EchoReportView:
     """Build an Echo report, highlighting only an explicitly supplied key."""
     return EchoReportBuilder().build(
@@ -760,6 +785,7 @@ def build_echo_report_view(
         viewer_speaker_key=viewer_speaker_key,
         conversation_kind=conversation_kind,
         title=title,
+        expression_source=expression_source,
     )
 
 

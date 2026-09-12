@@ -159,6 +159,7 @@ class AnalysisApplicationService:
                 processed_message_count=processed_message_count,
                 rich_messages=outcome.rich_messages,
                 conversation_type=conversation_type,
+                expression_source=outcome.result.platform,
             )
 
         ranked_words = top_words(analyzed.tokens, request.top)
@@ -171,6 +172,7 @@ class AnalysisApplicationService:
                 processed_message_count=processed_message_count,
                 rich_messages=outcome.rich_messages,
                 conversation_type=conversation_type,
+                expression_source=outcome.result.platform,
             )
         if not ranked_words:
             return AnalysisResultDTO(
@@ -222,6 +224,7 @@ class AnalysisApplicationService:
                 reports,
                 viewer_speaker_key=viewer_speaker_key,
                 conversation_kind=conversation_type,
+                expression_source=outcome.result.platform,
             )
         except (OSError, ValueError):
             raise ArtifactGenerationFailed() from None
@@ -302,6 +305,7 @@ def _expression_only_result(
     processed_message_count: int,
     rich_messages: tuple[RichMessage, ...],
     conversation_type: str,
+    expression_source: str | None,
 ) -> AnalysisResultDTO:
     """Build the guarded expression-only result with graceful fallback."""
     try:
@@ -321,6 +325,7 @@ def _expression_only_result(
                 request.viewer_speaker_key,
             ),
             conversation_kind=conversation_type,
+            expression_source=expression_source,
         )
     except Exception:
         _LOGGER.warning(
@@ -551,6 +556,7 @@ def _export_artifacts(
     *,
     viewer_speaker_key: str | None,
     conversation_kind: str,
+    expression_source: str | None,
 ) -> EchoReportView:
     output_directory = request.output_directory
     export_word_frequency_csv(
@@ -589,6 +595,7 @@ def _export_artifacts(
         reports,
         viewer_speaker_key=viewer_speaker_key,
         conversation_kind=conversation_kind,
+        expression_source=expression_source,
     )
 
 
@@ -598,6 +605,7 @@ def _export_echo_artifacts(
     *,
     viewer_speaker_key: str | None,
     conversation_kind: str,
+    expression_source: str | None,
 ) -> EchoReportView:
     """Write the Echo JSON and self-contained HTML report artifacts."""
     output_directory = request.output_directory
@@ -605,6 +613,7 @@ def _export_echo_artifacts(
         reports,
         viewer_speaker_key=viewer_speaker_key,
         conversation_kind=conversation_kind,
+        expression_source=expression_source,
     )
     export_echo_report_json(
         view,

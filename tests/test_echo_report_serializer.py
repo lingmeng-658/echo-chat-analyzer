@@ -8,11 +8,15 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_ROOT))
 
+import qq_chat_analyzer.presentation.expression_assets as expression_assets  # noqa: E402
+from qq_chat_analyzer.analysis import models as analysis_models  # noqa: E402
 from qq_chat_analyzer.presentation import (  # noqa: E402
     ChartPoint,
     EchoConversationSession,
@@ -28,6 +32,7 @@ from qq_chat_analyzer.presentation import (  # noqa: E402
     EchoMemberCard,
     EchoReportView,
     EchoSharedWord,
+    build_echo_report_view,
     echo_report_to_dict,
     export_echo_report_html,
     export_echo_report_json,
@@ -489,6 +494,7 @@ def test_expression_tokens_serialize_as_display_assets() -> None:
     view = EchoReportView(
         title="Echo Report",
         has_data=True,
+        expression_source="wechat",
         members=(
             EchoMemberCard(
                 speaker_key="fictional-alice",
@@ -690,3 +696,132 @@ def test_private_language_profile_serializes_new_layers_and_overview_density() -
     assert habits["average_length"] == 5.0
     assert habits["run_count"] == 2
     assert habits["multi_message_run_count"] == 1
+
+
+#: A throwaway payload; tests only assert it round-trips through base64.
+_FAKE_PNG_BYTES = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRfake-minimal-png"
+
+
+@pytest.fixture
+def qq_asset_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
+    """Point the QQ resolver at a throwaway directory of fake PNGs."""
+    root = tmp_path / "qq-emojis"
+    root.mkdir()
+    monkeypatch.setattr(
+        expression_assets, "QQ_ASSET_ROOT", str(root), raising=False
+    )
+    monkeypatch.setattr(
+        expression_assets, "_qq_asset_index", None, raising=False
+    )
+    return root
+
+
+def _expression_view(
+    expression_key: str,
+    display_text: str,
+    expression_source: str | None,
+) -> EchoReportView:
+    usage = analysis_models.ExpressionUsage(
+        expression_key=expression_key,
+        display_text=display_text,
+        count=3,
+        kind="platform_face",
+    )
+    report = analysis_models.ExpressionReport(
+        expression_message_count=3,
+        expression_only_message_count=1,
+        expression_only_rate=0.33,
+        unique_expression_count=1,
+        top_expressions=(usage,),
+        members=(
+            analysis_models.MemberExpressionUsage(
+                speaker_key="fictional-member",
+                expression_occurrence_count=3,
+                expression_message_count=3,
+                expression_share_percent=100.0,
+                expression_only_message_count=1,
+                top_expressions=(usage,),
+            ),
+        ),
+    )
+    try:
+        return build_echo_report_view(
+            analysis_models.AnalysisReports(expression=report),
+            conversation_kind="group",
+            expression_source=expression_source,
+        )
+    except TypeError:
+        pytest.fail("builder cannot express an explicit expression source")
+
+
+def test_qq_face_serializes_with_inline_asset_and_keeps_display_text(
+    qq_asset_root: Path,
+    tmp_path: Path,
+) -> None:
+    (qq_asset_root / "265.png").write_bytes(_FAKE_PNG_BYTES)
+
+    view = _expression_view("265", "/辣眼睛", "qq")
+    item = view.expression_culture.top_expressions[0]
+    assert item.asset_key == "qq:265"
+    assert item.display_text == "/辣眼睛"
+
+    output_path = tmp_path / "echo-report.html"
+    export_echo_report_html(view, output_path)
+    html = output_path.read_text(encoding="utf-8")
+
+    match = re.search(
+        r"window\.ECHO_ASSETS = (\{.*?\});",
+        html,
+        flags=re.DOTALL,
+    )
+    assert match is not None
+    assets = json.loads(match.group(1))
+    assert assets["qq:265"].startswith("data:image/png;base64,")
+
+
+def test_qq_face_without_asset_keeps_text_fallback(
+    qq_asset_root: Path,
+) -> None:
+    view = _expression_view("999", "/辣眼睛", "qq")
+    item = view.expression_culture.top_expressions[0]
+
+    assert item.asset_key is None
+    assert item.display_text == "/辣眼睛"
+
+
+def test_wechat_666_is_not_hijacked_by_bundled_qq_666(
+    qq_asset_root: Path,
+) -> None:
+    # A bundled QQ 666.png must never steal the WeChat emoji named "666".
+    (qq_asset_root / "666.png").write_bytes(_FAKE_PNG_BYTES)
+
+    view = _expression_view("666", "[666]", "wechat")
+    item = view.expression_culture.top_expressions[0]
+
+    assert item.asset_key == "wechat:666"
+    assert item.display_text == "666"
+
+
+def test_qq_666_resolves_when_the_source_is_qq(qq_asset_root: Path) -> None:
+    (qq_asset_root / "666.png").write_bytes(_FAKE_PNG_BYTES)
+
+    view = _expression_view("666", "/666", "qq")
+    item = view.expression_culture.top_expressions[0]
+
+    assert item.asset_key == "qq:666"
+    assert item.display_text == "/666"
+
+
+def test_unknown_source_never_resolves_expression_assets(
+    qq_asset_root: Path,
+) -> None:
+    (qq_asset_root / "666.png").write_bytes(_FAKE_PNG_BYTES)
+
+    view = _expression_view("666", "/666", None)
+    item = view.expression_culture.top_expressions[0]
+
+    assert item.asset_key is None
+    assert item.display_text == "/666"

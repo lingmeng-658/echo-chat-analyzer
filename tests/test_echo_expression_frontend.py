@@ -55,6 +55,7 @@ function toNode(node) {
   return {
     tag: node.tagName,
     src: node.src,
+    className: node.className,
     text: node.textContent,
     children: (node.children || []).map(toNode)
   };
@@ -432,3 +433,60 @@ def test_expression_frontend_contains_no_internal_statistics() -> None:
     )
     assert 'id="expression"' in html
     assert "表达文化" in html
+
+
+def test_pure_unicode_emoji_fallback_uses_emoji_class() -> None:
+    """Pure unicode emoji fallback gets its own class; plain text does not."""
+    rendered = _render(
+        {
+            "available": True,
+            "expression_message_count": 2,
+            "expression_only_message_count": 1,
+            "expression_only_rate": 0.5,
+            "unique_expression_count": 2,
+            "top_expressions": [
+                {"display_text": "🐢", "count": 2, "kind": "unicode"},
+                {
+                    "display_text": "未知表达",
+                    "count": 2,
+                    "kind": "platform_face",
+                    "with_text_message_count": 0,
+                    "text_only_message_count": 2,
+                },
+            ],
+            "members": [],
+        }
+    )
+
+    entries = rendered["expression-top-list"]["children"]
+    emoji_entry = entries[0]["children"][0]
+    text_entry = entries[1]["children"][0]
+
+    assert emoji_entry["tag"] == "SPAN"
+    assert "expression-fallback" in emoji_entry["className"]
+    assert "expression-emoji-fallback" in emoji_entry["className"]
+
+    assert text_entry["tag"] == "SPAN"
+    assert "expression-fallback" in text_entry["className"]
+    assert "expression-emoji-fallback" not in text_entry["className"]
+
+
+def test_emoji_fallback_class_present_in_template_and_frontend() -> None:
+    """Export template and frontend preview must define the same emoji class."""
+    import sys
+
+    sys.path.insert(0, "src")
+    from qq_chat_analyzer.presentation.echo_report_template import (
+        ECHO_REPORT_APP_JS,
+        ECHO_REPORT_CSS,
+    )
+
+    frontend_dir = PROJECT_ROOT / "frontend" / "echo_report"
+    style_css = (frontend_dir / "style.css").read_text(encoding="utf-8")
+    app_js = (frontend_dir / "app.js").read_text(encoding="utf-8")
+
+    selector = ".expression-list li .expression-emoji-fallback"
+    assert selector in ECHO_REPORT_CSS
+    assert selector in style_css
+    assert "expression-emoji-fallback" in ECHO_REPORT_APP_JS
+    assert "expression-emoji-fallback" in app_js

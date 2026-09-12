@@ -632,6 +632,7 @@ def test_expression_culture_filters_one_time_and_caps_top_five() -> None:
             ),
         ),
         conversation_kind="group",
+        expression_source="wechat",
     )
 
     culture = view.expression_culture
@@ -731,6 +732,7 @@ def test_expression_combination_common_members_filters_share_and_limits() -> Non
             ),
         ),
         conversation_kind="group",
+        expression_source="wechat",
     )
 
     combo = view.expression_culture.top_combinations[0]

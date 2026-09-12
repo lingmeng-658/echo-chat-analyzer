@@ -301,6 +301,7 @@ class EchoReportView:
     conversation_sessions: EchoConversationSessions | None = None
     language_profile: EchoLanguageProfile | None = None
     expression_culture: EchoExpressionCulture | None = None
+    expression_source: str | None = None
     empty_description: str = ""
     active_days: int = 0
     average_messages_per_active_day: float = 0.0

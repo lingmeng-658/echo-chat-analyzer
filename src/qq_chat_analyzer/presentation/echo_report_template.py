@@ -578,6 +578,11 @@ h1, h2, h3, p { margin-top: 0; }
   color: var(--muted);
   font-size: 14px;
 }
+.expression-list li .expression-emoji-fallback {
+  font-size: 30px;
+  line-height: 1.1;
+  vertical-align: -4px;
+}
 .expression-list li small {
   display: block;
   margin-top: 5px;
@@ -1483,7 +1488,13 @@ document.documentElement.classList.add("js-ready");
       }
       entry.appendChild(img);
     } else {
-      entry.textContent = item.display_text;
+      var fallback = document.createElement("span");
+      fallback.className = "expression-fallback";
+      if (item.kind === "unicode") {
+        fallback.className += " expression-emoji-fallback";
+      }
+      fallback.textContent = item.display_text;
+      entry.appendChild(fallback);
     }
     var count = document.createElement("strong");
     count.textContent = formatCount(item.count) + " 次";

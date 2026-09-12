@@ -286,6 +286,10 @@ h1, h2, h3, p { margin-top: 0; }
   font-size: 20px;
   line-height: 28px;
 }
+.expression-list li .expression-emoji-fallback {
+  font-size: 30px;
+  line-height: 1.1;
+}
 .expression-list li small {
   display: block;
   margin-top: 5px;
