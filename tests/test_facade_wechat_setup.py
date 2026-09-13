@@ -19,6 +19,9 @@ from qq_chat_analyzer.application.wechat_environment_config import (
     WeChatConfigWriteFailed,
     WeChatEnvironmentConfig,
 )
+from qq_chat_analyzer.providers.wechat_database_provider import (
+    DatabaseUnreadable,
+)
 
 
 class _StubSetupService:
@@ -251,3 +254,37 @@ def test_facade_passes_progress_to_acquire_db_key(tmp_path: Path) -> None:
 
     assert service.progress_callbacks
     assert callable(service.progress_callbacks[0])
+
+
+class _VerifyingSetupService(_StubSetupService):
+    """Record verification calls and optionally fail like a wrong key."""
+
+    def __init__(self, *, error: Exception | None = None, **kwargs):
+        super().__init__(**kwargs)
+        self.verify_error = error
+        self.verifies = 0
+
+    def verify_connection(self) -> None:
+        self.verifies += 1
+        if self.verify_error is not None:
+            raise self.verify_error
+
+
+def test_facade_verifies_the_wechat_database_through_the_setup_service() -> None:
+    setup = _VerifyingSetupService()
+    facade = ChatAnalyzerFacade(wechat_setup_service=setup)
+
+    assert facade.verify_wechat_database() is None
+    assert setup.verifies == 1
+
+
+def test_facade_translates_an_unreadable_wechat_database() -> None:
+    setup = _VerifyingSetupService(error=DatabaseUnreadable())
+    facade = ChatAnalyzerFacade(wechat_setup_service=setup)
+
+    with pytest.raises(FacadeError) as failure:
+        facade.verify_wechat_database()
+
+    assert failure.value.code == "wechat_database_unreadable"
+    assert failure.value.source is ChatSource.WECHAT
+    assert DatabaseUnreadable.public_message in failure.value.public_message

@@ -29,6 +29,9 @@ from qq_chat_analyzer.application.wechat_setup_service import (
     WeChatSetupState,
     WeChatSetupStatus,
 )
+from qq_chat_analyzer.providers.wechat_database_provider import (
+    DatabaseUnreadable,
+)
 
 
 def _config(tmp_path: Path) -> WeChatEnvironmentConfig:
@@ -794,3 +797,71 @@ def test_disconnect_without_config_is_a_noop(tmp_path: Path) -> None:
     assert target.exists() is False
     assert factory.invalidations == 0
     assert key_service.clear_calls == 1
+
+
+# ------------------------------------------------------------- verification
+
+
+class _VerifyingProvider:
+    """Stand in for the provider's key/database verification step."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.calls = 0
+
+    def verify_readable(self) -> None:
+        self.calls += 1
+        if self.error is not None:
+            raise self.error
+
+
+class _VerifyingFactory:
+    def __init__(self, provider: object) -> None:
+        self.provider = provider
+        self.creates = 0
+        self.invalidations = 0
+
+    def create(self) -> object:
+        self.creates += 1
+        return self.provider
+
+    def invalidate(self) -> None:
+        self.invalidations += 1
+
+
+def test_verify_connection_uses_the_provider_the_session_read_uses() -> None:
+    provider = _VerifyingProvider()
+    factory = _VerifyingFactory(provider)
+    service = WeChatSetupService(provider_factory=factory)
+
+    assert service.verify_connection() is None
+    assert provider.calls == 1
+    assert factory.creates == 1
+
+
+def test_verify_connection_propagates_the_unreadable_error() -> None:
+    provider = _VerifyingProvider(DatabaseUnreadable())
+    service = WeChatSetupService(provider_factory=_VerifyingFactory(provider))
+
+    with pytest.raises(DatabaseUnreadable) as failure:
+        service.verify_connection()
+
+    assert failure.value.code == "wechat_database_unreadable"
+
+
+def test_verify_connection_without_a_provider_factory_does_not_fail() -> None:
+    service = WeChatSetupService()
+
+    assert service.verify_connection() is None
+
+
+def test_verify_connection_tolerates_a_provider_without_verification() -> None:
+    class _PlainProvider:
+        def list_sessions(self):  # pragma: no cover - contract only
+            return []
+
+    service = WeChatSetupService(
+        provider_factory=_VerifyingFactory(_PlainProvider())
+    )
+
+    assert service.verify_connection() is None

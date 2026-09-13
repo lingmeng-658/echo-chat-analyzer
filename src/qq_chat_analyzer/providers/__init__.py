@@ -14,6 +14,7 @@ from .wechat_cli_provider import (
     WeChatCliProvider,
 )
 from .wechat_database_provider import (
+    DatabaseUnreadable,
     QueryFailed,
     WeChatDatabaseError,
     WeChatDatabaseProvider,
@@ -59,6 +60,7 @@ __all__ = [
     "TokenUnavailable",
     "CliSession",
     "CliStatus",
+    "DatabaseUnreadable",
     "QueryFailed",
     "WcdbHelperNotFound",
     "WcdbLibraryNotFound",

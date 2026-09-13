@@ -214,6 +214,36 @@ class WeChatSetupService:
             return None
         return self._connection_service.check_status()
 
+    def verify_connection(self) -> None:
+        """Prove the current key can read the configured database.
+
+        Called right before session loading. A structurally valid but
+        unreadable ``session.db`` (wrong login, or a directory that does not
+        belong to the current account) must surface as the provider's
+        :class:`DatabaseUnreadable` instead of ending as a generic query
+        failure, so the caller can offer another data location.
+
+        The verification itself belongs to the provider; this method only
+        picks the provider the following session read would use, so the
+        verification and the read can never disagree about configuration.
+        Returns without verifying when no provider factory is wired, the same
+        way the other optional collaborators of this service degrade.
+        """
+        factory = self._provider_factory
+        if factory is None:
+            return
+        provider = factory.create()
+        verify = getattr(provider, "verify_readable", None)
+        if not callable(verify):
+            return
+        try:
+            verify()
+        except Exception:
+            results = self._probe_wechat_databases(provider)
+            if self._recover_unique_readable_database(provider, results):
+                return
+            raise
+
     def acquire_db_key(
         self,
         progress: Callable[[str], None] | None = None,
@@ -292,6 +322,73 @@ class WeChatSetupService:
             wcdb_dll_path=config.wcdb_dll_path or existing.wcdb_dll_path,
         )
 
+    def _probe_wechat_databases(self, provider: Any) -> list[Any]:
+        """Return the provider's read-only candidate results, never raising."""
+        probe = getattr(provider, "probe_session_databases", None)
+        if not callable(probe):
+            return []
+
+        roots: list[Path] = []
+        try:
+            detected = self._data_roots_detector()
+        except Exception:
+            detected = ()
+        for value in detected or ():
+            if value is None:
+                continue
+            try:
+                roots.append(Path(value))
+            except Exception:
+                continue
+        try:
+            results = probe(roots)
+        except Exception:
+            _LOGGER.debug("wechat database candidate probe skipped")
+            return []
+        try:
+            return list(results or ())
+        except Exception:
+            return []
+
+    def _recover_unique_readable_database(
+        self,
+        provider: Any,
+        results: list[Any],
+    ) -> bool:
+        """Switch to one uniquely readable account root after a second verify."""
+        readable = [
+            result
+            for result in results
+            if bool(getattr(result, "readable", False))
+        ]
+        if len(readable) != 1:
+            return False
+        _LOGGER.info("wechat.database.recovery unique_candidate=true")
+
+        data_root = getattr(readable[0], "data_root", None)
+        if data_root is None or not is_valid_wechat_data_root(Path(data_root)):
+            return False
+
+        with_data_root = getattr(provider, "with_data_root", None)
+        if not callable(with_data_root):
+            return False
+        try:
+            recovered_provider = with_data_root(Path(data_root))
+            verify = getattr(recovered_provider, "verify_readable", None)
+            if not callable(verify):
+                return False
+            verify()
+        except Exception:
+            _LOGGER.info("wechat.database.recovery verify_success=false")
+            return False
+
+        _LOGGER.info("wechat.database.recovery verify_success=true")
+        if not self._persist_detected_data_root(Path(data_root)):
+            _LOGGER.info("wechat.database.recovery persisted=false")
+            return False
+        _LOGGER.info("wechat.database.recovery persisted=true")
+        return True
+
     def _saved_valid_data_root(self) -> Path | None:
         try:
             root = self._config_loader.load().data_root
@@ -301,7 +398,7 @@ class WeChatSetupService:
             return None
         return root
 
-    def _persist_detected_data_root(self, root: Path) -> None:
+    def _persist_detected_data_root(self, root: Path) -> bool:
         try:
             existing = self._config_loader.load()
         except Exception:
@@ -312,9 +409,10 @@ class WeChatSetupService:
         try:
             self._config_writer.save(config)
         except Exception:
-            return
+            return False
         if self._provider_factory is not None:
             self._provider_factory.invalidate()
+        return True
 
     @staticmethod
     def _apply_default_runtime(

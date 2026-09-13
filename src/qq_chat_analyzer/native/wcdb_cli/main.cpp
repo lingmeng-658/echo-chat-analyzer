@@ -18,11 +18,13 @@
 //   The shared InnerHandle is therefore reached through the public core API
 //   (CommonCore::getOrCreateDatabase) solely to prepare the raw SQL text.
 //
-// stdout contract (unchanged):
+// stdout contract:
 //   {"ok":true,"columns":[...],"rows":[...],"row_count":N,"truncated":bool,"db":"..."}
-//   {"ok":false,"stage":"...","error":"..."}
+//   {"ok":false,"stage":"...","error":"...",
+//    "wcdb_error_code":int,"wcdb_error_ext_code":int,"wcdb_error_message":"..."}
 //
 // The key is only kept in memory and is never printed or written to disk.
+// Diagnostic fields are redacted to avoid leaking paths, SQL or keys.
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -43,7 +45,6 @@
 #include "CoreConst.h"
 #include "CommonCore.hpp"
 #include "Database.hpp"
-#include "Handle.hpp"
 #include "InnerDatabase.hpp"
 #include "InnerHandle.hpp"
 #include "Path.hpp"
@@ -243,9 +244,9 @@ std::wstring WideFromUtf8(const std::string& utf8) {
 }
 
 // Appends the JSON value of one result column to |out|. Column types follow
-// WCDB::Syntax::ColumnType: Null=0, Integer=1, Float=2, Text=3, BLOB=4.
-bool AppendColumnValue(std::string* out, WCDB::Handle* handle, int index) {
-  const int column_type = static_cast<int>(handle->getType(index));
+// WCDB::ColumnType: Null=0, Integer=1, Float=2, Text=3, BLOB=4.
+bool AppendColumnValue(std::string* out, WCDB::InnerHandle* handle, int index) {
+  const int column_type = static_cast<int>(handle->getColumnType(index));
   switch (column_type) {
     case 1: {  // INTEGER
       const int64_t value = handle->getInteger(index);
@@ -260,7 +261,7 @@ bool AppendColumnValue(std::string* out, WCDB::Handle* handle, int index) {
       return true;
     }
     case 3: {  // TEXT
-      const WCDB::UnsafeStringView text = handle->getText(index);
+      const auto text = handle->getText(index);
       // Copy immediately: the view is only valid until the next step.
       const std::string value(text.data(), text.length());
       out->append("\"");
@@ -279,6 +280,54 @@ bool AppendColumnValue(std::string* out, WCDB::Handle* handle, int index) {
       out->append("null");
       return true;
   }
+}
+
+// Replace every occurrence of |needle| in |haystack| with |replacement|.
+void ReplaceAll(std::string* haystack,
+                const std::string& needle,
+                const std::string& replacement) {
+  if (needle.empty()) {
+    return;
+  }
+  size_t pos = 0;
+  while ((pos = haystack->find(needle, pos)) != std::string::npos) {
+    haystack->replace(pos, needle.length(), replacement);
+    pos += replacement.length();
+  }
+}
+
+// Redact sensitive strings (path, SQL, key) from a WCDB error message before
+// returning it to Python. The original message is replaced in-place.
+void RedactErrorMessage(std::string* message,
+                        const QueryOptions& options) {
+  ReplaceAll(message, options.db_path, "[db_path]");
+  ReplaceAll(message, options.sql, "[sql]");
+  ReplaceAll(message, options.key_hex, "[key]");
+  // Also redact the key when passed via environment variable (same value).
+  const char* env_key = std::getenv("WX_DB_KEY");
+  if (env_key != nullptr) {
+    ReplaceAll(message, std::string(env_key), "[key]");
+  }
+}
+
+// Extract and redact WCDB error diagnostics from an InnerHandle.
+void PrintPrepareError(WCDB::InnerHandle* inner_handle,
+                       const QueryOptions& options,
+                       const char* detail) {
+  const WCDB::Error& error = inner_handle->getError();
+  const int error_code = static_cast<int>(error.code());
+  const int error_ext_code = static_cast<int>(error.getExtCode());
+  const WCDB::StringView message_view = error.getMessage();
+  std::string message(message_view.data(), message_view.length());
+  if (message.empty()) {
+    message = detail;
+  }
+  RedactErrorMessage(&message, options);
+  std::printf(
+      "{\"ok\":false,\"stage\":\"prepare\",\"error\":\"%s\","
+      "\"wcdb_error_code\":%d,\"wcdb_error_ext_code\":%d,"
+      "\"wcdb_error_message\":\"%s\"}\n",
+      detail, error_code, error_ext_code, JsonEscape(message).c_str());
 }
 
 int RunQuery(const QueryOptions& options) {
@@ -345,16 +394,11 @@ int RunQuery(const QueryOptions& options) {
       return 1;
     }
 
-    DebugPrint(options, "get handle");
-    WCDB::Handle handle = db.getHandle();
-
-    // Raw SQL prepare is not exposed on the public Handle (StatementOperation::
-    // prepare() only accepts winq Statement objects and no SQL-text parser is
-    // provided in v2.1.15), so the shared InnerHandle is reached through the
-    // public core API solely to prepare the arbitrary SQL text supplied by
-    // Python. getOrCreateDatabase returns the same InnerDatabase instance that
-    // `db` wraps (same normalized path); no database object is constructed on
-    // the caller stack here.
+    // The public Handle in WCDB v2.1.15 has no raw-SQL prepare entry, so the
+    // whole query lifecycle runs on the same InnerHandle obtained from the
+    // shared InnerDatabase. getOrCreateDatabase returns the same InnerDatabase
+    // instance that `db` wraps (same normalized path); no database object is
+    // constructed on the caller stack here.
     SetStage("prepare statement");
     DebugPrint(options, "prepare");
     WCDB::RecyclableDatabase database_holder = WCDB::CommonCore::shared().getOrCreateDatabase(
@@ -367,7 +411,7 @@ int RunQuery(const QueryOptions& options) {
       return 1;
     }
     if (!inner_handle->prepare(WCDB::UnsafeStringView(options.sql.c_str()))) {
-      std::printf("{\"ok\":false,\"stage\":\"prepare\",\"error\":\"prepare failed\"}\n");
+      PrintPrepareError(inner_handle, options, "prepare failed");
       return 1;
     }
     SetStage("bind arguments");
@@ -375,9 +419,9 @@ int RunQuery(const QueryOptions& options) {
 
     DebugPrint(options, "read columns");
     std::vector<std::string> columns;
-    const int column_count = handle.getNumberOfColumns();
+    const int column_count = inner_handle->getNumberOfColumns();
     for (int index = 0; index < column_count; ++index) {
-      const WCDB::UnsafeStringView name = handle.getColumnName(index);
+      const auto name = inner_handle->getColumnName(index);
       const std::string name_copy(name.data(), name.length());
       if (name_copy.empty()) {
         break;
@@ -402,10 +446,10 @@ int RunQuery(const QueryOptions& options) {
     int row_count = 0;
     int max_rows = options.limit > 0 ? options.limit : 100000;
     while (row_count < max_rows) {
-      if (!handle.step()) {
+      if (!inner_handle->step()) {
         break;
       }
-      if (handle.done()) {
+      if (inner_handle->done()) {
         break;
       }
       if (options.debug && row_count < 5) {
@@ -428,7 +472,7 @@ int RunQuery(const QueryOptions& options) {
           std::fprintf(stderr, "[wcdb_cli]   column %zu\n", i);
           std::fflush(stderr);
         }
-        if (!AppendColumnValue(&out, &handle, static_cast<int>(i))) {
+        if (!AppendColumnValue(&out, inner_handle, static_cast<int>(i))) {
           out += "null";
         }
       }
@@ -439,7 +483,7 @@ int RunQuery(const QueryOptions& options) {
     const bool truncated = options.limit > 0 && row_count >= options.limit;
     SetStage("finalize");
     DebugPrint(options, "done");
-    handle.invalidate();
+    inner_handle->finalize();
 
     out += "],\"row_count\":";
     out += std::to_string(row_count);

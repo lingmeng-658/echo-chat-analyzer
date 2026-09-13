@@ -541,6 +541,19 @@ class ChatAnalyzerFacade:
         with _translated_errors(ChatSource.WECHAT):
             return service.save_environment(config)
 
+    def verify_wechat_database(self) -> None:
+        """Verify the current key can read the selected WeChat database.
+
+        The GUI calls this immediately before loading sessions. A key that
+        cannot open a structurally valid ``session.db`` becomes
+        ``wechat_database_unreadable`` instead of a generic read failure, so
+        the caller can return the user to the data-location flow. No chat
+        content is read.
+        """
+        service = self._require_setup_service()
+        with _translated_errors(ChatSource.WECHAT):
+            return service.verify_connection()
+
     def acquire_wechat_db_key(
         self,
         progress: Callable[[str], None] | None = None,

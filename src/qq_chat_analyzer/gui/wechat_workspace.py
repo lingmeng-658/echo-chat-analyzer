@@ -80,6 +80,9 @@ _WECHAT_WAITING_LOGIN = "等待微信登录"
 _WECHAT_KEY_ACQUIRING = "Key 获取中"
 _WECHAT_DATABASE_FAILED = "微信数据库读取失败"
 _WECHAT_SESSIONS_FAILED = "微信会话加载失败"
+# Raised by the provider when the captured key cannot open the selected
+# session.db: never a plain query failure, because the user has to act on it.
+_WECHAT_DATABASE_UNREADABLE_CODE = "wechat_database_unreadable"
 _WECHAT_INTERNAL_TERMS = (
     "db_key",
     "dbkey",
@@ -122,6 +125,9 @@ class WeChatWorkspace(QWidget):
         self._facade = facade
         self._executor = executor or submit
         self._wechat_connect_pending = False
+        # True once this process captured a database key, so changing the data
+        # directory retries verification without another WeChat login.
+        self._wechat_key_captured = False
         self._connection_task: Any = None
         self._wechat_guide_image_path = default_wechat_login_guide_path()
         self._sessions_loaded = False
@@ -428,8 +434,18 @@ class WeChatWorkspace(QWidget):
         self._show_wechat_guide(include_directory_help=True)
         self.open_wechat_setup()
 
-    def _start_wechat_connect(self, config: Any) -> None:
-        """Run save-then-key for one config, off the UI thread."""
+    def _start_wechat_connect(
+        self,
+        config: Any,
+        *,
+        reuse_key: bool = False,
+    ) -> None:
+        """Run save-then-key for one config, off the UI thread.
+
+        ``reuse_key`` skips the key capture for a retry after the user picked
+        another data directory: the key captured earlier in this process is
+        still the current one, so no new WeChat login is needed.
+        """
         self._wechat_connect_button.setText(_CANCEL_CONNECTION_LABEL)
         self._wechat_connect_button.setEnabled(True)
         self._status_label.setVisible(True)
@@ -440,7 +456,11 @@ class WeChatWorkspace(QWidget):
         self.status_changed.emit(_WECHAT_CONNECTING)
 
         task = self._executor(
-            lambda report: self._connect_wechat_operation(config, report),
+            lambda report: self._connect_wechat_operation(
+                config,
+                report,
+                capture_key=not reuse_key,
+            ),
             on_success=self._after_wechat_key_acquired,
             on_error=lambda code, message: self._handle_wechat_connect_error(
                 code,
@@ -455,10 +475,13 @@ class WeChatWorkspace(QWidget):
         self,
         config: Any,
         progress: Any = None,
+        *,
+        capture_key: bool = True,
     ) -> Any:
         """Save the directory, then acquire the key. Runs off the UI thread."""
         self._facade.setup_wechat_environment(config)
-        self._facade.acquire_wechat_db_key(progress=progress)
+        if capture_key:
+            self._facade.acquire_wechat_db_key(progress=progress)
         if progress is not None:
             progress(_WECHAT_READING_DATABASE)
         return self._facade.get_connection_status(ChatSource.WECHAT)
@@ -473,6 +496,7 @@ class WeChatWorkspace(QWidget):
         self._wechat_connect_button.setVisible(not connected)
 
     def _after_wechat_key_acquired(self, status: Any) -> None:
+        self._wechat_key_captured = True
         self._show_connection_status(
             status,
             load_sessions_on_ready=True,
@@ -500,6 +524,9 @@ class WeChatWorkspace(QWidget):
 
     def _handle_wechat_connect_error(self, code: str, message: str) -> None:
         """Show the classified application failure without flattening it."""
+        if code == _WECHAT_DATABASE_UNREADABLE_CODE:
+            self._offer_wechat_directory_reselection(message)
+            return
         detail = message or ""
         lowered = detail.lower()
         titles = {
@@ -563,6 +590,9 @@ class WeChatWorkspace(QWidget):
         )
 
     def _after_wechat_disconnect(self, status: Any) -> None:
+        # Disconnecting releases the stored key, so the next attempt must
+        # capture a fresh one instead of reusing the process-local key.
+        self._wechat_key_captured = False
         self._show_connection_status(status, False)
 
     def _finish_wechat_disconnect(self) -> None:
@@ -603,10 +633,20 @@ class WeChatWorkspace(QWidget):
 
     def _load_sessions(self) -> None:
         self._executor(
-            lambda: self._facade.list_sessions(ChatSource.WECHAT),
+            self._load_verified_sessions,
             on_success=self._handle_sessions_loaded,
             on_error=self._handle_session_error,
         )
+
+    def _load_verified_sessions(self) -> Any:
+        """Verify the current key against the database, then list sessions.
+
+        Runs off the UI thread. Verification comes first so a key that cannot
+        open the selected ``session.db`` never reaches ``list_sessions``, and
+        never ends as a plain read failure the user cannot act on.
+        """
+        self._facade.verify_wechat_database()
+        return self._facade.list_sessions(ChatSource.WECHAT)
 
     def _handle_sessions_loaded(self, sessions: Any) -> None:
         self._sessions_loaded = True
@@ -620,6 +660,9 @@ class WeChatWorkspace(QWidget):
 
     def _handle_session_error(self, code: str, message: str) -> None:
         self._sessions_loaded = False
+        if code == _WECHAT_DATABASE_UNREADABLE_CODE:
+            self._offer_wechat_directory_reselection(message)
+            return
         database_codes = {
             "database_not_found",
             "key_unavailable",
@@ -639,6 +682,44 @@ class WeChatWorkspace(QWidget):
         self._status_label.setVisible(True)
         self._set_restart_action()
         self.status_changed.emit(detail)
+
+    def _offer_wechat_directory_reselection(self, detail: str) -> None:
+        """Return the user to the WeChat data-location flow.
+
+        Used when the captured key cannot read the selected database. The
+        session list is deliberately not loaded. The user sees the actionable
+        message and the setup dialog opens with everything available: every
+        detected candidate when there are several, otherwise a free-text
+        directory field that also accepts a pasted path Echo never detected.
+        The key captured in this process is reused for the retry, so changing
+        the directory does not require another WeChat login.
+        """
+        _LOGGER.info("wechat.database.verify recovery=directory_selection")
+        self._sessions_loaded = False
+        self._wechat_key_captured = True
+        self._wechat_connect_pending = True
+        text = (detail or "").strip() or _WECHAT_DATABASE_FAILED
+        self._status_label.setVisible(True)
+        self._status_label.setText(_DISCONNECTED_PREFIX + text)
+        self._status_label.setToolTip(text)
+        self.session_panel.show_disconnected_placeholder()
+        self._show_wechat_guide(include_directory_help=True)
+        self._set_restart_action()
+        self.open_wechat_setup(data_roots=self._recovery_candidates())
+        self.status_changed.emit(text)
+
+    def _recovery_candidates(self) -> list[Path]:
+        """Offer several candidates; ask for a manual path when there is one.
+
+        A single candidate is not offered as a fixed combo box, so the user
+        can always enter or paste a directory Echo did not detect.
+        """
+        try:
+            detected = self._facade.detect_wechat_data_roots() or ()
+        except Exception:
+            return []
+        candidates = [Path(value) for value in detected]
+        return candidates if len(candidates) > 1 else []
 
     # ---------------------------------------------------------------- setup
 
@@ -670,7 +751,10 @@ class WeChatWorkspace(QWidget):
         pending = getattr(self, "_wechat_connect_pending", False)
         self._wechat_connect_pending = False
         if pending:
-            self._start_wechat_connect(dialog.config())
+            self._start_wechat_connect(
+                dialog.config(),
+                reuse_key=self._wechat_key_captured,
+            )
             return
         self.save_wechat_environment(dialog.config())
 

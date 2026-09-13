@@ -25,7 +25,7 @@ import logging
 import os
 import re
 import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -40,13 +40,17 @@ DB_KEY_ENVIRONMENT_VARIABLE = "WX_DB_KEY"
 SESSION_DB_NAME = "session.db"
 MESSAGE_DB_GLOB = "message_*.db"
 CONTACT_DB_NAME = "contact.db"
+_SESSION_TABLE = "SessionTable"
+# Minimal read that still requires decryption: one aggregate over the schema
+# table. It reads no conversation table, no message content, and assumes no
+# WeChat-specific layout.
+_VERIFY_SQL = "SELECT count(*) FROM sqlite_master"
 WCDB_DLL_NAME = "WCDB.dll"
 MESSAGE_AVAILABILITY_REASON = (
     "\u8be5\u4f1a\u8bdd\u6ca1\u6709\u53ef\u5206\u6790\u6d88\u606f"
 )
 
 _DB_STORAGE_DIR_NAMES = ("db_storage",)
-_SESSION_TABLE = "SessionTable"
 _ACCOUNT_DIRECTORY_SUFFIX_PATTERN = re.compile(
     r"^(?P<username>.+)_[0-9a-fA-F]{4,}$"
 )
@@ -116,6 +120,37 @@ class QueryFailed(WeChatDatabaseError):
         "\u8bfb\u53d6\u5fae\u4fe1\u6570\u636e\u5e93\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5\u3002"
     )
 
+    def __init__(
+        self,
+        public_message: str | None = None,
+        *,
+        wcdb_error_code: Any = None,
+    ) -> None:
+        super().__init__(public_message)
+        # Safe diagnostic only: the numeric WCDB error code. The helper's raw
+        # message, path, SQL text, and key value are never carried here.
+        self.wcdb_error_code = wcdb_error_code
+
+
+class DatabaseUnreadable(WeChatDatabaseError):
+    """Raised when the current key cannot read the selected database.
+
+    WeChat stores its databases encrypted, so a structurally valid
+    ``session.db`` still fails to open when the captured key belongs to
+    another login: the WCDB prepare fails with ``NOTADB`` (code 26). A
+    matching folder layout is therefore never proof that this key can read
+    this file, and a caller needs to tell this case apart from a generic
+    query failure so it can ask for a different data location.
+    """
+
+    code = "wechat_database_unreadable"
+    public_message = (
+        "\u5f53\u524d\u5fae\u4fe1\u767b\u5f55\u4fe1\u606f\u65e0\u6cd5\u8bfb\u53d6"
+        "\u6240\u9009\u6570\u636e\u5e93\uff0c\u8bf7\u786e\u8ba4\u6570\u636e\u4f4d\u7f6e"
+        "\u662f\u5426\u5bf9\u5e94\u5f53\u524d\u767b\u5f55\u8d26\u53f7\uff0c"
+        "\u6216\u91cd\u65b0\u83b7\u53d6\u5fae\u4fe1\u8fde\u63a5\u4fe1\u606f\u3002"
+    )
+
 
 class SessionNotFound(WeChatDatabaseError):
     """Raised when a session has no message table in any shard."""
@@ -137,6 +172,22 @@ class WeChatSession:
     message_count: int | None = None
     message_available: bool = True
     unavailable_reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DatabaseProbeResult:
+    """Internal result of probing one known WeChat session database."""
+
+    session_db: Path
+    data_root: Path
+    readable: bool
+    wcdb_error_code: Any = None
+
+
+@dataclass(frozen=True, slots=True)
+class _SessionDatabaseCandidate:
+    session_db: Path
+    data_root: Path
 
 
 def message_table_name(username: str) -> str:
@@ -182,16 +233,124 @@ class WeChatDatabaseProvider:
         self._runner = runner or _run_subprocess
         self._diagnostic_spawner = diagnostic_spawner
 
+    # --------------------------------------------------------- verification
+
+    def verify_readable(self) -> None:
+        """Prove the current key can open the selected ``session.db``.
+
+        This is the cheapest read that still requires decryption, and it is
+        what separates "the folder layout looks right" from "this key can
+        read this database". Session loading must not start until this
+        succeeds, otherwise a non-matching directory is reported as a generic
+        read failure with no way for the user to pick another location.
+
+        Raises :class:`DatabaseNotFound` when no ``session.db`` exists,
+        :class:`KeyUnavailable` when no key is configured, and
+        :class:`DatabaseUnreadable` when the key cannot read the file.
+        """
+        session_db = self._session_db_path()
+        try:
+            rows = self._query(
+                session_db,
+                _VERIFY_SQL,
+                limit=1,
+                query_stage="verify",
+                log_wcdb_error_message=False,
+            )
+        except QueryFailed as error:
+            _log_database_verification(
+                success=False,
+                error_type=type(error).__name__,
+                wcdb_error_code=getattr(error, "wcdb_error_code", None),
+            )
+            raise DatabaseUnreadable() from error
+
+        if not rows:
+            # The helper reported success but returned no row, so the read is
+            # not usable as proof: fail closed instead of trusting the layout.
+            _log_database_verification(
+                success=False,
+                error_type="EmptyResult",
+                wcdb_error_code=None,
+            )
+            raise DatabaseUnreadable()
+
+        _log_database_verification(
+            success=True,
+            error_type=None,
+            wcdb_error_code=None,
+        )
+
+    def probe_session_databases(
+        self,
+        additional_roots: Iterable[str | Path] = (),
+    ) -> list[DatabaseProbeResult]:
+        """Probe every known ``session.db`` with the provider's current key.
+
+        This is diagnostic only. It never changes ``data_root``, retries a
+        different cipher profile, or raises probe failures to the caller.
+        Candidate numbers are local to the log; the underlying paths stay in
+        memory solely for de-duplication and are never logged.
+        """
+        candidates = self._session_db_candidates(additional_roots)
+        _LOGGER.info(
+            "wechat.database.probe candidate_count=%d",
+            len(candidates),
+        )
+        results: list[DatabaseProbeResult] = []
+        for index, candidate in enumerate(candidates, start=1):
+            success = False
+            wcdb_error_code: Any = None
+            try:
+                rows = self._query(
+                    candidate.session_db,
+                    _VERIFY_SQL,
+                    limit=1,
+                    query_stage="probe",
+                    log_wcdb_error_message=False,
+                )
+                success = bool(rows)
+            except QueryFailed as error:
+                wcdb_error_code = getattr(error, "wcdb_error_code", None)
+            except Exception:
+                # A diagnostic failure must never replace the original
+                # verification error or disturb the caller's recovery flow.
+                pass
+            results.append(
+                DatabaseProbeResult(
+                    session_db=candidate.session_db,
+                    data_root=candidate.data_root,
+                    readable=success,
+                    wcdb_error_code=wcdb_error_code,
+                )
+            )
+            _log_database_probe_candidate(
+                index,
+                success=success,
+                wcdb_error_code=wcdb_error_code,
+            )
+        return results
+
+    def with_data_root(self, data_root: str | Path) -> WeChatDatabaseProvider:
+        """Return an equivalent provider scoped to one verified account root."""
+        return WeChatDatabaseProvider(
+            data_root=data_root,
+            db_key=self._db_key,
+            wcdb_cli_path=self._wcdb_cli_path,
+            wcdb_dll_path=self._wcdb_dll_path,
+            timeout=self._timeout,
+            runner=self._runner,
+            diagnostic_spawner=self._diagnostic_spawner,
+        )
+
     # ---------------------------------------------------------------- listing
 
     def list_sessions(self, limit: int = DEFAULT_SESSION_LIMIT) -> list[WeChatSession]:
         """List conversations found in ``session.db``."""
         session_db = self._session_db_path()
         self._maybe_launch_wcdb_diagnostic(session_db)
-        sql = (
-            "SELECT username, summary, last_timestamp "
-            f"FROM {_SESSION_TABLE} ORDER BY last_timestamp DESC"
-        )
+        columns = self._query_table_columns(session_db)
+        sql = _build_session_list_sql(columns)
         rows = self._query(
             session_db,
             sql,
@@ -225,6 +384,20 @@ class WeChatDatabaseProvider:
                 )
             )
         return sessions
+
+    def _query_table_columns(self, db_path: Path) -> set[str]:
+        """Return the set of column names for the session table."""
+        rows = self._query(
+            db_path,
+            f"PRAGMA table_info({_SESSION_TABLE})",
+            limit=DEFAULT_MESSAGE_LIMIT,
+            query_stage="schema_info",
+        )
+        columns: set[str] = set()
+        for row in rows:
+            if isinstance(row, Mapping) and isinstance(row.get("name"), str):
+                columns.add(row["name"])
+        return columns
 
     def _maybe_launch_wcdb_diagnostic(self, session_db: Path) -> None:
         """Start the standalone WCDB diagnostic runner when the env gate is on.
@@ -344,6 +517,8 @@ class WeChatDatabaseProvider:
         sql: str,
         limit: int,
         query_stage: str = "query",
+        *,
+        log_wcdb_error_message: bool = True,
     ) -> list[Any]:
         command = [
             str(self._resolve_helper()),
@@ -393,14 +568,27 @@ class WeChatDatabaseProvider:
             )
             raise QueryFailed()
         if payload.get("ok") is not True:
+            wcdb_error_code = payload.get("wcdb_error_code")
+            wcdb_error_message = payload.get("wcdb_error_message")
+            if (
+                log_wcdb_error_message
+                and isinstance(wcdb_error_message, str)
+            ):
+                wcdb_error_message = _sanitize_wcdb_message(
+                    wcdb_error_message, db_path, self._resolve_key(), sql
+                )
+            elif not log_wcdb_error_message:
+                wcdb_error_message = None
             _log_query_failure(
                 database_type,
                 query_stage,
                 wcdb_stage=_safe_stage(payload.get("stage")),
                 returncode=returncode,
                 error_type="QueryFailed",
+                wcdb_error_code=wcdb_error_code,
+                wcdb_error_message=wcdb_error_message,
             )
-            raise QueryFailed()
+            raise QueryFailed(wcdb_error_code=wcdb_error_code)
 
         rows = payload.get("rows")
         _LOGGER.info(
@@ -409,6 +597,46 @@ class WeChatDatabaseProvider:
             query_stage,
         )
         return rows if isinstance(rows, list) else []
+
+    def _session_db_candidates(
+        self,
+        additional_roots: Iterable[str | Path],
+    ) -> list[_SessionDatabaseCandidate]:
+        roots: list[Path] = []
+        if self._data_root is not None:
+            roots.append(self._data_root)
+        try:
+            for value in additional_roots:
+                if value is not None:
+                    roots.append(Path(value))
+        except Exception:
+            pass
+
+        candidates: list[_SessionDatabaseCandidate] = []
+        seen: set[str] = set()
+        for root in roots:
+            try:
+                directories = _iter_db_directories(root)
+            except Exception:
+                continue
+            for directory in directories:
+                session_db = directory / SESSION_DB_NAME
+                try:
+                    if not session_db.is_file():
+                        continue
+                except OSError:
+                    continue
+                identity = _path_identity(session_db)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                candidates.append(
+                    _SessionDatabaseCandidate(
+                        session_db=session_db,
+                        data_root=_owning_data_root(root, directory),
+                    )
+                )
+        return candidates
 
     def _resolve_key(self) -> str:
         key = self._db_key or os.environ.get(DB_KEY_ENVIRONMENT_VARIABLE)
@@ -613,6 +841,17 @@ def _iter_db_directories(root: Path) -> list[Path]:
     return directories
 
 
+def _owning_data_root(root: Path, db_directory: Path) -> Path:
+    """Map a provider-scanned db directory back to its known account root."""
+    if db_directory == root:
+        return root
+    if db_directory.name in _DB_STORAGE_DIR_NAMES:
+        return db_directory.parent
+    if db_directory.parent.name in _DB_STORAGE_DIR_NAMES:
+        return db_directory.parent.parent
+    return root
+
+
 def _session_type(username: str) -> str:
     if username.endswith("@chatroom"):
         return "group"
@@ -670,6 +909,79 @@ def _safe_stage(value: Any) -> str:
     return text[:80] or "unknown"
 
 
+def _build_session_list_sql(columns: set[str]) -> str:
+    """Return a SessionTable query that adapts to available columns.
+
+    ``username`` is required; ``summary`` and ``last_timestamp`` are optional.
+    If ``last_timestamp`` is absent, no ORDER BY clause is emitted.
+    """
+    if "username" not in columns:
+        raise QueryFailed("SessionTable 缺少必需的 username 列")
+    selected = ["username"]
+    if "last_timestamp" in columns:
+        selected.append("last_timestamp")
+    if "summary" in columns:
+        selected.append("summary")
+    order = " ORDER BY last_timestamp DESC" if "last_timestamp" in columns else ""
+    return f"SELECT {', '.join(selected)} FROM {_SESSION_TABLE}{order}"
+
+
+def _sanitize_wcdb_message(
+    message: str, db_path: Path, db_key: str, sql: str | None = None
+) -> str:
+    """Redact sensitive strings from a WCDB error message before logging."""
+    text = str(message or "")
+    text = text.replace(str(db_path), "[db_path]")
+    if db_key:
+        text = text.replace(db_key, "[key]")
+    if sql:
+        text = text.replace(sql, "[sql]")
+    return text
+
+
+def _log_database_verification(
+    *,
+    success: bool,
+    error_type: str | None,
+    wcdb_error_code: Any,
+) -> None:
+    """Record the verification outcome as a safe state only.
+
+    No database path, account directory, key, SQL text, or chat content is
+    ever logged; a failed verification adds only the error type and the
+    numeric WCDB code.
+    """
+    if success:
+        _LOGGER.info("wechat.database.verify success=true")
+        return
+    _LOGGER.warning(
+        "wechat.database.verify success=false error_type=%s "
+        "wcdb_error_code=%s",
+        error_type or "unknown",
+        wcdb_error_code if wcdb_error_code is not None else "",
+    )
+
+
+def _log_database_probe_candidate(
+    candidate: int,
+    *,
+    success: bool,
+    wcdb_error_code: Any,
+) -> None:
+    if success:
+        _LOGGER.info(
+            "wechat.database.probe candidate=%d success=true",
+            candidate,
+        )
+        return
+    _LOGGER.warning(
+        "wechat.database.probe candidate=%d success=false "
+        "wcdb_error_code=%s",
+        candidate,
+        wcdb_error_code if wcdb_error_code is not None else "",
+    )
+
+
 def _log_query_failure(
     database_type: str,
     query_stage: str,
@@ -677,15 +989,20 @@ def _log_query_failure(
     wcdb_stage: str,
     returncode: Any,
     error_type: str,
+    wcdb_error_code: Any = None,
+    wcdb_error_message: str | None = None,
 ) -> None:
     _LOGGER.error(
         "wechat.wcdb.failed database_type=%s query_stage=%s "
-        "wcdb_stage=%s returncode=%s error_type=%s",
+        "wcdb_stage=%s returncode=%s error_type=%s "
+        "wcdb_error_code=%s wcdb_error_message=%s",
         database_type,
         query_stage,
         wcdb_stage,
         returncode,
         error_type,
+        wcdb_error_code if wcdb_error_code is not None else "",
+        wcdb_error_message or "",
     )
 
 
@@ -715,6 +1032,11 @@ def _parse_result(stdout: str) -> Mapping[str, Any] | None:
         if isinstance(payload, dict):
             return payload
     return None
+
+
+def _path_identity(path: Path) -> str:
+    """Return an in-memory-only path identity used for candidate de-duplication."""
+    return os.path.normcase(os.path.realpath(os.fspath(path)))
 
 
 def _run_subprocess(
