@@ -292,11 +292,21 @@ class QQWorkspace(QWidget):
             self._stop_qq_status_polling()
             self._hide_qq_qrcode()
 
+        if state == _QQ_STATE_WAITING_AUTH:
+            self._qq_connect_button.setEnabled(
+                self._qq_qrcode_label.isVisibleTo(self)
+            )
+
     def _poll_qq_status(self) -> None:
         """Refresh the QQ snapshot while the user is waiting to log in."""
         if self._qq_auth_waiting_expired():
             self._handle_qq_auth_timeout()
             return
+        # A fresh local QR must not wait for the async snapshot/health worker:
+        # the worker can stay blocked for seconds, but the QR file is already
+        # fresh and can be shown immediately during this poll.
+        if self._qq_waiting_auth_since is not None:
+            self._refresh_qq_qrcode()
         self._executor(
             lambda: self._facade.get_qq_connection_snapshot(),
             on_success=lambda snapshot: self._show_qq_status(
@@ -441,7 +451,6 @@ class QQWorkspace(QWidget):
                 _snapshot_state(status),
             )
             self._after_qq_connect(status)
-            self._qq_connect_button.setEnabled(True)
 
         QTimer.singleShot(self._connect_display_delay(started_at), _apply)
 

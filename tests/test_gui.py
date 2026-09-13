@@ -4644,6 +4644,53 @@ def test_waiting_auth_hides_stale_qrcode_until_session_file_is_fresh(
     assert page._qq_qrcode_label.pixmap() is not None
 
 
+def test_poll_displays_qr_before_snapshot_worker_completes(
+    qt_app,
+    sources,
+    tmp_path: Path,
+) -> None:
+    """QR refresh must not wait for the async snapshot/health worker.
+
+    While waiting for auth, a ready local QR file has to be shown during the
+    current poll even when ``get_qq_connection_snapshot`` is still blocked.
+    """
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+
+    qr_path = tmp_path / "qrcode.png"
+    _write_qrcode_png(qr_path)
+
+    snapshot_started = threading.Event()
+    release = threading.Event()
+
+    class _BlockingSnapshotFacade(_GatedQRFacade):
+        def get_qq_connection_snapshot(self):
+            self.get_qq_connection_snapshot_calls.append(1)
+            snapshot_started.set()
+            release.wait(timeout=5)
+            return self._qq_snapshot()
+
+    facade = _BlockingSnapshotFacade(
+        _qq_snapshot("waiting_auth"),
+        _qq_snapshot("waiting_auth"),
+        sources=sources,
+    )
+    facade.qr_ready = True
+
+    workspace = QQWorkspace(facade)
+    workspace._qq_qrcode_path = qr_path
+    workspace._qq_waiting_auth_since = time.monotonic()
+
+    try:
+        workspace._poll_qq_status()
+
+        assert snapshot_started.wait(timeout=2)
+
+        assert workspace._qq_qrcode_label.isVisibleTo(workspace) is True
+    finally:
+        release.set()
+        _settle_workers()
+
+
 def test_waiting_auth_without_qrcode_keeps_it_hidden(
     qt_app,
     sources,
@@ -5476,6 +5523,66 @@ def test_qq_workspace_connect_disables_button_until_finish(
     cancel_workspace.cancel_connection()
     assert cancel_workspace._qq_connect_button.isEnabled() is True
     assert cancel_workspace._qq_connect_button.text() == "连接QQ"
+
+
+def test_qq_workspace_waiting_auth_disables_button_until_qr_ready(
+    qt_app,
+    sources,
+    tmp_path: Path,
+) -> None:
+    """Regression: the connect button must stay disabled while QR is not ready."""
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+    from PySide6.QtGui import QPixmap
+
+    qr_path = tmp_path / "qrcode.png"
+    pixmap = QPixmap(8, 8)
+    pixmap.fill(Qt.GlobalColor.black)
+    assert pixmap.save(str(qr_path)) is True
+
+    facade = _GatedQRFacade(
+        _qq_snapshot("waiting_auth"),
+        _qq_snapshot("waiting_auth"),
+        sources=sources,
+    )
+    facade.qr_ready = False
+    workspace = QQWorkspace(facade, executor=_inline_executor())
+    workspace._qq_qrcode_path = qr_path
+
+    workspace.connect_qq()
+    QTest.qWait(600)
+
+    assert workspace._qq_qrcode_label.isVisibleTo(workspace) is False
+    assert workspace._qq_connect_button.isEnabled() is False
+
+
+def test_qq_workspace_waiting_auth_enables_button_once_qr_displayed(
+    qt_app,
+    sources,
+    tmp_path: Path,
+) -> None:
+    """Once the QR is actually displayed, the connect button becomes enabled."""
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+    from PySide6.QtGui import QPixmap
+
+    qr_path = tmp_path / "qrcode.png"
+    pixmap = QPixmap(8, 8)
+    pixmap.fill(Qt.GlobalColor.black)
+    assert pixmap.save(str(qr_path)) is True
+
+    facade = _GatedQRFacade(
+        _qq_snapshot("waiting_auth"),
+        _qq_snapshot("waiting_auth"),
+        sources=sources,
+    )
+    facade.qr_ready = True
+    workspace = QQWorkspace(facade, executor=_inline_executor())
+    workspace._qq_qrcode_path = qr_path
+
+    workspace.connect_qq()
+    QTest.qWait(600)
+
+    assert workspace._qq_qrcode_label.isVisibleTo(workspace) is True
+    assert workspace._qq_connect_button.isEnabled() is True
 
 
 def test_qq_workspace_offers_qq_exe_selection_when_install_path_missing(
@@ -6751,3 +6858,4 @@ def test_waiting_auth_timeout_enters_error_state(qt_app, sources) -> None:
     assert workspace._qq_status_timer.isActive() is False
     assert "等待超时" in workspace._status_label.text()
     assert workspace._qq_connect_button.text() == "重新开始"
+    assert workspace._qq_connect_button.isEnabled() is True
