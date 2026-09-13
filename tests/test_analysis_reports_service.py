@@ -56,6 +56,10 @@ def _write_qce_chat(path: Path) -> None:
                 "content": {
                     "text": "今天 😀 开心",
                     "elements": [
+                        {
+                            "type": "text",
+                            "textElement": {"content": "今天 😀 开心"},
+                        },
                         {"type": "face", "data": {"id": "1", "name": "[笑]"}}
                     ],
                 },
@@ -193,6 +197,10 @@ def _write_qce_market_face_chat(path: Path) -> None:
                     "text": "来一个",
                     "elements": [
                         {
+                            "type": "text",
+                            "textElement": {"content": "来一个"},
+                        },
+                        {
                             "type": "market_face",
                             "marketFaceElement": {
                                 "faceName": "[肘击]",
@@ -204,6 +212,67 @@ def _write_qce_market_face_chat(path: Path) -> None:
                 "recalled": False,
                 "system": False,
             }
+        ],
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def _write_private_qce_expression_fallback_export(path: Path) -> None:
+    payload = {
+        "chatInfo": {
+            "peerUid": "fictional-private-peer",
+            "name": "Fictional Private Chat",
+            "type": "private",
+        },
+        "messages": [
+            {
+                "id": "fictional-private-fallback-1",
+                "timestamp": 1704099600,
+                "sender": {
+                    "uid": "u-1",
+                    "uin": "1",
+                    "name": "Fictional Alice",
+                },
+                "type": "text",
+                "content": {
+                    "text": "Facepalm",
+                    "elements": [
+                        {
+                            "type": "market_face",
+                            "marketFaceElement": {
+                                "emojiId": "market-facepalm",
+                                "faceName": "Facepalm",
+                            },
+                        }
+                    ],
+                },
+                "recalled": False,
+                "system": False,
+            },
+            {
+                "id": "fictional-private-fallback-2",
+                "timestamp": 1704099660,
+                "sender": {
+                    "uid": "u-2",
+                    "uin": "2",
+                    "name": "Fictional Bob",
+                },
+                "type": "text",
+                "content": {
+                    "text": "Facepalm",
+                    "elements": [
+                        {
+                            "type": "market_face",
+                            "marketFaceElement": {
+                                "emojiId": "market-facepalm",
+                                "faceName": "Facepalm",
+                            },
+                        }
+                    ],
+                },
+                "recalled": False,
+                "system": False,
+            },
         ],
     }
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -576,6 +645,39 @@ def test_market_face_reaches_expression_report_from_qce(tmp_path: Path) -> None:
     assert expression.top_expressions[0].expression_key == "market-1"
     assert expression.top_expressions[0].kind == "sticker"
     assert expression.top_expressions[0].with_text_message_count == 1
+
+
+def test_private_qce_expression_fallback_does_not_leak_into_voice_words(
+    tmp_path: Path,
+) -> None:
+    application = _application_module()
+    input_path = tmp_path / "fictional-private-expression-fallback.json"
+    output_directory = tmp_path / "private-output"
+    output_directory.mkdir()
+    _write_private_qce_expression_fallback_export(input_path)
+
+    result = application.AnalysisApplicationService().execute(
+        _request(application, tmp_path, input_path)
+    )
+
+    expression = result.reports.expression
+    assert expression is not None
+    assert expression.expression_occurrence_count == 2
+    assert expression.top_expressions[0].expression_key == "market-facepalm"
+    assert all(word.word != "Facepalm" for word in result.top_words)
+
+    profile_words = [
+        word.word
+        for profile in result.reports.user_profiles.profiles
+        for word in profile.top_words
+    ]
+    private_words = [
+        word.word for word in result.reports.private_language.shared_words
+    ]
+    assert "Facepalm" not in profile_words
+    assert "Facepalm" not in private_words
+    assert "expression:market-facepalm" in profile_words
+    assert "expression:market-facepalm" in private_words
 
 
 def test_sticker_only_chat_returns_expression_only_with_echo_artifacts(

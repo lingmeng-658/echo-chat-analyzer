@@ -338,6 +338,13 @@ def _build_rich_contents(content: Mapping[Any, Any]) -> tuple[RichContent, ...]:
     if ordered is not None:
         return ordered
 
+    structured_parts = _ordered_content_parts(
+        content,
+        allow_expression_fallback=True,
+    )
+    if structured_parts is not None:
+        return structured_parts
+
     text = content.get("text")
     contents: list[RichContent] = []
     if isinstance(text, str) and text:
@@ -348,6 +355,8 @@ def _build_rich_contents(content: Mapping[Any, Any]) -> tuple[RichContent, ...]:
 
 def _ordered_content_parts(
     content: Mapping[Any, Any],
+    *,
+    allow_expression_fallback: bool = False,
 ) -> tuple[RichContent, ...] | None:
     """Reconstruct QCE element order when it matches the exported text."""
     elements = content.get("elements")
@@ -371,12 +380,17 @@ def _ordered_content_parts(
     has_expression = any(
         isinstance(part, ExpressionContent) for part in parts
     )
-    if not has_expression or not text_parts:
+    if not has_expression:
         return None
+    if not text_parts:
+        return tuple(parts) if allow_expression_fallback else None
     exported_text = content.get("text")
     if not isinstance(exported_text, str):
-        return None
-    if "".join(text_parts) != exported_text:
+        return tuple(parts) if allow_expression_fallback else None
+    if (
+        "".join(text_parts) != exported_text
+        and not allow_expression_fallback
+    ):
         return None
 
     expression_index = 0
