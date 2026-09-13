@@ -54,6 +54,22 @@ def _helper_result(rows: list[object]) -> str:
     )
 
 
+def _schema_result(columns: list[str]) -> str:
+    pragma_rows = [
+        {"cid": index, "name": name, "type": "TEXT", "notnull": 0, "dflt_value": None, "pk": 0}
+        for index, name in enumerate(columns)
+    ]
+    return json.dumps(
+        {
+            "ok": True,
+            "columns": ["cid", "name", "type", "notnull", "dflt_value", "pk"],
+            "rows": pragma_rows,
+            "row_count": len(pragma_rows),
+            "truncated": False,
+        }
+    )
+
+
 def _make_data_root(tmp_path: Path) -> Path:
     storage = tmp_path / "xwechat_files" / "wxid_owner" / "db_storage"
     message_dir = storage / "message"
@@ -253,6 +269,8 @@ def test_provider_gate_off_does_not_launch_runner(tmp_path: Path) -> None:
 
     def runner(command, timeout, environment):
         sql = " ".join(command)
+        if "PRAGMA table_info" in sql:
+            return _FakeCompleted(stdout=_schema_result(["username", "summary", "last_timestamp"]))
         if "SessionTable" in sql:
             return _FakeCompleted(
                 stdout=_helper_result(
@@ -281,6 +299,8 @@ def test_provider_gate_on_launches_runner_with_key(
 ) -> None:
     def runner(command, timeout, environment):
         sql = " ".join(command)
+        if "PRAGMA table_info" in sql:
+            return _FakeCompleted(stdout=_schema_result(["username", "summary", "last_timestamp"]))
         if "SessionTable" in sql:
             return _FakeCompleted(
                 stdout=_helper_result(
@@ -315,6 +335,8 @@ def test_provider_spawner_failure_does_not_break_connection(
 ) -> None:
     def runner(command, timeout, environment):
         sql = " ".join(command)
+        if "PRAGMA table_info" in sql:
+            return _FakeCompleted(stdout=_schema_result(["username", "summary", "last_timestamp"]))
         if "SessionTable" in sql:
             return _FakeCompleted(
                 stdout=_helper_result(

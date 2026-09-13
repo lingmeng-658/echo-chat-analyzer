@@ -29,6 +29,7 @@ from qq_chat_analyzer.rich_message import (
 )
 from qq_chat_analyzer.providers.wechat_database_provider import (
     DatabaseNotFound,
+    DatabaseUnreadable,
     KeyUnavailable,
     QueryFailed,
     SessionNotFound,
@@ -36,6 +37,8 @@ from qq_chat_analyzer.providers.wechat_database_provider import (
     WcdbLibraryNotFound,
     WeChatDatabaseProvider,
     message_table_name,
+    _build_session_list_sql,
+    _sanitize_wcdb_message,
 )
 from qq_chat_analyzer.providers import wechat_database_provider
 
@@ -145,6 +148,17 @@ def _helper_result(rows: list[object], columns: list[str] | None = None) -> str:
             "row_count": len(rows),
             "truncated": False,
         }
+    )
+
+
+def _schema_result(columns: list[str]) -> str:
+    pragma_rows = [
+        {"cid": index, "name": name, "type": "TEXT", "notnull": 0, "dflt_value": None, "pk": 0}
+        for index, name in enumerate(columns)
+    ]
+    return _helper_result(
+        pragma_rows,
+        columns=["cid", "name", "type", "notnull", "dflt_value", "pk"],
     )
 
 
@@ -515,6 +529,10 @@ def test_list_sessions_returns_privacy_safe_descriptors(tmp_path: Path) -> None:
 
     def runner(command, timeout, environment):
         sql = " ".join(command)
+        if "PRAGMA table_info" in sql:
+            return _FakeCompleted(
+                stdout=_schema_result(["username", "summary", "last_timestamp"])
+            )
         if "SessionTable" in sql:
             return _FakeCompleted(stdout=_helper_result(rows))
         if "sqlite_master" in sql:
@@ -548,6 +566,10 @@ def test_list_sessions_marks_missing_msg_tables_unavailable(
 
     def runner(command, timeout, environment):
         sql = " ".join(command)
+        if "PRAGMA table_info" in sql:
+            return _FakeCompleted(
+                stdout=_schema_result(["username", "summary", "last_timestamp"])
+            )
         if "SessionTable" in sql:
             return _FakeCompleted(stdout=_helper_result(session_rows))
         if "sqlite_master" in sql:
@@ -592,6 +614,10 @@ def test_list_sessions_resolves_contact_display_names(tmp_path: Path) -> None:
 
     def runner(command, timeout, environment):
         sql = " ".join(command)
+        if "PRAGMA table_info" in sql:
+            return _FakeCompleted(
+                stdout=_schema_result(["username", "summary", "last_timestamp"])
+            )
         if "SessionTable" in sql:
             return _FakeCompleted(stdout=_helper_result(session_rows))
         if "FROM contact" in sql:
@@ -642,6 +668,10 @@ def test_list_sessions_filters_official_and_system_sessions(
 
     def runner(command, timeout, environment):
         sql = " ".join(command)
+        if "PRAGMA table_info" in sql:
+            return _FakeCompleted(
+                stdout=_schema_result(["username", "summary", "last_timestamp"])
+            )
         if "SessionTable" in sql:
             return _FakeCompleted(stdout=_helper_result(session_rows))
         if "sqlite_master" in sql:
@@ -896,6 +926,11 @@ def test_key_is_never_placed_on_the_command_line(tmp_path: Path) -> None:
 
     def runner(command, timeout, environment):
         captured.append(list(command))
+        sql = " ".join(command)
+        if "PRAGMA table_info" in sql:
+            return _FakeCompleted(
+                stdout=_schema_result(["username", "summary", "last_timestamp"])
+            )
         return _FakeCompleted(stdout=_helper_result([]))
 
     _provider(tmp_path, runner).list_sessions()
@@ -1054,6 +1089,11 @@ def test_query_failure_logs_safe_wcdb_diagnostics(
 
     def failing(command, timeout, environment):
         assert environment["WX_DB_KEY"] == secret_key
+        sql = " ".join(command)
+        if "PRAGMA table_info" in sql:
+            return _FakeCompleted(
+                stdout=_schema_result(["username", "summary", "last_timestamp"])
+            )
         return _FakeCompleted(
             stdout=json.dumps(
                 {
@@ -1095,6 +1135,11 @@ def test_query_runner_exception_logs_original_error_type_without_key(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     def crashing(command, timeout, environment):
+        sql = " ".join(command)
+        if "PRAGMA table_info" in sql:
+            return _FakeCompleted(
+                stdout=_schema_result(["username", "summary", "last_timestamp"])
+            )
         raise RuntimeError(FICTIONAL_KEY)
 
     with caplog.at_level(
@@ -1178,3 +1223,330 @@ def test_db_export_does_not_leak_into_qq_detection(tmp_path: Path) -> None:
     )
 
     assert outcome.result.message_count == 0
+
+
+# ------------------------------------------------- schema / diagnostic contracts
+
+
+def test_build_session_list_sql_uses_full_schema() -> None:
+    sql = _build_session_list_sql({"username", "summary", "last_timestamp"})
+    assert "username" in sql
+    assert "summary" in sql
+    assert "last_timestamp" in sql
+    assert "ORDER BY last_timestamp DESC" in sql
+
+
+def test_build_session_list_sql_omits_missing_summary() -> None:
+    sql = _build_session_list_sql({"username", "last_timestamp"})
+    assert "username" in sql
+    assert "summary" not in sql
+    assert "ORDER BY last_timestamp DESC" in sql
+
+
+def test_build_session_list_sql_falls_back_without_last_timestamp() -> None:
+    sql = _build_session_list_sql({"username", "summary"})
+    assert "username" in sql
+    assert "summary" in sql
+    assert "last_timestamp" not in sql
+    assert "ORDER BY" not in sql
+
+
+def test_build_session_list_sql_fails_when_username_missing() -> None:
+    with pytest.raises(QueryFailed):
+        _build_session_list_sql({"summary", "last_timestamp"})
+
+
+def test_sanitize_wcdb_message_redacts_path_key_and_sql() -> None:
+    db_path = Path("C:/Users/Fake/AppData/secret/session.db")
+    key = "a" * 64
+    sql = "SELECT secret FROM SessionTable"
+    raw = (
+        f"cannot open {db_path} with sql {sql} and key {key} "
+        "and some user data here"
+    )
+    cleaned = _sanitize_wcdb_message(raw, db_path, key, sql)
+    assert str(db_path) not in cleaned
+    assert key not in cleaned
+    assert sql not in cleaned
+    assert "user data here" in cleaned
+
+
+def test_query_failure_logs_wcdb_error_code_and_message(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret_key = FICTIONAL_KEY
+    db_path = _make_data_root(tmp_path) / "wxid_owner" / "db_storage" / "message" / "session.db"
+
+    def failing(command, timeout, environment):
+        assert environment["WX_DB_KEY"] == secret_key
+        sql = " ".join(command)
+        if "PRAGMA table_info" in sql:
+            return _FakeCompleted(
+                stdout=_schema_result(["username", "summary", "last_timestamp"])
+            )
+        return _FakeCompleted(
+            stdout=json.dumps(
+                {
+                    "ok": False,
+                    "stage": "prepare",
+                    "error": "prepare failed",
+                    "wcdb_error_code": 26,
+                    "wcdb_error_ext_code": 1032,
+                    "wcdb_error_message": (
+                        f"file is not a database at {db_path} "
+                        f"using key {secret_key}"
+                    ),
+                }
+            ),
+            returncode=1,
+        )
+
+    provider = _provider(tmp_path, failing)
+
+    with caplog.at_level(
+        "INFO",
+        logger="qq_chat_analyzer.providers.wechat_database_provider",
+    ):
+        with pytest.raises(QueryFailed):
+            provider.list_sessions()
+
+    logs = caplog.text
+    assert "wechat.wcdb.failed" in logs
+    assert "database_type=session" in logs
+    assert "query_stage=session_list" in logs
+    assert "wcdb_stage=prepare" in logs
+    assert "returncode=1" in logs
+    assert "wcdb_error_code=26" in logs
+    assert "wcdb_error_message=" in logs
+    assert "file is not a database" in logs
+    assert str(db_path) not in logs
+    assert secret_key not in logs
+    assert "error_type=QueryFailed" in logs
+
+
+def test_query_failure_distinguishes_inner_handle_null_from_prepare_failure(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def failing(command, timeout, environment):
+        return _FakeCompleted(
+            stdout=json.dumps(
+                {
+                    "ok": False,
+                    "stage": "prepare",
+                    "error": "inner handle is null",
+                }
+            ),
+            returncode=1,
+        )
+
+    provider = _provider(tmp_path, failing)
+
+    with caplog.at_level(
+        "INFO",
+        logger="qq_chat_analyzer.providers.wechat_database_provider",
+    ):
+        with pytest.raises(QueryFailed):
+            provider.list_sessions()
+
+    assert "wcdb_stage=prepare" in caplog.text
+    assert "inner handle is null" not in caplog.text
+
+
+def test_list_sessions_adapts_to_missing_summary_and_last_timestamp(
+    tmp_path: Path,
+) -> None:
+    def runner(command, timeout, environment):
+        sql = command[command.index("--sql") + 1]
+        if "PRAGMA table_info" in sql:
+            return _FakeCompleted(
+                stdout=json.dumps(
+                    {
+                        "ok": True,
+                        "columns": ["cid", "name", "type", "notnull", "dflt_value", "pk"],
+                        "rows": [{"name": "username"}],
+                        "row_count": 1,
+                        "truncated": False,
+                    }
+                )
+            )
+        if "SessionTable" in sql:
+            assert "username" in sql
+            assert "summary" not in sql
+            assert "last_timestamp" not in sql
+            assert "ORDER BY" not in sql
+            return _FakeCompleted(
+                stdout=_helper_result([{"username": FICTIONAL_SESSION}])
+            )
+        if "sqlite_master" in sql:
+            return _FakeCompleted(stdout=_helper_result([]))
+        raise AssertionError(f"unexpected query: {sql}")
+
+    sessions = _provider(tmp_path, runner).list_sessions()
+    assert [session.session_id for session in sessions] == [FICTIONAL_SESSION]
+
+
+# ------------------------------------------------- key/database verification
+
+
+def _verify_runner(
+    captured: list[list[str]] | None = None,
+    *,
+    rows: list[object] | None = None,
+):
+    def runner(command, timeout, environment):
+        if captured is not None:
+            captured.append(list(command))
+        return _FakeCompleted(
+            stdout=_helper_result(
+                rows if rows is not None else [{"count(*)": 1}]
+            )
+        )
+
+    return runner
+
+
+def _fictional_session_db(tmp_path: Path) -> Path:
+    return (
+        _make_data_root(tmp_path)
+        / "wxid_owner"
+        / "db_storage"
+        / "message"
+        / "session.db"
+    )
+
+
+def test_verify_readable_uses_a_minimal_read_only_query(tmp_path: Path) -> None:
+    captured: list[list[str]] = []
+
+    _provider(tmp_path, _verify_runner(captured)).verify_readable()
+
+    assert captured, "verification must reuse the existing wcdb query path"
+    command = captured[0]
+    sql = command[command.index("--sql") + 1]
+    assert "sqlite_master" in sql
+    assert "SessionTable" not in sql
+    assert "Msg_" not in sql
+    assert "message" not in sql.lower()
+    assert command[command.index("--db") + 1].endswith("session.db")
+
+
+def test_verify_readable_keeps_the_key_off_the_command_line(
+    tmp_path: Path,
+) -> None:
+    captured: list[list[str]] = []
+    seen: list[dict[str, str]] = []
+
+    def runner(command, timeout, environment):
+        captured.append(list(command))
+        seen.append(dict(environment))
+        return _FakeCompleted(stdout=_helper_result([{"count(*)": 1}]))
+
+    _provider(tmp_path, runner).verify_readable()
+
+    assert seen[0]["WX_DB_KEY"] == FICTIONAL_KEY
+    assert all(FICTIONAL_KEY not in part for part in captured[0])
+
+
+def test_verify_readable_raises_unreadable_when_the_key_cannot_open_the_db(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret_key = FICTIONAL_KEY
+    session_db = _fictional_session_db(tmp_path)
+
+    def failing(command, timeout, environment):
+        assert environment["WX_DB_KEY"] == secret_key
+        return _FakeCompleted(
+            stdout=json.dumps(
+                {
+                    "ok": False,
+                    "stage": "prepare",
+                    "error": "prepare failed",
+                    "wcdb_error_code": 26,
+                    "wcdb_error_ext_code": 1032,
+                    "wcdb_error_message": (
+                        f"file is not a database at {session_db} "
+                        f"using key {secret_key}"
+                    ),
+                }
+            ),
+            returncode=1,
+        )
+
+    with caplog.at_level(
+        "INFO",
+        logger="qq_chat_analyzer.providers.wechat_database_provider",
+    ):
+        with pytest.raises(DatabaseUnreadable) as failure:
+            _provider(tmp_path, failing).verify_readable()
+
+    assert failure.value.code == "wechat_database_unreadable"
+    assert failure.value.code != QueryFailed.code
+
+    logs = caplog.text
+    assert "wechat.database.verify success=false" in logs
+    assert "wcdb_error_code=26" in logs
+    assert str(session_db) not in logs
+    assert secret_key not in logs
+
+
+def test_verify_readable_fails_closed_when_no_row_is_returned(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(
+        "INFO",
+        logger="qq_chat_analyzer.providers.wechat_database_provider",
+    ):
+        with pytest.raises(DatabaseUnreadable):
+            _provider(tmp_path, _verify_runner(rows=[])).verify_readable()
+
+    assert "wechat.database.verify success=false" in caplog.text
+    assert "error_type=EmptyResult" in caplog.text
+
+
+def test_verify_readable_logs_only_safe_status(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    session_db = _fictional_session_db(tmp_path)
+
+    with caplog.at_level(
+        "INFO",
+        logger="qq_chat_analyzer.providers.wechat_database_provider",
+    ):
+        _provider(tmp_path, _verify_runner()).verify_readable()
+
+    logs = caplog.text
+    assert "wechat.database.verify success=true" in logs
+    assert session_db.name not in logs
+    assert str(session_db) not in logs
+    assert "wxid_owner" not in logs
+    assert FICTIONAL_KEY not in logs
+    assert "sqlite_master" not in logs
+    assert "SELECT" not in logs
+
+
+def test_verify_readable_reports_a_missing_database(tmp_path: Path) -> None:
+    helper = tmp_path / "wcdb_cli.exe"
+    helper.write_bytes(b"fake")
+    library = tmp_path / "WCDB.dll"
+    library.write_bytes(b"fake")
+    provider = WeChatDatabaseProvider(
+        data_root=tmp_path / "fictional_empty_root",
+        db_key=FICTIONAL_KEY,
+        wcdb_cli_path=helper,
+        wcdb_dll_path=library,
+        runner=_verify_runner(),
+    )
+
+    with pytest.raises(DatabaseNotFound):
+        provider.verify_readable()
+
+
+def test_database_unreadable_is_exported_for_application_callers() -> None:
+    from qq_chat_analyzer import providers
+
+    assert providers.DatabaseUnreadable is DatabaseUnreadable

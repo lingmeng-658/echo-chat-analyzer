@@ -96,6 +96,7 @@ class StubFacade:
         connection_status=None,
         connection_status_after_connect=None,
         connection_error=None,
+        verify_error=None,
         connect_qq_error=None,
         setup_status=None,
         setup_error=None,
@@ -122,6 +123,7 @@ class StubFacade:
         self._connection_status = connection_status
         self._connection_status_after_connect = connection_status_after_connect
         self._connection_error = connection_error
+        self._verify_error = verify_error
         self._connect_qq_error = connect_qq_error
         self._setup_status = setup_status
         self._setup_error = setup_error
@@ -147,6 +149,7 @@ class StubFacade:
         self.detect_wechat_data_root_calls: list[object] = []
         self.detect_wechat_data_roots_calls: list[object] = []
         self.acquire_wechat_db_key_calls: list[object] = []
+        self.verify_wechat_database_calls: list[object] = []
         self.get_qq_setup_status_calls: list[object] = []
         self.get_qq_runtime_status_calls: list[object] = []
         self.get_qq_environment_config_calls: list[object] = []
@@ -447,6 +450,12 @@ class StubFacade:
         if self._connection_status_after_connect is not None:
             self._connection_status = self._connection_status_after_connect
         return "fictional-key-64"
+
+    def verify_wechat_database(self):
+        self.verify_wechat_database_calls.append(1)
+        if self._verify_error is not None:
+            raise self._verify_error
+        return None
 
     def setup_wechat_environment(self, config):
         self.setup_wechat_environment_calls.append(config)
@@ -6180,6 +6189,8 @@ def test_wechat_workspace_auto_detection_opens_choice_for_multiple_roots(
     assert dialog._use_data_roots is True
     assert dialog._data_root_combo.count() == 2
     assert facade.setup_wechat_environment_calls == []
+    assert facade.verify_wechat_database_calls == []
+    assert window.wechat_workspace._wechat_connect_pending is True
 
 
 def test_wechat_workspace_auto_detection_opens_manual_setup_when_no_candidates(
@@ -6205,6 +6216,299 @@ def test_wechat_workspace_auto_detection_opens_manual_setup_when_no_candidates(
     assert dialog is not None
     assert dialog._use_data_roots is False
     assert facade.setup_wechat_environment_calls == []
+
+# ----------------------------------------------------------------
+# GUI-5b: WeChat key/database verification fallback
+# ----------------------------------------------------------------
+
+
+def _wechat_unreadable_error():
+    module = _facade_module()
+    return module.FacadeError(
+        code="wechat_database_unreadable",
+        public_message=(
+            "\u5f53\u524d\u5fae\u4fe1\u767b\u5f55\u4fe1\u606f\u65e0\u6cd5"
+            "\u8bfb\u53d6\u6240\u9009\u6570\u636e\u5e93\uff0c\u8bf7\u786e\u8ba4"
+            "\u6570\u636e\u4f4d\u7f6e\u662f\u5426\u5bf9\u5e94\u5f53\u524d"
+            "\u767b\u5f55\u8d26\u53f7\uff0c\u6216\u91cd\u65b0\u83b7\u53d6"
+            "\u5fae\u4fe1\u8fde\u63a5\u4fe1\u606f\u3002"
+        ),
+        source=module.ChatSource.WECHAT,
+    )
+
+
+def _wechat_connected_status():
+    module = _facade_module()
+    return module.WeChatConnectionStatus(
+        available=True, data_found=True, db_key_available=True,
+        runtime_available=True, message="\u5fae\u4fe1\u5df2\u8fde\u63a5",
+        action_hint="",
+    )
+
+
+def _wechat_missing_status():
+    module = _facade_module()
+    return module.WeChatConnectionStatus(
+        available=False, data_found=False, db_key_available=False,
+        runtime_available=False,
+        message="\u672a\u627e\u5230\u5fae\u4fe1\u6570\u636e\u4f4d\u7f6e\u3002",
+        action_hint="",
+    )
+
+
+def _wechat_mismatch_facade(
+    sources,
+    *,
+    verify_error,
+    data_roots=("D:/fictional_wechat",),
+):
+    module = _facade_module()
+    return StubFacade(
+        sources=sources,
+        connection_status=_wechat_missing_status(),
+        connection_status_after_connect=_wechat_connected_status(),
+        sessions=[
+            _session(module.ChatSource.WECHAT, "wx1", "\u6d4b\u8bd5\u4f1a\u8bdd1", 10)
+        ],
+        data_roots=list(data_roots),
+        verify_error=verify_error,
+    )
+
+
+def _run_wechat_verification(executor):
+    """Run the queued verification, which raises for a mismatched database."""
+    with pytest.raises(_facade_module().FacadeError):
+        executor.operation()
+
+
+def _drive_wechat_database_mismatch(
+    qt_app,
+    sources,
+    *,
+    data_roots=("D:/fictional_wechat",),
+):
+    """Run the one-click flow until the captured key fails verification."""
+    facade = _wechat_mismatch_facade(
+        sources,
+        verify_error=_wechat_unreadable_error(),
+        data_roots=data_roots,
+    )
+    executor = _DeferredExecutor()
+    window = _main_window(qt_app, facade, executor=executor)
+    window.navigate_to_wechat()
+    _drain(window)
+
+    executor.operation()
+    executor.succeed(_wechat_missing_status())
+    _drain(window)
+
+    workspace = window.wechat_workspace
+    if len(data_roots) > 1:
+        # Several candidates: the user picks one first, so the connect runs
+        # from the setup dialog instead of the one-click auto path.
+        workspace._wechat_setup_dialog.set_data_root(data_roots[0])
+        workspace._save_wechat_environment_from_dialog()
+        _drain(window)
+
+    executor.operation(lambda _message: None)
+    executor.succeed(_wechat_connected_status())
+    _drain(window)
+
+    _run_wechat_verification(executor)
+    executor.fail(
+        "wechat_database_unreadable",
+        facade._verify_error.public_message,
+    )
+    _drain(window)
+    return window, facade, executor
+
+
+def test_wechat_workspace_verifies_the_database_before_listing_sessions(
+    qt_app, sources
+) -> None:
+    """A: one auto-detected root keeps the existing connect chain."""
+    module = _facade_module()
+    connected = _wechat_connected_status()
+    facade = _wechat_mismatch_facade(sources, verify_error=None)
+    order: list[str] = []
+    verify = facade.verify_wechat_database
+    list_sessions = facade.list_sessions
+
+    def verify_spy():
+        order.append("verify")
+        return verify()
+
+    def list_sessions_spy(source):
+        order.append("list_sessions")
+        return list_sessions(source)
+
+    facade.verify_wechat_database = verify_spy
+    facade.list_sessions = list_sessions_spy
+
+    executor = _DeferredExecutor()
+    window = _main_window(qt_app, facade, executor=executor)
+    window.navigate_to_wechat()
+    _drain(window)
+
+    executor.operation()
+    executor.succeed(_wechat_missing_status())
+    _drain(window)
+
+    assert facade.detect_wechat_data_roots_calls
+    executor.operation(lambda _message: None)
+    assert facade.setup_wechat_environment_calls
+    assert facade.acquire_wechat_db_key_calls
+    executor.succeed(connected)
+    _drain(window)
+
+    executor.operation()
+    executor.succeed(facade._sessions)
+    _drain(window)
+
+    assert order[:2] == ["verify", "list_sessions"]
+    assert facade.verify_wechat_database_calls
+    assert facade.list_sessions_calls == [module.ChatSource.WECHAT]
+    assert window.wechat_workspace.session_panel._sessions_ready is True
+
+
+def test_wechat_workspace_mismatch_returns_to_directory_selection(
+    qt_app, sources
+) -> None:
+    """B: a failed verification must not load sessions and must re-ask."""
+    window, facade, executor = _drive_wechat_database_mismatch(qt_app, sources)
+    workspace = window.wechat_workspace
+
+    assert facade.verify_wechat_database_calls, "verification must run first"
+    assert facade.list_sessions_calls == []
+    assert workspace._sessions_loaded is False
+    assert workspace._wechat_setup_dialog is not None
+    # A single detected candidate is offered as an editable field so the user
+    # can also paste a directory Echo never detected.
+    assert workspace._wechat_setup_dialog._use_data_roots is False
+    assert workspace._wechat_connect_pending is True
+    assert facade._verify_error.public_message in workspace._status_label.text()
+    assert workspace._wechat_connect_button.text() == "\u91cd\u65b0\u5f00\u59cb"
+    assert workspace._wechat_connect_button.isEnabled() is True
+
+
+def test_wechat_workspace_reselected_root_reuses_the_captured_key(
+    qt_app, sources
+) -> None:
+    """D: the new directory is retried with the key already in this process."""
+    module = _facade_module()
+    window, facade, executor = _drive_wechat_database_mismatch(qt_app, sources)
+    workspace = window.wechat_workspace
+    assert len(facade.acquire_wechat_db_key_calls) == 1
+
+    workspace._wechat_setup_dialog.set_data_root("D:/other_wechat_root")
+    facade._verify_error = None
+    workspace._save_wechat_environment_from_dialog()
+    _drain(window)
+
+    executor.operation(lambda _message: None)
+    assert facade.setup_wechat_environment_calls[-1].data_root == Path(
+        "D:/other_wechat_root"
+    )
+    # Changing the directory must not require another WeChat login.
+    assert len(facade.acquire_wechat_db_key_calls) == 1
+    executor.succeed(_wechat_connected_status())
+    _drain(window)
+
+    executor.operation()
+    executor.succeed(facade._sessions)
+    _drain(window)
+
+    assert facade.verify_wechat_database_calls
+    assert facade.list_sessions_calls == [module.ChatSource.WECHAT]
+    assert workspace.session_panel._sessions_ready is True
+
+
+def test_wechat_workspace_second_mismatch_offers_another_choice(
+    qt_app, sources
+) -> None:
+    """E: a still-unreadable directory stays actionable without auto retry."""
+    window, facade, executor = _drive_wechat_database_mismatch(qt_app, sources)
+    workspace = window.wechat_workspace
+    verify_calls_before = len(facade.verify_wechat_database_calls)
+
+    workspace._wechat_setup_dialog.set_data_root("D:/still_wrong_root")
+    workspace._save_wechat_environment_from_dialog()
+    _drain(window)
+    executor.operation(lambda _message: None)
+    executor.succeed(_wechat_connected_status())
+    _drain(window)
+    _run_wechat_verification(executor)
+    executor.fail(
+        "wechat_database_unreadable",
+        facade._verify_error.public_message,
+    )
+    _drain(window)
+
+    assert facade.list_sessions_calls == []
+    # One user action equals one verification: no automatic retry loop.
+    assert len(facade.verify_wechat_database_calls) - verify_calls_before == 1
+    assert workspace._wechat_setup_dialog is not None
+    assert facade._verify_error.public_message in workspace._status_label.text()
+    assert workspace._wechat_connect_pending is True
+    assert workspace._wechat_connect_button.isEnabled() is True
+
+
+def test_wechat_workspace_mismatch_offers_every_detected_candidate(
+    qt_app, sources
+) -> None:
+    """C/E: several candidates stay selectable when verification fails."""
+    module = _facade_module()
+    window, facade, executor = _drive_wechat_database_mismatch(
+        qt_app,
+        sources,
+        data_roots=("D:/fictional_wechat_a", "D:/fictional_wechat_b"),
+    )
+    workspace = window.wechat_workspace
+    dialog = workspace._wechat_setup_dialog
+
+    assert dialog is not None
+    assert dialog._use_data_roots is True
+    assert dialog._data_root_combo.count() == 2
+    assert facade.list_sessions_calls == []
+
+    # Picking the other detected candidate still reuses the captured key.
+    facade._verify_error = None
+    dialog._data_root_combo.setCurrentIndex(1)
+    workspace._save_wechat_environment_from_dialog()
+    _drain(window)
+
+    executor.operation(lambda _message: None)
+    assert facade.setup_wechat_environment_calls[-1].data_root == Path(
+        "D:/fictional_wechat_b"
+    )
+    assert len(facade.acquire_wechat_db_key_calls) == 1
+    executor.succeed(_wechat_connected_status())
+    _drain(window)
+
+    executor.operation()
+    executor.succeed(facade._sessions)
+    _drain(window)
+
+    assert facade.list_sessions_calls == [module.ChatSource.WECHAT]
+    assert workspace.session_panel._sessions_ready is True
+
+
+def test_wechat_workspace_mismatch_message_exposes_no_internal_details(
+    qt_app, sources
+) -> None:
+    """F: the recovery text stays actionable without internal details."""
+    window, facade, executor = _drive_wechat_database_mismatch(qt_app, sources)
+    workspace = window.wechat_workspace
+    status_label = workspace._status_label
+
+    visible = status_label.text() + "\n" + status_label.toolTip()
+    assert "\u5f53\u524d\u5fae\u4fe1\u767b\u5f55\u4fe1\u606f" in visible
+    assert "a" * 64 not in visible
+    assert "session.db" not in visible
+    assert "SELECT" not in visible
+    assert ".db_storage" not in visible
+    assert "D:/fictional_wechat" not in visible
+    assert "wcdb" not in visible.lower()
 
 # ---------------------------------------------------------------
 # GUI-6: Local Data page
