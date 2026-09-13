@@ -27,6 +27,7 @@ from qq_chat_analyzer.rich_message import (
     ReplyRelation,
     TextContent,
 )
+from qq_chat_analyzer.tokenizer import tokenize
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -225,7 +226,6 @@ def test_parse_qce_rich_messages_maps_face_element_to_expression_content() -> No
 
     assert warnings == ()
     assert messages[0].contents == (
-        TextContent(text="[QQ表情]"),
         ExpressionContent(
             expression_kind="platform_face",
             expression_key="358",
@@ -290,6 +290,114 @@ def test_parse_qce_rich_messages_maps_market_face_to_sticker() -> None:
             source="qq",
         ),
     )
+
+
+@pytest.mark.parametrize(
+    (
+        "element",
+        "expected_kind",
+        "expected_key",
+        "display_text",
+    ),
+    (
+        (
+            {
+                "type": "face",
+                "data": {"id": "358", "name": "Facepalm"},
+            },
+            "platform_face",
+            "358",
+            "Facepalm",
+        ),
+        (
+            {
+                "type": "market_face",
+                "marketFaceElement": {
+                    "emojiId": "market-thumbs-up",
+                    "faceName": "ThumbsUp",
+                },
+            },
+            "sticker",
+            "market-thumbs-up",
+            "ThumbsUp",
+        ),
+    ),
+)
+def test_structured_expression_fallback_is_not_text_content(
+    element: dict,
+    expected_kind: str,
+    expected_key: str,
+    display_text: str,
+) -> None:
+    raw_message = _qce_message(
+        message_id=f"fictional-fallback-{expected_key}",
+        text=display_text,
+    )
+    raw_message["content"]["elements"] = [element]
+
+    messages, warnings = parse_qce_rich_messages([raw_message])
+    legacy_messages, _ = parse_qce_messages([raw_message])
+
+    assert warnings == ()
+    assert messages[0].contents == (
+        ExpressionContent(
+            expression_kind=expected_kind,
+            expression_key=expected_key,
+            display_text=display_text,
+            source="qq",
+        ),
+    )
+    assert legacy_messages[0].text == ""
+
+
+def test_mixed_expression_fallback_preserves_only_authored_text() -> None:
+    raw_message = _qce_message(
+        message_id="fictional-mixed-fallback",
+        text="你干嘛呢Laugh",
+    )
+    raw_message["content"]["elements"] = [
+        {
+            "type": "text",
+            "textElement": {"content": "你干嘛呢"},
+        },
+        {
+            "type": "face",
+            "data": {"id": "359", "name": "Laugh"},
+        },
+    ]
+
+    messages, warnings = parse_qce_rich_messages([raw_message])
+    legacy_messages, _ = parse_qce_messages([raw_message])
+
+    assert warnings == ()
+    assert messages[0].contents == (
+        TextContent(text="你干嘛呢"),
+        ExpressionContent(
+            expression_kind="platform_face",
+            expression_key="359",
+            display_text="Laugh",
+            source="qq",
+            position=0,
+            text_before="你干嘛呢",
+            text_after=None,
+        ),
+    )
+    assert legacy_messages[0].text == "你干嘛呢"
+
+
+def test_plain_text_named_like_expression_is_preserved() -> None:
+    raw_message = _qce_message(
+        message_id="fictional-plain-laugh",
+        text="Laugh",
+    )
+
+    messages, warnings = parse_qce_rich_messages([raw_message])
+    legacy_messages, _ = parse_qce_messages([raw_message])
+
+    assert warnings == ()
+    assert messages[0].contents == (TextContent(text="Laugh"),)
+    assert legacy_messages[0].text == "Laugh"
+    assert tokenize("Laugh") == ["Laugh"]
 
 
 def test_unknown_market_face_fallback_hides_key_from_display() -> None:
