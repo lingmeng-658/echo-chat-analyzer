@@ -163,33 +163,68 @@ GUI 通过 ChatAnalyzerFacade 接入（见 GUI原则）。
 - 未确认执行 git checkout；
 - 覆盖未知来源修改。
 
-不要： - 大规模重构； - 为未确定需求提前设计复杂框架； - 修改无关文件。
+不要：
+- 大规模重构；
+- 为未确定需求提前设计复杂框架；
+- 修改无关文件。
+
+### Python / pytest 执行环境
+
+本仓库使用根目录下的项目虚拟环境：
+
+`.venv`
+
+在 Windows / PowerShell 下，AI Agent 执行 Python 或 pytest 命令时，必须显式使用该虚拟环境中的 Python，不得假设当前 shell 已经激活虚拟环境。
+
+测试命令统一使用：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+```
+
+例如：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_facade.py
+.\.venv\Scripts\python.exe -m pytest tests/test_facade.py -q
+```
+
+执行 Python 脚本时使用：
+
+```powershell
+.\.venv\Scripts\python.exe <script>
+```
+
+除非已经明确验证命令解析到本仓库的 `.venv`，否则不要直接使用：
+
+```powershell
+pytest
+python -m pytest
+py -m pytest
+```
+
+如果 `.\.venv\Scripts\python.exe` 不存在，或者无法导入项目所需依赖，应停止并报告环境问题。
+
+未经明确要求，不要：
+
+- 自动安装依赖；
+- 新建另一套虚拟环境；
+- 回退到系统 Python；
+- 因环境错误修改测试或生产代码。
+
+遇到以下错误时：
+
+- `No module named pytest`
+- `ModuleNotFoundError`
+- 依赖包缺失
+
+首先确认实际使用的 Python 是否为本仓库 `.venv`，而不是将其直接判断为测试 RED 或代码失败。
+
+**使用错误 Python 解释器得到的测试结果，不属于有效的 RED / GREEN 证据。**
 
 新功能：
 
 设计 → RED测试 → 实现 → GREEN测试 → 完整测试 → 检查diff
-
-测试失败时：
-
-先判断原因：
-
-- 代码逻辑问题；
-- 测试问题；
-- 环境问题。
-
-禁止为了通过测试直接修改测试预期。
-
-完成前运行：
-
-pytest
-
-git diff --check
-
-已有设计文档、实施计划或调查结论时：
-
-执行阶段优先按照已有结论实施。
-
-不要因为局部问题重新扩大任务范围。修改测试数据、fixture 或断言前，必须证明当前业务设计变化，而不是为了适配当前实现。
 
 ------------------------------------------------------------------------
 
