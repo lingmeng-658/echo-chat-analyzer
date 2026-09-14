@@ -72,7 +72,9 @@ Full：
 
 再次强调：这些数字只是当时 snapshot，不是未来 baseline。
 
-## 6. 当前测试规则
+## 6. 本轮治理完成时确立的测试规则
+
+当前长期开发规则以 `AGENTS.md` 和 `DEVELOPMENT.md` 为准。
 
 ```text
 focused
