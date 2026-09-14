@@ -109,6 +109,14 @@ Release Blocker：TBD。
 
 Release Blocker：TBD。
 
+### BUG-06 WeChat 会话数据明显不完整 / 不随新消息更新
+
+真实会话长期有大量聊天，但报告仅读取 19 条；发送新消息后重新分析仍为 19 条。首次分析即发生，暂不支持“旧 Echo 缓存”假设。待审计 WeChat 本地 DB 是否更新、数据目录是否正确、同一会话是否分布在多个 message_*.db shard，以及 Provider 是否只读取单一 shard。
+
+状态：未审计
+
+Release Blocker：Yes
+
 **明确注明：QCE / Windows 权限弹窗不是 Bug。**
 
 这是正常权限行为，UX 已经做过优化，不应重新进入 Active Bugs。
@@ -127,7 +135,14 @@ Release Blocker：TBD。
 QCE 提供 messageCount、progress、status、message，
 没有可靠标准 totalMessages / processedMessages。
 
-状态：已审计，可进入 RED。
+状态：实现中。
+
+当前收尾记录：
+
+- 真实 QCE 百分比已打通，并完成 packaged Echo 验收。
+- 已区分 `progress=0` 与 `progress=None`。
+- `messageCount` 已透传到 Application，但真实语义尚未验证，因此暂不展示。
+- 大数据 QCE 卡住 / 超时转入 BUG-01，本阶段不处理。
 
 ### REL-02 History 可以直接 reopen 完整分析结果
 

@@ -135,9 +135,11 @@ class _SnapshotQQService(_StubQQService):
     def __init__(self, *, acquisition, groups=()) -> None:
         super().__init__(groups=groups, export_path=acquisition.payload_path)
         self._acquisition = acquisition
+        self.progress_callbacks: list[object] = []
 
-    def acquire_export(self, request):
+    def acquire_export(self, request, progress=None):
         self.export_requests.append(request)
+        self.progress_callbacks.append(progress)
         return self._acquisition
 
 
@@ -2917,4 +2919,158 @@ def test_facade_defaults_to_the_real_snapshot_manager() -> None:
     assert isinstance(
         facade._snapshot_manager,
         module.ChatDataSnapshotManager,
+    )
+
+
+# ------------------------------------------- QQ export progress (REL-01)
+
+
+def _application_package():
+    return importlib.import_module("qq_chat_analyzer.application")
+
+
+def _qq_export_progress(
+    *,
+    status: str = "running",
+    progress: int | None = None,
+    message_count: int | None = None,
+    message: str | None = None,
+):
+    """Build one structured QQ export snapshot exactly as the app emits it."""
+    return _application_package().QQExportProgress(
+        status=status,
+        progress=progress,
+        message_count=message_count,
+        message=message,
+    )
+
+
+def _qq_acquisition(
+    payload_path: Path,
+    *,
+    snapshot_id: str | None = None,
+    reused_snapshot: bool = False,
+):
+    return type(
+        "Acquisition",
+        (),
+        {
+            "payload_path": payload_path,
+            "snapshot_id": snapshot_id,
+            "acquired_at": datetime(2026, 8, 11, 12, 0, tzinfo=timezone.utc),
+            "reused_snapshot": reused_snapshot,
+        },
+    )()
+
+
+class _ProgressQQService(_StubQQService):
+    """QQ service that replays structured export progress during acquisition."""
+
+    def __init__(self, *, acquisition, snapshots=(), groups=()) -> None:
+        super().__init__(groups=groups, export_path=acquisition.payload_path)
+        self._acquisition = acquisition
+        self._snapshots = list(snapshots)
+        self.progress_callbacks: list[object] = []
+
+    def acquire_export(self, request, progress=None):
+        self.export_requests.append(request)
+        self.progress_callbacks.append(progress)
+        if progress is not None:
+            for snapshot in self._snapshots:
+                progress(snapshot)
+        return self._acquisition
+
+
+def test_analyze_session_forwards_qq_export_progress_to_acquire_export(
+    tmp_path: Path,
+) -> None:
+    """A QQ analysis reports real 47% through the existing string callback."""
+    module = _facade_module()
+    service = _ProgressQQService(
+        acquisition=_qq_acquisition(_export_file(tmp_path, "qq-progress.json")),
+        snapshots=[_qq_export_progress(progress=47, message_count=1234)],
+    )
+    facade = _facade(qq_service=service, tmp_path=tmp_path)
+    progress: list[str] = []
+
+    facade.analyze_session(
+        module.ChatSource.QQ,
+        "fictional-session",
+        progress=progress.append,
+    )
+
+    assert len(service.progress_callbacks) == 1
+    assert callable(service.progress_callbacks[0])
+    assert "正在获取 QQ 聊天记录 · 47%" in progress
+
+
+def test_analyze_session_keeps_zero_qq_export_progress(tmp_path: Path) -> None:
+    """A real ``progress=0`` must be shown, never dropped by truthiness."""
+    module = _facade_module()
+    service = _ProgressQQService(
+        acquisition=_qq_acquisition(_export_file(tmp_path, "qq-zero.json")),
+        snapshots=[_qq_export_progress(progress=0)],
+    )
+    facade = _facade(qq_service=service, tmp_path=tmp_path)
+    progress: list[str] = []
+
+    facade.analyze_session(
+        module.ChatSource.QQ,
+        "fictional-session",
+        progress=progress.append,
+    )
+
+    assert "正在获取 QQ 聊天记录 · 0%" in progress
+
+
+def test_analyze_session_never_fabricates_a_qq_percentage(
+    tmp_path: Path,
+) -> None:
+    """A missing progress value must not become a fabricated percentage."""
+    module = _facade_module()
+    service = _ProgressQQService(
+        acquisition=_qq_acquisition(_export_file(tmp_path, "qq-none.json")),
+        snapshots=[_qq_export_progress(progress=None, message_count=5)],
+    )
+    facade = _facade(qq_service=service, tmp_path=tmp_path)
+    progress: list[str] = []
+
+    facade.analyze_session(
+        module.ChatSource.QQ,
+        "fictional-session",
+        progress=progress.append,
+    )
+
+    assert callable(service.progress_callbacks[0])
+    assert not any(
+        "正在获取 QQ 聊天记录" in message for message in progress
+    )
+
+
+def test_analyze_session_reused_qq_snapshot_without_progress_is_not_an_error(
+    tmp_path: Path,
+) -> None:
+    """A reused snapshot emits no progress and must still succeed."""
+    module = _facade_module()
+    service = _ProgressQQService(
+        acquisition=_qq_acquisition(
+            _export_file(tmp_path, "qq-reused.json"),
+            snapshot_id="33333333-3333-3333-3333-333333333333",
+            reused_snapshot=True,
+        ),
+        snapshots=(),
+    )
+    facade = _facade(qq_service=service, tmp_path=tmp_path)
+    progress: list[str] = []
+
+    outcome = facade.analyze_session(
+        module.ChatSource.QQ,
+        "fictional-session",
+        progress=progress.append,
+    )
+
+    assert callable(service.progress_callbacks[0])
+    assert outcome.snapshot_reused is True
+    assert not any(
+        "正在获取 QQ 聊天记录" in message for message in progress
     )

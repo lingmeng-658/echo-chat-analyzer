@@ -169,11 +169,16 @@ class ExportFriend:
 
 @dataclass(frozen=True, slots=True)
 class ExportTask:
-    """Snapshot of an export task."""
+    """Snapshot of an export task.
+
+    ``progress`` holds the provider's own value. ``None`` means the provider
+    reported no progress at all, which is deliberately different from a real
+    ``0``.
+    """
 
     task_id: str
     status: str
-    progress: int = 0
+    progress: int | None = None
     message_count: int | None = None
     session_name: str = ""
     chat_type: int | None = None
@@ -475,16 +480,22 @@ class QQChatExporterProvider:
         task_id: str,
         timeout: float = DEFAULT_EXPORT_TIMEOUT_SECONDS,
         poll_interval: float = DEFAULT_POLL_INTERVAL_SECONDS,
+        on_task_update: Callable[[ExportTask], None] | None = None,
     ) -> Path:
         """Poll until the task settles and return the exported JSON path.
 
         Terminal states are decided by ``status`` alone. ``progress`` is not a
         completion signal: a failed task keeps whatever progress it had when it
         broke.
+
+        ``on_task_update`` receives every raw snapshot, in polling order,
+        including the terminal one. It is a display-only side channel: the
+        callback never decides when the wait stops.
         """
         deadline = self._monotonic() + timeout
         while True:
             task = self.get_export_task(task_id)
+            _publish_task_update(on_task_update, task)
 
             if task.status == STATUS_COMPLETED:
                 if not task.file_path:
@@ -508,8 +519,13 @@ class QQChatExporterProvider:
         end_time: Any = None,
         timeout: float = DEFAULT_EXPORT_TIMEOUT_SECONDS,
         poll_interval: float = DEFAULT_POLL_INTERVAL_SECONDS,
+        on_task_update: Callable[[ExportTask], None] | None = None,
     ) -> Path:
-        """Convenience wrapper: create a task, then wait for its output file."""
+        """Convenience wrapper: create a task, then wait for its output file.
+
+        ``on_task_update`` is forwarded unchanged to :meth:`wait_export_task`;
+        completion semantics and polling stay there.
+        """
         return self.export_chat_json(
             group_code,
             chat_type=GROUP_CHAT_TYPE,
@@ -517,6 +533,7 @@ class QQChatExporterProvider:
             end_time=end_time,
             timeout=timeout,
             poll_interval=poll_interval,
+            on_task_update=on_task_update,
         )
 
     def export_chat_json(
@@ -530,8 +547,14 @@ class QQChatExporterProvider:
         end_time: Any = None,
         timeout: float = DEFAULT_EXPORT_TIMEOUT_SECONDS,
         poll_interval: float = DEFAULT_POLL_INTERVAL_SECONDS,
+        on_task_update: Callable[[ExportTask], None] | None = None,
     ) -> Path:
-        """Create and wait for one group or private conversation export."""
+        """Create and wait for one group or private conversation export.
+
+        ``on_task_update`` is a display-only pass-through to
+        :meth:`wait_export_task`: the caller observes the provider's own task
+        snapshots but never influences when the wait stops.
+        """
         task = self.create_export_task(
             peer_uid,
             start_time=start_time,
@@ -544,6 +567,7 @@ class QQChatExporterProvider:
             task.task_id,
             timeout=timeout,
             poll_interval=poll_interval,
+            on_task_update=on_task_update,
         )
 
     # ---------------------------------------------------------------- internals
@@ -662,7 +686,7 @@ def _build_task(data: Mapping[str, Any]) -> ExportTask:
     return ExportTask(
         task_id=task_id,
         status=_clean_str(data.get("status")),
-        progress=_optional_int(data.get("progress")) or 0,
+        progress=_optional_int(data.get("progress")),
         message_count=_optional_int(data.get("messageCount")),
         session_name=(
             _clean_str(data.get("sessionName"))
@@ -682,6 +706,15 @@ def _build_task(data: Mapping[str, Any]) -> ExportTask:
         error=_extract_task_error(data),
         raw=dict(data),
     )
+
+
+def _publish_task_update(
+    on_task_update: Callable[[ExportTask], None] | None,
+    task: ExportTask,
+) -> None:
+    """Hand one raw polling snapshot to a caller that asked for live progress."""
+    if on_task_update is not None:
+        on_task_update(task)
 
 
 def _extract_task_error(data: Mapping[str, Any]) -> str:

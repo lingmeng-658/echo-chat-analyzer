@@ -57,7 +57,10 @@ from .qq_connection_service import (
     QQConnectionStatus,
 )
 from .qq_environment_config import QQEnvironmentConfig
-from .qq_export_import_service import QQExportImportRequest
+from .qq_export_import_service import (
+    QQExportImportRequest,
+    QQExportProgress,
+)
 from .qq_setup_service import QQSetupStatus
 from .echo_report_export import ECHO_REPORT_HTML_NAME, package_echo_report
 from .report_history import InputIdentitySummary
@@ -96,6 +99,28 @@ def _report_progress(
     """Publish a facade-owned analysis stage when a caller is listening."""
     if progress is not None:
         progress(message)
+
+
+def _qq_export_progress_relay(
+    progress: Callable[[str], None] | None,
+) -> Callable[[QQExportProgress], None] | None:
+    """Translate QQ export progress into the caller's string channel.
+
+    Returns ``None`` when the caller is not listening, so the service keeps
+    its original call shape. Only the provider's real ``progress`` value is
+    published: ``0`` is a valid percentage and stays visible, while a missing
+    (``None``) value is skipped rather than fabricated from a message count.
+    """
+    if progress is None:
+        return None
+
+    def _relay(snapshot: QQExportProgress) -> None:
+        value = snapshot.progress
+        if value is None:
+            return
+        progress(f"正在获取 QQ 聊天记录 · {value}%")
+
+    return _relay
 
 
 DEFAULT_TOP = 50
@@ -848,6 +873,7 @@ class ChatAnalyzerFacade:
                     resolved_config,
                     scratch_directory,
                     raw_session=raw_session if chat_source is ChatSource.QQ else None,
+                    progress=progress,
                 )
 
             return self._analyze_path(
@@ -1117,6 +1143,7 @@ class ChatAnalyzerFacade:
         scratch_directory: Path,
         *,
         raw_session: Any = None,
+        progress: Callable[[str], None] | None = None,
     ) -> _SessionExport:
         """Ask the matching service for an export file."""
         if source is ChatSource.QQ:
@@ -1136,7 +1163,10 @@ class ChatAnalyzerFacade:
             )
             acquire_export = getattr(service, "acquire_export", None)
             if callable(acquire_export):
-                acquisition = acquire_export(request)
+                acquisition = acquire_export(
+                    request,
+                    progress=_qq_export_progress_relay(progress),
+                )
                 return _SessionExport(
                     payload_path=Path(acquisition.payload_path),
                     snapshot_id=getattr(acquisition, "snapshot_id", None),

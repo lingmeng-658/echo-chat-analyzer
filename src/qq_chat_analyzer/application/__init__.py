@@ -77,6 +77,7 @@ from .qq_export_import_service import (
     QQExportFileMissing,
     QQExportImportRequest,
     QQExportImportService,
+    QQExportProgress,
     QQExportProvider,
     QQExportUnavailable,
 )
@@ -162,6 +163,7 @@ __all__ = [
     "QQExportAcquisition",
     "QQExportImportRequest",
     "QQExportImportService",
+    "QQExportProgress",
     "QQExportProvider",
     "QQExportUnavailable",
     "QQRuntimeManager",

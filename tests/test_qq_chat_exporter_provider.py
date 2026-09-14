@@ -703,6 +703,253 @@ def test_wait_export_task_rejects_completed_without_file_path():
         provider.wait_export_task("export_9", poll_interval=0)
 
 
+# -------------------------------------------------------- task update callback
+
+
+def test_wait_export_task_reports_every_poll_snapshot_in_order():
+    """Each polling snapshot reaches the caller, in order, before the wait ends.
+
+    ``on_task_update`` is the contract the progress display needs: the caller
+    observes the real QCE fields instead of only the final ``Path``.
+    """
+    responses = [
+        (
+            200,
+            _envelope(
+                {
+                    "taskId": "export_20",
+                    "status": "running",
+                    "progress": 0,
+                    "messageCount": 0,
+                }
+            ),
+        ),
+        (
+            200,
+            _envelope(
+                {
+                    "taskId": "export_20",
+                    "status": "running",
+                    "progress": 42,
+                    "messageCount": 123,
+                    "progressMessage": "\u6b63\u5728\u5bfc\u51fa",
+                }
+            ),
+        ),
+        (
+            200,
+            _envelope(
+                {
+                    "taskId": "export_20",
+                    "status": "completed",
+                    "progress": 100,
+                    "messageCount": 456,
+                    "filePath": "D:/exports/group.json",
+                    "fileName": "group.json",
+                }
+            ),
+        ),
+    ]
+    provider, transport = _provider(responses)
+    updates: list[object] = []
+
+    result = provider.wait_export_task(
+        "export_20",
+        poll_interval=0,
+        on_task_update=updates.append,
+    )
+
+    assert result == Path("D:/exports/group.json")
+    assert len(transport.calls) == 3
+    assert [update.status for update in updates] == [
+        "running",
+        "running",
+        "completed",
+    ]
+    assert [update.progress for update in updates] == [0, 42, 100]
+    assert [update.message_count for update in updates] == [0, 123, 456]
+    assert updates[1].progress_message == "\u6b63\u5728\u5bfc\u51fa"
+
+
+def test_wait_export_task_task_update_preserves_zero_progress():
+    """``progress=0`` is a real value, never a missing one."""
+    responses = [
+        (
+            200,
+            _envelope(
+                {"taskId": "export_21", "status": "running", "progress": 0}
+            ),
+        ),
+        (
+            200,
+            _envelope(
+                {
+                    "taskId": "export_21",
+                    "status": "completed",
+                    "progress": 100,
+                    "filePath": "D:/exports/g.json",
+                }
+            ),
+        ),
+    ]
+    provider, _ = _provider(responses)
+    updates: list[object] = []
+
+    provider.wait_export_task(
+        "export_21",
+        poll_interval=0,
+        on_task_update=updates.append,
+    )
+
+    assert updates[0].progress == 0
+    assert updates[0].progress is not None
+
+
+def test_wait_export_task_task_update_keeps_missing_progress_as_none():
+    """A missing ``progress`` field must stay ``None``, never become ``0``.
+
+    ``0`` and "the provider said nothing" are different facts, and only the
+    latter may be treated as unknown.
+    """
+    responses = [
+        (
+            200,
+            _envelope(
+                {"taskId": "export_25", "status": "running", "progress": 0}
+            ),
+        ),
+        (200, _envelope({"taskId": "export_25", "status": "running"})),
+        (
+            200,
+            _envelope(
+                {
+                    "taskId": "export_25",
+                    "status": "completed",
+                    "filePath": "D:/exports/g.json",
+                }
+            ),
+        ),
+    ]
+    provider, _ = _provider(responses)
+    updates: list[object] = []
+
+    provider.wait_export_task(
+        "export_25",
+        poll_interval=0,
+        on_task_update=updates.append,
+    )
+
+    assert updates[0].progress == 0
+    assert updates[0].progress is not None
+    assert updates[1].progress is None
+
+
+def test_wait_export_task_task_update_keeps_missing_message_count_as_none():
+    """A missing ``messageCount`` must not be invented as ``0``."""
+    responses = [
+        (
+            200,
+            _envelope(
+                {"taskId": "export_22", "status": "running", "messageCount": 0}
+            ),
+        ),
+        (200, _envelope({"taskId": "export_22", "status": "running"})),
+        (
+            200,
+            _envelope(
+                {
+                    "taskId": "export_22",
+                    "status": "completed",
+                    "filePath": "D:/exports/g.json",
+                }
+            ),
+        ),
+    ]
+    provider, _ = _provider(responses)
+    updates: list[object] = []
+
+    provider.wait_export_task(
+        "export_22",
+        poll_interval=0,
+        on_task_update=updates.append,
+    )
+
+    assert updates[0].message_count == 0
+    assert updates[1].message_count is None
+
+
+def test_wait_export_task_task_update_exposes_status_and_progress_message():
+    """The provider's own status and message stay observable to the caller."""
+    responses = [
+        (
+            200,
+            _envelope(
+                {
+                    "taskId": "export_23",
+                    "status": "running",
+                    "message": "\u6b63\u5728\u51c6\u5907\u5bfc\u51fa",
+                }
+            ),
+        ),
+        (
+            200,
+            _envelope(
+                {
+                    "taskId": "export_23",
+                    "status": "completed",
+                    "filePath": "D:/exports/g.json",
+                }
+            ),
+        ),
+    ]
+    provider, _ = _provider(responses)
+    updates: list[object] = []
+
+    provider.wait_export_task(
+        "export_23",
+        poll_interval=0,
+        on_task_update=updates.append,
+    )
+
+    assert updates[0].status == "running"
+    assert updates[0].progress_message == "\u6b63\u5728\u51c6\u5907\u5bfc\u51fa"
+
+
+def test_wait_export_task_task_update_does_not_make_progress_a_completion_signal():
+    """Reporting progress must not change when the wait decides to stop."""
+    responses = [
+        (
+            200,
+            _envelope(
+                {"taskId": "export_24", "status": "running", "progress": 100}
+            ),
+        ),
+        (
+            200,
+            _envelope(
+                {
+                    "taskId": "export_24",
+                    "status": "completed",
+                    "progress": 100,
+                    "filePath": "D:/exports/g.json",
+                }
+            ),
+        ),
+    ]
+    provider, transport = _provider(responses)
+    updates: list[object] = []
+
+    result = provider.wait_export_task(
+        "export_24",
+        poll_interval=0,
+        on_task_update=updates.append,
+    )
+
+    assert result == Path("D:/exports/g.json")
+    assert len(transport.calls) == 2
+    assert [update.status for update in updates] == ["running", "completed"]
+
+
 def test_get_export_task_reads_flattened_id():
     provider, _ = _provider([(200, _envelope({"id": "export_10", "status": "running"}))])
 

@@ -24,7 +24,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, Protocol, runtime_checkable
 
 from ..analysis.timestamps import to_epoch_seconds
@@ -81,6 +81,7 @@ class QQExportProvider(Protocol):
         group_code: str,
         start_time: Any = None,
         end_time: Any = None,
+        on_task_update: Callable[[Any], None] | None = None,
     ) -> Path:  # pragma: no cover - structural contract only
         ...
 
@@ -106,6 +107,23 @@ class QQExportAcquisition:
     snapshot_id: str | None = None
     acquired_at: datetime | None = None
     reused_snapshot: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class QQExportProgress:
+    """One real export-progress snapshot, safe to display as-is.
+
+    Mirrors only what QCE actually reports: ``status``, ``progress``,
+    ``message_count`` and ``message``. ``progress_message`` from the provider's
+    task snapshot is carried over verbatim as ``message``; no business meaning
+    is added. There is deliberately no ``total``: QCE has no reliable
+    totalMessages, so this contract never invents one.
+    """
+
+    status: str = ""
+    progress: int | None = None
+    message_count: int | None = None
+    message: str | None = None
 
 
 class QQExportImportService:
@@ -236,8 +254,14 @@ class QQExportImportService:
     def acquire_export(
         self,
         request: QQExportImportRequest,
+        progress: Callable[[QQExportProgress], None] | None = None,
     ) -> QQExportAcquisition:
-        """Reuse a valid snapshot or export and persist a new raw payload."""
+        """Reuse a valid snapshot or export and persist a new raw payload.
+
+        ``progress``, when given, receives one :class:`QQExportProgress` per
+        provider task snapshot while a *fresh* export runs. A reused snapshot
+        never contacts the provider, so no progress is emitted in that case.
+        """
         session_type = _session_type(request)
         cacheable = _is_full_session_request(request)
         if cacheable and not request.force_refresh:
@@ -258,7 +282,7 @@ class QQExportImportService:
                     reused_snapshot=True,
                 )
 
-        export_path = self._export(request)
+        export_path = self._export(request, progress)
         if not export_path.exists():
             raise QQExportFileMissing()
 
@@ -304,14 +328,28 @@ class QQExportImportService:
 
     # ---------------------------------------------------------------- internals
 
-    def _export(self, request: QQExportImportRequest) -> Path:
+    def _export(
+        self,
+        request: QQExportImportRequest,
+        progress: Callable[[QQExportProgress], None] | None = None,
+    ) -> Path:
         """Run the provider export, normalising its failures.
 
         Provider-level errors are re-raised untouched: they already carry
         actionable, user-facing messages such as "service not running" or
         "export cancelled". Only a missing or unusable return value is
         translated here.
+
+        ``progress``, when given, is forwarded to the provider as
+        ``on_task_update`` so the caller observes each provider task snapshot
+        as a :class:`QQExportProgress`. Task creation, polling and completion
+        stay inside the provider.
         """
+        relay = _progress_adapter(progress)
+        extra: dict[str, Any] = {}
+        if relay is not None:
+            extra["on_task_update"] = relay
+
         export_chat = getattr(self._provider, "export_chat_json", None)
         if callable(export_chat):
             result = export_chat(
@@ -321,12 +359,14 @@ class QQExportImportService:
                 session_name=request.session_name,
                 start_time=request.start_time,
                 end_time=request.end_time,
+                **extra,
             )
         elif request.chat_type == QQ_GROUP_CHAT_TYPE:
             result = self._provider.export_group_json(
                 request.group_code,
                 start_time=request.start_time,
                 end_time=request.end_time,
+                **extra,
             )
         else:
             raise QQExportUnavailable()
@@ -337,6 +377,38 @@ class QQExportImportService:
         if isinstance(result, str) and result.strip():
             return Path(result)
         raise QQExportUnavailable()
+
+
+def _progress_adapter(
+    progress: Callable[[QQExportProgress], None] | None,
+) -> Callable[[Any], None] | None:
+    """Wrap a caller callback so it receives :class:`QQExportProgress`.
+
+    Returns ``None`` when the caller did not ask for progress, so the provider
+    call keeps its original shape and no extra argument is forwarded.
+    """
+    if progress is None:
+        return None
+
+    def _relay(task: Any) -> None:
+        progress(_to_export_progress(task))
+
+    return _relay
+
+
+def _to_export_progress(task: Any) -> QQExportProgress:
+    """Translate one provider task snapshot into a :class:`QQExportProgress`.
+
+    Values are carried over verbatim: ``0`` stays ``0`` and a missing value
+    stays ``None``. Nothing is derived or invented.
+    """
+    return QQExportProgress(
+        status=task.status,
+        progress=task.progress,
+        message_count=task.message_count,
+        message=task.progress_message,
+    )
+
 
 def _session_type(request: QQExportImportRequest) -> str:
     return "private" if request.chat_type == QQ_PRIVATE_CHAT_TYPE else "group"

@@ -33,6 +33,7 @@ from qq_chat_analyzer.application import (
 from qq_chat_analyzer.qq_chat_exporter_adapter import (
     WARNING_QCE_NON_TEXT_MESSAGE_SKIPPED,
 )
+from qq_chat_analyzer.providers import ExportTask
 
 
 # --------------------------------------------------------------------- fixtures
@@ -632,3 +633,286 @@ def test_export_only_propagates_provider_error() -> None:
         service.export_only(QQExportImportRequest(group_code="700000001"))
 
     assert excinfo.value.code == "qce_service_unreachable"
+
+
+# -------------------------------- 6. structured export progress contract (REL-01)
+#
+# ``acquire_export`` must be able to surface the provider's own export progress
+# to a caller-supplied callback, without leaking the provider's task type. The
+# contract mirrors exactly what QCE reports and can be trusted:
+# ``progress``, ``message_count``, ``status`` and ``message``. It carries no
+# ``total``: QCE has no reliable totalMessages, so the application layer must
+# never invent one. Progress must never change what ``acquire_export`` persists.
+
+
+def _provider_task(
+    status: str,
+    *,
+    progress: int | None = None,
+    message_count: int | None = None,
+    message: str = "",
+    task_id: str = "export_progress",
+) -> ExportTask:
+    """Build one provider-side task snapshot, exactly as the provider would."""
+    return ExportTask(
+        task_id=task_id,
+        status=status,
+        progress=progress,
+        message_count=message_count,
+        progress_message=message,
+    )
+
+
+class _ProgressStubProvider:
+    """Provider stub that replays scripted task snapshots while exporting.
+
+    It exposes every export style the orchestrator may use (the convenience
+    ``export_chat_json`` / ``export_group_json`` wrappers and the lower-level
+    ``create_export_task`` / ``wait_export_task`` pair), so the progress callback
+    is delivered no matter which route the application layer picks.
+    """
+
+    def __init__(
+        self,
+        export_path: object,
+        updates: list[ExportTask] | None = None,
+    ) -> None:
+        self._export_path = export_path
+        self._updates = list(updates or [])
+        self.calls: list[tuple[str, object, object]] = []
+        self.received_callbacks: list[object] = []
+
+    def export_chat_json(
+        self,
+        peer_uid: str,
+        *,
+        chat_type: int = 2,
+        peer_uin: object = None,
+        session_name: object = None,
+        start_time: object = None,
+        end_time: object = None,
+        on_task_update: object = None,
+    ) -> object:
+        self.calls.append((peer_uid, start_time, end_time))
+        self._deliver(on_task_update)
+        return self._export_path
+
+    def export_group_json(
+        self,
+        group_code: str,
+        start_time: object = None,
+        end_time: object = None,
+        on_task_update: object = None,
+    ) -> object:
+        self.calls.append((group_code, start_time, end_time))
+        self._deliver(on_task_update)
+        return self._export_path
+
+    def create_export_task(
+        self,
+        peer_uid: str,
+        start_time: object = None,
+        end_time: object = None,
+        session_name: object = None,
+        output_dir: object = None,
+        chat_type: int = 2,
+        peer_uin: object = None,
+    ) -> ExportTask:
+        self.calls.append((peer_uid, start_time, end_time))
+        return _provider_task("running")
+
+    def wait_export_task(
+        self,
+        task_id: str,
+        timeout: float = 900,
+        poll_interval: float = 2.0,
+        on_task_update: object = None,
+    ) -> Path:
+        self._deliver(on_task_update)
+        return Path(self._export_path)
+
+    def _deliver(self, on_task_update: object) -> None:
+        self.received_callbacks.append(on_task_update)
+        if on_task_update is None:
+            return
+        for update in self._updates:
+            on_task_update(update)
+
+
+def _progress_service(
+    tmp_path: Path,
+    updates: list[ExportTask],
+) -> tuple[QQExportImportService, _ProgressStubProvider]:
+    export_path = _write_fake_export(tmp_path / "fake_export.json")
+    provider = _ProgressStubProvider(export_path, updates=updates)
+    service = QQExportImportService(
+        provider,
+        snapshot_manager=ChatDataSnapshotManager(tmp_path / "user-data"),
+    )
+    return service, provider
+
+
+def test_acquire_export_forwards_structured_progress_to_callback(
+    tmp_path: Path,
+) -> None:
+    """Every provider export snapshot reaches the caller's ``progress`` callback."""
+    updates: list[object] = []
+    service, provider = _progress_service(
+        tmp_path,
+        updates=[
+            _provider_task("running", progress=0, message_count=0),
+            _provider_task(
+                "running",
+                progress=42,
+                message_count=123,
+                message="正在导出",
+            ),
+            _provider_task("completed", progress=100, message_count=456),
+        ],
+    )
+
+    acquisition = service.acquire_export(
+        QQExportImportRequest(group_code="700000001"),
+        progress=updates.append,
+    )
+
+    assert provider.calls == [("700000001", None, None)]
+    assert [update.status for update in updates] == [
+        "running",
+        "running",
+        "completed",
+    ]
+    assert [update.progress for update in updates] == [0, 42, 100]
+    assert [update.message_count for update in updates] == [0, 123, 456]
+    assert acquisition.snapshot_id is not None
+
+
+def test_acquire_export_progress_zero_is_kept(tmp_path: Path) -> None:
+    """``progress=0`` must survive as ``0``, never collapse into a missing value."""
+    updates: list[object] = []
+    service, _ = _progress_service(
+        tmp_path,
+        updates=[_provider_task("running", progress=0, message_count=0)],
+    )
+
+    service.acquire_export(
+        QQExportImportRequest(group_code="700000001"),
+        progress=updates.append,
+    )
+
+    assert updates[0].progress == 0
+    assert updates[0].progress is not None
+
+
+def test_acquire_export_missing_progress_stays_none(tmp_path: Path) -> None:
+    """A provider that reports no progress stays ``None``, never ``0``."""
+    updates: list[object] = []
+    service, _ = _progress_service(
+        tmp_path,
+        updates=[_provider_task("running")],
+    )
+
+    service.acquire_export(
+        QQExportImportRequest(group_code="700000001"),
+        progress=updates.append,
+    )
+
+    assert updates[0].progress is None
+
+
+def test_acquire_export_message_count_is_kept(tmp_path: Path) -> None:
+    """``message_count`` is forwarded verbatim, including a real ``0``."""
+    updates: list[object] = []
+    service, _ = _progress_service(
+        tmp_path,
+        updates=[
+            _provider_task("running", progress=10, message_count=0),
+            _provider_task("running", progress=20),
+        ],
+    )
+
+    service.acquire_export(
+        QQExportImportRequest(group_code="700000001"),
+        progress=updates.append,
+    )
+
+    assert updates[0].message_count == 0
+    assert updates[1].message_count is None
+
+
+def test_acquire_export_progress_exposes_status_and_message(
+    tmp_path: Path,
+) -> None:
+    """The provider's own ``status`` and progress ``message`` stay observable."""
+    updates: list[object] = []
+    service, _ = _progress_service(
+        tmp_path,
+        updates=[_provider_task("running", progress=5, message="正在准备导出")],
+    )
+
+    service.acquire_export(
+        QQExportImportRequest(group_code="700000001"),
+        progress=updates.append,
+    )
+
+    assert updates[0].status == "running"
+    assert updates[0].message == "正在准备导出"
+
+
+def test_acquire_export_progress_never_fabricates_total(tmp_path: Path) -> None:
+    """Progress and message count are real; no ``total`` is ever invented."""
+    updates: list[object] = []
+    service, _ = _progress_service(
+        tmp_path,
+        updates=[_provider_task("running", progress=42, message_count=123)],
+    )
+
+    service.acquire_export(
+        QQExportImportRequest(group_code="700000001"),
+        progress=updates.append,
+    )
+
+    update = updates[0]
+    assert update.progress == 42
+    assert getattr(update, "total", None) is None
+    assert getattr(update, "total_messages", None) is None
+
+
+def test_acquire_export_progress_keeps_snapshot_behavior(tmp_path: Path) -> None:
+    """Reporting progress must not change what ``acquire_export`` persists."""
+    export_path = _write_fake_export(tmp_path / "fake_export.json")
+    baseline_manager = ChatDataSnapshotManager(tmp_path / "baseline")
+    baseline = QQExportImportService(
+        _StubProvider(export_path),
+        snapshot_manager=baseline_manager,
+    ).acquire_export(QQExportImportRequest(group_code="700000001"))
+
+    provider = _ProgressStubProvider(
+        export_path,
+        updates=[_provider_task("running", progress=10, message_count=1)],
+    )
+    progress_manager = ChatDataSnapshotManager(tmp_path / "with-progress")
+    updates: list[object] = []
+    with_progress = QQExportImportService(
+        provider,
+        snapshot_manager=progress_manager,
+    ).acquire_export(
+        QQExportImportRequest(group_code="700000001"),
+        progress=updates.append,
+    )
+
+    assert updates
+    baseline_snapshot = baseline_manager.get_snapshot(baseline.snapshot_id)
+    progress_snapshot = progress_manager.get_snapshot(with_progress.snapshot_id)
+    assert baseline_snapshot is not None
+    assert progress_snapshot is not None
+    assert with_progress.reused_snapshot is False
+    assert progress_snapshot.message_count == baseline_snapshot.message_count == 4
+    assert progress_snapshot.session_id == baseline_snapshot.session_id
+    assert progress_snapshot.source is baseline_snapshot.source
+    assert progress_snapshot.session_type == baseline_snapshot.session_type
+    assert progress_snapshot.coverage_start == baseline_snapshot.coverage_start
+    assert progress_snapshot.coverage_end == baseline_snapshot.coverage_end
+    assert (
+        with_progress.payload_path.read_bytes() == baseline.payload_path.read_bytes()
+    )
