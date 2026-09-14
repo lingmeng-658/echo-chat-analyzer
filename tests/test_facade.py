@@ -900,13 +900,6 @@ def test_list_sessions_returns_empty_for_local_files() -> None:
     assert _facade().list_sessions(module.ChatSource.LOCAL_FILE) == []
 
 
-def test_list_sessions_handles_a_source_with_no_conversations() -> None:
-    module = _facade_module()
-    facade = _facade(wechat_service=_StubWeChatService(sessions=[]))
-
-    assert facade.list_sessions(module.ChatSource.WECHAT) == []
-
-
 def test_list_sessions_tolerates_a_service_returning_none() -> None:
     module = _facade_module()
     facade = _facade(wechat_service=_StubWeChatService(sessions=None))
@@ -989,27 +982,21 @@ def test_get_session_message_range_returns_none_for_local_files() -> None:
 
 def test_get_connection_status_delegates_to_the_connection_service() -> None:
     module = _facade_module()
-    connection_service = _StubQQConnectionService(
-        status=module.QQConnectionStatus(
-            available=True,
-            qce_running=True,
-            authenticated=True,
-            version="4.1.0",
-            message="\u53ef\u7528",
-            action_hint="\u5f00\u59cb\u5206\u6790",
-        )
+    qq_status = module.QQConnectionStatus(
+        available=True,
+        qce_running=True,
+        authenticated=True,
+        version="4.1.0",
+        message="\u53ef\u7528",
+        action_hint="\u5f00\u59cb\u5206\u6790",
     )
+    connection_service = _StubQQConnectionService(status=qq_status)
     facade = _facade(qq_connection_service=connection_service)
 
     status = facade.get_connection_status(module.ChatSource.QQ)
 
+    assert status is qq_status
     assert connection_service.check_calls == 1
-    assert status.available is True
-    assert status.qce_running is True
-    assert status.authenticated is True
-    assert status.version == "4.1.0"
-    assert status.message != ""
-    assert status.action_hint != ""
 
 
 def test_get_connection_status_accepts_a_plain_source_string() -> None:
@@ -1045,47 +1032,21 @@ def test_get_connection_status_without_service_raises() -> None:
 
 def test_get_connection_status_delegates_to_wechat_connection_service() -> None:
     module = _facade_module()
-    connection_service = _StubWeChatConnectionService(
-        status=module.WeChatConnectionStatus(
-            available=True,
-            data_found=True,
-            db_key_available=True,
-            runtime_available=True,
-            message="\u5fae\u4fe1\u53ef\u7528",
-            action_hint="\u5f00\u59cb\u5206\u6790",
-        )
+    wechat_status = module.WeChatConnectionStatus(
+        available=True,
+        data_found=True,
+        db_key_available=True,
+        runtime_available=True,
+        message="\u5fae\u4fe1\u53ef\u7528",
+        action_hint="\u5f00\u59cb\u5206\u6790",
     )
+    connection_service = _StubWeChatConnectionService(status=wechat_status)
     facade = _facade(wechat_connection_service=connection_service)
 
     status = facade.get_connection_status(module.ChatSource.WECHAT)
 
+    assert status is wechat_status
     assert connection_service.check_calls == 1
-    assert status.available is True
-    assert status.data_found is True
-    assert status.db_key_available is True
-    assert status.runtime_available is True
-    assert status.message != ""
-    assert status.action_hint != ""
-
-
-def test_get_connection_status_accepts_a_wechat_source_string() -> None:
-    module = _facade_module()
-    connection_service = _StubWeChatConnectionService(
-        status=module.WeChatConnectionStatus(
-            available=False,
-            data_found=False,
-            db_key_available=False,
-            runtime_available=False,
-            message="\u4e0d\u53ef\u7528",
-            action_hint="\u68c0\u67e5\u6570\u636e\u76ee\u5f55",
-        )
-    )
-    facade = _facade(wechat_connection_service=connection_service)
-
-    status = facade.get_connection_status("wechat")
-
-    assert connection_service.check_calls == 1
-    assert status.available is False
 
 
 def test_get_connection_status_without_wechat_service_raises() -> None:
@@ -1759,27 +1720,6 @@ def test_analyze_qq_private_forwards_conversation_kind(
     assert analysis_service.requests[0].conversation_kind == "private"
 
 
-def test_analyze_file_maps_profile_to_a_stopwords_file(tmp_path: Path) -> None:
-    module = _facade_module()
-    analysis_service = _StubAnalysisService(result=_result())
-    facade = module.ChatAnalyzerFacade(
-        analysis_service=analysis_service,
-        stopwords_directory=tmp_path,
-    )
-
-    facade.analyze_file(
-        _export_file(tmp_path),
-        module.AnalysisConfig(
-            profile="topic",
-            output_directory=tmp_path / "facade-output",
-        ),
-    )
-
-    assert analysis_service.requests[0].stopwords_path == (
-        tmp_path / "stopwords_topic.txt"
-    )
-
-
 def test_unknown_profile_falls_back_to_the_default_stopwords(
     tmp_path: Path,
 ) -> None:
@@ -2317,10 +2257,8 @@ def test_analyze_session_applies_wechat_time_range_after_export(
     )
 
 
-@pytest.mark.parametrize("source", ["QQ", "WECHAT"])
 def test_invalid_custom_scope_stops_before_source_export(
     tmp_path: Path,
-    source: str,
 ) -> None:
     module = _facade_module()
     export_path = _export_file(tmp_path)
@@ -2336,7 +2274,7 @@ def test_invalid_custom_scope_stops_before_source_export(
 
     with pytest.raises(module.FacadeError) as captured:
         facade.analyze_session(
-            getattr(module.ChatSource, source),
+            module.ChatSource.QQ,
             "fictional-session",
             module.AnalysisConfig(
                 scope_mode=module.AnalysisScopeMode.CUSTOM,

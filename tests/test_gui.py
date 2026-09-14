@@ -4256,7 +4256,7 @@ def test_unexpected_errors_never_leak_a_traceback(qt_app, sources) -> None:
 # -------------------------------------------------------------------- layering
 
 
-def test_gui_never_imports_analysis_or_provider_internals() -> None:
+def test_gui_never_imports_analysis_provider_or_parser_internals() -> None:
     gui_directory = SRC_ROOT / "qq_chat_analyzer" / "gui"
     forbidden = (
         "from ..providers",
@@ -4265,6 +4265,9 @@ def test_gui_never_imports_analysis_or_provider_internals() -> None:
         "from ..analyzer",
         "from ..tokenizer",
         "from ..cleaner",
+        "from ..qq_chat_exporter_adapter",
+        "from ..wechat_db_adapter",
+        "from ..wechat_cli_adapter",
         "import sqlite3",
     )
 
@@ -4283,26 +4286,6 @@ def test_gui_pages_do_not_compute_statistics() -> None:
         source = (gui_directory / name).read_text(encoding="utf-8")
         for marker in ("Counter(", "statistics.", "sum(", "sorted("):
             assert marker not in source, f"{name} computes {marker}"
-
-
-def test_gui_modules_never_import_providers_or_parsers() -> None:
-    gui_directory = SRC_ROOT / "qq_chat_analyzer" / "gui"
-    forbidden = (
-        "from ..providers",
-        "from ..parser",
-        "from ..wechat_parser",
-        "from ..qq_chat_exporter_adapter",
-        "from ..wechat_db_adapter",
-        "from ..wechat_cli_adapter",
-        "import sqlite3",
-    )
-
-    for module_path in gui_directory.glob("*.py"):
-        if module_path.name == "app.py":
-            continue
-        source = module_path.read_text(encoding="utf-8")
-        for marker in forbidden:
-            assert marker not in source, f"{module_path.name} imports {marker}"
 
 
 def test_gui_pages_only_import_the_facade_from_application() -> None:
