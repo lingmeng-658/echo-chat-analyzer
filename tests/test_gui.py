@@ -74,6 +74,27 @@ def sources():
     )
 
 
+@pytest.fixture
+def instant_qq_connect(monkeypatch):
+    """Make the QQ connect min-display delay deterministic.
+
+    ``_connect_display_delay`` keeps the "connecting" state visible for
+    ``_QQ_CONNECT_MIN_DISPLAY_MS`` (500ms) and applies the result through
+    ``QTimer.singleShot``. Tests assert the *applied* state, not the pause, so
+    dropping the delay to 0 turns that callback into a plain zero-timer that
+    ``_drain`` delivers immediately - no fixed real wait.
+    """
+    for module_name in (
+        "qq_chat_analyzer.gui.analysis_page",
+        "qq_chat_analyzer.gui.qq_workspace",
+    ):
+        monkeypatch.setattr(
+            importlib.import_module(module_name),
+            "_QQ_CONNECT_MIN_DISPLAY_MS",
+            0,
+        )
+
+
 class _StaticConnectionService:
     """Return one fixed QQ connection status."""
 
@@ -1957,7 +1978,11 @@ def test_qq_not_ready_shows_connect_button_instead_of_auto_dialog(
     assert facade.list_sessions_calls == []
 
 
-def test_clicking_qq_connect_calls_the_facade(qt_app, sources) -> None:
+def test_clicking_qq_connect_calls_the_facade(
+    qt_app,
+    sources,
+    instant_qq_connect,
+) -> None:
     module = _facade_module()
     status = _connection_status(
         available=True,
@@ -1985,7 +2010,6 @@ def test_clicking_qq_connect_calls_the_facade(qt_app, sources) -> None:
     _drain(page)
     page._qq_connect_button.click()
     _drain(page)
-    QTest.qWait(600)
 
     assert facade.start_qq_auth_flow_calls == [1]
     assert page._session_list.count() == 1
@@ -2223,6 +2247,7 @@ def test_qq_ready_hides_connect_action_and_loads_sessions(
 def test_qq_connect_failure_shows_user_safe_message(
     qt_app,
     sources,
+    instant_qq_connect,
 ) -> None:
     module = _facade_module()
     error = module.FacadeError(
@@ -2256,7 +2281,6 @@ def test_qq_connect_failure_shows_user_safe_message(
     _drain(page)
     page._qq_connect_button.click()
     _drain(page)
-    QTest.qWait(600)
 
     assert facade.start_qq_auth_flow_calls == [1]
     assert "QQ \u8fde\u63a5\u5931\u8d25" in page._status_label.text()
@@ -2268,7 +2292,11 @@ def test_qq_connect_failure_shows_user_safe_message(
     assert facade.list_sessions_calls == []
 
 
-def test_qq_connect_unavailable_status_is_not_silent(qt_app, sources) -> None:
+def test_qq_connect_unavailable_status_is_not_silent(
+    qt_app,
+    sources,
+    instant_qq_connect,
+) -> None:
     module = _facade_module()
     status = _connection_status(
         available=False,
@@ -2296,7 +2324,6 @@ def test_qq_connect_unavailable_status_is_not_silent(qt_app, sources) -> None:
     _drain(page)
     page._qq_connect_button.click()
     _drain(page)
-    QTest.qWait(600)
 
     assert facade.start_qq_auth_flow_calls == [1]
     assert "\u65e0\u6cd5\u8fde\u63a5 QQ" in page._status_label.text()
@@ -2324,7 +2351,11 @@ def test_qq_connect_remains_clickable_when_no_runtime_detected(
     assert facade.start_qq_auth_flow_calls == [1]
 
 
-def test_qq_connect_disables_button_while_connecting(qt_app, sources) -> None:
+def test_qq_connect_disables_button_while_connecting(
+    qt_app,
+    sources,
+    instant_qq_connect,
+) -> None:
     module = _facade_module()
     status = _connection_status(
         available=True,
@@ -2359,7 +2390,6 @@ def test_qq_connect_disables_button_while_connecting(qt_app, sources) -> None:
 
     executor.succeed(facade._qq_snapshot())
     _drain(page)
-    QTest.qWait(600)
 
     assert page._qq_connect_button.isEnabled() is True
     assert page._qq_connect_button.isVisibleTo(page) is False
@@ -4986,6 +5016,7 @@ def test_automatic_refresh_detects_login_and_loads_sessions(
 def test_connect_result_waiting_auth_starts_automatic_refresh(
     qt_app,
     sources,
+    instant_qq_connect,
 ) -> None:
     module = _facade_module()
     facade = _ConnectWaitingAuthFacade(
@@ -5001,7 +5032,7 @@ def test_connect_result_waiting_auth_starts_automatic_refresh(
     assert page._qq_status_timer.isActive() is False
 
     page._qq_connect_button.click()
-    QTest.qWait(600)
+    _drain(page)
 
     assert facade.start_qq_auth_flow_calls == [1]
     assert page._qq_status_timer.isActive() is True
@@ -5171,6 +5202,7 @@ def test_return_to_source_selection_clears_connection_view(qt_app, sources) -> N
 def test_return_to_source_selection_cancels_without_stopping_qq(
     qt_app,
     sources,
+    instant_qq_connect,
 ) -> None:
     module = _facade_module()
     executor = _DeferredExecutor()
@@ -5183,7 +5215,7 @@ def test_return_to_source_selection_cancels_without_stopping_qq(
 
     executor.progress("正在加载 QQ...")
     executor.succeed(facade._qq_snapshot())
-    QTest.qWait(600)
+    _drain(page)
 
     assert executor.cancelled is True
     assert facade.shutdown_qq_runtime_calls == []
@@ -5655,6 +5687,7 @@ def test_qq_workspace_shows_connect_button_when_disconnected(
 def test_qq_workspace_connect_disables_button_until_finish(
     qt_app,
     sources,
+    instant_qq_connect,
 ) -> None:
     from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
 
@@ -5669,7 +5702,7 @@ def test_qq_workspace_connect_disables_button_until_finish(
     assert workspace._qq_connect_button.isEnabled() is False
 
     executor.fail("qq_connect_failed", "QQ 连接失败")
-    QTest.qWait(600)
+    _drain(workspace)
     assert workspace._qq_connect_button.isEnabled() is True
     assert workspace._qq_connect_button.text() == "重新开始"
 
@@ -5684,6 +5717,7 @@ def test_qq_workspace_waiting_auth_disables_button_until_qr_ready(
     qt_app,
     sources,
     tmp_path: Path,
+    instant_qq_connect,
 ) -> None:
     """Regression: the connect button must stay disabled while QR is not ready."""
     from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
@@ -5704,7 +5738,7 @@ def test_qq_workspace_waiting_auth_disables_button_until_qr_ready(
     workspace._qq_qrcode_path = qr_path
 
     workspace.connect_qq()
-    QTest.qWait(600)
+    _drain(workspace)
 
     assert workspace._qq_qrcode_label.isVisibleTo(workspace) is False
     assert workspace._qq_connect_button.isEnabled() is False
@@ -5714,6 +5748,7 @@ def test_qq_workspace_waiting_auth_enables_button_once_qr_displayed(
     qt_app,
     sources,
     tmp_path: Path,
+    instant_qq_connect,
 ) -> None:
     """Once the QR is actually displayed, the connect button becomes enabled."""
     from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
@@ -5734,7 +5769,7 @@ def test_qq_workspace_waiting_auth_enables_button_once_qr_displayed(
     workspace._qq_qrcode_path = qr_path
 
     workspace.connect_qq()
-    QTest.qWait(600)
+    _drain(workspace)
 
     assert workspace._qq_qrcode_label.isVisibleTo(workspace) is True
     assert workspace._qq_connect_button.isEnabled() is True
@@ -6007,7 +6042,7 @@ def test_session_panel_selection_requests_message_range(qt_app, sources) -> None
 
 
 def test_qq_workspace_full_chain_connect_sessions_analyze(
-    qt_app, sources, tmp_path
+    qt_app, sources, tmp_path, monkeypatch
 ) -> None:
     """QQ workspace keeps the GUI-2 connect -> sessions -> analyze chain."""
     from qq_chat_analyzer.gui.main_window import (
@@ -6017,7 +6052,7 @@ def test_qq_workspace_full_chain_connect_sessions_analyze(
     )
     module = _facade_module()
     qq_module = importlib.import_module("qq_chat_analyzer.gui.qq_workspace")
-    qq_module._QQ_CONNECT_MIN_DISPLAY_MS = 0
+    monkeypatch.setattr(qq_module, "_QQ_CONNECT_MIN_DISPLAY_MS", 0)
     disconnected = module.QQConnectionStatus(
         available=False, qce_running=False, authenticated=False,
         version="", message="QQ 尚未连接。", action_hint="",
@@ -7256,7 +7291,7 @@ def test_local_data_clear_history_failure_shows_public_message(
 
 
 def test_qq_connect_error_snapshot_keeps_workspace_usable(
-    qt_app, sources
+    qt_app, sources, instant_qq_connect
 ) -> None:
     """An ERROR snapshot from the auth flow renders restart, never crashes."""
     from qq_chat_analyzer.gui.main_window import QQ_WORKSPACE_INDEX

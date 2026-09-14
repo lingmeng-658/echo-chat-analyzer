@@ -405,22 +405,30 @@ def test_wait_ready_succeeds_when_health_checker_passes(
 
 def test_wait_ready_times_out_with_user_safe_error(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = _runtime_module()
-    clock = iter([0.0, 1.0, 2.0, 3.0, 6.0])
+    clock = [0.0]
     runtime, _ = _started_runtime(
         tmp_path,
         health=False,
         ready_timeout=5.0,
         poll_interval=1.0,
-        monotonic=lambda: next(clock),
+        monotonic=lambda: clock[0],
     )
+
+    def _advance(seconds: float) -> None:
+        """Deterministic stand-in for time.sleep: advance the fake clock."""
+        clock[0] += seconds
+
+    monkeypatch.setattr(module.time, "sleep", _advance)
 
     with pytest.raises(module.QQChatRuntimeError) as excinfo:
         runtime.wait_ready()
 
     assert excinfo.value.public_message != ""
     assert "Traceback" not in excinfo.value.public_message
+    assert clock[0] >= 5.0
 
 
 def test_health_checker_exception_is_not_leaked(tmp_path: Path) -> None:
