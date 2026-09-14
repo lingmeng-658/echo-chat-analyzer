@@ -2798,6 +2798,7 @@ class _StubSnapshotManager:
         self.list_kwargs = []
         self.validate_calls = []
         self.remove_calls = []
+        self.remove_all_calls = 0
 
     def list_snapshots(self, *, source=None, session_id=None):
         self.list_calls += 1
@@ -2823,27 +2824,12 @@ class _StubSnapshotManager:
         self.remove_calls.append(snapshot_id)
         if self._errors.get("remove") is not None:
             raise self._errors["remove"]
-        validation = self.validate_snapshot(snapshot_id)
-        module = _snapshot_module()
-        if (
-            validation.status is module.SnapshotStatus.NOT_FOUND
-            or validation.snapshot is None
-        ):
-            return module.SnapshotValidation(
-                snapshot_id,
-                module.SnapshotStatus.NOT_FOUND,
-            )
-        removed = dataclasses.replace(
-            validation.snapshot,
-            payload_state=module.SnapshotPayloadState.REMOVED,
-        )
-        return module.SnapshotValidation(
-            snapshot_id,
-            module.SnapshotStatus.REMOVED,
-            snapshot=removed,
-        )
+        return self.validate_snapshot(snapshot_id)
 
     def remove_all_payloads(self):
+        self.remove_all_calls += 1
+        if self._errors.get("remove_all") is not None:
+            raise self._errors["remove_all"]
         removed = 0
         for snapshot in list(self._snapshots):
             validation = self.remove_payload(snapshot.id)
@@ -2868,26 +2854,19 @@ def test_facade_lists_snapshots_through_the_application_boundary() -> None:
     assert manager.list_kwargs[-1] == (module.ChatSource.QQ, "room-1")
 
 
-def test_facade_validates_a_snapshot_and_reports_missing() -> None:
-    module = _facade_module()
+def test_facade_validates_a_snapshot_through_the_application_boundary() -> None:
     snapshot = _snapshot("snap-1", size=10)
+    expected_validation = _validation(snapshot)
     manager = _StubSnapshotManager(
         snapshots=[snapshot],
-        validations={snapshot.id: _validation(snapshot)},
+        validations={snapshot.id: expected_validation},
     )
     facade = _facade(snapshot_manager=manager)
 
-    validation = facade.validate_snapshot("snap-1")
-    assert validation.available is True
-    assert validation.snapshot.id == "snap-1"
-
-    missing = facade.validate_snapshot("missing")
-    snapshot_module = _snapshot_module()
-    assert missing.status is snapshot_module.SnapshotStatus.NOT_FOUND
+    assert facade.validate_snapshot("snap-1") is expected_validation
 
 
 def test_facade_removes_a_snapshot_payload_and_returns_its_metadata() -> None:
-    module = _snapshot_module()
     snapshot = _snapshot("snap-1", size=10)
     manager = _StubSnapshotManager(
         snapshots=[snapshot],
@@ -2898,9 +2877,7 @@ def test_facade_removes_a_snapshot_payload_and_returns_its_metadata() -> None:
     removed = facade.remove_snapshot("snap-1")
 
     assert manager.remove_calls == ["snap-1"]
-    assert removed is not None
-    assert removed.id == "snap-1"
-    assert removed.payload_state is module.SnapshotPayloadState.REMOVED
+    assert removed is snapshot
 
 
 def test_facade_remove_missing_snapshot_returns_none_without_error() -> None:
@@ -2922,23 +2899,7 @@ def test_facade_removes_all_snapshot_payloads() -> None:
     facade = _facade(snapshot_manager=manager)
 
     assert facade.remove_all_snapshots() == 2
-    assert manager.remove_calls == ["snap-1", "snap-2"]
-
-
-def test_facade_remove_all_snapshot_errors_become_facade_error() -> None:
-    module = _facade_module()
-    snapshot = _snapshot("snap-1", size=10)
-    manager = _StubSnapshotManager(
-        snapshots=[snapshot],
-        errors={"remove": RuntimeError("boom")},
-    )
-    facade = _facade(snapshot_manager=manager)
-
-    with pytest.raises(module.FacadeError) as captured:
-        facade.remove_all_snapshots()
-
-    assert captured.value.code == "snapshot_clear_failed"
-    assert captured.value.public_message
+    assert manager.remove_all_calls == 1
 
 
 def test_facade_reports_available_snapshot_storage_usage() -> None:
@@ -2960,18 +2921,35 @@ def test_facade_reports_available_snapshot_storage_usage() -> None:
 
 
 @pytest.mark.parametrize(
-    ("method_name", "error_key", "expected_code"),
+    ("method_name", "error_key", "expected_code", "args"),
     [
-        ("list_snapshots", "list", "snapshot_list_failed"),
-        ("validate_snapshot", "validate", "snapshot_validation_failed"),
-        ("remove_snapshot", "remove", "snapshot_remove_failed"),
-        ("get_snapshot_storage_usage", "usage", "snapshot_storage_usage_failed"),
+        ("list_snapshots", "list", "snapshot_list_failed", ()),
+        (
+            "validate_snapshot",
+            "validate",
+            "snapshot_validation_failed",
+            ("snap-1",),
+        ),
+        (
+            "remove_snapshot",
+            "remove",
+            "snapshot_remove_failed",
+            ("snap-1",),
+        ),
+        ("remove_all_snapshots", "remove_all", "snapshot_clear_failed", ()),
+        (
+            "get_snapshot_storage_usage",
+            "usage",
+            "snapshot_storage_usage_failed",
+            (),
+        ),
     ],
 )
 def test_facade_snapshot_errors_become_stable_facade_errors(
     method_name,
     error_key,
     expected_code,
+    args,
 ) -> None:
     module = _facade_module()
 
@@ -2987,12 +2965,7 @@ def test_facade_snapshot_errors_become_stable_facade_errors(
     method = getattr(facade, method_name)
 
     with pytest.raises(module.FacadeError) as captured:
-        if method_name == "list_snapshots":
-            method()
-        elif method_name == "get_snapshot_storage_usage":
-            method()
-        else:
-            method("snap-1")
+        method(*args)
 
     assert captured.value.code == expected_code
     assert captured.value.public_message
