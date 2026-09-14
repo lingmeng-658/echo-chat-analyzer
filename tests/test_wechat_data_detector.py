@@ -10,6 +10,7 @@ import importlib
 import sys
 from pathlib import Path
 
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
@@ -20,6 +21,12 @@ def _module():
     return importlib.import_module(
         "qq_chat_analyzer.application.wechat_data_detector"
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_registry(monkeypatch):
+    """Detector unit tests must never consult the host Windows registry."""
+    monkeypatch.setattr(_module(), "registered_wechat_data_dirs", lambda: [])
 
 
 def _xwechat_account(base: Path, wxid: str) -> Path:

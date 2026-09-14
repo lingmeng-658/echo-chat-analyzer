@@ -60,6 +60,17 @@ def _valid_wechat_root(
     return root
 
 
+def _isolated_setup_service(tmp_path: Path, **overrides) -> WeChatSetupService:
+    """Build a setup service whose persisted config lives under tmp_path."""
+    target = tmp_path / "config" / "wechat.json"
+    defaults = {
+        "config_loader": WeChatEnvironmentConfigLoader(target),
+        "config_writer": WeChatEnvironmentConfigWriter(target),
+    }
+    defaults.update(overrides)
+    return WeChatSetupService(**defaults)
+
+
 class _StubConnectionService:
     def __init__(self, status: object) -> None:
         self._status = status
@@ -178,7 +189,10 @@ def test_check_setup_reports_missing_config(tmp_path: Path) -> None:
         def load_or_default(self):
             raise WeChatConfigNotFound()
 
-    service = WeChatSetupService(config_loader=_MissingLoader())
+    service = _isolated_setup_service(
+        tmp_path,
+        config_loader=_MissingLoader(),
+    )
 
     status = service.check_setup()
 
@@ -205,7 +219,10 @@ def test_check_setup_uses_bundled_defaults(tmp_path: Path) -> None:
         def load_or_default(self):
             return default_config
 
-    service = WeChatSetupService(config_loader=_DefaultLoader())
+    service = _isolated_setup_service(
+        tmp_path,
+        config_loader=_DefaultLoader(),
+    )
 
     status = service.check_setup()
 
@@ -216,8 +233,9 @@ def test_check_setup_uses_bundled_defaults(tmp_path: Path) -> None:
 def test_check_setup_reports_ready_config(tmp_path: Path) -> None:
     target = tmp_path / "wechat.json"
     WeChatEnvironmentConfigWriter(target).save(_config(tmp_path))
-    service = WeChatSetupService(
-        config_loader=WeChatEnvironmentConfigLoader(target)
+    service = _isolated_setup_service(
+        tmp_path,
+        config_loader=WeChatEnvironmentConfigLoader(target),
     )
 
     status = service.check_setup()
@@ -229,8 +247,9 @@ def test_check_setup_reports_ready_config(tmp_path: Path) -> None:
 def test_check_setup_reports_invalid_config(tmp_path: Path) -> None:
     target = tmp_path / "wechat.json"
     target.write_text("{ this is not json", encoding="utf-8")
-    service = WeChatSetupService(
-        config_loader=WeChatEnvironmentConfigLoader(target)
+    service = _isolated_setup_service(
+        tmp_path,
+        config_loader=WeChatEnvironmentConfigLoader(target),
     )
 
     status = service.check_setup()
@@ -247,7 +266,10 @@ def test_check_setup_never_raises_loader_errors(tmp_path: Path) -> None:
         def load(self) -> WeChatEnvironmentConfig:
             raise RuntimeError("native handle 0xfeedface collapsed")
 
-    status = WeChatSetupService(config_loader=_AngryLoader()).check_setup()
+    status = _isolated_setup_service(
+        tmp_path,
+        config_loader=_AngryLoader(),
+    ).check_setup()
 
     assert status.state is WeChatSetupState.CONFIG_INVALID
     assert "0xfeedface" not in status.message
@@ -255,8 +277,9 @@ def test_check_setup_never_raises_loader_errors(tmp_path: Path) -> None:
 
 def test_check_setup_exposes_config_path(tmp_path: Path) -> None:
     target = tmp_path / "config" / "wechat.json"
-    service = WeChatSetupService(
-        config_loader=WeChatEnvironmentConfigLoader(target)
+    service = _isolated_setup_service(
+        tmp_path,
+        config_loader=WeChatEnvironmentConfigLoader(target),
     )
 
     assert service.check_setup().config_path == target
@@ -267,28 +290,48 @@ def test_check_setup_exposes_config_path(tmp_path: Path) -> None:
 
 def test_detect_wechat_data_root_returns_detected_path(tmp_path: Path) -> None:
     detected = _valid_wechat_root(tmp_path)
-    service = WeChatSetupService(data_root_detector=lambda: detected)
+    service = _isolated_setup_service(
+        tmp_path,
+        data_root_detector=lambda: detected,
+    )
 
     assert service.detect_wechat_data_root() == detected
 
 
-def test_detect_wechat_data_root_returns_none_when_missing() -> None:
-    service = WeChatSetupService(data_root_detector=lambda: None)
+def test_detect_wechat_data_root_returns_none_when_missing(tmp_path: Path) -> None:
+    service = _isolated_setup_service(
+        tmp_path,
+        data_root_detector=lambda: None,
+    )
 
     assert service.detect_wechat_data_root() is None
 
 
-def test_detect_wechat_data_root_swallows_detector_errors() -> None:
+def test_detect_wechat_data_root_swallows_detector_errors(tmp_path: Path) -> None:
     def _explode() -> Path:
         raise OSError("cannot read home 0xdeadbeef")
 
-    service = WeChatSetupService(data_root_detector=_explode)
+    service = _isolated_setup_service(tmp_path, data_root_detector=_explode)
 
     assert service.detect_wechat_data_root() is None
 
 
-def test_detect_wechat_data_root_uses_provider_default() -> None:
-    service = WeChatSetupService()
+def test_detect_wechat_data_root_uses_provider_default(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    detector_module = __import__(
+        "qq_chat_analyzer.application.wechat_data_detector",
+        fromlist=["registered_wechat_data_dirs"],
+    )
+    monkeypatch.setattr(
+        detector_module,
+        "registered_wechat_data_dirs",
+        lambda: [],
+    )
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    service = _isolated_setup_service(tmp_path)
 
     detected = service.detect_wechat_data_root()
 
@@ -302,7 +345,10 @@ def test_detect_wechat_data_roots_returns_injected_roots(
         _valid_wechat_root(tmp_path, "wxid_a"),
         _valid_wechat_root(tmp_path, "wxid_b"),
     ]
-    service = WeChatSetupService(data_roots_detector=lambda: roots)
+    service = _isolated_setup_service(
+        tmp_path,
+        data_roots_detector=lambda: roots,
+    )
 
     assert service.detect_wechat_data_roots() == roots
     assert service.detect_wechat_data_root() is None
@@ -312,7 +358,10 @@ def test_detect_wechat_data_root_returns_single_roots_value(
     tmp_path: Path,
 ) -> None:
     root = _valid_wechat_root(tmp_path, "wxid_single")
-    service = WeChatSetupService(data_roots_detector=lambda: [root])
+    service = _isolated_setup_service(
+        tmp_path,
+        data_roots_detector=lambda: [root],
+    )
 
     assert service.detect_wechat_data_roots() == [root]
     assert service.detect_wechat_data_root() == root
@@ -325,7 +374,10 @@ def test_detect_wechat_data_root_rejects_invalid_detector_result(
     msg_dir = legacy / "Msg"
     msg_dir.mkdir(parents=True)
     (msg_dir / "MSG0.db").write_text("fake", encoding="utf-8")
-    service = WeChatSetupService(data_root_detector=lambda: legacy)
+    service = _isolated_setup_service(
+        tmp_path,
+        data_root_detector=lambda: legacy,
+    )
 
     assert service.detect_wechat_data_root() is None
 
@@ -338,18 +390,19 @@ def test_detect_wechat_data_roots_filters_invalid_injected_roots(
     msg_dir.mkdir(parents=True)
     (msg_dir / "MSG0.db").write_text("fake", encoding="utf-8")
     valid = _valid_wechat_root(tmp_path, "wxid_valid")
-    service = WeChatSetupService(
+    service = _isolated_setup_service(
+        tmp_path,
         data_roots_detector=lambda: [legacy, valid],
     )
 
     assert service.detect_wechat_data_roots() == [valid]
 
 
-def test_detect_wechat_data_roots_swallows_detector_errors() -> None:
+def test_detect_wechat_data_roots_swallows_detector_errors(tmp_path: Path) -> None:
     def _explode() -> list[Path]:
         raise OSError("cannot read storage 0xdeadbeef")
 
-    service = WeChatSetupService(data_roots_detector=_explode)
+    service = _isolated_setup_service(tmp_path, data_roots_detector=_explode)
 
     assert service.detect_wechat_data_roots() == []
     assert service.detect_wechat_data_root() is None
@@ -829,19 +882,26 @@ class _VerifyingFactory:
         self.invalidations += 1
 
 
-def test_verify_connection_uses_the_provider_the_session_read_uses() -> None:
+def test_verify_connection_uses_the_provider_the_session_read_uses(
+    tmp_path: Path,
+) -> None:
     provider = _VerifyingProvider()
     factory = _VerifyingFactory(provider)
-    service = WeChatSetupService(provider_factory=factory)
+    service = _isolated_setup_service(tmp_path, provider_factory=factory)
 
     assert service.verify_connection() is None
     assert provider.calls == 1
     assert factory.creates == 1
 
 
-def test_verify_connection_propagates_the_unreadable_error() -> None:
+def test_verify_connection_propagates_the_unreadable_error(
+    tmp_path: Path,
+) -> None:
     provider = _VerifyingProvider(DatabaseUnreadable())
-    service = WeChatSetupService(provider_factory=_VerifyingFactory(provider))
+    service = _isolated_setup_service(
+        tmp_path,
+        provider_factory=_VerifyingFactory(provider),
+    )
 
     with pytest.raises(DatabaseUnreadable) as failure:
         service.verify_connection()
@@ -849,19 +909,24 @@ def test_verify_connection_propagates_the_unreadable_error() -> None:
     assert failure.value.code == "wechat_database_unreadable"
 
 
-def test_verify_connection_without_a_provider_factory_does_not_fail() -> None:
-    service = WeChatSetupService()
+def test_verify_connection_without_a_provider_factory_does_not_fail(
+    tmp_path: Path,
+) -> None:
+    service = _isolated_setup_service(tmp_path)
 
     assert service.verify_connection() is None
 
 
-def test_verify_connection_tolerates_a_provider_without_verification() -> None:
+def test_verify_connection_tolerates_a_provider_without_verification(
+    tmp_path: Path,
+) -> None:
     class _PlainProvider:
         def list_sessions(self):  # pragma: no cover - contract only
             return []
 
-    service = WeChatSetupService(
-        provider_factory=_VerifyingFactory(_PlainProvider())
+    service = _isolated_setup_service(
+        tmp_path,
+        provider_factory=_VerifyingFactory(_PlainProvider()),
     )
 
     assert service.verify_connection() is None
