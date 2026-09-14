@@ -137,6 +137,18 @@ GUI 通过 ChatAnalyzerFacade 接入（见 GUI原则）。
 
 ## AI开发流程
 
+### First 5 Minutes / 首次进入仓库检查
+
+进入仓库后先按以下顺序确认工作边界：
+
+1. 运行 `git status --short --branch`，识别当前分支和 working tree 状态；
+2. 识别并保护已有未提交修改，不覆盖、不 restore、不 checkout；
+3. 确认 `Test-Path .\.venv\Scripts\python.exe`；
+4. 用 `.\.venv\Scripts\python.exe -c "import sys; print(sys.executable); print(sys.version)"` 验证实际解释器；
+5. 明确当前任务允许修改的文件范围；
+6. 阅读与任务直接相关的事实来源；
+7. 先运行与当前任务直接相关的 focused tests，不要无条件先跑 full suite。
+
 修改代码前：
 
 1. 阅读相关代码；
@@ -168,6 +180,53 @@ GUI 通过 ChatAnalyzerFacade 接入（见 GUI原则）。
 - 为未确定需求提前设计复杂框架；
 - 修改无关文件。
 
+### Git 安全规则
+
+- 禁止使用 `git add .`；
+- 提交时显式列出文件；
+- 不覆盖未知来源的 working tree 修改；
+- 不为当前任务顺手清理无关变化。
+
+### Bug 修复流程
+
+Bug 修复按以下顺序进行：
+
+现象/复现 → 调用链 → 竞争假设 → 最小诊断 → 根因 → regression RED →
+minimal GREEN → focused verification → Fast / 必要时 Full → real acceptance。
+
+- 看到异常后不得直接 patch，必须先完成最小诊断并确认根因；
+- 不得为了让测试变绿而修改测试预期；
+- 环境失败先分类和报告，不得顺手修改无关业务代码。
+
+### 测试分层与 slow integration 边界
+
+- **Focused**：与当前修改直接相关的测试文件或测试节点；
+- **Fast**：日常开发回归，运行 `slow_integration` 和 `known_failure` 之外的测试；
+- **Full**：阶段完成或提交前的完整回归。
+
+Fast Suite 命令必须与 `pyproject.toml` 中的 marker 定义一致：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -m "not slow_integration and not known_failure" -q
+```
+
+如果当前修改触及 `slow_integration` 覆盖的能力，必须显式运行相关的 focused
+integration tests。适用范围包括 packaging、Chromium renderer、CLI subprocess、
+PowerShell helper、Windows runtime integration 和特定 WeChat integration；Fast
+通过不能替代这些测试。不要把当前测试数量或耗时硬编码进文档。
+
+### 完成前检查
+
+完成前运行：
+
+```powershell
+git diff --check
+git diff --name-only
+git status --short
+```
+
+并确认实际修改文件没有超出当前任务允许的范围。
+
 ### Python / pytest 执行环境
 
 本仓库使用根目录下的项目虚拟环境：
@@ -189,7 +248,7 @@ GUI 通过 ChatAnalyzerFacade 接入（见 GUI原则）。
 .\.venv\Scripts\python.exe -m pytest tests/test_facade.py -q
 ```
 
-日常开发 / RED-GREEN 使用 Fast Suite（排除 heavy integration），普通测试默认属于 Fast：
+日常开发 / RED-GREEN 使用 Fast Suite（排除 `slow_integration` 和 `known_failure`），普通测试默认属于 Fast：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -m "not slow_integration and not known_failure" -q
@@ -273,17 +332,19 @@ GUI → ChatAnalyzerFacade → Application Service → Core
 
 ------------------------------------------------------------------------
 
-## 产品优先级
+## 当前产品阶段
+
+Echo 当前处于上线前 Hardening 阶段。
 
 优先：
 
-1.  能运行；
-2.  用户能使用；
-3.  支持更多来源；
-4.  提升分析质量；
-5.  优化界面。
+1. 修复真实用户遇到的阻塞和明显 Bug；
+2. 保证数据获取、分析结果和本地数据生命周期可信；
+3. 完善结果导出 / 分享和关键用户体验；
+4. 降低诊断和维护成本。
 
-不要为了完美架构阻碍产品落地。
+当前阶段默认不新增大型功能或新数据来源。
+新增能力需先由人工确认。
 
 ------------------------------------------------------------------------
 

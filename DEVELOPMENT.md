@@ -34,74 +34,112 @@ The virtual environment is local only and should not be committed.
 
 ## 3. Initial Setup
 
-After cloning the repository:
+### 3.1 Human Initial Setup (new clone)
 
-Create virtual environment:
+After cloning the repository, a human developer may create the project
+virtual environment:
 
 ``` powershell
 python -m venv .venv
 ```
 
-Activate environment:
+Install the complete development environment from `pyproject.toml`:
 
 ``` powershell
-.\.venv\Scripts\Activate.ps1
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,gui]"
 ```
 
-Install project:
+All project commands after creation should use the explicit `.venv` interpreter;
+shell activation is not required.
+
+### 3.2 AI Existing Workspace
+
+An AI agent entering an existing working tree must first verify the environment:
 
 ``` powershell
-pip install -e .
+Test-Path .\.venv\Scripts\python.exe
+.\.venv\Scripts\python.exe -c "import sys; print(sys.executable); print(sys.version)"
+.\.venv\Scripts\python.exe -m pip --version
 ```
 
-Editable installation allows local source changes to be used
-immediately.
+If `.venv` is missing or dependencies cannot be imported, report an environment
+problem. Do not create another environment or install dependencies unless the
+task explicitly authorizes environment initialization.
 
 ------------------------------------------------------------------------
 
 ## 4. Verify Environment
 
-Check Python:
+Verify the actual interpreter and pip selected for project commands:
 
 ``` powershell
-where python
+.\.venv\Scripts\python.exe -c "import sys; print(sys.executable); print(sys.version)"
+.\.venv\Scripts\python.exe -m pip --version
 ```
 
-Check pip:
+If package metadata is needed, query it through the same interpreter:
 
 ``` powershell
-where pip
-```
-
-Check installed project:
-
-``` powershell
-pip show qq-chat-analyzer
+.\.venv\Scripts\python.exe -m pip show qq-chat-analyzer
 ```
 
 ------------------------------------------------------------------------
 
 ## 5. Running Tests
 
-Run all tests:
+Tests are run in three layers:
+
+- **Focused**: the test file or node directly related to the change;
+- **Fast**: daily development regression, excluding `slow_integration` and
+  `known_failure`;
+- **Full**: complete regression at a phase boundary or before submission.
+
+Run the relevant focused tests first, for example:
 
 ``` powershell
-pytest
+.\.venv\Scripts\python.exe -m pytest tests/test_facade.py -q
+.\.venv\Scripts\python.exe -m pytest tests/test_facade.py::test_name -q
 ```
 
-If Windows temporary directory permission problems appear:
+The marker names are defined in `pyproject.toml`; do not replace them with
+ad-hoc exclusions. The standard Fast Suite is:
 
 ``` powershell
-pytest --basetemp=.pytest-temp
+.\.venv\Scripts\python.exe -m pytest -m "not slow_integration and not known_failure" -q
 ```
 
-Do not commit temporary test directories.
+The Full Suite is:
+
+``` powershell
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+Fast does not replace focused integration tests covered by `slow_integration`.
+When a change touches packaging, Chromium rendering, CLI subprocesses,
+PowerShell helpers, Windows runtime integration, or a specific WeChat
+integration, run the relevant focused integration tests explicitly.
+
+If Windows temporary-directory permission problems appear, pass a local base
+directory to the same explicit interpreter:
+
+``` powershell
+.\.venv\Scripts\python.exe -m pytest --basetemp=.pytest-temp
+```
+
+Do not commit temporary test directories, test counts, or timing snapshots.
 
 ------------------------------------------------------------------------
 
 ## 6. Git Workflow
 
-Use feature branches.
+Use feature branches. Before editing, run:
+
+``` powershell
+git status --short --branch
+```
+
+Identify and preserve existing working-tree changes. Do not use `git restore`,
+`git checkout`, or broad cleanup to remove changes whose source is unknown.
 
 Workflow:
 
@@ -122,6 +160,10 @@ Workflow:
     Review
         ↓
     Squash merge
+
+Do not use `git add .`; stage only explicitly named files. Run
+`git diff --check` before completion and confirm the changed-file list stays
+within the allowed task scope.
 
 Do not commit: - real chat data; - generated outputs; - local
 configuration; - virtual environments.
@@ -301,20 +343,6 @@ Tests must use fictional data only.
 6. Run the full test suite.
 7. Do not modify analyzer.py, tokenizer.py, or cleaner.py.
 
-------------------------------------------------------------------------
-
-Current working state:
-- Architecture: 见 ARCHITECTURE.md（唯一架构事实来源）
-- Product: 余音 Echo
-- Sources: QQ（QCE Provider / Adapter、登录闭环）、微信（数据库 Provider / CLI Provider）、本地导出文件
-- Application: ImportService, AnalysisApplicationService, QQ/WeChatExportImportService, ChatAnalyzerFacade
-- Analysis: Analysis Core v2/v3（activity / length / profile / conversation reports）
-- Presentation: DashboardBuilder -> DashboardView
-- GUI: PySide6 MVP（AnalysisPage / DashboardPage；会话搜索排序、时间范围、QQ 登录引导）
-- Tests: 905 passed + 1 个已知失败（ConversationAnalyzer timestamp=0）
-- Next phase: Windows packaging, normal-user install flow, report presentation enhancements
-
-See PROJECT_STATUS.md for current progress and next steps.
 
 ## Source Structure
 
