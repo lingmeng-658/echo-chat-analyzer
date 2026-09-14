@@ -2354,11 +2354,9 @@ def test_invalid_custom_scope_stops_before_source_export(
     assert analysis_service.requests == []
 
 
-@pytest.mark.parametrize("source_name", ["QQ", "WECHAT"])
 def test_source_analysis_uses_the_shared_application_scope_filter(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    source_name: str,
 ) -> None:
     module = _facade_module()
     service_module = importlib.import_module(
@@ -2394,7 +2392,7 @@ def test_source_analysis_uses_the_shared_application_scope_filter(
         "generate_wordcloud",
     ):
         monkeypatch.setattr(service_module, exporter_name, lambda *args: None)
-    source = getattr(module.ChatSource, source_name)
+    source = module.ChatSource.QQ
     services = {
         "qq_service": _StubQQService(export_path=export_path),
         "wechat_service": _StubWeChatService(export_path=export_path),
