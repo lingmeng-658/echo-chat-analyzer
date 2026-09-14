@@ -46,6 +46,7 @@ SPEAKER_SUMMARIES = [
 ]
 
 
+@pytest.mark.slow_integration
 def test_importing_exporters_preserves_selected_matplotlib_backend(
     tmp_path: Path,
 ) -> None:

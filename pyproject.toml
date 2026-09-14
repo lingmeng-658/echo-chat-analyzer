@@ -34,3 +34,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+    "slow_integration: heavy integration excluded from the Fast Suite (real subprocess/browser/packaging/Qt-heavy)",
+    "known_failure: pre-existing known-failing test quarantined from the Fast Suite (not fixed by this task)",
+]

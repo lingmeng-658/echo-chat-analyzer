@@ -153,6 +153,7 @@ def _provider(**overrides) -> _FakeProvider:
 # ------------------------------------------------------------- full success
 
 
+@pytest.mark.slow_integration
 def test_validation_success_reads_messages_and_runs_analysis() -> None:
     provider = _provider(rows=[_row(), _row(text="second fictional deck")])
 
@@ -170,6 +171,7 @@ def test_validation_success_reads_messages_and_runs_analysis() -> None:
     assert provider.export_limits == [10]
 
 
+@pytest.mark.slow_integration
 def test_validation_accepts_an_explicit_session_id() -> None:
     provider = _provider()
 
@@ -339,6 +341,7 @@ def test_validation_fails_when_vc_runtime_missing() -> None:
     assert VC_RUNTIME_ERROR_MESSAGE in report.errors
 
 
+@pytest.mark.slow_integration
 def test_validation_passes_when_vc_runtime_ok() -> None:
     def ok_runtime() -> tuple[bool, str | None]:
         return True, None

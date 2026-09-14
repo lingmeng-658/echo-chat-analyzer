@@ -23,6 +23,10 @@ BUNDLED_NODE = WECHAT_RUNTIME / "node.exe"
 HELPER = WECHAT_RUNTIME / "wx_key_helper.cjs"
 POWERSHELL_BASE_ENV = "ECHO_WX_KEY_POWERSHELL_BASE"
 
+# Full-only: real subprocess integration that launches bundled Node together
+# with a PowerShell shim. Excluded from the Fast Suite (see pyproject.toml).
+pytestmark = pytest.mark.slow_integration
+
 
 def _fake_powershell(tmp_path: Path, directory: Path) -> Path:
     """Compile a tiny fake powershell.exe whose behavior is marker-driven."""

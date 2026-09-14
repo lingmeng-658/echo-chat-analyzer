@@ -197,6 +197,7 @@ def test_run_chromium_timeout_kills_process_tree(monkeypatch) -> None:
     assert "4242" in taskkill_calls[0]
 
 
+@pytest.mark.slow_integration
 @pytest.mark.skipif(
     importlib.import_module(
         "qq_chat_analyzer.presentation.share.renderer"

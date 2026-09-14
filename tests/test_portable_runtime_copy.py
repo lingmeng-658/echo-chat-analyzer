@@ -14,6 +14,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BUILD_SCRIPT = PROJECT_ROOT / "scripts" / "build_windows_exe.ps1"
 KOFFI_SOURCE = PROJECT_ROOT / "runtime" / "wechat" / "node_modules" / "koffi"
 
+# Full-only: build/packaging smoke that runs build_windows_exe.ps1 and loads
+# the bundled Node runtime. Excluded from the Fast Suite (see pyproject.toml).
+pytestmark = pytest.mark.slow_integration
+
 
 def _write(path: Path, content: str = "fictional") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)

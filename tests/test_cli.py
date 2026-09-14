@@ -36,6 +36,7 @@ from qq_chat_analyzer.application import (
 from qq_chat_analyzer.cli import main
 
 
+@pytest.mark.slow_integration
 def test_module_cli_help_guides_first_time_users() -> None:
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(SRC_ROOT)
@@ -99,6 +100,7 @@ def test_module_cli_help_guides_first_time_users() -> None:
     assert "positional arguments:" not in result.stdout
 
 
+@pytest.mark.slow_integration
 def test_console_script_and_module_help_are_consistent() -> None:
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(SRC_ROOT)
@@ -419,6 +421,7 @@ def test_cli_does_not_directly_import_core_pipeline_modules() -> None:
     assert direct_core_imports == set()
 
 
+@pytest.mark.slow_integration
 def test_module_cli_file_input_generates_outputs_without_printing_chat(
     tmp_path: Path,
 ) -> None:

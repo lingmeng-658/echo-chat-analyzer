@@ -189,6 +189,18 @@ GUI 通过 ChatAnalyzerFacade 接入（见 GUI原则）。
 .\.venv\Scripts\python.exe -m pytest tests/test_facade.py -q
 ```
 
+日常开发 / RED-GREEN 使用 Fast Suite（排除 heavy integration），普通测试默认属于 Fast：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -m "not slow_integration and not known_failure" -q
+```
+
+阶段完成 / 提交前运行完整回归（命令不变）：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
 执行 Python 脚本时使用：
 
 ```powershell
