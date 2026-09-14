@@ -959,12 +959,175 @@ def _drain(page):
 
 def _settle_workers(timeout_ms: int = 5000) -> None:
     """Wait for real thread-pool work and deliver queued GUI callbacks."""
+    workers = importlib.import_module("qq_chat_analyzer.gui.workers")
+    import shiboken6
+
+    def relay_can_dispatch(relay) -> bool:
+        if not shiboken6.isValid(relay):
+            return False
+        try:
+            return any(
+                isinstance(source, workers.WorkerSignals)
+                and shiboken6.isValid(source)
+                for source in relay.children()
+            )
+        except RuntimeError:
+            return False
+
     deadline = time.monotonic() + timeout_ms / 1000
     pool = QThreadPool.globalInstance()
-    while time.monotonic() < deadline:
-        pool.waitForDone(100)
-        QTest.qWait(20)
+    while True:
         QApplication.processEvents()
+        live_relays = tuple(
+            relay
+            for relay in workers._RELAYS
+            if relay_can_dispatch(relay)
+        )
+        if (
+            not workers._PENDING
+            and not live_relays
+            and pool.activeThreadCount() == 0
+        ):
+            return
+        remaining_ms = int((deadline - time.monotonic()) * 1000)
+        if remaining_ms <= 0:
+            return
+        pool.waitForDone(min(100, remaining_ms))
+        QTest.qWait(min(20, remaining_ms))
+
+
+def test_settle_workers_returns_immediately_when_pool_is_idle(monkeypatch) -> None:
+    workers = importlib.import_module("qq_chat_analyzer.gui.workers")
+
+    class _IdlePool:
+        def activeThreadCount(self) -> int:
+            return 0
+
+        def waitForDone(self, _timeout: int) -> bool:
+            raise AssertionError("idle worker pool should not be waited on")
+
+    monkeypatch.setattr(workers, "_PENDING", set())
+    monkeypatch.setattr(workers, "_RELAYS", set())
+    monkeypatch.setattr(
+        QThreadPool,
+        "globalInstance",
+        staticmethod(lambda: _IdlePool()),
+    )
+
+    _settle_workers(timeout_ms=5000)
+
+
+def test_settle_workers_still_honors_timeout_for_pending_workers(monkeypatch) -> None:
+    workers = importlib.import_module("qq_chat_analyzer.gui.workers")
+    clock = [0.0]
+    waits: list[int] = []
+
+    class _BusyPool:
+        def activeThreadCount(self) -> int:
+            return 1
+
+        def waitForDone(self, timeout: int) -> bool:
+            waits.append(timeout)
+            clock[0] = 0.011
+            return False
+
+    monkeypatch.setattr(workers, "_PENDING", {object()})
+    monkeypatch.setattr(workers, "_RELAYS", set())
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        QThreadPool,
+        "globalInstance",
+        staticmethod(lambda: _BusyPool()),
+    )
+    monkeypatch.setattr(QTest, "qWait", lambda _timeout: None)
+    monkeypatch.setattr(QApplication, "processEvents", lambda: None)
+
+    _settle_workers(timeout_ms=10)
+
+    assert waits
+
+
+def test_settle_workers_keeps_processing_events_for_an_active_relay(
+    monkeypatch,
+) -> None:
+    workers = importlib.import_module("qq_chat_analyzer.gui.workers")
+    relay = workers._CallbackRelay(
+        lambda _result: None,
+        lambda *_error: None,
+        None,
+        None,
+    )
+    signal_source = workers.WorkerSignals(relay)
+    relays = {relay}
+    event_turns: list[int] = []
+    waits: list[int] = []
+
+    class _IdlePool:
+        def activeThreadCount(self) -> int:
+            return 0
+
+        def waitForDone(self, timeout: int) -> bool:
+            waits.append(timeout)
+            return True
+
+    def process_events() -> None:
+        event_turns.append(1)
+        if len(event_turns) == 2:
+            relays.discard(relay)
+
+    monkeypatch.setattr(workers, "_PENDING", set())
+    monkeypatch.setattr(workers, "_RELAYS", relays)
+    monkeypatch.setattr(time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(
+        QThreadPool,
+        "globalInstance",
+        staticmethod(lambda: _IdlePool()),
+    )
+    monkeypatch.setattr(QTest, "qWait", lambda _timeout: None)
+    monkeypatch.setattr(QApplication, "processEvents", process_events)
+
+    _settle_workers(timeout_ms=10)
+
+    assert signal_source.parent() is relay
+    assert len(event_turns) == 2
+    assert waits == [10]
+
+
+def test_settle_workers_ignores_relay_whose_signal_source_was_destroyed(
+    monkeypatch,
+) -> None:
+    import shiboken6
+
+    workers = importlib.import_module("qq_chat_analyzer.gui.workers")
+    relay = workers._CallbackRelay(
+        lambda _result: None,
+        lambda *_error: None,
+        None,
+        None,
+    )
+    signal_source = workers.WorkerSignals(relay)
+
+    shiboken6.delete(signal_source)
+    assert shiboken6.isValid(relay)
+    assert not shiboken6.isValid(signal_source)
+
+    class _IdlePool:
+        def activeThreadCount(self) -> int:
+            return 0
+
+        def waitForDone(self, _timeout: int) -> bool:
+            raise AssertionError("a stale relay cannot receive another callback")
+
+    monkeypatch.setattr(workers, "_PENDING", set())
+    monkeypatch.setattr(workers, "_RELAYS", {relay})
+    monkeypatch.setattr(
+        QThreadPool,
+        "globalInstance",
+        staticmethod(lambda: _IdlePool()),
+    )
+    monkeypatch.setattr(QApplication, "processEvents", lambda: None)
+
+    _settle_workers(timeout_ms=5000)
 
 
 # ------------------------------------------------------------ initialization
