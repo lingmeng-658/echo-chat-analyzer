@@ -438,13 +438,83 @@ class _RecordingBuilder:
         return presentation.build_dashboard_view(reports, top_words=top_words)
 
 
-def _facade(**overrides):
+def _facade(
+    *,
+    tmp_path: Path | None = None,
+    retain_output: bool = False,
+    **overrides,
+):
     module = _facade_module()
     defaults = {
         "analysis_service": _StubAnalysisService(result=_result()),
     }
     defaults.update(overrides)
-    return module.ChatAnalyzerFacade(**defaults)
+    facade = module.ChatAnalyzerFacade(**defaults)
+    if tmp_path is None:
+        return facade
+
+    output_directory = tmp_path / "facade-output"
+    reports_root = tmp_path / "facade-reports"
+
+    def _with_test_output(operation):
+        package_echo_report = module.package_echo_report
+        user_data_dir = module.user_data_dir
+
+        def _package_echo_report(output_directory, *args, **kwargs):
+            kwargs.setdefault("reports_root", reports_root)
+            return package_echo_report(output_directory, *args, **kwargs)
+
+        module.package_echo_report = _package_echo_report
+        if retain_output:
+            module.user_data_dir = lambda: tmp_path / "facade-user-data"
+        try:
+            return operation()
+        finally:
+            module.package_echo_report = package_echo_report
+            module.user_data_dir = user_data_dir
+
+    def _test_config(config):
+        if retain_output:
+            return config or module.AnalysisConfig()
+        if config is None:
+            return module.AnalysisConfig(output_directory=output_directory)
+        if config.output_directory is None:
+            return config.with_output_directory(output_directory)
+        return config
+
+    analyze_file = facade.analyze_file
+    analyze_session = facade.analyze_session
+
+    def _analyze_file(path, config=None, progress=None, **kwargs):
+        return _with_test_output(
+            lambda: analyze_file(
+                path,
+                _test_config(config),
+                progress,
+                **kwargs,
+            )
+        )
+
+    def _analyze_session(
+        source,
+        session_id,
+        config=None,
+        progress=None,
+        **kwargs,
+    ):
+        return _with_test_output(
+            lambda: analyze_session(
+                source,
+                session_id,
+                _test_config(config),
+                progress,
+                **kwargs,
+            )
+        )
+
+    facade.analyze_file = _analyze_file
+    facade.analyze_session = _analyze_session
+    return facade
 
 
 def _export_file(tmp_path: Path, name: str = "export.json") -> Path:
@@ -454,6 +524,28 @@ def _export_file(tmp_path: Path, name: str = "export.json") -> Path:
 
 
 # --------------------------------------------------------------- data models
+
+
+def test_plain_facade_analysis_uses_test_output_directory(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _facade_module()
+    analysis_service = _StubAnalysisService(result=_result())
+
+    def _forbidden_user_data_dir():
+        raise AssertionError("plain facade tests must not resolve user_data_dir")
+
+    monkeypatch.setattr(module, "user_data_dir", _forbidden_user_data_dir)
+    facade = _facade(
+        analysis_service=analysis_service,
+        tmp_path=tmp_path,
+    )
+
+    facade.analyze_file(_export_file(tmp_path))
+
+    request = analysis_service.requests[0]
+    assert request.output_directory.is_relative_to(tmp_path)
 
 
 def test_chat_source_covers_every_supported_origin() -> None:
@@ -1147,6 +1239,7 @@ def test_analyze_file_runs_analysis_then_presentation(tmp_path: Path) -> None:
     facade = _facade(
         analysis_service=analysis_service,
         presentation_builder=builder,
+        tmp_path=tmp_path,
     )
     export_path = _export_file(tmp_path)
 
@@ -1173,7 +1266,7 @@ def test_analyze_file_runs_analysis_then_presentation(tmp_path: Path) -> None:
 
 def test_analyze_file_reports_each_analysis_stage(tmp_path: Path) -> None:
     progress: list[str] = []
-    facade = _facade()
+    facade = _facade(tmp_path=tmp_path)
 
     facade.analyze_file(_export_file(tmp_path), progress=progress.append)
 
@@ -1189,7 +1282,7 @@ def test_analyze_file_reports_each_analysis_stage(tmp_path: Path) -> None:
 
 def test_analyze_file_accepts_a_string_path(tmp_path: Path) -> None:
     export_path = _export_file(tmp_path)
-    facade = _facade()
+    facade = _facade(tmp_path=tmp_path)
 
     outcome = facade.analyze_file(str(export_path))
 
@@ -1199,7 +1292,7 @@ def test_analyze_file_accepts_a_string_path(tmp_path: Path) -> None:
 def test_analyze_file_uses_defaults_without_a_config(tmp_path: Path) -> None:
     module = _facade_module()
     analysis_service = _StubAnalysisService(result=_result())
-    facade = _facade(analysis_service=analysis_service)
+    facade = _facade(analysis_service=analysis_service, tmp_path=tmp_path)
 
     facade.analyze_file(_export_file(tmp_path))
 
@@ -1298,6 +1391,7 @@ def test_real_analysis_report_survives_facade_return(tmp_path: Path) -> None:
     )
     facade = _facade(
         analysis_service=application.AnalysisApplicationService(),
+        tmp_path=tmp_path,
     )
 
     outcome = facade.analyze_file(input_path)
@@ -1326,7 +1420,11 @@ def test_second_analysis_updates_to_the_latest_generated_report(
             )
             return _result_with_echo_artifact()
 
-    facade = _facade(analysis_service=_WritingAnalysisService())
+    facade = _facade(
+        analysis_service=_WritingAnalysisService(),
+        tmp_path=tmp_path,
+        retain_output=True,
+    )
 
     first = facade.analyze_file(_export_file(tmp_path, "first.json"))
     second = facade.analyze_file(_export_file(tmp_path, "second.json"))
@@ -1359,7 +1457,11 @@ def test_shutdown_cleans_scratch_but_keeps_packaged_report(
             )
             return _result_with_echo_artifact()
 
-    facade = _facade(analysis_service=_WritingAnalysisService())
+    facade = _facade(
+        analysis_service=_WritingAnalysisService(),
+        tmp_path=tmp_path,
+        retain_output=True,
+    )
     outcome = facade.analyze_file(_export_file(tmp_path))
     assert outcome.report_path is not None
     assert outcome.report_directory is not None
@@ -1375,7 +1477,10 @@ def test_shutdown_cleans_scratch_but_keeps_packaged_report(
 
 
 def test_missing_echo_artifact_returns_no_report_path(tmp_path: Path) -> None:
-    facade = _facade(analysis_service=_StubAnalysisService(result=_result()))
+    facade = _facade(
+        analysis_service=_StubAnalysisService(result=_result()),
+        tmp_path=tmp_path,
+    )
 
     outcome = facade.analyze_file(_export_file(tmp_path))
 
@@ -1402,7 +1507,10 @@ def test_echo_packaging_failure_falls_back_to_generated_report(
         raise OSError("fictional packaging failure")
 
     monkeypatch.setattr(module, "package_echo_report", _failing_package)
-    facade = _facade(analysis_service=_WritingAnalysisService())
+    facade = _facade(
+        analysis_service=_WritingAnalysisService(),
+        tmp_path=tmp_path,
+    )
 
     outcome = facade.analyze_file(_export_file(tmp_path))
 
@@ -1592,6 +1700,7 @@ def test_qq_and_wechat_share_the_same_retained_report_contract(
         qq_service=qq,
         wechat_service=wechat,
         analysis_service=analysis_service,
+        tmp_path=tmp_path,
     )
 
     qq_outcome = facade.analyze_session(module.ChatSource.QQ, "qq-fictional")
@@ -1616,7 +1725,7 @@ def test_analyze_file_forwards_speaker_names_and_viewer_key(
 ) -> None:
     module = _facade_module()
     analysis_service = _StubAnalysisService(result=_result())
-    facade = _facade(analysis_service=analysis_service)
+    facade = _facade(analysis_service=analysis_service, tmp_path=tmp_path)
 
     facade.analyze_file(
         _export_file(tmp_path),
@@ -1639,7 +1748,11 @@ def test_analyze_qq_private_forwards_conversation_kind(
         groups=[_FakeQQFriend("u_fictional_1", "Fictional Alice", "200001")],
         export_path=_export_file(tmp_path, "qq_private_export.json"),
     )
-    facade = _facade(qq_service=qq_service, analysis_service=analysis_service)
+    facade = _facade(
+        qq_service=qq_service,
+        analysis_service=analysis_service,
+        tmp_path=tmp_path,
+    )
 
     facade.analyze_session(module.ChatSource.QQ, "u_fictional_1")
 
@@ -1656,7 +1769,10 @@ def test_analyze_file_maps_profile_to_a_stopwords_file(tmp_path: Path) -> None:
 
     facade.analyze_file(
         _export_file(tmp_path),
-        module.AnalysisConfig(profile="topic"),
+        module.AnalysisConfig(
+            profile="topic",
+            output_directory=tmp_path / "facade-output",
+        ),
     )
 
     assert analysis_service.requests[0].stopwords_path == (
@@ -1676,7 +1792,10 @@ def test_unknown_profile_falls_back_to_the_default_stopwords(
 
     facade.analyze_file(
         _export_file(tmp_path),
-        module.AnalysisConfig(profile="not-a-profile"),
+        module.AnalysisConfig(
+            profile="not-a-profile",
+            output_directory=tmp_path / "facade-output",
+        ),
     )
 
     assert analysis_service.requests[0].stopwords_path == (
@@ -1693,11 +1812,17 @@ def test_default_stopwords_resolve_from_resources(
         monkeypatch.delattr(sys, "_MEIPASS")
     resources = importlib.import_module("qq_chat_analyzer.resources")
     analysis_service = _StubAnalysisService(result=_result())
-    facade = module.ChatAnalyzerFacade(analysis_service=analysis_service)
+    facade = _facade(
+        analysis_service=analysis_service,
+        tmp_path=tmp_path,
+    )
 
     facade.analyze_file(
         _export_file(tmp_path),
-        module.AnalysisConfig(profile="topic"),
+        module.AnalysisConfig(
+            profile="topic",
+            output_directory=tmp_path / "facade-output",
+        ),
     )
 
     assert analysis_service.requests[0].stopwords_path == (
@@ -1713,11 +1838,17 @@ def test_default_stopwords_use_meipass_in_bundled_mode(
     fake_bundle = tmp_path / "bundle"
     monkeypatch.setattr(sys, "_MEIPASS", str(fake_bundle), raising=False)
     analysis_service = _StubAnalysisService(result=_result())
-    facade = module.ChatAnalyzerFacade(analysis_service=analysis_service)
+    facade = _facade(
+        analysis_service=analysis_service,
+        tmp_path=tmp_path,
+    )
 
     facade.analyze_file(
         _export_file(tmp_path),
-        module.AnalysisConfig(profile="culture"),
+        module.AnalysisConfig(
+            profile="culture",
+            output_directory=tmp_path / "facade-output",
+        ),
     )
 
     assert analysis_service.requests[0].stopwords_path == (
@@ -1735,6 +1866,7 @@ def test_analyze_session_dispatches_to_the_qq_service(tmp_path: Path) -> None:
         qq_service=qq_service,
         wechat_service=wechat_service,
         analysis_service=analysis_service,
+        tmp_path=tmp_path,
     )
 
     outcome = facade.analyze_session(
@@ -1779,6 +1911,7 @@ def test_qq_snapshot_metadata_and_force_refresh_flow_through_facade(
     facade = _facade(
         qq_service=qq_service,
         analysis_service=analysis_service,
+        tmp_path=tmp_path,
     )
 
     outcome = facade.analyze_session(
@@ -1798,7 +1931,7 @@ def test_wechat_analysis_ignores_qq_force_refresh_flag(tmp_path: Path) -> None:
     module = _facade_module()
     export_path = _export_file(tmp_path, "wechat-force-refresh.json")
     wechat_service = _StubWeChatService(export_path=export_path)
-    facade = _facade(wechat_service=wechat_service)
+    facade = _facade(wechat_service=wechat_service, tmp_path=tmp_path)
 
     outcome = facade.analyze_session(
         module.ChatSource.WECHAT,
@@ -1835,6 +1968,7 @@ def test_successful_qq_analysis_saves_scoped_history_metadata(
         analysis_service=_StubAnalysisService(result=result),
         presentation_builder=_RecordingBuilder(view=expected_view),
         report_history_manager=history_manager,
+        tmp_path=tmp_path,
     )
 
     outcome = facade.analyze_session(
@@ -1897,6 +2031,7 @@ def test_successful_qq_analysis_links_history_to_snapshot(tmp_path: Path) -> Non
             groups=[_FakeQQGroup("fictional-session", "Fictional Group")],
         ),
         report_history_manager=history_manager,
+        tmp_path=tmp_path,
     )
 
     facade.analyze_session(module.ChatSource.QQ, "fictional-session")
@@ -1934,6 +2069,7 @@ def test_successful_wechat_analysis_saves_history_metadata(
         ),
         analysis_service=_StubAnalysisService(result=result),
         report_history_manager=history_manager,
+        tmp_path=tmp_path,
     )
 
     outcome = facade.analyze_session(module.ChatSource.WECHAT, session_id)
@@ -1978,6 +2114,7 @@ def test_history_save_failure_does_not_replace_successful_analysis(
         report_history_manager=history_module.ReportHistoryManager(
             invalid_history_path
         ),
+        tmp_path=tmp_path,
     )
 
     with caplog.at_level(
@@ -2006,7 +2143,7 @@ def test_facade_reads_history_through_the_application_boundary(
     history_manager = history_module.ReportHistoryManager(
         tmp_path / "history.jsonl"
     )
-    facade = _facade(report_history_manager=history_manager)
+    facade = _facade(report_history_manager=history_manager, tmp_path=tmp_path)
 
     outcome = facade.analyze_file(_export_file(tmp_path))
 
@@ -2029,6 +2166,7 @@ def test_analysis_failure_does_not_create_history(tmp_path: Path) -> None:
     facade = _facade(
         analysis_service=_StubAnalysisService(error=errors.InputPathNotFound()),
         report_history_manager=history_manager,
+        tmp_path=tmp_path,
     )
 
     with pytest.raises(module.FacadeError):
@@ -2040,7 +2178,7 @@ def test_analysis_failure_does_not_create_history(tmp_path: Path) -> None:
 def test_facade_without_history_manager_preserves_old_outcome_behavior(
     tmp_path: Path,
 ) -> None:
-    outcome = _facade().analyze_file(_export_file(tmp_path))
+    outcome = _facade(tmp_path=tmp_path).analyze_file(_export_file(tmp_path))
 
     assert outcome.history_saved is None
     assert outcome.history_record_id is None
@@ -2086,7 +2224,10 @@ def test_analyze_private_qq_session_preserves_private_export_identity(
         export_path=export_path,
     )
 
-    outcome = _facade(qq_service=qq_service).analyze_session(
+    outcome = _facade(
+        qq_service=qq_service,
+        tmp_path=tmp_path,
+    ).analyze_session(
         module.ChatSource.QQ,
         "u_fictional_1",
     )
@@ -2113,6 +2254,7 @@ def test_analyze_qq_group_uses_session_name_in_conversation_summary(
     outcome = _facade(
         qq_service=qq_service,
         analysis_service=_ConversationSummaryAnalysisService(session_id),
+        tmp_path=tmp_path,
     ).analyze_session(module.ChatSource.QQ, session_id)
 
     summary = outcome.result.reports.conversations.conversations[0]
@@ -2135,6 +2277,7 @@ def test_analyze_qq_private_uses_friend_name_in_conversation_summary(
     outcome = _facade(
         qq_service=qq_service,
         analysis_service=_ConversationSummaryAnalysisService(session_id),
+        tmp_path=tmp_path,
     ).analyze_session(module.ChatSource.QQ, session_id)
 
     summary = outcome.result.reports.conversations.conversations[0]
@@ -2153,6 +2296,7 @@ def test_analyze_session_applies_wechat_time_range_after_export(
     facade = _facade(
         wechat_service=wechat_service,
         analysis_service=analysis_service,
+        tmp_path=tmp_path,
     )
 
     facade.analyze_session(
@@ -2187,6 +2331,7 @@ def test_invalid_custom_scope_stops_before_source_export(
         qq_service=qq_service,
         wechat_service=wechat_service,
         analysis_service=analysis_service,
+        tmp_path=tmp_path,
     )
 
     with pytest.raises(module.FacadeError) as captured:
@@ -2254,9 +2399,10 @@ def test_source_analysis_uses_the_shared_application_scope_filter(
         "qq_service": _StubQQService(export_path=export_path),
         "wechat_service": _StubWeChatService(export_path=export_path),
     }
-    facade = module.ChatAnalyzerFacade(
+    facade = _facade(
         analysis_service=service_module.AnalysisApplicationService(),
         **services,
+        tmp_path=tmp_path,
     )
 
     outcome = facade.analyze_session(
@@ -2283,7 +2429,11 @@ def test_analyze_session_dispatches_to_the_wechat_service(
     export_path = _export_file(tmp_path, "wechat_export.json")
     qq_service = _StubQQService(export_path=export_path)
     wechat_service = _StubWeChatService(export_path=export_path)
-    facade = _facade(qq_service=qq_service, wechat_service=wechat_service)
+    facade = _facade(
+        qq_service=qq_service,
+        wechat_service=wechat_service,
+        tmp_path=tmp_path,
+    )
 
     outcome = facade.analyze_session(
         module.ChatSource.WECHAT,
@@ -2314,9 +2464,10 @@ def test_analyze_session_resolves_wechat_conversation_name(
             )
         ],
     )
-    facade = module.ChatAnalyzerFacade(
+    facade = _facade(
         wechat_service=wechat_service,
         analysis_service=analysis_service,
+        tmp_path=tmp_path,
     )
 
     outcome = facade.analyze_session(
@@ -2335,7 +2486,10 @@ def test_analyze_session_hides_the_intermediate_export_file(
 ) -> None:
     module = _facade_module()
     export_path = _export_file(tmp_path)
-    facade = _facade(wechat_service=_StubWeChatService(export_path=export_path))
+    facade = _facade(
+        wechat_service=_StubWeChatService(export_path=export_path),
+        tmp_path=tmp_path,
+    )
 
     outcome = facade.analyze_session(module.ChatSource.WECHAT, "fictional")
 
@@ -2368,7 +2522,10 @@ def test_analyze_reports_empty_data_without_crashing(tmp_path: Path) -> None:
         processed_message_count=0,
         valid_text_count=0,
     )
-    facade = _facade(analysis_service=_StubAnalysisService(result=empty_result))
+    facade = _facade(
+        analysis_service=_StubAnalysisService(result=empty_result),
+        tmp_path=tmp_path,
+    )
 
     outcome = facade.analyze_file(_export_file(tmp_path))
 
@@ -2384,7 +2541,8 @@ def test_application_errors_become_facade_errors(tmp_path: Path) -> None:
     module = _facade_module()
     errors = _errors()
     facade = _facade(
-        analysis_service=_StubAnalysisService(error=errors.InputPathNotFound())
+        analysis_service=_StubAnalysisService(error=errors.InputPathNotFound()),
+        tmp_path=tmp_path,
     )
 
     try:
@@ -2486,7 +2644,10 @@ def test_missing_analysis_service_raises_a_facade_error(tmp_path: Path) -> None:
 def test_facade_errors_are_not_re_wrapped(tmp_path: Path) -> None:
     module = _facade_module()
     original = module.FacadeError(code="already_wrapped", public_message="x")
-    facade = _facade(analysis_service=_StubAnalysisService(error=original))
+    facade = _facade(
+        analysis_service=_StubAnalysisService(error=original),
+        tmp_path=tmp_path,
+    )
 
     try:
         facade.analyze_file(_export_file(tmp_path))
@@ -2506,11 +2667,12 @@ def test_every_collaborator_can_be_injected(tmp_path: Path) -> None:
     analysis_service = _StubAnalysisService(result=_result())
     builder = _RecordingBuilder()
 
-    facade = module.ChatAnalyzerFacade(
+    facade = _facade(
         qq_service=qq_service,
         wechat_service=wechat_service,
         analysis_service=analysis_service,
         presentation_builder=builder,
+        tmp_path=tmp_path,
     )
     facade.analyze_session(module.ChatSource.QQ, "10001")
 
@@ -2525,6 +2687,7 @@ def test_injected_builder_receives_reports_untouched(tmp_path: Path) -> None:
     facade = _facade(
         analysis_service=_StubAnalysisService(result=result),
         presentation_builder=builder,
+        tmp_path=tmp_path,
     )
 
     facade.analyze_file(_export_file(tmp_path))
@@ -2536,7 +2699,7 @@ def test_injected_builder_receives_reports_untouched(tmp_path: Path) -> None:
 
 def test_facade_falls_back_to_the_default_builder(tmp_path: Path) -> None:
     presentation = importlib.import_module("qq_chat_analyzer.presentation")
-    facade = _facade()
+    facade = _facade(tmp_path=tmp_path)
 
     outcome = facade.analyze_file(_export_file(tmp_path))
 

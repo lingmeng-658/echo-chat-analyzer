@@ -86,6 +86,17 @@ def _config(tmp_path: Path) -> WeChatEnvironmentConfig:
     )
 
 
+def _isolate_wechat_config(monkeypatch, tmp_path: Path) -> None:
+    """Keep composition-root setup config under the test temp directory."""
+    from qq_chat_analyzer.application import wechat_environment_config
+
+    monkeypatch.setattr(
+        wechat_environment_config,
+        "user_data_dir",
+        lambda: tmp_path / "user-data",
+    )
+
+
 def test_facade_saves_wechat_environment(tmp_path: Path) -> None:
     sentinel = object()
     setup = _StubSetupService(status=sentinel)
@@ -201,9 +212,13 @@ def test_facade_translates_unexpected_setup_failure(tmp_path: Path) -> None:
     assert isinstance(caught.value.public_message, str)
 
 
-def test_composition_root_wires_setup_service() -> None:
+def test_composition_root_wires_setup_service(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     from qq_chat_analyzer.gui import app as gui_app
 
+    _isolate_wechat_config(monkeypatch, tmp_path)
     facade = gui_app.build_facade()
 
     status = facade.get_wechat_setup_status()
@@ -211,9 +226,13 @@ def test_composition_root_wires_setup_service() -> None:
     assert hasattr(status, "message")
 
 
-def test_composition_root_shares_factory_with_setup() -> None:
+def test_composition_root_shares_factory_with_setup(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     from qq_chat_analyzer.gui import app as gui_app
 
+    _isolate_wechat_config(monkeypatch, tmp_path)
     facade = gui_app.build_facade()
 
     setup = facade._wechat_setup_service
