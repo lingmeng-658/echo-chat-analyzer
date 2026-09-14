@@ -3408,10 +3408,84 @@ def test_custom_scope_uses_session_message_range(qt_app) -> None:
     ).date()
 
 
-def test_qq_selection_initializes_time_range_from_session_messages(
+def test_wechat_session_selection_still_requests_message_range(qt_app) -> None:
+    """WeChat keeps the unchanged contract: selection probes the range."""
+    module = _facade_module()
+    session_id = "wxid_still_probes"
+    start = 1704067200
+    end = 1704153600
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        sessions=[
+            _session(
+                module.ChatSource.WECHAT,
+                session_id,
+                "Fictional Room",
+                1,
+            )
+        ],
+        message_range=(start, end),
+    )
+    page = _analysis_page(qt_app, facade)
+
+    page.select_source(module.ChatSource.WECHAT)
+    _drain(page)
+    page._session_list.setCurrentRow(0)
+    _drain(page)
+
+    assert facade.get_session_message_range_calls == [
+        (module.ChatSource.WECHAT, session_id)
+    ]
+    assert page._message_range == (start, end)
+
+
+def test_qq_session_selection_does_not_request_message_range(
     qt_app,
     sources,
 ) -> None:
+    """Selecting a QQ session must not probe the session message range.
+
+    Product contract: QQ never runs a QCE export just because a session was
+    selected, so the earliest/latest message timestamps stay unknown until an
+    analysis actually needs them. A later custom date range is intersected
+    with the messages that really exist.
+    """
+    module = _facade_module()
+    session_id = "10001"
+    start = 1704067200
+    end = 1704153600
+    facade = StubFacade(
+        sources=sources,
+        sessions=[
+            _session(
+                module.ChatSource.QQ,
+                session_id,
+                "Fictional Group",
+            )
+        ],
+        message_range=(start, end),
+    )
+    page = _analysis_page(qt_app, facade)
+
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+    page._session_list.setCurrentRow(0)
+    _drain(page)
+
+    assert page.selected_session_id() == session_id
+    assert facade.get_session_message_range_calls == []
+    assert page._message_range is None
+
+
+def test_qq_custom_scope_keeps_user_dates_without_a_range_probe(
+    qt_app,
+    sources,
+) -> None:
+    """QQ custom scope still reaches the config without a range probe.
+
+    The custom start/end dates are whatever the user picked; they are not
+    backfilled from the session message range.
+    """
     from datetime import datetime
 
     module = _facade_module()
@@ -3436,16 +3510,58 @@ def test_qq_selection_initializes_time_range_from_session_messages(
     page._session_list.setCurrentRow(0)
     _drain(page)
     page._scope_custom.setChecked(True)
+    page._start_date.setDate(QDate(2026, 2, 11))
+    page._end_date.setDate(QDate(2026, 8, 11))
 
-    assert facade.get_session_message_range_calls == [
-        (module.ChatSource.QQ, session_id)
-    ]
-    assert page._start_date.date().toPython() == datetime.fromtimestamp(
-        start
-    ).date()
-    assert page._end_date.date().toPython() == datetime.fromtimestamp(
-        end
-    ).date()
+    config = page.build_config()
+    assert config.scope_mode is module.AnalysisScopeMode.CUSTOM
+    assert config.start_time == "2026-02-11"
+    assert config.end_time == "2026-08-11"
+    assert page._start_date.date().toPython() == datetime(2026, 2, 11).date()
+    assert page._end_date.date().toPython() == datetime(2026, 8, 11).date()
+    assert facade.get_session_message_range_calls == []
+
+
+@pytest.mark.parametrize(
+    ("control_name", "expected_mode"),
+    [
+        ("_scope_last_year", "LAST_YEAR"),
+        ("_scope_last_six_months", "LAST_SIX_MONTHS"),
+    ],
+)
+def test_qq_relative_scope_reaches_config_without_a_range_probe(
+    qt_app,
+    sources,
+    control_name,
+    expected_mode,
+) -> None:
+    """QQ relative scopes keep working without a session message range."""
+    module = _facade_module()
+    session_id = "10001"
+    facade = StubFacade(
+        sources=sources,
+        sessions=[
+            _session(
+                module.ChatSource.QQ,
+                session_id,
+                "Fictional Group",
+            )
+        ],
+        message_range=(1704067200, 1704153600),
+    )
+    page = _analysis_page(qt_app, facade)
+
+    page.select_source(module.ChatSource.QQ)
+    _drain(page)
+    page._session_list.setCurrentRow(0)
+    _drain(page)
+    getattr(page, control_name).setChecked(True)
+
+    config = page.build_config()
+    assert config.scope_mode is getattr(module.AnalysisScopeMode, expected_mode)
+    assert config.start_time is None
+    assert config.end_time is None
+    assert facade.get_session_message_range_calls == []
 
 
 @pytest.mark.parametrize(
@@ -6014,8 +6130,11 @@ def test_session_panel_disables_sessions_without_messages(
     assert panel._analyze_button.isEnabled() is True
 
 
-def test_session_panel_selection_requests_message_range(qt_app, sources) -> None:
-    """Selecting a session fetches its real message range through the facade."""
+def test_wechat_session_panel_selection_requests_message_range(
+    qt_app,
+    sources,
+) -> None:
+    """WeChat panel selection fetches the real message range through the facade."""
     from datetime import datetime
 
     from qq_chat_analyzer.gui.session_analysis_panel import SessionAnalysisPanel
@@ -6042,6 +6161,25 @@ def test_session_panel_selection_requests_message_range(qt_app, sources) -> None
         start
     ).date()
     assert panel._end_date.date().toPython() == datetime.fromtimestamp(end).date()
+
+
+def test_qq_session_panel_selection_skips_range_probe(qt_app) -> None:
+    """QQ panel selection must not probe the range and must not start a worker."""
+    from qq_chat_analyzer.gui.session_analysis_panel import SessionAnalysisPanel
+    module = _facade_module()
+    facade = StubFacade(
+        sources=_wechat_available_sources(),
+        sessions=[_session(module.ChatSource.QQ, "10002", "Fictional Group", 10)],
+        message_range=(1704067200, 1704153600),
+    )
+    panel = SessionAnalysisPanel()
+    panel.configure(facade, module.ChatSource.QQ, executor=_inline_executor())
+    panel.populate_sessions(facade._sessions)
+    panel._session_list.setCurrentRow(0)
+    _drain(panel)
+
+    assert facade.get_session_message_range_calls == []
+    assert panel._message_range is None
 
 
 def test_qq_workspace_full_chain_connect_sessions_analyze(
