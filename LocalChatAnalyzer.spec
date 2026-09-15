@@ -31,6 +31,26 @@ datas.append((str(echo_expression_assets), "frontend/echo_report/wechat-emojis")
 datas.append((str(echo_qq_expression_assets), "frontend/echo_report/qq-emojis"))
 
 
+# Libraries that only the legacy CLI artifacts need. The desktop app writes
+# nothing but echo-report.json / echo-report.html, so its import graph never
+# reaches matplotlib, wordcloud, Pillow or pandas (nor pytest/pygments, which
+# pandas.testing drags in). Excluding them keeps Echo.exe small; the source
+# install and the ``qqchat`` CLI keep the full dependency set.
+desktop_excludes = [
+    "matplotlib",
+    "mpl_toolkits",
+    "wordcloud",
+    "pandas",
+    "PIL",
+    "contourpy",
+    "kiwisolver",
+    "fontTools",
+    "pytest",
+    "_pytest",
+    "pygments",
+]
+
+
 a = Analysis(
     ["desktop_entry.py"],
     pathex=[str(project_root / "src")],
@@ -40,7 +60,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=desktop_excludes,
     noarchive=False,
     optimize=0,
 )

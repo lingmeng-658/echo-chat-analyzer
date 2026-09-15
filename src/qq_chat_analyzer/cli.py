@@ -20,6 +20,7 @@ from .application import (
     QQExportImportService,
 )
 from .application.analysis_service import AnalysisApplicationService
+from .application.legacy_word_artifacts import write_legacy_word_artifacts
 from .resources import resource_path
 
 
@@ -85,7 +86,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     try:
-        result = AnalysisApplicationService().execute(request)
+        result = AnalysisApplicationService(
+            legacy_word_artifacts=write_legacy_word_artifacts,
+        ).execute(request)
     except InputPathNotFound:
         print("错误：输入路径不存在。", file=sys.stderr)
         return 2

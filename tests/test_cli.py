@@ -193,6 +193,9 @@ def test_main_adapts_cli_configuration_to_application_service(
     requests: list[AnalysisRequestDTO] = []
 
     class FakeAnalysisApplicationService:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            """Accept the legacy artifact writer the CLI injects."""
+
         def execute(self, request: AnalysisRequestDTO) -> AnalysisResultDTO:
             requests.append(request)
             return AnalysisResultDTO(
@@ -258,6 +261,9 @@ def test_main_displays_empty_analysis_status_without_top_words(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     class EmptyAnalysisApplicationService:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            """Accept the legacy artifact writer the CLI injects."""
+
         def execute(self, request: AnalysisRequestDTO) -> AnalysisResultDTO:
             return AnalysisResultDTO(
                 status=status,
@@ -357,6 +363,9 @@ def test_main_maps_application_errors_without_exposing_private_paths(
     private_input_path = tmp_path / "private-chat.json"
 
     class FailingAnalysisApplicationService:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            """Accept the legacy artifact writer the CLI injects."""
+
         def execute(self, request: AnalysisRequestDTO) -> AnalysisResultDTO:
             raise application_error
 
