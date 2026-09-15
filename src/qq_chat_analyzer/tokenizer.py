@@ -8,7 +8,7 @@ from pathlib import Path
 
 import jieba
 
-from .wechat_official_emojis import OFFICIAL_WECHAT_EMOJI_NAMES
+from .wechat_official_emojis import wechat_expression_names
 
 
 _WORD_CONTENT_RE = re.compile(r"[\u3400-\u9fffA-Za-z0-9]")
@@ -36,7 +36,7 @@ _EXPRESSION_PLACEHOLDER_RE = re.compile(
     + "|"
     + "|".join(
         re.escape(f"[{name}]")
-        for name in OFFICIAL_WECHAT_EMOJI_NAMES
+        for name in wechat_expression_names()
     ),
     re.IGNORECASE,
 )
@@ -53,15 +53,17 @@ def tokenize(
 
     _load_user_dictionary(user_dict_path)
     stopwords = _load_stopwords(stopwords_path)
-    protected_text, protected_tokens = _protect_hyphenated_ascii(text)
-    url_masked_text = _URL_RE.sub(_URL_PLACEHOLDER, protected_text)
-    expression_masked_text = _EXPRESSION_PLACEHOLDER_RE.sub(
-        " ",
-        url_masked_text,
+    # Mask expression markers before hyphen protection: a hyphenated bracket
+    # code such as ``[Pooh-pooh]`` would otherwise be placeholder-protected
+    # out of reach of the expression pattern and leak as a language token.
+    expression_masked_text = _EXPRESSION_PLACEHOLDER_RE.sub(" ", text)
+    protected_text, protected_tokens = _protect_hyphenated_ascii(
+        expression_masked_text
     )
+    url_masked_text = _URL_RE.sub(_URL_PLACEHOLDER, protected_text)
     tokens: list[str] = []
 
-    for raw_token in jieba.lcut(expression_masked_text):
+    for raw_token in jieba.lcut(url_masked_text):
         token = raw_token.strip()
         token = protected_tokens.get(token, token)
         if not token or token == _URL_PLACEHOLDER:

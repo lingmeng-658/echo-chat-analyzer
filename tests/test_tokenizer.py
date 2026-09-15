@@ -5,12 +5,18 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_ROOT))
 
 from qq_chat_analyzer.tokenizer import tokenize
+from qq_chat_analyzer.wechat_official_emojis import (
+    OFFICIAL_WECHAT_EMOJI_NAMES,
+    WECHAT_EMOJI_ALIASES,
+)
 
 
 def test_tokenizes_chinese_text_with_jieba() -> None:
@@ -200,3 +206,61 @@ def test_expression_placeholders_never_become_language_words() -> None:
     assert tokenize("[动画表情]") == []
     assert tokenize("哈哈 表情 继续") == ["哈哈", "继续"]
     assert tokenize("这个表情不错") == ["这个", "表情", "不错"]
+
+
+def test_official_wechat_english_alias_is_not_a_language_token() -> None:
+    tokens = tokenize("哈哈[Facepalm]来了")
+
+    assert "哈哈" in tokens
+    assert "Facepalm" not in tokens
+
+
+def test_standalone_official_wechat_english_aliases_are_not_tokens() -> None:
+    for marker in ("[Grin]", "[Laugh]", "[Sob]", "[ThumbsUp]", "[Facepalm]"):
+        assert tokenize(marker) == []
+
+
+@pytest.mark.parametrize("word", ("TODO", "AI", "Python"))
+def test_bracketed_plain_english_words_are_not_expressions(word: str) -> None:
+    assert word not in WECHAT_EMOJI_ALIASES
+    assert tokenize(f"[{word}]") == [word]
+
+
+def test_literal_english_words_without_brackets_are_preserved() -> None:
+    assert tokenize("Laugh") == ["Laugh"]
+    assert tokenize("Sob") == ["Sob"]
+    assert tokenize("Lol") == ["Lol"]
+    assert tokenize("Awesome") == ["Awesome"]
+    assert tokenize("今天 Grin 一下") == ["今天", "Grin", "一下"]
+
+
+@pytest.mark.parametrize("alias", sorted(WECHAT_EMOJI_ALIASES))
+def test_every_alias_bracket_is_masked_as_an_expression(alias: str) -> None:
+    """Every alias bracket must be masked, including spaced or punctuated keys."""
+    assert tokenize(f"[{alias}]") == []
+
+
+def test_newly_added_english_aliases_are_masked_as_expressions() -> None:
+    for marker in ("[Bye]", "[Awesome]", "[MyBad]", "[Let Down]", "[LetDown]"):
+        assert tokenize(marker) == []
+
+
+def test_newly_added_english_alias_never_leaks_into_language_tokens() -> None:
+    tokens = tokenize("数据分析[Awesome]继续")
+
+    assert tokens == tokenize("数据分析 继续")
+    assert "Awesome" not in tokens
+    assert "[Awesome]" not in tokens
+
+
+def test_undocumented_bracketed_english_stays_a_plain_word() -> None:
+    # Only published codes are expressions; there is no generic English rule.
+    assert tokenize("[Best]") == ["Best"]
+    assert tokenize("[Whatever]") == ["Whatever"]
+
+
+def test_all_current_official_codes_are_masked_as_expressions() -> None:
+    """Current client codes must never surface as language tokens."""
+    assert len(OFFICIAL_WECHAT_EMOJI_NAMES) == 109
+    for name in OFFICIAL_WECHAT_EMOJI_NAMES:
+        assert tokenize(f"[{name}]") == []
