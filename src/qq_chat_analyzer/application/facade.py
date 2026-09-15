@@ -107,18 +107,18 @@ def _qq_export_progress_relay(
     """Translate QQ export progress into the caller's string channel.
 
     Returns ``None`` when the caller is not listening, so the service keeps
-    its original call shape. Only the provider's real ``progress`` value is
-    published: ``0`` is a valid percentage and stays visible, while a missing
-    (``None``) value is skipped rather than fabricated from a message count.
+    its original call shape. QCE's percentage can remain frozen during both
+    message retrieval and long post-processing, so only a positive message
+    count is shown; missing, zero or invalid counts use the plain stage label.
     """
     if progress is None:
         return None
 
     def _relay(snapshot: QQExportProgress) -> None:
-        value = snapshot.progress
-        if value is None:
-            return
-        progress(f"正在获取 QQ 聊天记录 · {value}%")
+        message = "正在获取 QQ 聊天记录"
+        if snapshot.message_count is not None and snapshot.message_count > 0:
+            message = f"{message} · 已获取 {snapshot.message_count:,} 条"
+        progress(message)
 
     return _relay
 

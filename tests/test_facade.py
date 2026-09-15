@@ -2981,14 +2981,14 @@ class _ProgressQQService(_StubQQService):
         return self._acquisition
 
 
-def test_analyze_session_forwards_qq_export_progress_to_acquire_export(
+def test_analyze_session_reports_qq_export_message_count_without_percentage(
     tmp_path: Path,
 ) -> None:
-    """A QQ analysis reports real 47% through the existing string callback."""
+    """QCE's stalled percentage never replaces its useful message count."""
     module = _facade_module()
     service = _ProgressQQService(
         acquisition=_qq_acquisition(_export_file(tmp_path, "qq-progress.json")),
-        snapshots=[_qq_export_progress(progress=47, message_count=1234)],
+        snapshots=[_qq_export_progress(progress=50, message_count=360424)],
     )
     facade = _facade(qq_service=service, tmp_path=tmp_path)
     progress: list[str] = []
@@ -3001,15 +3001,19 @@ def test_analyze_session_forwards_qq_export_progress_to_acquire_export(
 
     assert len(service.progress_callbacks) == 1
     assert callable(service.progress_callbacks[0])
-    assert "正在获取 QQ 聊天记录 · 47%" in progress
+    assert "正在获取 QQ 聊天记录 · 已获取 360,424 条" in progress
+    assert not any("50%" in message for message in progress)
 
 
-def test_analyze_session_keeps_zero_qq_export_progress(tmp_path: Path) -> None:
-    """A real ``progress=0`` must be shown, never dropped by truthiness."""
+@pytest.mark.parametrize("message_count", [None, 0])
+def test_analyze_session_reports_plain_qq_progress_without_reliable_count(
+    tmp_path: Path,
+    message_count: int | None,
+) -> None:
     module = _facade_module()
     service = _ProgressQQService(
         acquisition=_qq_acquisition(_export_file(tmp_path, "qq-zero.json")),
-        snapshots=[_qq_export_progress(progress=0)],
+        snapshots=[_qq_export_progress(progress=50, message_count=message_count)],
     )
     facade = _facade(qq_service=service, tmp_path=tmp_path)
     progress: list[str] = []
@@ -3020,17 +3024,31 @@ def test_analyze_session_keeps_zero_qq_export_progress(tmp_path: Path) -> None:
         progress=progress.append,
     )
 
-    assert "正在获取 QQ 聊天记录 · 0%" in progress
+    assert "正在获取 QQ 聊天记录" in progress
+    assert not any("50%" in message for message in progress)
 
 
-def test_analyze_session_never_fabricates_a_qq_percentage(
+@pytest.mark.parametrize("progress_value", [None, 0, 42, 97, 100])
+def test_analyze_session_never_renders_a_qce_percentage(
     tmp_path: Path,
+    progress_value: int | None,
 ) -> None:
-    """A missing progress value must not become a fabricated percentage."""
+    """QCE's raw ``progress`` number is not a trusted percentage.
+
+    Turning it into a ``…%`` label is exactly what produced the misleading
+    0%→97% progress that never completed. The provider's own ``message`` may
+    also embed a percentage, so it must not be relayed verbatim either.
+    """
     module = _facade_module()
     service = _ProgressQQService(
-        acquisition=_qq_acquisition(_export_file(tmp_path, "qq-none.json")),
-        snapshots=[_qq_export_progress(progress=None, message_count=5)],
+        acquisition=_qq_acquisition(_export_file(tmp_path, "qq-pct.json")),
+        snapshots=[
+            _qq_export_progress(
+                progress=progress_value,
+                message_count=1234,
+                message="正在导出 42%",
+            )
+        ],
     )
     facade = _facade(qq_service=service, tmp_path=tmp_path)
     progress: list[str] = []
@@ -3041,10 +3059,8 @@ def test_analyze_session_never_fabricates_a_qq_percentage(
         progress=progress.append,
     )
 
-    assert callable(service.progress_callbacks[0])
-    assert not any(
-        "正在获取 QQ 聊天记录" in message for message in progress
-    )
+    assert "正在获取 QQ 聊天记录 · 已获取 1,234 条" in progress
+    assert not any("%" in message for message in progress)
 
 
 def test_analyze_session_reused_qq_snapshot_without_progress_is_not_an_error(
