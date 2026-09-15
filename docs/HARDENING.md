@@ -135,14 +135,43 @@ Release Blocker：Yes
 QCE 提供 messageCount、progress、status、message，
 没有可靠标准 totalMessages / processedMessages。
 
-状态：实现中。
+状态：已真实验收通过。
 
-当前收尾记录：
+最终设计：
 
-- 真实 QCE 百分比已打通，并完成 packaged Echo 验收。
-- 已区分 `progress=0` 与 `progress=None`。
-- `messageCount` 已透传到 Application，但真实语义尚未验证，因此暂不展示。
-- 大数据 QCE 卡住 / 超时转入 BUG-01，本阶段不处理。
+- QCE 的 `progress` 字段不足以为用户提供可靠的完成百分比；实际表现为类似
+  0% → … → 97% 后长时间不变，因此不再作为面向用户的百分比展示。
+- facade 不再把 `progress` 渲染为 `{value}%`，也不透传可能含百分比的 QCE `message`。
+- `message_count > 0` 时显示：`正在获取 QQ 聊天记录 · 已获取 N 条`；
+  无可信数量时只显示：`正在获取 QQ 聊天记录`。
+- 不插值、不估计 total、不伪造 100%，也不把 `messageCount` 当作 total。
+- `progress` / `status` / `message` 仍在 Application 层 `QQExportProgress` 中原样透传，
+  只是不再渲染成百分比。
+
+真实验收结果：
+
+- QCE 阶段显示 `已获取 4,379 条`，未再出现 0% / 97% / 100% 等假百分比。
+- 数量很快到 4,379 后约数秒不增长，随后进入报告生成。
+- 最终 Echo Report 分析消息为 234 条：4,379 是获取到的原始消息数，234 是过滤后
+  进入分析的消息数，二者语义允许且符合预期（该验收群以机器人 / 模板噪声为主）。
+
+大数据 QCE 卡住 / 超时转入 BUG-01，本阶段不处理。
+
+### REL-01.1 QQ 导出停滞感提示（非阻塞 UX debt）
+
+当 `message_count` 一段时间没有增长、但导出任务仍未结束时，用户容易误以为程序卡死。
+
+后续可考虑显示类似：
+`已获取 4,379 条 QQ 聊天记录 · 正在完成导出，请稍候…`
+
+约束：
+
+- 只能说明“任务仍在处理中 / 导出尚未结束”；
+- 不得猜测 QCE 正在进行审核、校验、安全检查等具体内部步骤；
+- 不显示虚假百分比；
+- 不预测剩余时间。
+
+状态：已记录，本次不实现。
 
 ### REL-02 History 可以直接 reopen 完整分析结果
 
