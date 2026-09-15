@@ -6,6 +6,7 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Protocol
 
 from ..analysis.identity import stable_sender_key
 from ..analysis.conversation_sessions import analyze_conversation_sessions
@@ -28,13 +29,6 @@ from ..analyzer import (
     top_words,
 )
 from ..cleaner import clean_text
-from ..exporters import (
-    export_word_frequency_csv,
-    export_word_speaker_frequency_csv,
-    export_word_speaker_summary_csv,
-    generate_word_top_speakers_chart,
-    generate_wordcloud,
-)
 from ..message import ChatMessage
 from ..message_quality_filter import apply_message_quality_filter
 from ..rich_message import ExpressionContent, RichMessage
@@ -67,12 +61,7 @@ from .scope_filter import AnalysisScopeMode, filter_messages
 
 _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.identity")
 
-_ARTIFACT_FILENAMES = {
-    "word_frequency_csv": "word_frequency.csv",
-    "wordcloud": "wordcloud.png",
-    "word_speaker_summary_csv": "word_speaker_summary.csv",
-    "word_speaker_frequency_csv": "word_speaker_frequency.csv",
-    "word_top_speakers_chart": "word_top_speakers.png",
+_ECHO_ARTIFACT_FILENAMES = {
     "echo_report_json": "echo-report.json",
     "echo_report_html": "echo-report.html",
 }
@@ -80,6 +69,24 @@ _ECHO_ARTIFACTS = (
     ArtifactDTO(kind="echo_report_json", filename="echo-report.json"),
     ArtifactDTO(kind="echo_report_html", filename="echo-report.html"),
 )
+
+
+class LegacyArtifactWriter(Protocol):
+    """Writes the legacy CLI artifacts for one completed analysis run.
+
+    The desktop build injects nothing, so those artifacts (and the chart
+    libraries that produce them) stay out of the packaged app entirely.
+    """
+
+    def __call__(
+        self,
+        *,
+        output_directory: Path,
+        ranked_words: list[tuple[str, int]],
+        speaker_summaries: list[WordSpeakerSummary],
+        speaker_frequency_rows: list[tuple[str, str, int]],
+        font_path: str | None,
+    ) -> tuple[ArtifactDTO, ...]: ...
 
 
 @dataclass(slots=True)
@@ -91,6 +98,14 @@ class _AnalyzedMessages:
 
 class AnalysisApplicationService:
     """Coordinate one complete analysis use case without CLI behavior."""
+
+    def __init__(
+        self,
+        *,
+        legacy_word_artifacts: LegacyArtifactWriter | None = None,
+    ) -> None:
+        """Create the service; the desktop build injects no legacy writer."""
+        self._legacy_word_artifacts = legacy_word_artifacts
 
     def execute(self, request: AnalysisRequestDTO) -> AnalysisResultDTO:
         """Analyze supported local exports and return a privacy-safe result."""
@@ -216,11 +231,14 @@ class AnalysisApplicationService:
         )
 
         try:
-            echo_report_view = _export_artifacts(
+            legacy_artifacts = self._write_legacy_artifacts(
                 request,
                 ranked_words,
                 speaker_summaries,
                 speaker_frequency_rows,
+            )
+            echo_report_view = _export_echo_artifacts(
+                request,
                 reports,
                 viewer_speaker_key=viewer_speaker_key,
                 conversation_kind=conversation_type,
@@ -244,12 +262,27 @@ class AnalysisApplicationService:
                 WordFrequencyDTO(word=word, count=count)
                 for word, count in ranked_words
             ),
-            artifacts=tuple(
-                ArtifactDTO(kind=kind, filename=filename)
-                for kind, filename in _ARTIFACT_FILENAMES.items()
-            ),
+            artifacts=(*legacy_artifacts, *_ECHO_ARTIFACTS),
             reports=reports,
             echo_report_view=echo_report_view,
+        )
+
+    def _write_legacy_artifacts(
+        self,
+        request: AnalysisRequestDTO,
+        ranked_words: list[tuple[str, int]],
+        speaker_summaries: list[WordSpeakerSummary],
+        speaker_frequency_rows: list[tuple[str, str, int]],
+    ) -> tuple[ArtifactDTO, ...]:
+        """Write the legacy CLI artifacts, or nothing for the desktop build."""
+        if self._legacy_word_artifacts is None:
+            return ()
+        return self._legacy_word_artifacts(
+            output_directory=request.output_directory,
+            ranked_words=ranked_words,
+            speaker_summaries=speaker_summaries,
+            speaker_frequency_rows=speaker_frequency_rows,
+            font_path=request.font_path,
         )
 
 
@@ -333,8 +366,8 @@ def _expression_only_result(
             exc_info=True,
         )
         for filename in (
-            _ARTIFACT_FILENAMES["echo_report_json"],
-            _ARTIFACT_FILENAMES["echo_report_html"],
+            _ECHO_ARTIFACT_FILENAMES["echo_report_json"],
+            _ECHO_ARTIFACT_FILENAMES["echo_report_html"],
         ):
             try:
                 (request.output_directory / filename).unlink(missing_ok=True)
@@ -547,58 +580,6 @@ def _log_identity_diagnostics(messages: list[ChatMessage]) -> None:
     )
 
 
-def _export_artifacts(
-    request: AnalysisRequestDTO,
-    ranked_words: list[tuple[str, int]],
-    speaker_summaries: list[WordSpeakerSummary],
-    speaker_frequency_rows: list[tuple[str, str, int]],
-    reports: AnalysisReports,
-    *,
-    viewer_speaker_key: str | None,
-    conversation_kind: str,
-    expression_source: str | None,
-) -> EchoReportView:
-    output_directory = request.output_directory
-    export_word_frequency_csv(
-        ranked_words,
-        str(output_directory / _ARTIFACT_FILENAMES["word_frequency_csv"]),
-    )
-    export_word_speaker_summary_csv(
-        speaker_summaries,
-        str(
-            output_directory
-            / _ARTIFACT_FILENAMES["word_speaker_summary_csv"]
-        ),
-    )
-    export_word_speaker_frequency_csv(
-        speaker_frequency_rows,
-        str(
-            output_directory
-            / _ARTIFACT_FILENAMES["word_speaker_frequency_csv"]
-        ),
-    )
-    generate_word_top_speakers_chart(
-        speaker_summaries,
-        str(
-            output_directory
-            / _ARTIFACT_FILENAMES["word_top_speakers_chart"]
-        ),
-        request.font_path,
-    )
-    generate_wordcloud(
-        ranked_words,
-        str(output_directory / _ARTIFACT_FILENAMES["wordcloud"]),
-        request.font_path,
-    )
-    return _export_echo_artifacts(
-        request,
-        reports,
-        viewer_speaker_key=viewer_speaker_key,
-        conversation_kind=conversation_kind,
-        expression_source=expression_source,
-    )
-
-
 def _export_echo_artifacts(
     request: AnalysisRequestDTO,
     reports: AnalysisReports,
@@ -617,10 +598,10 @@ def _export_echo_artifacts(
     )
     export_echo_report_json(
         view,
-        str(output_directory / _ARTIFACT_FILENAMES["echo_report_json"]),
+        str(output_directory / _ECHO_ARTIFACT_FILENAMES["echo_report_json"]),
     )
     export_echo_report_html(
         view,
-        str(output_directory / _ARTIFACT_FILENAMES["echo_report_html"]),
+        str(output_directory / _ECHO_ARTIFACT_FILENAMES["echo_report_html"]),
     )
     return view

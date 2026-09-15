@@ -17,6 +17,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_ROOT))
 
+# Artifacts retired from the desktop analysis path: they belong to the legacy
+# CLI only and must not be produced by AnalysisApplicationService.
+RETIRED_DESKTOP_ARTIFACT_FILENAMES = (
+    "word_frequency.csv",
+    "word_speaker_summary.csv",
+    "word_speaker_frequency.csv",
+    "word_top_speakers.png",
+    "wordcloud.png",
+)
+
 
 def _application_module():
     return importlib.import_module("qq_chat_analyzer.application")
@@ -89,34 +99,6 @@ def test_execute_returns_completed_privacy_safe_result_without_cli_output(
     def record_export(*args: object) -> None:
         generated_filenames.append(Path(str(args[-1])).name)
 
-    def record_chart(*args: object) -> None:
-        generated_filenames.append(Path(str(args[1])).name)
-
-    monkeypatch.setattr(
-        service_module,
-        "export_word_frequency_csv",
-        record_export,
-    )
-    monkeypatch.setattr(
-        service_module,
-        "export_word_speaker_summary_csv",
-        record_export,
-    )
-    monkeypatch.setattr(
-        service_module,
-        "export_word_speaker_frequency_csv",
-        record_export,
-    )
-    monkeypatch.setattr(
-        service_module,
-        "generate_word_top_speakers_chart",
-        record_chart,
-    )
-    monkeypatch.setattr(
-        service_module,
-        "generate_wordcloud",
-        record_chart,
-    )
     monkeypatch.setattr(
         service_module,
         "export_echo_report_json",
@@ -158,20 +140,10 @@ def test_execute_returns_completed_privacy_safe_result_without_cli_output(
         count=3,
     )
     assert {(artifact.kind, artifact.filename) for artifact in result.artifacts} == {
-        ("word_frequency_csv", "word_frequency.csv"),
-        ("wordcloud", "wordcloud.png"),
-        ("word_speaker_summary_csv", "word_speaker_summary.csv"),
-        ("word_speaker_frequency_csv", "word_speaker_frequency.csv"),
-        ("word_top_speakers_chart", "word_top_speakers.png"),
         ("echo_report_json", "echo-report.json"),
         ("echo_report_html", "echo-report.html"),
     }
     assert set(generated_filenames) == {
-        "word_frequency.csv",
-        "wordcloud.png",
-        "word_speaker_summary.csv",
-        "word_speaker_frequency.csv",
-        "word_top_speakers.png",
         "echo-report.json",
         "echo-report.html",
     }
@@ -181,6 +153,45 @@ def test_execute_returns_completed_privacy_safe_result_without_cli_output(
     assert str(tmp_path) not in result_repr
     for private_sender in private_senders:
         assert private_sender not in result_repr
+
+
+def test_desktop_analysis_writes_only_the_echo_report_artifacts(
+    tmp_path: Path,
+) -> None:
+    """The shipped desktop result is the Echo report and nothing else."""
+    application = _application_module()
+    service_module = _service_module()
+    input_path = tmp_path / "fictional-chat.json"
+    _write_fictional_chat(
+        input_path,
+        [
+            {
+                "timestamp": 1,
+                "sender": {"nickname": "Fictional-Alice"},
+                "type": "text",
+                "content": {"text": "Python Python analytics"},
+            },
+            {
+                "timestamp": 2,
+                "sender": {"nickname": "Fictional-Bob"},
+                "type": "text",
+                "content": {"text": "Python project"},
+            },
+        ],
+    )
+    request = _request(application, tmp_path, input_path)
+
+    result = service_module.AnalysisApplicationService().execute(request)
+
+    assert result.status is application.AnalysisStatus.COMPLETED
+    assert (request.output_directory / "echo-report.json").is_file()
+    assert (request.output_directory / "echo-report.html").is_file()
+    assert {artifact.kind for artifact in result.artifacts} == {
+        "echo_report_json",
+        "echo_report_html",
+    }
+    for retired_filename in RETIRED_DESKTOP_ARTIFACT_FILENAMES:
+        assert not (request.output_directory / retired_filename).exists()
 
 
 def test_execute_returns_no_valid_text_without_exporting(
@@ -317,14 +328,14 @@ def test_export_failure_becomes_safe_application_error(
             }
         ],
     )
-    private_failure = str(tmp_path / "private-output" / "word_frequency.csv")
+    private_failure = str(tmp_path / "private-output" / "echo-report.json")
 
     def fail_export(*args: object) -> None:
         raise OSError(f"cannot write {private_failure}")
 
     monkeypatch.setattr(
         service_module,
-        "export_word_frequency_csv",
+        "export_echo_report_json",
         fail_export,
     )
 
@@ -364,7 +375,6 @@ def test_importing_service_does_not_import_cli(
 
 def test_execute_analyzes_only_messages_inside_the_scope(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     application = _application_module()
     service_module = _service_module()
@@ -386,14 +396,6 @@ def test_execute_analyzes_only_messages_inside_the_scope(
             },
         ],
     )
-    for exporter_name in (
-        "export_word_frequency_csv",
-        "export_word_speaker_summary_csv",
-        "export_word_speaker_frequency_csv",
-        "generate_word_top_speakers_chart",
-        "generate_wordcloud",
-    ):
-        monkeypatch.setattr(service_module, exporter_name, lambda *args: None)
     request = dataclasses.replace(
         _request(application, tmp_path, input_path),
         scope=application.AnalysisScope.custom(

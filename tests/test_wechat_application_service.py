@@ -20,6 +20,16 @@ REPLY_TYPE = "\u5f15\u7528\u6d88\u606f"
 IMAGE_TYPE = "\u56fe\u7247\u6d88\u606f"
 SYSTEM_TYPE = "\u7cfb\u7edf\u6d88\u606f"
 
+# Artifacts retired from the desktop analysis path: they belong to the legacy
+# CLI only and must not be produced by AnalysisApplicationService.
+RETIRED_DESKTOP_ARTIFACT_FILENAMES = (
+    "word_frequency.csv",
+    "word_speaker_summary.csv",
+    "word_speaker_frequency.csv",
+    "word_top_speakers.png",
+    "wordcloud.png",
+)
+
 
 def _application_module():
     return importlib.import_module("qq_chat_analyzer.application")
@@ -127,34 +137,6 @@ def test_execute_routes_wechat_detailed_json_through_existing_pipeline(
     def record_export(*args: object) -> None:
         generated_filenames.append(Path(str(args[-1])).name)
 
-    def record_chart(*args: object) -> None:
-        generated_filenames.append(Path(str(args[1])).name)
-
-    monkeypatch.setattr(
-        service_module,
-        "export_word_frequency_csv",
-        record_export,
-    )
-    monkeypatch.setattr(
-        service_module,
-        "export_word_speaker_summary_csv",
-        record_export,
-    )
-    monkeypatch.setattr(
-        service_module,
-        "export_word_speaker_frequency_csv",
-        record_export,
-    )
-    monkeypatch.setattr(
-        service_module,
-        "generate_word_top_speakers_chart",
-        record_chart,
-    )
-    monkeypatch.setattr(
-        service_module,
-        "generate_wordcloud",
-        record_chart,
-    )
     monkeypatch.setattr(
         service_module,
         "export_echo_report_json",
@@ -178,20 +160,12 @@ def test_execute_routes_wechat_detailed_json_through_existing_pipeline(
         count=3,
     )
     assert {(artifact.kind, artifact.filename) for artifact in result.artifacts} == {
-        ("word_frequency_csv", "word_frequency.csv"),
-        ("wordcloud", "wordcloud.png"),
-        ("word_speaker_summary_csv", "word_speaker_summary.csv"),
-        ("word_speaker_frequency_csv", "word_speaker_frequency.csv"),
-        ("word_top_speakers_chart", "word_top_speakers.png"),
         ("echo_report_json", "echo-report.json"),
         ("echo_report_html", "echo-report.html"),
     }
     assert set(generated_filenames) == {
-        "word_frequency.csv",
-        "wordcloud.png",
-        "word_speaker_summary.csv",
-        "word_speaker_frequency.csv",
-        "word_top_speakers.png",
         "echo-report.json",
         "echo-report.html",
     }
+    for retired_filename in RETIRED_DESKTOP_ARTIFACT_FILENAMES:
+        assert not (tmp_path / "private-output" / retired_filename).exists()

@@ -2296,7 +2296,6 @@ def test_invalid_custom_scope_stops_before_source_export(
 
 def test_source_analysis_uses_the_shared_application_scope_filter(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = _facade_module()
     service_module = importlib.import_module(
@@ -2324,14 +2323,6 @@ def test_source_analysis_uses_the_shared_application_scope_filter(
         ),
         encoding="utf-8",
     )
-    for exporter_name in (
-        "export_word_frequency_csv",
-        "export_word_speaker_summary_csv",
-        "export_word_speaker_frequency_csv",
-        "generate_word_top_speakers_chart",
-        "generate_wordcloud",
-    ):
-        monkeypatch.setattr(service_module, exporter_name, lambda *args: None)
     source = module.ChatSource.QQ
     services = {
         "qq_service": _StubQQService(export_path=export_path),
