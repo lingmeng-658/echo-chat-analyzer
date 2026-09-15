@@ -36,3 +36,7 @@ runtime/wechat/*
 !runtime/wechat/wx_key_helper.cjs
 
 .codebuddy/
+
+# Local runtime and tool temp directories
+/Echo/
+/.codex-test-tmp/
