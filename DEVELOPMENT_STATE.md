@@ -1,5 +1,14 @@
 # Development State
 
+> **历史快照声明（2026-09-16）**
+>
+> 本文件是**历史开发阶段快照**，不再作为当前状态事实源。
+>
+> - 当前 Hardening / Active Bug：`docs/HARDENING.md`
+> - 当前架构：`ARCHITECTURE.md`
+>
+> 正文保持原样，不再维护。
+
 ## Stable
 
 - QQ / WeChat 数据接入

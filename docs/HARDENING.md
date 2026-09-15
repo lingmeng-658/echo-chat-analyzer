@@ -96,18 +96,45 @@ Release Blocker：Yes。
 
 Release Blocker：TBD。
 
-### BUG-05（候选）WeChat 普通语言画像可能混入 expression fallback names
+### BUG-05 WeChat 英文官方表情别名污染普通语言画像
 
-已知事实：
+状态：CLOSED。
 
-- 曾观察到 Facepalm / Sob / Laugh / ThumbsUp 等出现在普通「常说」词中。
-- 这是 WeChat 证据，不是 QQ。
-- 截图对应版本状态尚未确认。
-- 必须先在最新 main / build 上复验。
+Release Blocker：No / CLOSED。
 
-状态：待复验
+现象与根因：
 
-Release Blocker：TBD。
+- 曾观察到 Facepalm / Sob / Laugh / ThumbsUp 等出现在普通「常说」词中；
+  这是 WeChat 证据，不是 QQ。
+- 根因：WeChat 官方表情存在英文 bracket alias（`[Facepalm]` / `[Grin]` /
+  `[Laugh]` / `[Lol]` 等），旧逻辑主要识别中文 canonical name，
+  因此英文 alias 未被 expression recognizer 接住；
+  bracket punctuation 被 tokenizer 的 lexical preprocessing 去除后，
+  alias 本体进入普通 lexical token，污染「你常说 / TA常说 / 同频」等语言画像。
+- 这是 source representation compatibility 问题，
+  不是 stopword 覆盖不足，也不是「英文词本身不该统计」。
+
+修复：
+
+- 建立 official alias -> canonical expression normalization；
+- 110 个 aliases 建立 mapping / tokenizer / adapter 三层契约；
+- 不使用 stopword；
+- 不泛化删除任意 `[A-Za-z]+`：
+  `[TODO]` / `[AI]` / `[Python]` 等普通 bracket text 保留；
+- bare `Laugh` / `Lol` 等用户真实输入保留；
+- 修复中发现 `[Pooh-pooh]` 会被 hyphenated ASCII protection 抢先处理，
+  因此调整 preprocessing order：
+  expression masking 必须先于 hyphenated ASCII protection。
+
+验证：
+
+- focused：485 passed；
+- 该分支 Fast Suite：2121 passed / 26 deselected；
+- Windows build 成功；
+- 真实朋友机器 / 真实 WeChat 数据用最新版本复验通过：
+  原英文 expression names 不再进入语言画像，使用过程中未发现新 Bug。
+
+工程记录：`docs/BUG_JOURNAL.md` Journal 003。
 
 ### BUG-06 WeChat 会话数据明显不完整 / 不随新消息更新
 
@@ -222,7 +249,43 @@ GUI 不展示 traceback。
 Portable build 已存在。
 安装器、分发方式、普通用户首次运行体验仍需收口。
 
-状态：未审计。
+状态：未审计（installer / 最终普通用户分发体验仍未完成，不标 CLOSED）。
+
+#### REL-06 附：Windows portable package hardening 记录
+
+包体变化：
+
+| 阶段 | unpacked | ZIP |
+| --- | --- | --- |
+| Initial | 487.00 MiB | 199.86 MiB |
+| PACK-SIZE-01 | 417.18 MiB | 178.74 MiB |
+| PACK-SIZE-02B | 358.12 MiB | 146.60 MiB |
+
+PACK-SIZE-01（Windows native pruning）：
+
+- build 时过滤 Windows x64 不需要的 QQ native binaries；
+- source runtime 不删除；
+- Linux / Darwin / ARM native 不进入 Windows portable package。
+
+PACK-SIZE-02B（legacy desktop artifacts + dependency pruning）：
+
+- Desktop / Application 不再生成 5 个 legacy artifacts：
+
+```text
+word_frequency.csv
+word_speaker_summary.csv
+word_speaker_frequency.csv
+word_top_speakers.png
+wordcloud.png
+```
+
+- CLI 旧 legacy word artifact 能力仍保留；
+- desktop frozen import graph 排除旧 graphics / data stack：
+  `pandas` / `matplotlib` / `wordcloud` / `PIL` / `contourpy` / `kiwisolver` /
+  `mpl_toolkits` / `fontTools` / `pytest` / `_pytest` / `pygments`；
+- 保留（未误删）：`numpy` / `jieba` / `PySide6` / `zstandard`；
+- CLI console entrypoint 已额外验证：
+  `test_console_script_and_module_help_are_consistent`（1 passed）。
 
 ### REL-07 GUI 上线前最终 polish
 
@@ -309,6 +372,39 @@ Release Blocker：Yes。
 先记录，不在本任务处理。
 
 状态：未审计。
+
+### GOV-05.1 Build / runtime environment debt（本机 gitignored runtime 资产不完整）
+
+当前开发机 main worktree 的 gitignored：
+
+```text
+runtime/qq
+runtime/wechat
+```
+
+本地资产并不完整。因此 merge 后 Fast Suite 结果为：
+
+- 2121 passed
+- 3 failed（environment-dependent）
+- 1 skipped
+- 30 deselected
+
+失败节点与缺口：
+
+- `tests/test_qq_auth_bridge.py::test_launcher_user_exits_without_pause_in_echo_mode`
+- `tests/test_qq_auth_bridge.py::test_launcher_user_keeps_pause_for_interactive_mode`
+  —— 缺 `runtime/qq/launcher-user.bat`；
+  这两个节点在 PACK-SIZE-02B 的完整 runtime worktree 中已单独验证通过。
+- `tests/test_wechat_key_service.py::test_bundled_helper_reaches_process_enumeration_before_dll_load`
+  —— 缺完整 bundled runtime；
+  同文件 1 skipped：缺 bundled Windows Node.js / koffi / wx_key.dll。
+
+明确结论：
+
+- 这不是本次 merge 的产品代码 regression；
+- 不应靠旧 dist 恢复资产并将其当作正式 runtime source；
+- Final Build 前必须通过权威 bootstrap / source 恢复完整 runtime；
+- 该问题单独处理，不在本次 documentation checkpoint 修复。
 
 ---
 
