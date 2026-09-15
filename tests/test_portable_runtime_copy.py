@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import struct
@@ -14,6 +15,48 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BUILD_SCRIPT = PROJECT_ROOT / "scripts" / "build_windows_exe.ps1"
 KOFFI_SOURCE = PROJECT_ROOT / "runtime" / "wechat" / "node_modules" / "koffi"
 
+# NapCat ships native addons for every Node.js platform/arch pair it supports
+# and selects exactly one variant at runtime via
+# `process.platform + "." + process.arch` (native\ffmpeg, native\napi2native,
+# native\packet, native\pty, native\dpapi). A Windows x64 distribution can only
+# ever load the win32.x64 addons, so the packaged copy must not carry the
+# foreign platform/arch variants. The pattern matches a single path segment
+# carrying a foreign platform designator (native\pty\linux.x64,
+# native\dpapi\win32-arm64) or a foreign architecture designator for an
+# x64-only distribution (MoeHoo.linux.arm64.node).
+FOREIGN_NATIVE_SEGMENT = re.compile(
+    r"(?:^|[._-])(?:linux|darwin|freebsd|openbsd|netbsd|sunos|aix|android|arm64)"
+    r"(?:[._-]|$)"
+)
+
+WINDOWS_X64_NATIVE_ASSETS = (
+    "dpapi/win32-x64/@primno+dpapi.node",
+    "ffmpeg/ffmpegAddon.win32.x64.node",
+    "napi2native/ffmpeg.dll",
+    "napi2native/napi2native.win32.x64.node",
+    "packet/MoeHoo.win32.x64.node",
+    "pty/win32.x64/conpty.node",
+    "pty/win32.x64/conpty_console_list.node",
+    "pty/win32.x64/pty.node",
+    "pty/win32.x64/winpty-agent.exe",
+    "pty/win32.x64/winpty.dll",
+)
+
+FOREIGN_NATIVE_ASSETS = (
+    "dpapi/win32-arm64/@primno+dpapi.node",
+    "ffmpeg/ffmpegAddon.darwin.arm64.node",
+    "ffmpeg/ffmpegAddon.linux.arm64.node",
+    "ffmpeg/ffmpegAddon.linux.x64.node",
+    "napi2native/napi2native.darwin.arm64.node",
+    "napi2native/napi2native.linux.arm64.node",
+    "napi2native/napi2native.linux.x64.node",
+    "packet/MoeHoo.darwin.arm64.node",
+    "packet/MoeHoo.linux.arm64.node",
+    "packet/MoeHoo.linux.x64.node",
+    "pty/linux.arm64/pty.node",
+    "pty/linux.x64/pty.node",
+)
+
 # Full-only: build/packaging smoke that runs build_windows_exe.ps1 and loads
 # the bundled Node runtime. Excluded from the Fast Suite (see pyproject.toml).
 pytestmark = pytest.mark.slow_integration
@@ -22,6 +65,13 @@ pytestmark = pytest.mark.slow_integration
 def _write(path: Path, content: str = "fictional") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+def _fictional_native_tree(runtime: Path) -> None:
+    """Mirror the upstream NapCat native addon layout for every platform."""
+    native = runtime / "qq" / "native"
+    for relative in WINDOWS_X64_NATIVE_ASSETS + FOREIGN_NATIVE_ASSETS:
+        _write(native / relative)
 
 
 def _fictional_runtime(
@@ -73,6 +123,7 @@ def _fictional_runtime(
         project_root / "scripts" / "run_wechat_wcdb_diagnostic.ps1",
         "# fictional diagnostic runner\n",
     )
+    _fictional_native_tree(runtime)
     return runtime
 
 
@@ -301,3 +352,74 @@ def test_copied_portable_koffi_can_be_loaded_by_node(tmp_path: Path) -> None:
 
     assert helper_probe.returncode == 0, helper_probe.stderr
     assert helper_probe.stdout == "loaded"
+
+
+def _foreign_native_entries(native: Path) -> list[str]:
+    """Return packaged native entries carrying a foreign platform designator."""
+    foreign: list[str] = []
+    for path in native.rglob("*"):
+        relative = path.relative_to(native).as_posix()
+        if any(
+            FOREIGN_NATIVE_SEGMENT.search(segment)
+            for segment in relative.split("/")
+        ):
+            foreign.append(relative)
+    return sorted(foreign)
+
+
+def test_runtime_build_prunes_non_windows_native_addons(tmp_path: Path) -> None:
+    """The packaged runtime must only ship the Windows x64 native addons."""
+    _fictional_runtime(tmp_path)
+
+    completed = _copy_runtime(tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    native = tmp_path / "dist/Echo/runtime/qq/native"
+    assert native.is_dir()
+    assert _foreign_native_entries(native) == []
+
+
+def test_runtime_build_ships_windows_x64_native_addons(tmp_path: Path) -> None:
+    """Pruning must not remove the addons the Windows x64 runtime loads."""
+    _fictional_runtime(tmp_path)
+
+    completed = _copy_runtime(tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    native = tmp_path / "dist/Echo/runtime/qq/native"
+    missing = [
+        relative
+        for relative in WINDOWS_X64_NATIVE_ASSETS
+        if not (native / relative).is_file()
+    ]
+    assert missing == []
+
+
+def test_runtime_build_keeps_repository_native_assets_intact(
+    tmp_path: Path,
+) -> None:
+    """Pruning is a packaging concern: the repository runtime stays complete."""
+    runtime = _fictional_runtime(tmp_path)
+
+    completed = _copy_runtime(tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    missing = [
+        relative
+        for relative in FOREIGN_NATIVE_ASSETS
+        if not (runtime / "qq/native" / relative).is_file()
+    ]
+    assert missing == []
+
+
+def test_runtime_build_rejects_missing_windows_native_addon(
+    tmp_path: Path,
+) -> None:
+    """A Windows x64 build must not silently ship an incomplete native set."""
+    runtime = _fictional_runtime(tmp_path)
+    (runtime / "qq/native/packet/MoeHoo.win32.x64.node").unlink()
+
+    completed = _copy_runtime(tmp_path)
+
+    assert completed.returncode != 0
+    assert "MoeHoo.win32.x64.node" in (completed.stderr + completed.stdout)

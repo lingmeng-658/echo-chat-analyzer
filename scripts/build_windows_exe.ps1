@@ -32,6 +32,18 @@ $RequiredRuntimePaths = @(
     "qq\NapCatWinBootHook.dll",
     "qq\config\plugins.json",
     "qq\static\qce",
+    # Windows x64 native addons NapCat loads at runtime. They must survive the
+    # foreign platform pruning below, so a missing one fails the build.
+    "qq\native\dpapi\win32-x64\@primno+dpapi.node",
+    "qq\native\ffmpeg\ffmpegAddon.win32.x64.node",
+    "qq\native\napi2native\ffmpeg.dll",
+    "qq\native\napi2native\napi2native.win32.x64.node",
+    "qq\native\packet\MoeHoo.win32.x64.node",
+    "qq\native\pty\win32.x64\conpty.node",
+    "qq\native\pty\win32.x64\conpty_console_list.node",
+    "qq\native\pty\win32.x64\pty.node",
+    "qq\native\pty\win32.x64\winpty-agent.exe",
+    "qq\native\pty\win32.x64\winpty.dll",
     "wechat\wcdb_cli.exe",
     "wechat\WCDB.dll",
     "wechat\wx_key.dll",
@@ -40,6 +52,60 @@ $RequiredRuntimePaths = @(
     "wechat\node_modules\koffi\index.js",
     "wechat\node_modules\koffi\build\koffi\win32_x64\koffi.node"
 )
+
+# NapCat bundles native addons for every Node.js platform/arch pair it supports
+# and selects exactly one variant at runtime via
+# `process.platform + "." + process.arch` (native\ffmpeg, native\napi2native,
+# native\packet, native\pty, native\dpapi). This distribution targets Windows
+# x64, so only the win32.x64 addons can ever be loaded and the packaged copy
+# drops the foreign platform/arch variants. The repository runtime directory
+# stays complete as the upstream source of truth.
+#
+# The pattern matches a single path segment carrying a foreign platform
+# designator (native\pty\linux.x64, native\dpapi\win32-arm64) or a foreign
+# architecture designator for an x64-only distribution
+# (MoeHoo.linux.arm64.node). Segments carrying neither designator, such as
+# native\napi2native\ffmpeg.dll, are kept.
+$ForeignNativeSegmentPattern = '(^|[.\-_])(linux|darwin|freebsd|openbsd|netbsd|sunos|aix|android|arm64)([.\-_]|$)'
+
+function Remove-ForeignQQNativeAssets {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$NativeRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$ForeignSegmentPattern
+    )
+
+    if (-not (Test-Path -LiteralPath $NativeRoot -PathType Container)) {
+        return
+    }
+
+    $ForeignFiles = @(
+        Get-ChildItem -LiteralPath $NativeRoot -Recurse -File -Force |
+            Where-Object {
+                $Segments = $_.FullName.Substring($NativeRoot.Length) -split '[\\/]'
+                @($Segments | Where-Object {
+                        $_ -match $ForeignSegmentPattern
+                    }).Count -gt 0
+            }
+    )
+    foreach ($ForeignFile in $ForeignFiles) {
+        Remove-Item -LiteralPath $ForeignFile.FullName -Force
+    }
+
+    # Foreign-only directories (native\pty\linux.x64, native\dpapi\win32-arm64)
+    # are left behind as empty shells once their payload is gone.
+    $ForeignDirectories = @(
+        Get-ChildItem -LiteralPath $NativeRoot -Recurse -Directory -Force |
+            Sort-Object { $_.FullName.Length } -Descending |
+            Where-Object { $_.Name -match $ForeignSegmentPattern }
+    )
+    foreach ($ForeignDirectory in $ForeignDirectories) {
+        if (@(Get-ChildItem -LiteralPath $ForeignDirectory.FullName -Force).Count -eq 0) {
+            Remove-Item -LiteralPath $ForeignDirectory.FullName -Force
+        }
+    }
+}
 
 if (-not (Test-Path -LiteralPath $RuntimeSource -PathType Container)) {
     throw "Runtime source directory is missing. Restore the repository runtime directory before building."
@@ -69,6 +135,12 @@ try {
         Remove-Item -LiteralPath $PortableRuntime -Recurse -Force
     }
     Copy-Item -LiteralPath $RuntimeSource -Destination $PortableRuntime -Recurse
+
+    # Ship only the native addons this Windows x64 distribution loads; see the
+    # pruning policy above.
+    Remove-ForeignQQNativeAssets -NativeRoot (
+        Join-Path $PortableRuntime "qq\native"
+    ) -ForeignSegmentPattern $ForeignNativeSegmentPattern
 
     # The QQ launchers and WeChat native libraries use the MSVC dynamic
     # runtime. Ship it app-local so both child-process trees also start on
