@@ -1,5 +1,15 @@
 # 余音 Echo Project Status
 
+> **历史快照声明（2026-09-16）**
+>
+> 本文件是**历史阶段快照**，不再作为当前项目状态事实源。
+>
+> - 当前状态事实源：`docs/HARDENING.md`
+> - 当前架构事实源：`ARCHITECTURE.md`
+>
+> 正文中的旧测试数字、旧 HEAD、旧 roadmap 一律保持原样，不再维护，
+> 以免继续被误当作 live status source。
+
 ## 项目定位
 
 余音 Echo 是一个隐私优先、本地运行的聊天记忆分析工具。
