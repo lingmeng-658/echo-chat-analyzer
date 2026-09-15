@@ -41,6 +41,10 @@ from qq_chat_analyzer.providers.wechat_database_provider import (
     _sanitize_wcdb_message,
 )
 from qq_chat_analyzer.providers import wechat_database_provider
+from qq_chat_analyzer.wechat_official_emojis import (
+    OFFICIAL_WECHAT_EMOJI_NAMES,
+    WECHAT_EMOJI_ALIASES,
+)
 
 
 TEXT_LOCAL_TYPE = 1
@@ -79,6 +83,17 @@ def _write_db_export(
         "messages": rows,
     }
     path.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
+
+
+def _bracket_expression(export: Path, text: str) -> ExpressionContent:
+    """Return the single expression content parsed from a fictional text row."""
+    _write_db_export(export, [_db_row(message_content=text)])
+    contents = wechat_db_adapter.parse_rich_messages(
+        wechat_db_adapter.load_messages(export)
+    )[0].contents
+    assert contents[0] == TextContent(text=text)
+    assert len(contents) == 2
+    return contents[1]
 
 
 class _FakeCompleted:
@@ -272,6 +287,148 @@ def test_text_row_keeps_unknown_bracket_text_as_plain_text(
 ) -> None:
     export = tmp_path / "session.json"
     text = "今天[某个自定义词]继续"
+    _write_db_export(export, [_db_row(message_content=text)])
+
+    rich_messages = wechat_db_adapter.parse_rich_messages(
+        wechat_db_adapter.load_messages(export)
+    )
+
+    assert rich_messages[0].contents == (TextContent(text=text),)
+
+
+def test_english_alias_is_normalized_to_the_chinese_official_expression(
+    tmp_path: Path,
+) -> None:
+    expression = _bracket_expression(tmp_path / "session.json", "哈哈[Facepalm]来了")
+
+    assert expression.expression_kind == EXPRESSION_KIND_PLATFORM_FACE
+    assert expression.expression_key == "捂脸"
+    assert expression.source == "wechat"
+    assert expression.text_before == "哈哈"
+    assert expression.text_after == "来了"
+
+
+@pytest.mark.parametrize(
+    ("alias", "canonical"),
+    (
+        ("Facepalm", "捂脸"),
+        ("Grin", "呲牙"),
+        ("Laugh", "憨笑"),
+        ("Sob", "流泪"),
+        ("ThumbsUp", "强"),
+    ),
+)
+def test_english_alias_and_chinese_name_share_one_expression(
+    tmp_path: Path,
+    alias: str,
+    canonical: str,
+) -> None:
+    alias_expression = _bracket_expression(
+        tmp_path / "alias.json",
+        f"[{alias}]",
+    )
+    chinese_expression = _bracket_expression(
+        tmp_path / "chinese.json",
+        f"[{canonical}]",
+    )
+
+    assert alias_expression.expression_key == canonical
+    assert alias_expression.expression_key == chinese_expression.expression_key
+    assert (
+        alias_expression.expression_kind
+        == chinese_expression.expression_kind
+    )
+    assert alias_expression.source == chinese_expression.source
+    assert alias_expression.text_before == chinese_expression.text_before
+    assert alias_expression.text_after == chinese_expression.text_after
+
+
+@pytest.mark.parametrize(
+    ("alias", "canonical"),
+    (
+        ("Awesome", "666"),
+        ("Bye", "再见"),
+        ("MyBad", "打脸"),
+        ("Worship", "合十"),
+        ("Blush", "囧"),
+    ),
+)
+def test_new_english_alias_normalizes_to_canonical_expression(
+    tmp_path: Path,
+    alias: str,
+    canonical: str,
+) -> None:
+    expression = _bracket_expression(tmp_path / "new-alias.json", f"[{alias}]")
+
+    assert expression.expression_kind == EXPRESSION_KIND_PLATFORM_FACE
+    assert expression.expression_key == canonical
+    assert expression.source == "wechat"
+
+
+def test_spaced_and_joined_let_down_share_one_expression(
+    tmp_path: Path,
+) -> None:
+    spaced = _bracket_expression(tmp_path / "spaced.json", "[Let Down]")
+    joined = _bracket_expression(tmp_path / "joined.json", "[LetDown]")
+
+    assert spaced.expression_key == "失望"
+    assert joined.expression_key == spaced.expression_key
+
+
+def test_awesome_and_chinese_666_share_one_expression(tmp_path: Path) -> None:
+    alias = _bracket_expression(tmp_path / "alias.json", "[Awesome]")
+    chinese = _bracket_expression(tmp_path / "chinese.json", "[666]")
+
+    assert alias.expression_key == "666"
+    assert alias.expression_key == chinese.expression_key
+
+
+def test_every_current_official_code_is_recognized_in_one_text_row(
+    tmp_path: Path,
+) -> None:
+    codes = tuple(OFFICIAL_WECHAT_EMOJI_NAMES)
+    text = "".join(f"[{code}]" for code in codes)
+    export = tmp_path / "all-codes.json"
+    _write_db_export(export, [_db_row(message_content=text)])
+
+    contents = wechat_db_adapter.parse_rich_messages(
+        wechat_db_adapter.load_messages(export)
+    )[0].contents
+    expressions = [
+        content
+        for content in contents
+        if isinstance(content, ExpressionContent)
+    ]
+
+    assert len(expressions) == 109
+    assert {expression.expression_key for expression in expressions} == set(codes)
+
+
+@pytest.mark.parametrize(
+    ("alias", "canonical"),
+    sorted(WECHAT_EMOJI_ALIASES.items()),
+)
+def test_every_alias_bracket_becomes_canonical_expression(
+    tmp_path: Path,
+    alias: str,
+    canonical: str,
+) -> None:
+    """Every alias must reach the adapter as its canonical expression key."""
+    expression = _bracket_expression(tmp_path / "alias.json", f"[{alias}]")
+
+    assert expression.expression_kind == EXPRESSION_KIND_PLATFORM_FACE
+    assert expression.expression_key == canonical
+    assert expression.display_text == f"[{alias}]"
+    assert expression.source == "wechat"
+
+
+@pytest.mark.parametrize("word", ("TODO", "AI", "Python"))
+def test_plain_bracketed_english_stays_plain_text(
+    tmp_path: Path,
+    word: str,
+) -> None:
+    text = f"[{word}]"
+    export = tmp_path / "plain.json"
     _write_db_export(export, [_db_row(message_content=text)])
 
     rich_messages = wechat_db_adapter.parse_rich_messages(

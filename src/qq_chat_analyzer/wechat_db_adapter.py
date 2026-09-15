@@ -46,7 +46,7 @@ from .rich_message import (
     SenderIdentity,
     TextContent,
 )
-from .wechat_official_emojis import OFFICIAL_WECHAT_EMOJI_NAMES
+from .wechat_official_emojis import canonical_wechat_emoji_name
 
 
 WECHAT_PLATFORM = "wechat"
@@ -238,24 +238,30 @@ def _text_expression_contents(text: str) -> tuple[RichContent, ...]:
 
 
 def _extract_official_text_expressions(text: str) -> tuple[ExpressionContent, ...]:
-    """Extract known official WeChat emoji tokens without removing their text."""
-    matches = [
-        match
-        for match in _WECHAT_EMOJI_TOKEN_RE.finditer(text)
-        if match.group(1).strip() in OFFICIAL_WECHAT_EMOJI_NAMES
-    ]
+    """Extract known official WeChat emoji tokens without removing their text.
+
+    English bracket aliases normalize to the canonical official name, so
+    ``[Facepalm]`` and ``[捂脸]`` count as the same expression while the
+    original bracket text is kept for display.
+    """
+    matches: list[tuple[re.Match[str], str]] = []
+    for match in _WECHAT_EMOJI_TOKEN_RE.finditer(text):
+        canonical = canonical_wechat_emoji_name(match.group(1).strip())
+        if canonical is not None:
+            matches.append((match, canonical))
+
     expressions: list[ExpressionContent] = []
-    for position, match in enumerate(matches):
-        previous_end = matches[position - 1].end() if position > 0 else 0
+    for position, (match, canonical) in enumerate(matches):
+        previous_end = matches[position - 1][0].end() if position > 0 else 0
         next_start = (
-            matches[position + 1].start()
+            matches[position + 1][0].start()
             if position + 1 < len(matches)
             else len(text)
         )
         expressions.append(
             ExpressionContent(
                 expression_kind=EXPRESSION_KIND_PLATFORM_FACE,
-                expression_key=match.group(1).strip(),
+                expression_key=canonical,
                 display_text=match.group(0),
                 source=WECHAT_PLATFORM,
                 position=position,
