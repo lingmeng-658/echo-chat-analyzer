@@ -1,0 +1,270 @@
+{
+  "requirements": [
+    {
+      "path": "qq/launcher-user.bat",
+      "source": "qq",
+      "type": "file",
+      "description": "Login-window launcher; Echo starts it directly to authorize QQ."
+    },
+    {
+      "path": "qq/NapCatWinBootMain.exe",
+      "source": "qq",
+      "type": "file",
+      "description": "NapCat injection launcher executed by launcher-user.bat."
+    },
+    {
+      "path": "qq/NapCatWinBootHook.dll",
+      "source": "qq",
+      "type": "file",
+      "description": "NapCat injection hook passed to NapCatWinBootMain.exe."
+    },
+    {
+      "path": "qq/napcat.mjs",
+      "source": "qq",
+      "type": "file",
+      "description": "NapCat shell entry imported through the generated loader script."
+    },
+    {
+      "path": "qq/package.json",
+      "source": "qq",
+      "type": "file",
+      "description": "Declares type=module so the bundled .js chunks load as ESM."
+    },
+    {
+      "path": "qq/conout-wiJ7YKRd.js",
+      "source": "qq",
+      "type": "file",
+      "description": "Console chunk imported by napcat.mjs and the conout worker."
+    },
+    {
+      "path": "qq/qqnt.json",
+      "source": "qq",
+      "type": "file",
+      "description": "NapCat patch-package seed; refreshed from the local QQNT install at launch."
+    },
+    {
+      "path": "qq/qce-server.exe",
+      "source": "qq",
+      "type": "file",
+      "description": "QCE API server; spawned by the bundled QCE NapCat plugin."
+    },
+    {
+      "path": "qq/worker/conoutSocketWorker.mjs",
+      "source": "qq",
+      "type": "file",
+      "description": "Worker thread NapCat spawns for console output."
+    },
+    {
+      "path": "qq/config/plugins.json",
+      "source": "qq",
+      "type": "file",
+      "description": "Plugin enablement seed; the only config file the package ships."
+    },
+    {
+      "path": "qq/plugins/napcat-plugin-qce/package.json",
+      "source": "qq",
+      "type": "file",
+      "description": "QCE plugin manifest read by the NapCat plugin loader."
+    },
+    {
+      "path": "qq/plugins/napcat-plugin-qce/index.mjs",
+      "source": "qq",
+      "type": "file",
+      "description": "QCE plugin entry created by the NapCat plugin loader."
+    },
+    {
+      "path": "qq/plugins/napcat-plugin-qce/runtime/ApiLauncher.mjs",
+      "source": "qq",
+      "type": "file",
+      "description": "Starts qce-server and resolves the static frontend directory."
+    },
+    {
+      "path": "qq/plugins/napcat-plugin-qce/runtime/rustBridge.mjs",
+      "source": "qq",
+      "type": "file",
+      "description": "Bridge that locates and spawns qce-server.exe."
+    },
+    {
+      "path": "qq/node_modules/express/package.json",
+      "source": "qq",
+      "type": "file",
+      "description": "Bare dependency imported by napcat.mjs."
+    },
+    {
+      "path": "qq/node_modules/ws/package.json",
+      "source": "qq",
+      "type": "file",
+      "description": "Bare dependency imported by napcat.mjs."
+    },
+    {
+      "path": "qq/static/qce/index.html",
+      "source": "qq",
+      "type": "file",
+      "description": "Frontend entry the QCE plugin requires when serving static/qce."
+    },
+    {
+      "path": "qq/native/dpapi/win32-x64/@primno+dpapi.node",
+      "source": "qq",
+      "type": "file",
+      "description": "Windows x64 native addon selected by NapCat at runtime."
+    },
+    {
+      "path": "qq/native/ffmpeg/ffmpegAddon.win32.x64.node",
+      "source": "qq",
+      "type": "file",
+      "description": "Windows x64 native addon selected by NapCat at runtime."
+    },
+    {
+      "path": "qq/native/napi2native/ffmpeg.dll",
+      "source": "qq",
+      "type": "file",
+      "description": "Windows x64 native addon dependency selected by NapCat at runtime."
+    },
+    {
+      "path": "qq/native/napi2native/napi2native.win32.x64.node",
+      "source": "qq",
+      "type": "file",
+      "description": "Windows x64 native addon selected by NapCat at runtime."
+    },
+    {
+      "path": "qq/native/packet/MoeHoo.win32.x64.node",
+      "source": "qq",
+      "type": "file",
+      "description": "Windows x64 native addon selected by NapCat at runtime."
+    },
+    {
+      "path": "qq/native/pty/win32.x64/conpty.node",
+      "source": "qq",
+      "type": "file",
+      "description": "Windows x64 native addon selected by NapCat at runtime."
+    },
+    {
+      "path": "qq/native/pty/win32.x64/conpty_console_list.node",
+      "source": "qq",
+      "type": "file",
+      "description": "Windows x64 native addon selected by NapCat at runtime."
+    },
+    {
+      "path": "qq/native/pty/win32.x64/pty.node",
+      "source": "qq",
+      "type": "file",
+      "description": "Windows x64 native addon selected by NapCat at runtime."
+    },
+    {
+      "path": "qq/native/pty/win32.x64/winpty-agent.exe",
+      "source": "qq",
+      "type": "file",
+      "description": "Windows x64 native addon helper selected by NapCat at runtime."
+    },
+    {
+      "path": "qq/native/pty/win32.x64/winpty.dll",
+      "source": "qq",
+      "type": "file",
+      "description": "Windows x64 native addon dependency selected by NapCat at runtime."
+    },
+    {
+      "path": "qq/node_modules",
+      "source": "qq",
+      "type": "non-empty-directory",
+      "description": "Runtime dependencies resolved for napcat.mjs."
+    },
+    {
+      "path": "qq/plugins",
+      "source": "qq",
+      "type": "non-empty-directory",
+      "description": "NapCat plugin payload loaded at startup."
+    },
+    {
+      "path": "qq/static/qce",
+      "source": "qq",
+      "type": "non-empty-directory",
+      "description": "QCE web frontend payload."
+    },
+    {
+      "path": "wechat/wcdb_cli.exe",
+      "source": "wechat",
+      "type": "file",
+      "description": "Read-only WCDB helper invoked with database, library and query arguments."
+    },
+    {
+      "path": "wechat/WCDB.dll",
+      "source": "wechat",
+      "type": "file",
+      "description": "WCDB library handed to wcdb_cli.exe on the command line."
+    },
+    {
+      "path": "wechat/wx_key.dll",
+      "source": "wechat",
+      "type": "file",
+      "description": "Native hook library loaded by the bundled helper."
+    },
+    {
+      "path": "wechat/wx_key_helper.cjs",
+      "source": "wechat",
+      "type": "file",
+      "description": "Node helper that reports the WeChat database key on stdout."
+    },
+    {
+      "path": "wechat/node.exe",
+      "source": "wechat",
+      "type": "file",
+      "description": "Bundled Node.js runtime used when no system node is available."
+    },
+    {
+      "path": "wechat/node_modules/koffi/index.js",
+      "source": "wechat",
+      "type": "file",
+      "description": "koffi package entry required by the bundled helper."
+    },
+    {
+      "path": "wechat/node_modules/koffi/build/koffi/win32_x64/koffi.node",
+      "source": "wechat",
+      "type": "file",
+      "description": "Windows x64 koffi native binding."
+    },
+    {
+      "path": "wechat/node_modules",
+      "source": "wechat",
+      "type": "non-empty-directory",
+      "description": "Helper module root exposed to the helper process."
+    }
+  ],
+  "privatePaths": [
+    {
+      "path": "qq/cache",
+      "source": "qq",
+      "type": "directory",
+      "description": "Runtime cache written by the bundled runtime."
+    },
+    {
+      "path": "qq/logs",
+      "source": "qq",
+      "type": "directory",
+      "description": "Runtime logs written by the bundled runtime."
+    },
+    {
+      "path": "qq/config/qq_path.txt",
+      "source": "qq",
+      "type": "file",
+      "description": "Install location saved by the launcher on this machine."
+    },
+    {
+      "path": "qq/config/webui.json",
+      "source": "qq",
+      "type": "file",
+      "description": "Local NapCat WebUI settings."
+    },
+    {
+      "path": "qq/config/plugins",
+      "source": "qq",
+      "type": "directory",
+      "description": "Per-plugin runtime settings kept outside the package."
+    },
+    {
+      "path": "qq/loadNapCat.js",
+      "source": "qq",
+      "type": "file",
+      "description": "Rewritten by the launcher on every start and pinned to one machine's runtime folder."
+    }
+  ]
+}

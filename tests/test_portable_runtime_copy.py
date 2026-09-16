@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -14,6 +15,14 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BUILD_SCRIPT = PROJECT_ROOT / "scripts" / "build_windows_exe.ps1"
 KOFFI_SOURCE = PROJECT_ROOT / "runtime" / "wechat" / "node_modules" / "koffi"
+
+# The same contract the build script enforces, so a fictional package is always
+# materialised from one source of truth instead of a second hand-kept list.
+RUNTIME_CONTRACT = json.loads(
+    (PROJECT_ROOT / "scripts" / "windows_runtime_manifest.json").read_text(
+        encoding="utf-8"
+    )
+)
 
 # NapCat ships native addons for every Node.js platform/arch pair it supports
 # and selects exactly one variant at runtime via
@@ -74,6 +83,19 @@ def _fictional_native_tree(runtime: Path) -> None:
         _write(native / relative)
 
 
+def _write_contract_requirements(runtime: Path) -> None:
+    """Materialise every asset the shared runtime contract requires."""
+    for requirement in RUNTIME_CONTRACT["requirements"]:
+        target = runtime / requirement["path"]
+        if requirement["type"] == "file":
+            if not target.exists():
+                _write(target)
+            continue
+        target.mkdir(parents=True, exist_ok=True)
+        if not any(target.iterdir()):
+            _write(target / "sentinel.txt", "fictional directory payload")
+
+
 def _fictional_runtime(
     project_root: Path,
     *,
@@ -81,29 +103,20 @@ def _fictional_runtime(
     node_executable: bool = True,
 ) -> Path:
     runtime = project_root / "runtime"
-    for relative in (
-        "qq/qce-server.exe",
-        "qq/napcat.mjs",
-        "qq/NapCatWinBootMain.exe",
-        "qq/NapCatWinBootHook.dll",
-        "qq/static/qce/index.html",
-        "wechat/wcdb_cli.exe",
-        "wechat/WCDB.dll",
-        "wechat/wx_key.dll",
-        "wechat/wx_key_helper.cjs",
-    ):
-        _write(runtime / relative)
-    if node_executable:
-        _write(runtime / "wechat/node.exe")
+    _write_contract_requirements(runtime)
+    if not node_executable:
+        (runtime / "wechat/node.exe").unlink(missing_ok=True)
     if koffi_index:
         _write(
             runtime / "wechat/node_modules/koffi/index.js",
             "module.exports = { fictional: true }\n",
         )
-        _write(
-            runtime
-            / "wechat/node_modules/koffi/build/koffi/win32_x64/koffi.node"
-        )
+    else:
+        (runtime / "wechat/node_modules/koffi/index.js").unlink(missing_ok=True)
+    _write(
+        runtime
+        / "wechat/node_modules/koffi/build/koffi/win32_x64/koffi.node"
+    )
     _write(
         runtime / "wechat/node_modules/koffi/nested/sentinel.txt",
         "nested dependency",
@@ -115,6 +128,10 @@ def _fictional_runtime(
     _write(
         runtime / "qq/config/napcat_fictional-account.json",
         '{"account": "fictional"}\n',
+    )
+    _write(
+        runtime / "qq/static/qce/index.html",
+        "<!doctype html><title>fictional</title>\n",
     )
     # The build script also ships the WeChat WCDB diagnostic runner next to
     # the frozen app; mirror it in the fictional project so RuntimeOnly builds
@@ -423,3 +440,35 @@ def test_runtime_build_rejects_missing_windows_native_addon(
 
     assert completed.returncode != 0
     assert "MoeHoo.win32.x64.node" in (completed.stderr + completed.stdout)
+
+
+def test_runtime_build_rejects_missing_qq_launcher_user_batch(
+    tmp_path: Path,
+) -> None:
+    """Echo starts launcher-user.bat itself; a package without it is broken."""
+    runtime = _fictional_runtime(tmp_path)
+    (runtime / "qq/launcher-user.bat").unlink(missing_ok=True)
+
+    completed = _copy_runtime(tmp_path)
+
+    assert completed.returncode != 0
+    assert "launcher-user.bat" in (completed.stderr + completed.stdout)
+
+
+def test_runtime_build_rejects_empty_qce_static_directory(
+    tmp_path: Path,
+) -> None:
+    """A present-but-empty static/qce cannot serve the QCE web frontend."""
+    runtime = _fictional_runtime(tmp_path)
+    static_qce = runtime / "qq/static/qce"
+    for child in static_qce.rglob("*"):
+        if child.is_file():
+            child.unlink()
+    assert static_qce.is_dir()
+
+    completed = _copy_runtime(tmp_path)
+
+    assert completed.returncode != 0
+    assert "qq/static/qce" in (completed.stderr + completed.stdout).replace(
+        "\\", "/"
+    )

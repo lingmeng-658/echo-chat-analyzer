@@ -5,6 +5,10 @@ output/
 *.jsonl
 !tests/fixtures/sample_chat.json
 !tests/fixtures/sample_chat.jsonl
+
+# The Windows portable runtime contract is a hand-authored, tracked input:
+# both scripts/build_windows_exe.ps1 and the runtime contract tests read it.
+!scripts/windows_runtime_manifest.json
 .env
 
 # Python environments and caches
