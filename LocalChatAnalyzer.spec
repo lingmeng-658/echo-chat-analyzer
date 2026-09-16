@@ -36,6 +36,15 @@ datas.append((str(echo_qq_expression_assets), "frontend/echo_report/qq-emojis"))
 # reaches matplotlib, wordcloud, Pillow or pandas (nor pytest/pygments, which
 # pandas.testing drags in). Excluding them keeps Echo.exe small; the source
 # install and the ``qqchat`` CLI keep the full dependency set.
+#
+# jieba reaches numpy only through jieba.lac_small.predict / .utils, which are
+# imported lazily from inside jieba.Tokenizer.cut behind
+# ``use_paddle and is_paddle_installed``. Echo uses plain jieba.lcut /
+# jieba.load_userdict and never enables paddle, so that subpackage is dead
+# code in the frozen app -- and with it, numpy and its numpy.libs OpenBLAS
+# runtime. Both names are excluded explicitly: excluding the subpackage is
+# what actually removes numpy, while listing numpy keeps the intent (and its
+# absence from the package) asserted by the build contract tests.
 desktop_excludes = [
     "matplotlib",
     "mpl_toolkits",
@@ -48,6 +57,8 @@ desktop_excludes = [
     "pytest",
     "_pytest",
     "pygments",
+    "jieba.lac_small",
+    "numpy",
 ]
 
 
