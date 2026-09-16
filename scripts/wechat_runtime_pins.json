@@ -1,0 +1,15 @@
+{
+  "node": {
+    "version": "24.16.0",
+    "archiveUrl": "https://nodejs.org/download/release/v24.16.0/node-v24.16.0-win-x64.zip",
+    "archiveSha256": "edaca9bd58ec8e92037dac4e877d52f6b8f430b81c18b57e264b4e2fb111cd56",
+    "archiveRoot": "node-v24.16.0-win-x64",
+    "executableSha256": "b3094d0b49f9ad602262a9921551737bb97637c05dd357a06ae98188d7290aa3"
+  },
+  "koffi": {
+    "version": "2.16.2",
+    "tarballUrl": "https://registry.npmjs.org/koffi/-/koffi-2.16.2.tgz",
+    "tarballIntegrity": "sha512-owU0MRwv6xkrVqCd+33uw6BaYppkTRXbO/rVdJNI2dvZG0gzyRhYwW25eWtc5pauwK8TGh3AbkFONSezdykfSA==",
+    "tarballSha1": "9b1420c131f5daa0e561b00687c2222f2e452367"
+  }
+}
