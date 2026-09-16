@@ -25,33 +25,107 @@ $MsvcRuntimeNames = @(
 $MsvcRuntimeTargets = @("qq", "wechat")
 $MsvcRuntimeMinimumVersion = [Version]"14.43"
 
-$RequiredRuntimePaths = @(
-    "qq\qce-server.exe",
-    "qq\napcat.mjs",
-    "qq\NapCatWinBootMain.exe",
-    "qq\NapCatWinBootHook.dll",
-    "qq\config\plugins.json",
-    "qq\static\qce",
-    # Windows x64 native addons NapCat loads at runtime. They must survive the
-    # foreign platform pruning below, so a missing one fails the build.
-    "qq\native\dpapi\win32-x64\@primno+dpapi.node",
-    "qq\native\ffmpeg\ffmpegAddon.win32.x64.node",
-    "qq\native\napi2native\ffmpeg.dll",
-    "qq\native\napi2native\napi2native.win32.x64.node",
-    "qq\native\packet\MoeHoo.win32.x64.node",
-    "qq\native\pty\win32.x64\conpty.node",
-    "qq\native\pty\win32.x64\conpty_console_list.node",
-    "qq\native\pty\win32.x64\pty.node",
-    "qq\native\pty\win32.x64\winpty-agent.exe",
-    "qq\native\pty\win32.x64\winpty.dll",
-    "wechat\wcdb_cli.exe",
-    "wechat\WCDB.dll",
-    "wechat\wx_key.dll",
-    "wechat\wx_key_helper.cjs",
-    "wechat\node.exe",
-    "wechat\node_modules\koffi\index.js",
-    "wechat\node_modules\koffi\build\koffi\win32_x64\koffi.node"
-)
+# The portable runtime contract lives in one tracked manifest so the build and
+# the tests can never drift into two hand-maintained required-asset lists.
+# It sits next to this script and also pins the machine-local state that must
+# never ship, so it is resolved from the script location rather than from the
+# (possibly overridden) project root.
+$RuntimeContractPath = Join-Path $PSScriptRoot "windows_runtime_manifest.json"
+$RuntimeContract = $null
+$QQConfigSeeds = @()
+
+function Get-RuntimeContract {
+    if ($null -ne $RuntimeContract) {
+        return $RuntimeContract
+    }
+    if (-not (Test-Path -LiteralPath $RuntimeContractPath -PathType Leaf)) {
+        throw "Runtime contract manifest is missing: scripts\windows_runtime_manifest.json"
+    }
+    $Contract = (
+        Get-Content -LiteralPath $RuntimeContractPath -Raw -Encoding UTF8
+    ) | ConvertFrom-Json
+    if (-not $Contract.requirements -or -not $Contract.privatePaths) {
+        throw "Runtime contract manifest is incomplete: scripts\windows_runtime_manifest.json"
+    }
+    $script:RuntimeContract = $Contract
+    return $script:RuntimeContract
+}
+
+function Get-QQConfigSeedRequirement {
+    return @(
+        (Get-RuntimeContract).requirements | Where-Object {
+            [string]$_.source -eq "qq" -and
+            ([string]$_.path) -like "qq/config/*" -and
+            [string]$_.type -eq "file"
+        }
+    )
+}
+
+function Assert-RuntimeContract {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Root,
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("source", "portable")]
+        [string]$Phase
+    )
+
+    $MissingMessage = if ($Phase -eq "source") {
+        "Required runtime resource is missing"
+    }
+    else {
+        "Portable runtime copy is incomplete"
+    }
+    $EmptyMessage = if ($Phase -eq "source") {
+        "Required runtime directory is empty"
+    }
+    else {
+        "Portable runtime directory is empty"
+    }
+
+    foreach ($Requirement in (Get-RuntimeContract).requirements) {
+        $RelativePath = ([string]$Requirement.path) -replace '/', '\'
+        $Target = Join-Path $Root $RelativePath
+        switch ([string]$Requirement.type) {
+            "file" {
+                if (-not (Test-Path -LiteralPath $Target -PathType Leaf)) {
+                    throw ($MissingMessage + ": runtime\" + $RelativePath)
+                }
+            }
+            "non-empty-directory" {
+                if (-not (Test-Path -LiteralPath $Target -PathType Container)) {
+                    throw ($MissingMessage + ": runtime\" + $RelativePath)
+                }
+                if (@(Get-ChildItem -LiteralPath $Target -Force).Count -eq 0) {
+                    throw ($EmptyMessage + ": runtime\" + $RelativePath)
+                }
+            }
+            default {
+                throw (
+                    "Unknown runtime contract requirement type '" +
+                    [string]$Requirement.type + "': runtime\" + $RelativePath
+                )
+            }
+        }
+    }
+}
+
+function Assert-PrivateRuntimeStateAbsent {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Root,
+        [Parameter(Mandatory = $true)]
+        [string]$Label
+    )
+
+    foreach ($Entry in (Get-RuntimeContract).privatePaths) {
+        $RelativePath = ([string]$Entry.path) -replace '/', '\'
+        $Target = Join-Path $Root $RelativePath
+        if (Test-Path -LiteralPath $Target) {
+            throw ($Label + ": runtime\" + $RelativePath)
+        }
+    }
+}
 
 # NapCat bundles native addons for every Node.js platform/arch pair it supports
 # and selects exactly one variant at runtime via
@@ -111,12 +185,10 @@ if (-not (Test-Path -LiteralPath $RuntimeSource -PathType Container)) {
     throw "Runtime source directory is missing. Restore the repository runtime directory before building."
 }
 
-foreach ($RelativePath in $RequiredRuntimePaths) {
-    $SourcePath = Join-Path $RuntimeSource $RelativePath
-    if (-not (Test-Path -LiteralPath $SourcePath)) {
-        throw "Required runtime resource is missing: runtime\$RelativePath"
-    }
-}
+# Validate the contract before packaging starts: a package that would be
+# missing a product dependency must never be produced.
+Assert-RuntimeContract -Root $RuntimeSource -Phase "source"
+$QQConfigSeeds = Get-QQConfigSeedRequirement
 
 Push-Location $ProjectRoot
 try {
@@ -181,21 +253,31 @@ try {
         }
     }
 
-    # Restore only the machine-independent plugin enablement seed. Account,
-    # protocol, WebUI, cache, and log state remain excluded from Portable.
-    $QQPluginConfigSource = Join-Path $RuntimeSource "qq\config\plugins.json"
-    $QQPluginConfigDestination = Join-Path $PortableRuntime "qq\config\plugins.json"
-    New-Item -ItemType Directory -Force -Path (
-        Split-Path -Parent $QQPluginConfigDestination
-    ) | Out-Null
-    Copy-Item -LiteralPath $QQPluginConfigSource -Destination $QQPluginConfigDestination
-
-    foreach ($RelativePath in $RequiredRuntimePaths) {
-        $CopiedPath = Join-Path $PortableRuntime $RelativePath
-        if (-not (Test-Path -LiteralPath $CopiedPath)) {
-            throw "Portable runtime copy is incomplete: runtime\$RelativePath"
-        }
+    # loadNapCat.js is rewritten by the launcher on every start and embeds the
+    # absolute runtime folder of whichever machine generated it.
+    $GeneratedLoader = Join-Path $PortableRuntime "qq\loadNapCat.js"
+    if (Test-Path -LiteralPath $GeneratedLoader) {
+        Remove-Item -LiteralPath $GeneratedLoader -Force
     }
+
+    # Restore only the machine-independent config files the contract requires.
+    # Everything else under qq\config stays excluded, so a purge followed by an
+    # explicit re-copy can never leak a saved path or a per-install file.
+    foreach ($Seed in $QQConfigSeeds) {
+        $SeedRelativePath = ([string]$Seed.path) -replace '/', '\'
+        $SeedDestination = Join-Path $PortableRuntime $SeedRelativePath
+        New-Item -ItemType Directory -Force -Path (
+            Split-Path -Parent $SeedDestination
+        ) | Out-Null
+        Copy-Item -LiteralPath (
+            Join-Path $RuntimeSource $SeedRelativePath
+        ) -Destination $SeedDestination -Force
+    }
+
+    Assert-RuntimeContract -Root $PortableRuntime -Phase "portable"
+    Assert-PrivateRuntimeStateAbsent -Root $PortableRuntime -Label (
+        "Portable runtime contains state that must never ship"
+    )
     foreach ($RuntimeName in $MsvcRuntimeNames) {
         foreach ($RuntimeTarget in $MsvcRuntimeTargets) {
             $CopiedDependency = Join-Path (
