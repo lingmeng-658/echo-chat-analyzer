@@ -1,0 +1,61 @@
+{
+  "qce": {
+    "version": "6.2.3",
+    "project": "shuakami/qq-chat-exporter",
+    "license": "GPL-3.0",
+    "releaseUrl": "https://github.com/shuakami/qq-chat-exporter/releases/tag/v6.2.3",
+    "archiveUrl": "https://github.com/shuakami/qq-chat-exporter/releases/download/v6.2.3/NapCat-QCE-Windows-x64-v6.2.3.zip",
+    "archiveSha256": "d079d3dd92e8b0314ede0a53bf1f528729af71acefde8cceabdfca456b597e49",
+    "archiveSizeBytes": 41809798,
+    "archiveRoot": "NapCat-QCE-Windows-x64",
+    "bundledNapCatVersion": "4.18.18",
+    "bundledNapCatProject": "NapNeko/NapCatQQ",
+    "bundledNapCatLicense": "Limited Redistribution License for NapCat"
+  },
+  "launcherPatch": {
+    "path": "launcher-user.bat",
+    "upstreamSha256": "60d916cc816be13a16e77419590239e7b8bd410b72020abc8c549ba4352ea993",
+    "patchedSha256": "9134df029f4eb67b5d4680e3e9defbafb80c23c8d65ec749516db90734763df7",
+    "anchor": ":end_script\r\n\r\npause\r\nexit /b\r\n",
+    "replacement": ":end_script\n\nif \"%ECHO_MODE%\"==\"1\" exit /b\npause\nexit /b\n",
+    "addedLine": "if \"%ECHO_MODE%\"==\"1\" exit /b"
+  },
+  "requiredFiles": {
+    "NapCatWinBootHook.dll": "962bd5caf59e9792c37eed99c9130bf1464d619d0209820be570874017d66925",
+    "NapCatWinBootMain.exe": "bd8ec316582bfb25e3b9b7f27a22c91437584f29879950462f789fd7bb111949",
+    "conout-wiJ7YKRd.js": "4f1afebbc3a653f1d47bc787f37acc8b15d8d15a2e9bee7a4c3ba54344566564",
+    "config/plugins.json": "a30154ba088a99ca7f0f13d8e30b73d5e95bf2738f1a05a5076c22d67ec33b12",
+    "find-qq.ps1": "721a672078619ee2303d62bc0d6129a5fc08eb8f6a1d9476319df466916670c6",
+    "napcat.mjs": "59ba500eb824b4064d9f9a763101d15c5aae5cd268475b4cbbb7c3c8e2134aee",
+    "native/dpapi/win32-x64/@primno+dpapi.node": "386e7a520b143aa7b6fa1a28a0237391a938bbedd0b245733a3da3a215026a3f",
+    "native/ffmpeg/ffmpegAddon.win32.x64.node": "93abf4a2298dfd0209f1c55a8e8a06e112410666f2acd831930a9a16ff70a060",
+    "native/napi2native/ffmpeg.dll": "d5dfd1a30977db7a14434345de16790aaf3476cc1320d176138b1ca9f654c524",
+    "native/napi2native/napi2native.win32.x64.node": "46780f9cc420a840318179b26cbb551357d2ae986dd8df960ef1a49656181fcc",
+    "native/packet/MoeHoo.win32.x64.node": "2d2cf1f1fbda0922cc3c543fbf49ebb413968527c9e46c47301e3d8913fcab99",
+    "native/pty/win32.x64/conpty.node": "747cf00a7d4c5c339f991d3e6b441f4cd84beffbf1a0328e33f4daab7a94c70c",
+    "native/pty/win32.x64/conpty_console_list.node": "3feb55803bc88712dbf4c7e3fb398092dba49f00d9ada3a6511c9043f51d5ebe",
+    "native/pty/win32.x64/pty.node": "c2506b63e6b9c69a026549d4b139ee9fcef53e1e6f995f7ab99c3597e82492ed",
+    "native/pty/win32.x64/winpty-agent.exe": "4d724f4d2e6407e3d40c46f30d8edbb50e6f6ae84c3bfa7c9b089557d79cc822",
+    "native/pty/win32.x64/winpty.dll": "61f98635a9282ff0b8c99a1d11e7316ba34128cea58ddfeb7211adf622498129",
+    "node_modules/express/package.json": "2980b885bad92f757a2d44674e905cf875867d5685111d8ab8f285635b11367d",
+    "node_modules/ws/package.json": "22d3cdfb9a67c897d27af008e77f0f17aee5b1d5f7924436154f00691019b28a",
+    "package.json": "a4a29f9ecd82642d73d6f778a06e3a72531a2e52fc925fc0f46ed23519976ceb",
+    "plugins/napcat-plugin-qce/index.mjs": "97a20f41678acb529da4ae053152e4a2bc711d70e505bea77aa5e0c0d70dc72c",
+    "plugins/napcat-plugin-qce/package.json": "bd57b957a7059f19f72ece15cd912615514b467fa93a7a5ac9ebfd4e2ed7ec48",
+    "plugins/napcat-plugin-qce/runtime/ApiLauncher.mjs": "169d464a21d26056054a6a17eab73429113dff923b0d95c8b8a62c576c183bfe",
+    "plugins/napcat-plugin-qce/runtime/rustBridge.mjs": "e9c92a5cfda3feb81a8725bb754cf8dd09251e75b0c7ffb33ebfc57b1fdb38f5",
+    "qce-server.exe": "ec75e2f2625a5ad612c4cc36c4c3289991e21a1a150d4b398e9fad21b8d9db92",
+    "qqnt.json": "45346fc8694c6c14a7eb74c290f2de31072d9848ba08807c127770b028e920d6",
+    "static/qce/index.html": "bf12a2451c4a61f27e4f6306aa7cc6fe0b7bc4d2d83336292c1e86b95efeef7c",
+    "worker/conoutSocketWorker.mjs": "f794939779f59acfa9ce68eabfae60a7816ce0d68bddbd9d57f1d239039175f4"
+  },
+  "excludedPaths": [
+    "cache",
+    "config/napcat.json",
+    "config/onebot11.json",
+    "config/plugins",
+    "loadNapCat.js",
+    "logs",
+    "qce-notification-icon.png"
+  ]
+}

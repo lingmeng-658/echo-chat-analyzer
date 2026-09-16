@@ -7,6 +7,12 @@
       "description": "Login-window launcher; Echo starts it directly to authorize QQ."
     },
     {
+      "path": "qq/find-qq.ps1",
+      "source": "qq",
+      "type": "file",
+      "description": "QQ install detector used by the launcher and by the connection bridge."
+    },
+    {
       "path": "qq/NapCatWinBootMain.exe",
       "source": "qq",
       "type": "file",
@@ -40,7 +46,7 @@
       "path": "qq/qqnt.json",
       "source": "qq",
       "type": "file",
-      "description": "NapCat patch-package seed; refreshed from the local QQNT install at launch."
+      "description": "NapCat patch-package seed; only the upstream machine-independent seed is restored, then refreshed from the local QQNT install at launch."
     },
     {
       "path": "qq/qce-server.exe",

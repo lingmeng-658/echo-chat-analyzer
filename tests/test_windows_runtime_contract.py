@@ -50,6 +50,9 @@ FORBIDDEN_VALUE_FRAGMENTS = (
 QQ_REQUIRED_FILES = {
     # launcher-user.bat:6-10,186 — the file Echo itself starts.
     "qq/launcher-user.bat",
+    # The QCE launcher's Priority-4 QQ detector; qq_auth_bridge.py:506-511 also
+    # calls it before falling back to the registry/common-directory probe.
+    "qq/find-qq.ps1",
     "qq/NapCatWinBootMain.exe",
     "qq/NapCatWinBootHook.dll",
     "qq/napcat.mjs",

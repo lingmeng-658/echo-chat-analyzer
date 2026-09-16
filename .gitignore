@@ -13,6 +13,10 @@ output/
 # The WeChat runtime pin file is a hand-authored, tracked input: the Node/Koffi
 # bootstrap and its tests read it.
 !scripts/wechat_runtime_pins.json
+
+# The QQ runtime pin file is a hand-authored, tracked input: the QCE asset
+# bootstrap and its tests read it.
+!scripts/qq_runtime_pins.json
 .env
 
 # Python environments and caches
