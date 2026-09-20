@@ -28,7 +28,7 @@ from tempfile import TemporaryDirectory
 from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Iterator, Protocol, runtime_checkable
@@ -873,6 +873,7 @@ class ChatAnalyzerFacade:
                     resolved_config,
                     scratch_directory,
                     raw_session=raw_session if chat_source is ChatSource.QQ else None,
+                    scope=resolved_scope,
                     progress=progress,
                 )
 
@@ -1143,15 +1144,24 @@ class ChatAnalyzerFacade:
         scratch_directory: Path,
         *,
         raw_session: Any = None,
+        scope: AnalysisScope | None = None,
         progress: Callable[[str], None] | None = None,
     ) -> _SessionExport:
-        """Ask the matching service for an export file."""
+        """Ask the matching service for an export file.
+
+        A dated analysis scope is translated into QCE millisecond bounds so
+        the provider stops paging once the requested window is covered
+        instead of exporting the entire history. The scope filter still
+        re-checks every imported message, so these bounds are an acquisition
+        optimisation, never a correctness dependency.
+        """
         if source is ChatSource.QQ:
             session_type = _first_string(raw_session, "session_type")
+            start_millis, end_millis = _scope_export_window(scope)
             request = QQExportImportRequest(
                 group_code=session_id,
-                start_time=None,
-                end_time=None,
+                start_time=start_millis,
+                end_time=end_millis,
                 chat_type=1 if session_type == "private" else 2,
                 peer_uin=_first_string(raw_session, "peer_uin") or None,
                 session_name=_first_string(
@@ -1440,6 +1450,38 @@ def _epoch_millis(epoch_seconds: int | None) -> int | None:
     if epoch_seconds is None:
         return None
     return epoch_seconds * 1000
+
+
+def _scope_export_window(
+    scope: AnalysisScope | None,
+) -> tuple[int | None, int | None]:
+    """Translate an inclusive calendar scope into QCE millisecond bounds.
+
+    ``(None, None)`` means "no filter", which keeps the full-history export
+    path unchanged for the ALL scope. The end bound is the last millisecond
+    of the inclusive end date, matching the local-day scope filter.
+    """
+    if scope is None or scope.start_date is None or scope.end_date is None:
+        return None, None
+    try:
+        start_seconds = _local_midnight_epoch_seconds(scope.start_date)
+        end_exclusive_seconds = _local_midnight_epoch_seconds(
+            scope.end_date + timedelta(days=1)
+        )
+    except (OverflowError, OSError, ValueError):
+        # A calendar bound outside the platform clock keeps the provider's
+        # unfiltered export; the analysis scope still filters the messages.
+        return None, None
+    end_millis = _epoch_millis(end_exclusive_seconds)
+    return (
+        _epoch_millis(start_seconds),
+        None if end_millis is None else end_millis - 1,
+    )
+
+
+def _local_midnight_epoch_seconds(value: date) -> int:
+    """Return the local-time midnight of one calendar date in epoch seconds."""
+    return int(datetime.combine(value, time.min).timestamp())
 
 
 def _coerce_source(source: Any) -> ChatSource:

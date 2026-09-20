@@ -8,7 +8,7 @@ import json
 import os
 import subprocess
 import sys
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 
 import pytest
@@ -1821,8 +1821,14 @@ def test_analyze_session_dispatches_to_the_qq_service(tmp_path: Path) -> None:
     assert wechat_service.export_requests == []
     request = qq_service.export_requests[0]
     assert request.group_code == "10001"
-    assert request.start_time is None
-    assert request.end_time is None
+    # The dated scope now bounds the QCE export itself; before the fix this
+    # request stayed unbounded and produced the full-history acquisition.
+    assert request.start_time == int(
+        datetime.combine(date(2024, 1, 1), time.min).timestamp() * 1000
+    )
+    assert request.end_time == int(
+        datetime.combine(date(2024, 2, 2), time.min).timestamp() * 1000
+    ) - 1
     assert analysis_service.requests[0].input_path == export_path
     assert analysis_service.requests[0].scope == module.AnalysisScope.custom(
         date(2024, 1, 1),
