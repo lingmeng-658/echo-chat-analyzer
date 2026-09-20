@@ -332,8 +332,68 @@ def _extract_expression_contents(
     return tuple(expressions)
 
 
+
+def _is_qce_reply_content(content: Mapping[Any, Any]) -> bool:
+    """Return True when content.elements contains a reply element."""
+    elements = content.get("elements")
+    if not isinstance(elements, list):
+        return False
+    for element in elements:
+        if not isinstance(element, Mapping):
+            continue
+        if element.get("type") == "reply":
+            return True
+    return False
+
+
+def _extract_reply_contents(content: Mapping[Any, Any]) -> tuple[RichContent, ...]:
+    """Extract only content elements from a reply message, excluding reply/at elements.
+
+    For reply messages, authored text comes from text elements only.
+    reply elements, at elements, and text elements carrying at-mentions are
+    structural metadata, not authored content.
+    """
+    elements = content.get("elements")
+    if not isinstance(elements, list):
+        return ()
+    contents: list[RichContent] = []
+    for element in elements:
+        if not isinstance(element, Mapping):
+            continue
+        elem_type = element.get("type")
+        # Skip structural elements that are not authored text
+        if elem_type in ("reply", "at"):
+            continue
+        # Skip text elements that are at-mentions (atType present with a target).
+        # These carry mention relations, not authored text. The real authored
+        # text lives in content.text for this legacy structure.
+        if elem_type == "text":
+            block = element.get("textElement") or element.get("data")
+            if isinstance(block, Mapping) and block.get("atType") not in (None, 0, "0"):
+                continue
+        # Extract text content from text elements
+        text_value = _text_element_content(element)
+        if text_value is not None:
+            contents.append(TextContent(text=text_value))
+            continue
+        # Extract expression content (face, market_face, etc.)
+        expression = _expression_from_element(element)
+        if expression is not None:
+            contents.append(expression)
+    # Fallback: when no authored text element was found (e.g. old structure
+    # where the only text element is an at-mention), use content.text.
+    if not contents:
+        text = content.get("text")
+        if isinstance(text, str) and text:
+            contents.append(TextContent(text=text))
+    return tuple(contents)
+
+
 def _build_rich_contents(content: Mapping[Any, Any]) -> tuple[RichContent, ...]:
     """Build ordered contents, falling back to the legacy text projection."""
+    if _is_qce_reply_content(content):
+        return _extract_reply_contents(content)
+
     ordered = _ordered_content_parts(content)
     if ordered is not None:
         return ordered

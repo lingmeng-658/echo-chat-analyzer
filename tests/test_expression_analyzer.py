@@ -16,7 +16,9 @@ from qq_chat_analyzer.analysis.analyzers.expression_analyzer import (
     EXPRESSION_KIND_UNICODE,
     ExpressionAnalyzer,
 )
+from qq_chat_analyzer.legacy_projection import project_legacy_messages
 from qq_chat_analyzer.message import ChatMessage
+from qq_chat_analyzer.qq_chat_exporter_adapter import parse_qce_rich_messages
 from qq_chat_analyzer.rich_message import (
     ExpressionContent,
     RichMessage,
@@ -92,6 +94,67 @@ def test_unicode_emoji_clusters_are_counted_and_attributed() -> None:
     assert all(item.kind == EXPRESSION_KIND_UNICODE for item in report.top_expressions)
     assert report.members[0].speaker_key == "fictional-b"
     assert report.members[0].expression_occurrence_count == 3
+
+
+def test_reply_auto_mention_emoji_does_not_contaminate_sender_expression_stats() -> None:
+    raw_message = {
+        "id": "fictional-reply-1",
+        "timestamp": 1750000000000,
+        "sender": {
+            "uid": "fictional-user-alice",
+            "uin": "1001",
+            "name": "Alice",
+            "nickname": "Alice",
+        },
+        "type": "reply",
+        "content": {
+            "text": "[回复消息]@Fictional Bob🐊 依旧😂",
+            "elements": [
+                {
+                    "type": "reply",
+                    "data": {
+                        "messageId": "fictional-target-message",
+                        "senderUin": "2002",
+                        "senderName": "Fictional Bob🐊",
+                        "content": "Fictional quoted text",
+                        "timestamp": 1750000000,
+                    },
+                },
+                {
+                    "type": "at",
+                    "data": {
+                        "uid": "fictional-user-bob",
+                        "uin": "2002",
+                        "name": "Fictional Bob🐊",
+                        "atType": 2,
+                    },
+                },
+                {
+                    "type": "text",
+                    "data": {"text": " 依旧😂"},
+                },
+            ],
+            "resources": [],
+            "mentions": [],
+        },
+        "recalled": False,
+        "system": False,
+    }
+
+    rich_messages, warnings = parse_qce_rich_messages([raw_message])
+    report = ExpressionAnalyzer().analyze(
+        project_legacy_messages(rich_messages),
+        rich_messages=rich_messages,
+    )
+
+    assert warnings == ()
+    assert report.expression_occurrence_count == 1
+    assert {item.expression_key for item in report.top_expressions} == {"😂"}
+    assert len(report.members) == 1
+    alice = report.members[0]
+    assert alice.speaker_key == "fictional-user-alice"
+    assert alice.expression_occurrence_count == 1
+    assert {item.expression_key for item in alice.top_expressions} == {"😂"}
 
 
 def test_platform_face_from_rich_message_counts_as_expression_only() -> None:
