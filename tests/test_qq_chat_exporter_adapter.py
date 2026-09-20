@@ -664,3 +664,79 @@ def test_reply_message_excludes_auto_mention_from_authored_text() -> None:
     assert message.contents == (
         TextContent(text=" 依旧\U0001f602"),
     )
+
+
+def test_plain_at_text_does_not_count_mention_display_emoji_as_authored_text() -> None:
+    raw_message = _qce_message(
+        message_id="fake-plain-at-text-emoji-pollution",
+        text="@Fictional Bob\U0001f40a hello",
+    )
+    raw_message["content"]["elements"] = [
+        {
+            "type": "at",
+            "data": {
+                "uid": "fictional-user-2002",
+                "uin": "2002",
+                "name": "Fictional Bob\U0001f40a",
+                "atType": 2,
+            },
+        },
+        {
+            "type": "text",
+            "data": {"text": "hello"},
+        },
+    ]
+
+    messages, warnings = parse_qce_rich_messages([raw_message])
+
+    assert warnings == ()
+    assert len(messages) == 1
+    message = messages[0]
+    assert message.contents == (TextContent(text="hello"),)
+    assert all(
+        "Fictional Bob" not in content.text
+        and "\U0001f40a" not in content.text
+        for content in message.contents
+        if isinstance(content, TextContent)
+    )
+    assert message.relations == (
+        MentionRelation(
+            target_identity_id="fictional-user-2002",
+            display_text="Fictional Bob\U0001f40a",
+        ),
+    )
+
+
+def test_plain_at_text_preserves_emoji_authored_after_mention() -> None:
+    raw_message = _qce_message(
+        message_id="fake-plain-at-text-authored-emoji",
+        text="@Fictional Bob\U0001f40a \U0001f40a hello",
+    )
+    raw_message["content"]["elements"] = [
+        {
+            "type": "at",
+            "data": {
+                "uid": "fictional-user-2002",
+                "uin": "2002",
+                "name": "Fictional Bob\U0001f40a",
+                "atType": 2,
+            },
+        },
+        {
+            "type": "text",
+            "data": {"text": "\U0001f40a hello"},
+        },
+    ]
+
+    messages, warnings = parse_qce_rich_messages([raw_message])
+
+    assert warnings == ()
+    assert len(messages) == 1
+    message = messages[0]
+    assert message.contents == (TextContent(text="\U0001f40a hello"),)
+    assert message.relations == (
+        MentionRelation(
+            target_identity_id="fictional-user-2002",
+            display_text="Fictional Bob\U0001f40a",
+        ),
+    )

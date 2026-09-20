@@ -425,9 +425,12 @@ def _ordered_content_parts(
 
     parts: list[RichContent] = []
     text_parts: list[str] = []
+    has_at_element = False
     for element in elements:
         if not isinstance(element, Mapping):
             continue
+        if element.get("type") == "at":
+            has_at_element = True
         text_value = _text_element_content(element)
         if text_value is not None:
             parts.append(TextContent(text=text_value))
@@ -441,6 +444,8 @@ def _ordered_content_parts(
         isinstance(part, ExpressionContent) for part in parts
     )
     if not has_expression:
+        if has_at_element and text_parts:
+            return tuple(parts)
         return None
     if not text_parts:
         return tuple(parts) if allow_expression_fallback else None
