@@ -7,6 +7,7 @@ export file is fictional data written by the test itself.
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -21,6 +22,9 @@ from qq_chat_analyzer import cli as cli_module
 from qq_chat_analyzer.application import (
     ApplicationServiceError,
     QQExportImportService,
+)
+from qq_chat_analyzer.application.qq_transient_export import (
+    QQTransientExportWorkspace,
 )
 
 
@@ -45,7 +49,13 @@ class _ListProvider:
         self.list_calls += 1
         return self._groups
 
-    def export_group_json(self, group_code, start_time=None, end_time=None):
+    def export_group_json(
+        self,
+        group_code,
+        start_time=None,
+        end_time=None,
+        output_dir=None,
+    ):
         raise AssertionError("export must not be called for qce list")
 
 
@@ -58,7 +68,13 @@ class _FailingListProvider:
     def list_groups(self):
         raise _BoomError()
 
-    def export_group_json(self, group_code, start_time=None, end_time=None):
+    def export_group_json(
+        self,
+        group_code,
+        start_time=None,
+        end_time=None,
+        output_dir=None,
+    ):
         raise _BoomError()
 
 
@@ -103,9 +119,18 @@ class _ExportProvider:
     def list_groups(self):
         return []
 
-    def export_group_json(self, group_code, start_time=None, end_time=None):
+    def export_group_json(
+        self,
+        group_code,
+        start_time=None,
+        end_time=None,
+        output_dir=None,
+    ):
         self.export_calls.append((group_code, start_time, end_time))
-        return self._export_path
+        assert output_dir is not None
+        target = Path(output_dir) / self._export_path.name
+        shutil.copyfile(self._export_path, target)
+        return target
 
 
 # ------------------------------------------------------------------- qce list
@@ -118,7 +143,9 @@ def test_qce_list_prints_groups(monkeypatch, capsys) -> None:
             _StubGroup("700000002", "Fictional Group B", None),
         ]
     )
-    monkeypatch.setattr(cli_module, "_build_qce_service", lambda: QQExportImportService(provider))
+    monkeypatch.setattr(
+        cli_module, "_build_qce_service", lambda: QQExportImportService(provider)
+    )
 
     exit_code = cli_module.main(["qce", "list"])
     captured = capsys.readouterr()
@@ -143,7 +170,9 @@ def test_qce_list_reports_empty_result(monkeypatch, capsys) -> None:
 
 def test_qce_list_translates_provider_error(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
-        cli_module, "_build_qce_service", lambda: QQExportImportService(_FailingListProvider())
+        cli_module,
+        "_build_qce_service",
+        lambda: QQExportImportService(_FailingListProvider()),
     )
 
     exit_code = cli_module.main(["qce", "list"])
@@ -159,7 +188,14 @@ def test_qce_list_translates_provider_error(monkeypatch, capsys) -> None:
 def test_qce_analyze_runs_full_pipeline(monkeypatch, capsys, tmp_path) -> None:
     export_path = _write_fake_export(tmp_path / "fake-export.json")
     provider = _ExportProvider(export_path)
-    monkeypatch.setattr(cli_module, "_build_qce_service", lambda: QQExportImportService(provider))
+    monkeypatch.setattr(
+        cli_module,
+        "_build_qce_service",
+        lambda: QQExportImportService(
+            provider,
+            transient_workspace=QQTransientExportWorkspace(tmp_path / "user-data"),
+        ),
+    )
     output_dir = tmp_path / "out"
 
     exit_code = cli_module.main(
@@ -173,6 +209,38 @@ def test_qce_analyze_runs_full_pipeline(monkeypatch, capsys, tmp_path) -> None:
     assert output_dir.exists()
 
 
+def test_qce_analyze_does_not_advertise_a_deleted_transient_export(
+    monkeypatch,
+    capsys,
+    tmp_path,
+) -> None:
+    """The export dies before the command returns, so do not promise it."""
+    export_path = _write_fake_export(tmp_path / "fake-export.json")
+    provider = _ExportProvider(export_path)
+    exports_root = tmp_path / "Documents" / "QQChatExporter" / "exports"
+    monkeypatch.setattr(
+        cli_module,
+        "_build_qce_service",
+        lambda: QQExportImportService(
+            provider,
+            transient_workspace=QQTransientExportWorkspace(exports_root),
+        ),
+    )
+    output_dir = tmp_path / "out"
+
+    exit_code = cli_module.main(
+        ["qce", "analyze", "--group", "700000001", "--output-dir", str(output_dir)]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "\u5df2\u5bfc\u51fa" not in captured.out
+    echo_namespace = exports_root / "Echo"
+    assert str(echo_namespace) not in captured.out
+    assert not list(echo_namespace.iterdir())
+    assert output_dir.exists()
+
+
 def test_qce_analyze_requires_group(capsys) -> None:
     exit_code = cli_module.main(["qce", "analyze"])
     captured = capsys.readouterr()
@@ -183,7 +251,12 @@ def test_qce_analyze_requires_group(capsys) -> None:
 
 def test_qce_analyze_translates_provider_error(monkeypatch, capsys, tmp_path) -> None:
     monkeypatch.setattr(
-        cli_module, "_build_qce_service", lambda: QQExportImportService(_FailingListProvider())
+        cli_module,
+        "_build_qce_service",
+        lambda: QQExportImportService(
+            _FailingListProvider(),
+            transient_workspace=QQTransientExportWorkspace(tmp_path / "user-data"),
+        ),
     )
 
     exit_code = cli_module.main(

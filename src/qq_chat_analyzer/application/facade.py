@@ -26,7 +26,7 @@ import logging
 import shutil
 from tempfile import TemporaryDirectory
 from collections.abc import Mapping
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta, timezone
 from enum import Enum
@@ -809,9 +809,9 @@ class ChatAnalyzerFacade:
     ) -> AnalysisOutcome:
         """Export one conversation, analyze it, and return a view.
 
-        The export file is a temporary implementation detail: it is written to
-        a scratch directory, consumed by the analysis service, and discarded
-        before this method returns.
+        QQ exports are written to a private QCE transient lease and kept until
+        this analysis completes. WeChat exports use the facade scratch
+        directory. Neither path refers to QQChatExporter's default exports.
         """
         chat_source = _coerce_source(source)
         if chat_source is ChatSource.LOCAL_FILE:
@@ -865,33 +865,33 @@ class ChatAnalyzerFacade:
 
         with TemporaryDirectory(prefix="chat-analyzer-export-") as scratch:
             scratch_directory = Path(scratch)
-            with _translated_errors(chat_source):
-                session_export = self._export_session(
-                    chat_source,
-                    service,
-                    session_id,
+            with self._session_export_context(
+                chat_source,
+                service,
+                session_id,
+                resolved_config,
+                scratch_directory,
+                raw_session=(
+                    raw_session if chat_source is ChatSource.QQ else None
+                ),
+                scope=resolved_scope,
+                progress=progress,
+            ) as session_export:
+                return self._analyze_path(
+                    session_export.payload_path,
                     resolved_config,
-                    scratch_directory,
-                    raw_session=raw_session if chat_source is ChatSource.QQ else None,
+                    source=chat_source,
+                    session=session,
                     scope=resolved_scope,
+                    speaker_names=speaker_names,
+                    conversation_names=conversation_names,
+                    conversation_kind=conversation_kind,
+                    viewer_speaker_key=viewer_speaker_key,
+                    snapshot_id=session_export.snapshot_id,
+                    data_acquired_at=session_export.acquired_at,
+                    snapshot_reused=session_export.reused_snapshot,
                     progress=progress,
                 )
-
-            return self._analyze_path(
-                session_export.payload_path,
-                resolved_config,
-                source=chat_source,
-                session=session,
-                scope=resolved_scope,
-                speaker_names=speaker_names,
-                conversation_names=conversation_names,
-                conversation_kind=conversation_kind,
-                viewer_speaker_key=viewer_speaker_key,
-                snapshot_id=session_export.snapshot_id,
-                data_acquired_at=session_export.acquired_at,
-                snapshot_reused=session_export.reused_snapshot,
-                progress=progress,
-            )
 
     def generate_share_image(
         self,
@@ -1135,7 +1135,8 @@ class ChatAnalyzerFacade:
             conversation_kind=conversation_kind,
         )
 
-    def _export_session(
+    @contextmanager
+    def _session_export_context(
         self,
         source: ChatSource,
         service: Any,
@@ -1146,14 +1147,19 @@ class ChatAnalyzerFacade:
         raw_session: Any = None,
         scope: AnalysisScope | None = None,
         progress: Callable[[str], None] | None = None,
-    ) -> _SessionExport:
-        """Ask the matching service for an export file.
+    ) -> Iterator[_SessionExport]:
+        """Yield an export while preserving source-specific ownership.
 
         A dated analysis scope is translated into QCE millisecond bounds so
         the provider stops paging once the requested window is covered
         instead of exporting the entire history. The scope filter still
         re-checks every imported message, so these bounds are an acquisition
         optimisation, never a correctness dependency.
+
+        QQ acquisition failures are translated into :class:`FacadeError`
+        exactly as before, while the owned lease stays open for the whole
+        consumer: only the acquisition itself is translated, never
+        shortened.
         """
         if source is ChatSource.QQ:
             session_type = _first_string(raw_session, "session_type")
@@ -1171,13 +1177,15 @@ class ChatAnalyzerFacade:
                 ) or None,
                 force_refresh=config.force_refresh,
             )
-            acquire_export = getattr(service, "acquire_export", None)
-            if callable(acquire_export):
-                acquisition = acquire_export(
-                    request,
-                    progress=_qq_export_progress_relay(progress),
-                )
-                return _SessionExport(
+            with ExitStack() as ownership:
+                with _translated_errors(source):
+                    acquisition = ownership.enter_context(
+                        service.acquired_export(
+                            request,
+                            progress=_qq_export_progress_relay(progress),
+                        )
+                    )
+                yield _SessionExport(
                     payload_path=Path(acquisition.payload_path),
                     snapshot_id=getattr(acquisition, "snapshot_id", None),
                     acquired_at=getattr(acquisition, "acquired_at", None),
@@ -1185,24 +1193,23 @@ class ChatAnalyzerFacade:
                         getattr(acquisition, "reused_snapshot", False)
                     ),
                 )
-            return _SessionExport(
-                payload_path=Path(service.export_only(request))
-            )
+            return
 
-        return _SessionExport(
-            payload_path=Path(
-                service.export_only(
-                    WeChatExportImportRequest(
-                        session_id=session_id,
-                        output_path=(
-                            scratch_directory / "wechat_export.json"
-                        ),
-                        start_time=None,
-                        end_time=None,
+        with _translated_errors(source):
+            yield _SessionExport(
+                payload_path=Path(
+                    service.export_only(
+                        WeChatExportImportRequest(
+                            session_id=session_id,
+                            output_path=(
+                                scratch_directory / "wechat_export.json"
+                            ),
+                            start_time=None,
+                            end_time=None,
+                        )
                     )
                 )
             )
-        )
 
     @staticmethod
     def _resolve_scope(

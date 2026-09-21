@@ -243,7 +243,9 @@ Completed:
 
 - QCE HTTP Provider: health check, security.json token, group list, export task creation and polling.
 - QCE JSON Adapter: recognizes single-file QCE JSON exports and converts text/reply messages to ChatMessage.
-- QQExportImportService: orchestrates export, then import through the existing ImportService; exposes export_only() and list_groups().
+- QQExportImportService: orchestrates QQ acquisition through a bounded,
+  Echo-owned transient lease, then imports through the existing ImportService;
+  exposes context-managed acquired_export() and list_groups().
 - CLI qce commands: `qqchat qce list` and `qqchat qce analyze --group <group_code>`.
 - CLI reaches the QCE flow only through the Application layer; it does not construct a provider directly.
 

@@ -19,7 +19,9 @@ or chat data is contacted.
 from __future__ import annotations
 
 import json
+import shutil
 import sys
+from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
@@ -31,6 +33,9 @@ sys.path.insert(0, str(SRC_ROOT))
 from qq_chat_analyzer.application import (
     ChatDataSnapshotManager,
     QQExportImportService,
+)
+from qq_chat_analyzer.application.qq_transient_export import (
+    QQTransientExportWorkspace,
 )
 from qq_chat_analyzer.application.dto import (
     AnalysisResultDTO,
@@ -128,9 +133,10 @@ class _RecordingQQService:
     def list_sessions(self) -> list[object]:
         return []
 
-    def acquire_export(self, request, progress=None):
+    @contextmanager
+    def acquired_export(self, request, progress=None):
         self.requests.append(request)
-        return _acquisition(self._export_path)
+        yield _acquisition(self._export_path)
 
 
 class _RecordingAnalysisService:
@@ -216,7 +222,7 @@ class _FakeQceExportBackend:
                 "taskId": f"fictional-task-{len(self.export_bodies)}",
                 "status": "completed",
                 "messageCount": message_count,
-                "filePath": str(self._export_path),
+                "filePath": self._output_path(body),
             }
             self._tasks[str(task["taskId"])] = task
             return 200, self._envelope(task)
@@ -228,6 +234,14 @@ class _FakeQceExportBackend:
     @staticmethod
     def _envelope(data: object) -> str:
         return json.dumps({"success": True, "data": data, "requestId": "req-1"})
+
+    def _output_path(self, body: dict[str, object]) -> str:
+        options = body.get("options")
+        output_dir = options.get("outputDir") if isinstance(options, dict) else None
+        assert isinstance(output_dir, str)
+        target = Path(output_dir) / self._export_path.name
+        shutil.copyfile(self._export_path, target)
+        return str(target)
 
     def _scan(self, start_millis: object, end_millis: object) -> int:
         """Walk pages newest-first, exactly like QCE's reverse history scan."""
@@ -267,6 +281,7 @@ def _end_to_end_facade(
     service = QQExportImportService(
         provider=provider,
         snapshot_manager=ChatDataSnapshotManager(tmp_path / "user-data"),
+        transient_workspace=QQTransientExportWorkspace(tmp_path / "user-data"),
     )
     return ChatAnalyzerFacade(
         qq_service=service,

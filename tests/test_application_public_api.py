@@ -46,7 +46,12 @@ def test_application_package_exports_qq_snapshot_acquisition() -> None:
 
     assert application.QQExportAcquisition is service_module.QQExportAcquisition
     assert "QQExportAcquisition" in application.__all__
-    assert callable(application.QQExportImportService.acquire_export)
+    assert callable(application.QQExportImportService.acquired_export)
+    # Stage 1.1: acquisition is only reachable through the owned-lease
+    # context manager. A public unmanaged entry point would let QCE fall
+    # back to its default exports directory and hand callers a path Echo
+    # never cleans up.
+    assert not hasattr(application.QQExportImportService, "acquire_export")
 
 
 def test_application_package_exports_wechat_connection_types() -> None:

@@ -21,11 +21,12 @@ optional time window, hand back a path to a finished QCE JSON export.
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Callable, Mapping
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Iterator, Protocol, runtime_checkable
 
 from ..analysis.timestamps import to_epoch_seconds
 from ..qq_chat_exporter_adapter import load_qce_json
@@ -38,6 +39,11 @@ from .errors import ApplicationServiceError
 from .import_outcome import ImportOutcome
 from .import_request import ImportRequest
 from .import_service import ImportService
+from .qq_transient_export import (
+    QQTransientExportCleanupError,
+    QQTransientExportLease,
+    QQTransientExportWorkspace,
+)
 
 
 QQ_PLATFORM = "qq"
@@ -81,6 +87,7 @@ class QQExportProvider(Protocol):
         group_code: str,
         start_time: Any = None,
         end_time: Any = None,
+        output_dir: str | None = None,
         on_task_update: Callable[[Any], None] | None = None,
     ) -> Path:  # pragma: no cover - structural contract only
         ...
@@ -137,6 +144,7 @@ class QQExportImportService:
         provider_factory: Any = None,
         cache_directory: str | Path | None = None,
         snapshot_manager: ChatDataSnapshotManager | None = None,
+        transient_workspace: QQTransientExportWorkspace | None = None,
     ) -> None:
         if provider is None and provider_factory is None:
             raise TypeError(
@@ -146,6 +154,9 @@ class QQExportImportService:
         self._provider_factory = provider_factory
         self._import_service = import_service or ImportService()
         self._snapshot_manager = snapshot_manager or ChatDataSnapshotManager()
+        self._transient_workspace = (
+            transient_workspace or QQTransientExportWorkspace()
+        )
         # Kept only so existing constructor calls remain valid. Phase 3B does
         # not read, migrate, or delete the legacy metadata cache.
         del cache_directory
@@ -166,14 +177,13 @@ class QQExportImportService:
         return self.provider()
 
     def execute(self, request: QQExportImportRequest) -> ImportOutcome:
-        acquisition = self.acquire_export(request)
-
-        return self._import_service.execute(
-            ImportRequest(
-                input_path=acquisition.payload_path,
-                platform=QQ_PLATFORM,
+        with self.acquired_export(request) as acquisition:
+            return self._import_service.execute(
+                ImportRequest(
+                    input_path=acquisition.payload_path,
+                    platform=QQ_PLATFORM,
+                )
             )
-        )
 
     def list_groups(self) -> list[Any]:
         """Delegate group listing to the injected provider.
@@ -215,15 +225,15 @@ class QQExportImportService:
         based on real messages instead of a fixed window. Non-text messages are
         included because they still carry a real message time.
         """
-        export_path = self.export_only(
+        with self.acquired_export(
             QQExportImportRequest(
                 group_code=group_code,
                 chat_type=chat_type,
                 peer_uin=peer_uin,
                 session_name=session_name,
             )
-        )
-        payload = load_qce_json(export_path)
+        ) as acquisition:
+            payload = load_qce_json(acquisition.payload_path)
         if not isinstance(payload, Mapping):
             return None
         raw_messages = payload.get("messages")
@@ -240,57 +250,102 @@ class QQExportImportService:
             return None
         return min(epochs), max(epochs)
 
-    def export_only(self, request: QQExportImportRequest) -> Path:
-        """Export one QQ group and return the finished JSON file path.
-
-        This is the first half of :meth:`execute`, exposed for callers that
-        want the export file without immediately importing it. Provider
-        errors propagate unchanged; only a missing or unusable return value
-        becomes :class:`QQExportUnavailable`, and a path that is not present
-        on disk becomes :class:`QQExportFileMissing`.
-        """
-        return self.acquire_export(request).payload_path
-
-    def acquire_export(
+    @contextmanager
+    def acquired_export(
         self,
         request: QQExportImportRequest,
         progress: Callable[[QQExportProgress], None] | None = None,
-    ) -> QQExportAcquisition:
-        """Reuse a valid snapshot or export and persist a new raw payload.
+    ) -> Iterator[QQExportAcquisition]:
+        """Yield one export while owning any QCE transient run it needs."""
+        cached = self._cached_acquisition(request)
+        if cached is not None:
+            yield cached
+            return
 
-        ``progress``, when given, receives one :class:`QQExportProgress` per
-        provider task snapshot while a *fresh* export runs. A reused snapshot
-        never contacts the provider, so no progress is emitted in that case.
+        lease = self._transient_workspace.begin_run()
+        try:
+            acquisition, export_path = self._fresh_acquisition(
+                request,
+                progress,
+                lease=lease,
+            )
+            if acquisition.payload_path != export_path:
+                self._release_lease(lease)
+                lease = None
+            yield acquisition
+        finally:
+            if lease is not None:
+                self._release_lease(lease)
+
+    @staticmethod
+    def _release_lease(lease: QQTransientExportLease) -> None:
+        """Release one owned transient run without changing the outcome.
+
+        ``QQTransientExportLease.cleanup()`` is deliberately strict: it
+        refuses to delete anything it cannot prove Echo owns. That refusal
+        is a maintenance problem, never an analysis failure, so it is
+        logged here and the run is left in place for startup orphan
+        recovery. Swallowing it must not fail an analysis that already
+        succeeded, and must not replace the exception a consumer raised.
         """
+        try:
+            lease.cleanup()
+        except (OSError, QQTransientExportCleanupError):
+            _LOGGER.warning(
+                "QQ transient export run could not be cleaned up and was "
+                "left in place: %s",
+                lease.output_directory,
+                exc_info=True,
+            )
+
+    def _cached_acquisition(
+        self,
+        request: QQExportImportRequest,
+    ) -> QQExportAcquisition | None:
+        if not _is_full_session_request(request) or request.force_refresh:
+            return None
+        validation = self._snapshot_manager.find_latest_available(
+            source=ChatDataSource.QQ,
+            session_id=str(request.group_code),
+            session_type=_session_type(request),
+        )
+        if (
+            validation is None
+            or validation.snapshot is None
+            or validation.payload_path is None
+        ):
+            return None
+        return QQExportAcquisition(
+            payload_path=validation.payload_path,
+            snapshot_id=validation.snapshot.id,
+            acquired_at=validation.snapshot.acquired_at,
+            reused_snapshot=True,
+        )
+
+    def _fresh_acquisition(
+        self,
+        request: QQExportImportRequest,
+        progress: Callable[[QQExportProgress], None] | None = None,
+        *,
+        lease: QQTransientExportLease | None = None,
+    ) -> tuple[QQExportAcquisition, Path]:
         session_type = _session_type(request)
         cacheable = _is_full_session_request(request)
-        if cacheable and not request.force_refresh:
-            validation = self._snapshot_manager.find_latest_available(
-                source=ChatDataSource.QQ,
-                session_id=str(request.group_code),
-                session_type=session_type,
-            )
-            if (
-                validation is not None
-                and validation.snapshot is not None
-                and validation.payload_path is not None
-            ):
-                return QQExportAcquisition(
-                    payload_path=validation.payload_path,
-                    snapshot_id=validation.snapshot.id,
-                    acquired_at=validation.snapshot.acquired_at,
-                    reused_snapshot=True,
-                )
-
-        export_path = self._export(request, progress)
+        export_path = self._export(
+            request,
+            progress,
+            output_dir=(lease.output_directory if lease is not None else None),
+        )
         if not export_path.exists():
             raise QQExportFileMissing()
+        if lease is not None:
+            export_path = lease.require_owned_export_file(export_path)
 
         if not cacheable:
-            return QQExportAcquisition(payload_path=export_path)
+            return QQExportAcquisition(payload_path=export_path), export_path
         metadata = _snapshot_metadata(export_path)
         if metadata is None:
-            return QQExportAcquisition(payload_path=export_path)
+            return QQExportAcquisition(payload_path=export_path), export_path
         message_count, coverage_start, coverage_end = metadata
         try:
             snapshot = self._snapshot_manager.save_snapshot(
@@ -309,7 +364,7 @@ class QQExportImportService:
                 "QQ export succeeded but its chat data snapshot could not "
                 "be saved.",
             )
-            return QQExportAcquisition(payload_path=export_path)
+            return QQExportAcquisition(payload_path=export_path), export_path
 
         snapshot_payload = self._snapshot_manager.resolve_payload_path(
             snapshot.id
@@ -318,12 +373,15 @@ class QQExportImportService:
             _LOGGER.warning(
                 "QQ chat data snapshot failed validation after save."
             )
-            return QQExportAcquisition(payload_path=export_path)
-        return QQExportAcquisition(
-            payload_path=snapshot_payload,
-            snapshot_id=snapshot.id,
-            acquired_at=snapshot.acquired_at,
-            reused_snapshot=False,
+            return QQExportAcquisition(payload_path=export_path), export_path
+        return (
+            QQExportAcquisition(
+                payload_path=snapshot_payload,
+                snapshot_id=snapshot.id,
+                acquired_at=snapshot.acquired_at,
+                reused_snapshot=False,
+            ),
+            export_path,
         )
 
     # ---------------------------------------------------------------- internals
@@ -332,6 +390,8 @@ class QQExportImportService:
         self,
         request: QQExportImportRequest,
         progress: Callable[[QQExportProgress], None] | None = None,
+        *,
+        output_dir: Path | None = None,
     ) -> Path:
         """Run the provider export, normalising its failures.
 
@@ -349,6 +409,8 @@ class QQExportImportService:
         extra: dict[str, Any] = {}
         if relay is not None:
             extra["on_task_update"] = relay
+        if output_dir is not None:
+            extra["output_dir"] = str(output_dir)
 
         export_chat = getattr(self._provider, "export_chat_json", None)
         if callable(export_chat):

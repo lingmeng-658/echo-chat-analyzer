@@ -586,6 +586,39 @@ def test_create_export_task_raises_when_service_down():
 # -------------------------------------------------------------------- polling
 
 
+def test_export_chat_json_sends_echo_owned_output_directory_to_qce(tmp_path):
+    """The provider must forward the application-chosen owned directory."""
+    output_directory = tmp_path / "LocalChatAnalyzer" / "transient" / "qce-exports" / "run-1"
+    responses = [
+        (200, _envelope({"taskId": "export-output", "status": "running"})),
+        (
+            200,
+            _envelope(
+                {
+                    "taskId": "export-output",
+                    "status": "completed",
+                    "filePath": str(output_directory / "export.json"),
+                }
+            ),
+        ),
+    ]
+    provider, transport = _provider(responses)
+
+    result = provider.export_chat_json(
+        "fictional-session",
+        chat_type=2,
+        output_dir=str(output_directory),
+        poll_interval=0,
+    )
+
+    assert result == output_directory / "export.json"
+    assert transport.calls[0]["payload"] == {
+        "peer": {"chatType": 2, "peerUid": "fictional-session"},
+        "format": "JSON",
+        "options": {"outputDir": str(output_directory)},
+    }
+
+
 def test_wait_export_task_returns_completed_file_path():
     responses = [
         (200, _envelope({"taskId": "export_3", "status": "running", "progress": 60})),

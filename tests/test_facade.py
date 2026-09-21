@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+from contextlib import contextmanager
 from datetime import date, datetime, time, timezone
 from pathlib import Path
 
@@ -118,11 +119,21 @@ class _StubQQService:
             raise self._error
         return self._tasks
 
-    def export_only(self, request):
+    @contextmanager
+    def acquired_export(self, request, progress=None):
         self.export_requests.append(request)
         if self._error is not None:
             raise self._error
-        return self._export_path
+        yield type(
+            "Acquisition",
+            (),
+            {
+                "payload_path": self._export_path,
+                "snapshot_id": None,
+                "acquired_at": None,
+                "reused_snapshot": False,
+            },
+        )()
 
     def get_session_message_range(self, group_code, **kwargs):
         self.range_requests.append((group_code, kwargs))
@@ -137,10 +148,82 @@ class _SnapshotQQService(_StubQQService):
         self._acquisition = acquisition
         self.progress_callbacks: list[object] = []
 
-    def acquire_export(self, request, progress=None):
+    @contextmanager
+    def acquired_export(self, request, progress=None):
         self.export_requests.append(request)
         self.progress_callbacks.append(progress)
-        return self._acquisition
+        yield self._acquisition
+
+
+class _ContextManagedQQService(_StubQQService):
+    """Model the QCE lease that must span the facade's complete analysis."""
+
+    def __init__(self, run_directory: Path, *, error=None) -> None:
+        super().__init__(groups=[_FakeQQGroup("fictional-session", "Fictional")])
+        self._run_directory = run_directory
+        self._error = error
+        self.entered = False
+        self.exited = False
+
+    def acquired_export(self, request, progress=None):
+        service = self
+
+        class _AcquisitionContext:
+            def __enter__(self):
+                service.entered = True
+                service.export_requests.append(request)
+                service._run_directory.mkdir(parents=True)
+                payload_path = _export_file(
+                    service._run_directory,
+                    "qce-export.json",
+                )
+                return type(
+                    "Acquisition",
+                    (),
+                    {
+                        "payload_path": payload_path,
+                        "snapshot_id": None,
+                        "acquired_at": None,
+                        "reused_snapshot": False,
+                    },
+                )()
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                for child in service._run_directory.iterdir():
+                    child.unlink()
+                service._run_directory.rmdir()
+                service.exited = True
+                return False
+
+        return _AcquisitionContext()
+
+
+class _FailingExportQQService(_StubQQService):
+    """List sessions normally, but fail while Echo acquires the export.
+
+    Session listing must succeed so the failure lands on the export step,
+    the step that has to stay translated into a :class:`FacadeError`.
+    """
+
+    def __init__(self, error) -> None:
+        super().__init__(groups=[_FakeQQGroup("fictional-session", "Fictional")])
+        self._export_error = error
+
+    @contextmanager
+    def acquired_export(self, request, progress=None):
+        self.export_requests.append(request)
+        if self._export_error is not None:
+            raise self._export_error
+        yield type(  # pragma: no cover - only the failure path is used
+            "Acquisition",
+            (),
+            {
+                "payload_path": self._export_path,
+                "snapshot_id": None,
+                "acquired_at": None,
+                "reused_snapshot": False,
+            },
+        )()
 
 
 class _StubWeChatService:
@@ -2438,6 +2521,95 @@ def test_analyze_session_hides_the_intermediate_export_file(
     assert not hasattr(outcome, "export_path")
 
 
+def test_qq_bounded_export_lease_spans_successful_facade_analysis(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    qce_service = _ContextManagedQQService(
+        tmp_path / "LocalChatAnalyzer" / "transient" / "qce-exports" / "run-1"
+    )
+    facade = _facade(qq_service=qce_service, tmp_path=tmp_path)
+
+    facade.analyze_session(
+        module.ChatSource.QQ,
+        "fictional-session",
+        module.AnalysisConfig(
+            start_time="2025-01-01",
+            end_time="2025-01-02",
+        ),
+    )
+
+    assert qce_service.entered is True
+    assert qce_service.exited is True
+    assert not qce_service._run_directory.exists()
+
+
+def test_qq_bounded_export_lease_closes_when_facade_analysis_fails(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    qce_service = _ContextManagedQQService(
+        tmp_path / "LocalChatAnalyzer" / "transient" / "qce-exports" / "run-2"
+    )
+    facade = _facade(
+        qq_service=qce_service,
+        analysis_service=_StubAnalysisService(error=RuntimeError("fictional failure")),
+        tmp_path=tmp_path,
+    )
+
+    with pytest.raises(module.FacadeError):
+        facade.analyze_session(
+            module.ChatSource.QQ,
+            "fictional-session",
+            module.AnalysisConfig(
+                start_time="2025-01-01",
+                end_time="2025-01-02",
+            ),
+        )
+
+    assert qce_service.entered is True
+    assert qce_service.exited is True
+    assert not qce_service._run_directory.exists()
+
+
+def test_qq_export_failure_during_analysis_becomes_a_facade_error(
+    tmp_path: Path,
+) -> None:
+    """A QCE failure must reach callers as a FacadeError, never raw.
+
+    Stage 1.1: moving the acquisition into a context manager dropped the QQ
+    branch's error translation, so the GUI could only fall back to its
+    generic "unexpected error" message when QCE was not running.
+    """
+    module = _facade_module()
+    provider_errors = importlib.import_module(
+        "qq_chat_analyzer.providers.qq_chat_exporter_provider"
+    )
+    facade = _facade(
+        qq_service=_FailingExportQQService(
+            provider_errors.ServiceUnavailable()
+        ),
+        tmp_path=tmp_path,
+    )
+
+    with pytest.raises(module.FacadeError) as excinfo:
+        facade.analyze_session(
+            module.ChatSource.QQ,
+            "fictional-session",
+            module.AnalysisConfig(
+                start_time="2025-01-01",
+                end_time="2025-01-02",
+            ),
+        )
+
+    assert excinfo.value.code == provider_errors.ServiceUnavailable.code
+    assert (
+        excinfo.value.public_message
+        == provider_errors.ServiceUnavailable.public_message
+    )
+    assert excinfo.value.source is module.ChatSource.QQ
+
+
 def test_analyze_session_rejects_the_local_file_source() -> None:
     module = _facade_module()
     facade = _facade()
@@ -2969,13 +3141,14 @@ class _ProgressQQService(_StubQQService):
         self._snapshots = list(snapshots)
         self.progress_callbacks: list[object] = []
 
-    def acquire_export(self, request, progress=None):
+    @contextmanager
+    def acquired_export(self, request, progress=None):
         self.export_requests.append(request)
         self.progress_callbacks.append(progress)
         if progress is not None:
             for snapshot in self._snapshots:
                 progress(snapshot)
-        return self._acquisition
+        yield self._acquisition
 
 
 def test_analyze_session_reports_qq_export_message_count_without_percentage(

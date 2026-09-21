@@ -403,20 +403,19 @@ def _run_qce_analyze(arguments: list[str]) -> int:
         return 2
 
     try:
-        export_path = _build_qce_service().export_only(
+        with _build_qce_service().acquired_export(
             QQExportImportRequest(group_code=group_code, force_refresh=True)
-        )
+        ) as acquisition:
+            export_path = acquisition.payload_path
+
+            forwarded = [str(export_path)]
+            if known.profile:
+                forwarded.append(known.profile)
+            if known.output_dir:
+                forwarded += ["--output-dir", known.output_dir]
+            return main(forwarded)
     except ApplicationServiceError as error:
         return _report_qce_error(error)
-
-    print(f"\u5df2\u5bfc\u51fa\uff1a{export_path}")
-
-    forwarded = [str(export_path)]
-    if known.profile:
-        forwarded.append(known.profile)
-    if known.output_dir:
-        forwarded += ["--output-dir", known.output_dir]
-    return main(forwarded)
 
 
 def _report_qce_error(error: ApplicationServiceError) -> int:
