@@ -219,9 +219,7 @@ class _FailingExportQQService(_StubQQService):
             (),
             {
                 "payload_path": self._export_path,
-                "snapshot_id": None,
                 "acquired_at": None,
-                "reused_snapshot": False,
             },
         )()
 
@@ -1921,43 +1919,6 @@ def test_analyze_session_dispatches_to_the_qq_service(tmp_path: Path) -> None:
     assert outcome.session.session_id == "10001"
 
 
-def test_qq_snapshot_metadata_and_force_refresh_flow_through_facade(
-    tmp_path: Path,
-) -> None:
-    module = _facade_module()
-    snapshot_path = _export_file(tmp_path, "snapshot-export.json")
-    acquired_at = datetime(2026, 8, 11, 12, 30, tzinfo=timezone.utc)
-    acquisition = type(
-        "Acquisition",
-        (),
-        {
-            "payload_path": snapshot_path,
-            "snapshot_id": "11111111-1111-1111-1111-111111111111",
-            "acquired_at": acquired_at,
-            "reused_snapshot": True,
-        },
-    )()
-    qq_service = _SnapshotQQService(acquisition=acquisition)
-    analysis_service = _StubAnalysisService(result=_result())
-    facade = _facade(
-        qq_service=qq_service,
-        analysis_service=analysis_service,
-        tmp_path=tmp_path,
-    )
-
-    outcome = facade.analyze_session(
-        module.ChatSource.QQ,
-        "fictional-session",
-        module.AnalysisConfig(force_refresh=True),
-    )
-
-    assert qq_service.export_requests[0].force_refresh is True
-    assert analysis_service.requests[0].input_path == snapshot_path
-    assert outcome.snapshot_id == "11111111-1111-1111-1111-111111111111"
-    assert outcome.data_acquired_at == acquired_at
-    assert outcome.snapshot_reused is True
-
-
 def test_wechat_analysis_ignores_qq_force_refresh_flag(tmp_path: Path) -> None:
     module = _facade_module()
     export_path = _export_file(tmp_path, "wechat-force-refresh.json")
@@ -1973,9 +1934,6 @@ def test_wechat_analysis_ignores_qq_force_refresh_flag(tmp_path: Path) -> None:
     request = wechat_service.export_requests[0]
     assert not hasattr(request, "force_refresh")
     assert request.session_id == "wxid_fictional_force_refresh"
-    assert outcome.snapshot_id is None
-    assert outcome.data_acquired_at is None
-    assert outcome.snapshot_reused is False
 
 
 def test_successful_qq_analysis_saves_scoped_history_metadata(
@@ -2029,58 +1987,6 @@ def test_successful_qq_analysis_saves_scoped_history_metadata(
     assert outcome.history_record_id == record.analysis_id
 
 
-def test_successful_qq_analysis_links_history_to_snapshot(tmp_path: Path) -> None:
-    module = _facade_module()
-    history_module = importlib.import_module(
-        "qq_chat_analyzer.application.report_history"
-    )
-    snapshot_path = _export_file(tmp_path, "history-snapshot.json")
-    snapshot_id = "22222222-2222-2222-2222-222222222222"
-    acquisition = type(
-        "Acquisition",
-        (),
-        {
-            "payload_path": snapshot_path,
-            "snapshot_id": snapshot_id,
-            "acquired_at": datetime(
-                2026,
-                8,
-                11,
-                13,
-                0,
-                tzinfo=timezone.utc,
-            ),
-            "reused_snapshot": False,
-        },
-    )()
-    history_manager = history_module.ReportHistoryManager(
-        tmp_path / "snapshot-history.jsonl"
-    )
-    facade = _facade(
-        qq_service=_SnapshotQQService(
-            acquisition=acquisition,
-            groups=[_FakeQQGroup("fictional-session", "Fictional Group")],
-        ),
-        report_history_manager=history_manager,
-        tmp_path=tmp_path,
-    )
-
-    facade.analyze_session(module.ChatSource.QQ, "fictional-session")
-
-    record = history_manager.list_records()[0]
-    assert record.snapshot_id == snapshot_id
-    assert record.session_type == "group"
-    assert record.input_identity_summary == history_module.InputIdentitySummary(
-        snapshot_reused=False,
-        capture_mode="snapshot",
-    )
-    assert record.raw_message_count == 6
-    assert record.imported_message_count == 4
-    assert record.scope_message_count == 2
-    assert record.filtered_message_count == 1
-    assert record.analyzed_message_count == 1
-
-
 def test_successful_wechat_analysis_saves_history_metadata(
     tmp_path: Path,
 ) -> None:
@@ -2113,14 +2019,10 @@ def test_successful_wechat_analysis_saves_history_metadata(
     assert record.analysis_scope == "all"
     assert record.scope_start is None
     assert record.scope_end is None
-    assert record.snapshot_id is None
     assert record.session_type == "friend"
     assert record.input_identity_summary == history_module.InputIdentitySummary(
-        snapshot_reused=False,
         capture_mode="live_database",
     )
-    assert record.raw_message_count == 12
-    assert record.imported_message_count == 10
     assert record.scope_message_count == 8
     assert record.filtered_message_count == 7
     assert record.analyzed_message_count == 7
@@ -2947,153 +2849,6 @@ class _StubSnapshotManager:
         return removed
 
 
-def test_facade_lists_snapshots_through_the_application_boundary() -> None:
-    module = _facade_module()
-    first = _snapshot("snap-1", size=10)
-    second = _snapshot("snap-2", size=20)
-    manager = _StubSnapshotManager(snapshots=[first, second])
-    facade = _facade(snapshot_manager=manager)
-
-    assert facade.list_snapshots() == (first, second)
-
-    facade.list_snapshots(
-        source=module.ChatSource.QQ,
-        session_id="room-1",
-    )
-    assert manager.list_kwargs[-1] == (module.ChatSource.QQ, "room-1")
-
-
-def test_facade_validates_a_snapshot_through_the_application_boundary() -> None:
-    snapshot = _snapshot("snap-1", size=10)
-    expected_validation = _validation(snapshot)
-    manager = _StubSnapshotManager(
-        snapshots=[snapshot],
-        validations={snapshot.id: expected_validation},
-    )
-    facade = _facade(snapshot_manager=manager)
-
-    assert facade.validate_snapshot("snap-1") is expected_validation
-
-
-def test_facade_removes_a_snapshot_payload_and_returns_its_metadata() -> None:
-    snapshot = _snapshot("snap-1", size=10)
-    manager = _StubSnapshotManager(
-        snapshots=[snapshot],
-        validations={snapshot.id: _validation(snapshot)},
-    )
-    facade = _facade(snapshot_manager=manager)
-
-    removed = facade.remove_snapshot("snap-1")
-
-    assert manager.remove_calls == ["snap-1"]
-    assert removed is snapshot
-
-
-def test_facade_remove_missing_snapshot_returns_none_without_error() -> None:
-    facade = _facade(snapshot_manager=_StubSnapshotManager())
-
-    assert facade.remove_snapshot("missing") is None
-
-
-def test_facade_removes_all_snapshot_payloads() -> None:
-    first = _snapshot("snap-1", size=10)
-    second = _snapshot("snap-2", size=20)
-    manager = _StubSnapshotManager(
-        snapshots=[first, second],
-        validations={
-            first.id: _validation(first),
-            second.id: _validation(second),
-        },
-    )
-    facade = _facade(snapshot_manager=manager)
-
-    assert facade.remove_all_snapshots() == 2
-    assert manager.remove_all_calls == 1
-
-
-def test_facade_reports_available_snapshot_storage_usage() -> None:
-    available = _snapshot("snap-1", size=10)
-    removed = _snapshot("snap-2", size=20)
-    manager = _StubSnapshotManager(
-        snapshots=[available, removed],
-        validations={
-            available.id: _validation(available, available=True),
-            removed.id: _validation(removed, available=False),
-        },
-    )
-    facade = _facade(snapshot_manager=manager)
-
-    assert facade.get_snapshot_storage_usage() == 10
-    assert _facade(
-        snapshot_manager=_StubSnapshotManager()
-    ).get_snapshot_storage_usage() == 0
-
-
-@pytest.mark.parametrize(
-    ("method_name", "error_key", "expected_code", "args"),
-    [
-        ("list_snapshots", "list", "snapshot_list_failed", ()),
-        (
-            "validate_snapshot",
-            "validate",
-            "snapshot_validation_failed",
-            ("snap-1",),
-        ),
-        (
-            "remove_snapshot",
-            "remove",
-            "snapshot_remove_failed",
-            ("snap-1",),
-        ),
-        ("remove_all_snapshots", "remove_all", "snapshot_clear_failed", ()),
-        (
-            "get_snapshot_storage_usage",
-            "usage",
-            "snapshot_storage_usage_failed",
-            (),
-        ),
-    ],
-)
-def test_facade_snapshot_errors_become_stable_facade_errors(
-    method_name,
-    error_key,
-    expected_code,
-    args,
-) -> None:
-    module = _facade_module()
-
-    class _FailingUsageManager(_StubSnapshotManager):
-        def list_snapshots(self, *, source=None, session_id=None):
-            self.list_calls += 1
-            if self._errors.get("usage") is not None:
-                raise self._errors["usage"]
-            return super().list_snapshots(source=source, session_id=session_id)
-
-    manager = _FailingUsageManager(errors={error_key: RuntimeError("boom")})
-    facade = _facade(snapshot_manager=manager)
-    method = getattr(facade, method_name)
-
-    with pytest.raises(module.FacadeError) as captured:
-        method(*args)
-
-    assert captured.value.code == expected_code
-    assert captured.value.public_message
-
-
-def test_facade_defaults_to_the_real_snapshot_manager() -> None:
-    module = _snapshot_module()
-
-    facade = _facade()
-
-    assert isinstance(
-        facade._snapshot_manager,
-        module.ChatDataSnapshotManager,
-    )
-
-
-# ------------------------------------------- QQ export progress (REL-01)
-
-
 def _application_package():
     return importlib.import_module("qq_chat_analyzer.application")
 
@@ -3231,32 +2986,3 @@ def test_analyze_session_never_renders_a_qce_percentage(
 
     assert "正在获取 QQ 聊天记录 · 已获取 1,234 条" in progress
     assert not any("%" in message for message in progress)
-
-
-def test_analyze_session_reused_qq_snapshot_without_progress_is_not_an_error(
-    tmp_path: Path,
-) -> None:
-    """A reused snapshot emits no progress and must still succeed."""
-    module = _facade_module()
-    service = _ProgressQQService(
-        acquisition=_qq_acquisition(
-            _export_file(tmp_path, "qq-reused.json"),
-            snapshot_id="33333333-3333-3333-3333-333333333333",
-            reused_snapshot=True,
-        ),
-        snapshots=(),
-    )
-    facade = _facade(qq_service=service, tmp_path=tmp_path)
-    progress: list[str] = []
-
-    outcome = facade.analyze_session(
-        module.ChatSource.QQ,
-        "fictional-session",
-        progress=progress.append,
-    )
-
-    assert callable(service.progress_callbacks[0])
-    assert outcome.snapshot_reused is True
-    assert not any(
-        "正在获取 QQ 聊天记录" in message for message in progress
-    )

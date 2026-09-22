@@ -15,16 +15,7 @@ from .connection import (
     QQAuthBridge,
     QQConnectionManager,
 )
-from .chat_data_snapshot import (
-    ChatDataSnapshot,
-    ChatDataSnapshotManager,
-    ChatDataSource,
-    SnapshotCleanupError,
-    SnapshotPayloadState,
-    SnapshotSaveError,
-    SnapshotStatus,
-    SnapshotValidation,
-)
+
 from .dto import (
     AnalysisDiagnosticCounts,
     AnalysisRequestDTO,
@@ -136,9 +127,6 @@ __all__ = [
     "ArtifactDTO",
     "ArtifactGenerationFailed",
     "ChatAnalyzerFacade",
-    "ChatDataSnapshot",
-    "ChatDataSnapshotManager",
-    "ChatDataSource",
     "ChatSource",
     "ConnectionSnapshot",
     "ConnectionState",
@@ -178,11 +166,6 @@ __all__ = [
     "SessionInfo",
     "SourceInfo",
     "SourceUnavailable",
-    "SnapshotCleanupError",
-    "SnapshotPayloadState",
-    "SnapshotSaveError",
-    "SnapshotStatus",
-    "SnapshotValidation",
     "UnknownChatSource",
     "UserProfileReport",
     "WeChatExportFileMissing",

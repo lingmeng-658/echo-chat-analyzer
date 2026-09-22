@@ -1,4 +1,4 @@
-"""Regression tests for the QQ acquisition time-range bug.
+﻿"""Regression tests for the QQ acquisition time-range bug.
 
 Reported symptom: the GUI selects a short window ("last two days"), yet the
 progress line reports a full-history acquisition ("已获取 185,823 条").
@@ -31,7 +31,6 @@ SRC_ROOT = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_ROOT))
 
 from qq_chat_analyzer.application import (
-    ChatDataSnapshotManager,
     QQExportImportService,
 )
 from qq_chat_analyzer.application.qq_transient_export import (
@@ -280,7 +279,6 @@ def _end_to_end_facade(
     )
     service = QQExportImportService(
         provider=provider,
-        snapshot_manager=ChatDataSnapshotManager(tmp_path / "user-data"),
         transient_workspace=QQTransientExportWorkspace(tmp_path / "user-data"),
     )
     return ChatAnalyzerFacade(

@@ -23,10 +23,8 @@ sys.path.insert(0, str(SRC_ROOT))
 
 from qq_chat_analyzer.application import (
     ApplicationServiceError,
-    ChatDataSnapshotManager,
     QQExportImportRequest,
     QQExportImportService,
-    SnapshotSaveError,
 )
 
 
@@ -97,53 +95,6 @@ class _WritingProvider:
         return result
 
 
-class _SnapshotSaveFailure:
-    def find_latest_available(self, **_kwargs):
-        return None
-
-    def save_snapshot(self, *_args, **_kwargs):
-        raise SnapshotSaveError("fictional save failure")
-
-
-class _SnapshotValidationFailure:
-    def find_latest_available(self, **_kwargs):
-        return None
-
-    def save_snapshot(self, *_args, **_kwargs):
-        return type("Snapshot", (), {"id": "fictional-snapshot"})()
-
-    def resolve_payload_path(self, _snapshot_id):
-        return None
-
-
-class _SnapshotHit:
-    def __init__(self, payload_path: Path) -> None:
-        self._payload_path = payload_path
-
-    def find_latest_available(self, **_kwargs):
-        snapshot = type(
-            "Snapshot",
-            (),
-            {
-                "id": "existing-snapshot",
-                "acquired_at": None,
-            },
-        )()
-        return type(
-            "Validation",
-            (),
-            {
-                "snapshot": snapshot,
-                "payload_path": self._payload_path,
-            },
-        )()
-
-
-class _WorkspaceThatMustNotAllocate:
-    def begin_run(self):
-        raise AssertionError("snapshot hit must not allocate a transient run")
-
-
 def _workspace(tmp_path: Path):
     """Inject the QCE exports root so no test resolves a real user path."""
     module = _transient_module()
@@ -159,13 +110,11 @@ def _lease(tmp_path: Path, name: str = "run-1"):
     return module.QQTransientExportLease(namespace_root, run_directory)
 
 
-def _service(workspace, provider, snapshot_manager):
+def _service(workspace, provider):
     return QQExportImportService(
         provider,
-        snapshot_manager=snapshot_manager,
         transient_workspace=workspace,
     )
-
 
 def test_workspace_creates_one_owned_run_below_the_echo_namespace(
     tmp_path: Path,
@@ -205,7 +154,6 @@ def test_bounded_export_remains_available_until_successful_consumer_returns(
     service = _service(
         workspace,
         provider,
-        ChatDataSnapshotManager(tmp_path / "LocalChatAnalyzer"),
     )
     request = QQExportImportRequest(
         group_code="fictional-session",
@@ -230,7 +178,6 @@ def test_bounded_export_is_released_when_its_consumer_raises(
     service = _service(
         workspace,
         provider,
-        ChatDataSnapshotManager(tmp_path / "LocalChatAnalyzer"),
     )
 
     with pytest.raises(RuntimeError, match="fictional analysis failure"):
@@ -248,72 +195,6 @@ def test_bounded_export_is_released_when_its_consumer_raises(
     assert not run_directory.exists()
 
 
-def test_full_snapshot_hit_does_not_create_a_qce_transient_run(
-    tmp_path: Path,
-) -> None:
-    snapshot_payload = _write_qce_export(
-        tmp_path / "LocalChatAnalyzer" / "data" / "snapshots" / "qq" / "existing.json"
-    )
-    provider = _WritingProvider()
-    service = _service(
-        _WorkspaceThatMustNotAllocate(),
-        provider,
-        _SnapshotHit(snapshot_payload),
-    )
-
-    with service.acquired_export(
-        QQExportImportRequest(group_code="fictional-session")
-    ) as acquisition:
-        assert acquisition.payload_path == snapshot_payload
-        assert acquisition.reused_snapshot is True
-
-    assert provider.output_directories == []
-
-
-def test_full_export_keeps_snapshot_after_releasing_qce_transient_run(
-    tmp_path: Path,
-) -> None:
-    user_data = tmp_path / "LocalChatAnalyzer"
-    workspace = _workspace(tmp_path)
-    provider = _WritingProvider()
-    snapshot_manager = ChatDataSnapshotManager(user_data)
-    service = _service(workspace, provider, snapshot_manager)
-
-    with service.acquired_export(
-        QQExportImportRequest(group_code="fictional-session")
-    ) as acquisition:
-        assert acquisition.snapshot_id is not None
-        assert acquisition.payload_path.is_file()
-        assert acquisition.payload_path.is_relative_to(user_data / "data" / "snapshots")
-        run_directory = provider.output_directories[0]
-        assert not run_directory.exists()
-
-    assert acquisition.payload_path.is_file()
-    assert not run_directory.exists()
-
-
-@pytest.mark.parametrize(
-    "snapshot_manager",
-    [_SnapshotSaveFailure(), _SnapshotValidationFailure()],
-)
-def test_snapshot_failure_keeps_qce_transient_payload_until_consumer_exits(
-    tmp_path: Path,
-    snapshot_manager,
-) -> None:
-    workspace = _workspace(tmp_path)
-    provider = _WritingProvider()
-    service = _service(workspace, provider, snapshot_manager)
-
-    with service.acquired_export(
-        QQExportImportRequest(group_code="fictional-session")
-    ) as acquisition:
-        run_directory = provider.output_directories[0]
-        assert acquisition.snapshot_id is None
-        assert acquisition.payload_path == provider.returned_paths[0]
-        assert acquisition.payload_path.is_file()
-        assert run_directory.is_dir()
-
-    assert not run_directory.exists()
 
 
 # --------------------------------------- Stage 1.1 cleanup failure policy
@@ -351,6 +232,7 @@ def _cleanup_warnings(caplog) -> list[str]:
     ]
 
 
+
 def test_cleanup_failure_does_not_fail_a_successful_consumer(
     tmp_path: Path,
     caplog,
@@ -362,7 +244,6 @@ def test_cleanup_failure_does_not_fail_a_successful_consumer(
     service = _service(
         workspace,
         provider,
-        ChatDataSnapshotManager(tmp_path / "LocalChatAnalyzer"),
     )
     _break_cleanup(monkeypatch)
 
@@ -388,7 +269,6 @@ def test_consumer_exception_is_not_replaced_by_a_cleanup_failure(
     service = _service(
         workspace,
         provider,
-        ChatDataSnapshotManager(tmp_path / "LocalChatAnalyzer"),
     )
     _break_cleanup(monkeypatch)
 
@@ -481,7 +361,6 @@ def test_provider_reporting_the_run_directory_is_never_used_as_a_payload(
     service = _service(
         _workspace(tmp_path),
         provider,
-        ChatDataSnapshotManager(tmp_path / "LocalChatAnalyzer"),
     )
 
     with pytest.raises(module.QQTransientExportOwnershipError):
@@ -527,7 +406,6 @@ def test_qq_acquisition_never_lets_qce_use_its_default_exports_folder(
     service = _service(
         _workspace(tmp_path),
         provider,
-        ChatDataSnapshotManager(user_data),
     )
 
     service.execute(_bounded_request())

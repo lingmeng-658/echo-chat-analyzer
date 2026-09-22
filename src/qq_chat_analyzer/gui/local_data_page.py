@@ -167,14 +167,10 @@ class LocalDataPage(QWidget):
     # ---------------------------------------------------------------- public API
 
     def refresh(self) -> None:
-        """Reload history, snapshots, and storage usage through the facade."""
+        """Reload history through the facade."""
         self._status_label.setText(_LOADING_STATUS)
         self._executor(
-            lambda: (
-                self._facade.list_analysis_history(),
-                self._facade.list_snapshots(),
-                self._facade.get_snapshot_storage_usage(),
-            ),
+            lambda: self._facade.list_analysis_history(),
             on_success=self._render_data,
             on_error=self._show_error,
         )
@@ -199,14 +195,10 @@ class LocalDataPage(QWidget):
 
     # ---------------------------------------------------------------- internals
 
-    def _render_data(self, result: Any) -> None:
-        history, snapshots, usage = result
+    def _render_data(self, history: Any) -> None:
+        """Render history after a successful refresh."""
         self._render_history(history or ())
-        self._render_snapshots(snapshots or ())
-        self._usage_label.setText(
-            f"快照占用空间：{_format_bytes(int(usage or 0))}"
-        )
-        self._status_label.setText(_UPDATED_STATUS)
+        self._status_label.clear()
 
     def _render_history(self, history: Any) -> None:
         records = list(history)

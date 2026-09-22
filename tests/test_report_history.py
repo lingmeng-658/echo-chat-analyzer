@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import logging
@@ -31,7 +31,6 @@ def _save_record(
         30,
         tzinfo=timezone.utc,
     ),
-    snapshot_id: str | None = None,
     session_type: str | None = None,
     input_identity_summary: InputIdentitySummary | None = None,
     raw_message_count: int | None = None,
@@ -49,7 +48,6 @@ def _save_record(
         scope_start=scope_start,
         scope_end=scope_end,
         report_generated_at=report_generated_at,
-        snapshot_id=snapshot_id,
         session_type=session_type,
         input_identity_summary=input_identity_summary,
         raw_message_count=raw_message_count,
@@ -151,7 +149,6 @@ def test_jsonl_serialization_uses_metadata_allowlist_only(tmp_path):
         "scope_start",
         "scope_end",
         "report_generated_at",
-        "snapshot_id",
         "session_type",
         "input_identity_summary",
         "raw_message_count",
@@ -182,25 +179,12 @@ def test_record_repr_does_not_expose_session_identifiers(tmp_path):
     assert "fictional-session" not in repr(saved)
 
 
-def test_new_history_record_persists_optional_snapshot_id(tmp_path):
-    manager = ReportHistoryManager(tmp_path / "history.jsonl")
-
-    saved = _save_record(
-        manager,
-        snapshot_id="11111111-1111-1111-1111-111111111111",
-    )
-
-    assert saved.snapshot_id == "11111111-1111-1111-1111-111111111111"
-    assert manager.list_records()[0].snapshot_id == saved.snapshot_id
-
-
 def test_new_history_record_persists_diagnostic_metadata(tmp_path):
     manager = ReportHistoryManager(tmp_path / "history.jsonl")
     summary = InputIdentitySummary(
-        snapshot_reused=True,
         capture_mode="snapshot",
-    )
 
+    )
     saved = _save_record(
         manager,
         session_type="group",
@@ -247,7 +231,6 @@ def test_legacy_history_row_without_snapshot_id_remains_readable(tmp_path):
 
     assert len(records) == 1
     assert records[0].analysis_id == "legacy-analysis"
-    assert records[0].snapshot_id is None
     assert records[0].session_type is None
     assert records[0].input_identity_summary is None
     assert records[0].raw_message_count is None
@@ -277,7 +260,6 @@ def test_invalid_capture_mode_refuses_append(tmp_path, capture_mode):
         _save_record(
             manager,
             input_identity_summary=InputIdentitySummary(
-                snapshot_reused=False,
                 capture_mode=capture_mode,
             ),
         )

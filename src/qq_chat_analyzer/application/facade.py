@@ -64,7 +64,6 @@ from .qq_export_import_service import (
 from .qq_setup_service import QQSetupStatus
 from .echo_report_export import ECHO_REPORT_HTML_NAME, package_echo_report
 from .report_history import InputIdentitySummary
-from .chat_data_snapshot import ChatDataSnapshotManager
 from .wechat_connection_service import WeChatConnectionStatus
 from .wechat_environment_config import WeChatEnvironmentConfig
 from .wechat_export_import_service import WeChatExportImportRequest
@@ -273,19 +272,13 @@ class AnalysisOutcome:
     echo_report_view: EchoReportView | None = field(default=None, repr=False)
     history_saved: bool | None = None
     history_record_id: str | None = None
-    snapshot_id: str | None = None
-    data_acquired_at: datetime | None = None
-    snapshot_reused: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class _SessionExport:
-    """Internal export path plus optional snapshot acquisition metadata."""
+    """Internal export path for one session."""
 
     payload_path: Path
-    snapshot_id: str | None = None
-    acquired_at: datetime | None = None
-    reused_snapshot: bool = False
 
 
 class ChatAnalyzerFacade:
@@ -309,7 +302,6 @@ class ChatAnalyzerFacade:
         analysis_service: Any = None,
         presentation_builder: Any = None,
         report_history_manager: Any = None,
-        snapshot_manager: Any = None,
         stopwords_directory: Path | None = None,
     ) -> None:
         self._services: dict[ChatSource, Any] = {
@@ -328,7 +320,6 @@ class ChatAnalyzerFacade:
         self._analysis_service = analysis_service
         self._presentation_builder = presentation_builder
         self._report_history_manager = report_history_manager
-        self._snapshot_manager = snapshot_manager or ChatDataSnapshotManager()
         self._stopwords_directory = stopwords_directory or resources_dir()
         self._retained_output_directory: _RetainedReportDirectory | None = None
 
@@ -683,87 +674,6 @@ class ChatAnalyzerFacade:
                 public_message="无法清空 Echo 历史记录，请稍后重试。",
             ) from exc
 
-    # ------------------------------------------------------------- snapshots
-
-    def list_snapshots(
-        self,
-        source: ChatSource | None = None,
-        session_id: str | None = None,
-    ) -> tuple[Any, ...]:
-        """Return snapshot metadata through the application boundary."""
-        try:
-            return tuple(
-                self._snapshot_manager.list_snapshots(
-                    source=source,
-                    session_id=session_id,
-                )
-            )
-        except Exception as exc:
-            raise FacadeError(
-                code="snapshot_list_failed",
-                public_message="\u5feb\u7167\u5217\u8868\u8bfb\u53d6\u5931\u8d25\u3002",
-            ) from exc
-
-    def validate_snapshot(self, snapshot_id: str) -> Any:
-        """Validate one snapshot manifest and payload."""
-        try:
-            return self._snapshot_manager.validate_snapshot(snapshot_id)
-        except Exception as exc:
-            raise FacadeError(
-                code="snapshot_validation_failed",
-                public_message="\u5feb\u7167\u6821\u9a8c\u5931\u8d25\u3002",
-            ) from exc
-
-    def remove_snapshot(self, snapshot_id: str) -> Any | None:
-        """Remove one snapshot payload and return its metadata.
-
-        Returns ``None`` when no snapshot with that id exists, so a caller
-        can distinguish success from a clear missing result.
-        """
-        try:
-            validation = self._snapshot_manager.remove_payload(snapshot_id)
-        except Exception as exc:
-            raise FacadeError(
-                code="snapshot_remove_failed",
-                public_message="\u5feb\u7167\u5220\u9664\u5931\u8d25\u3002",
-            ) from exc
-        return getattr(validation, "snapshot", None)
-
-    def remove_all_snapshots(self) -> int:
-        """Remove payloads for every snapshot and return the count."""
-        try:
-            return int(self._snapshot_manager.remove_all_payloads())
-        except Exception as exc:
-            raise FacadeError(
-                code="snapshot_clear_failed",
-                public_message="快照全部删除失败。",
-            ) from exc
-
-    def get_snapshot_storage_usage(self) -> int:
-        """Return total bytes of currently available snapshot payloads."""
-        try:
-            total = 0
-            for snapshot in self._snapshot_manager.list_snapshots():
-                validation = self._snapshot_manager.validate_snapshot(
-                    getattr(snapshot, "id", "")
-                )
-                if getattr(validation, "available", False):
-                    total += int(
-                        getattr(
-                            getattr(validation, "snapshot", None),
-                            "data_size_bytes",
-                            0,
-                        )
-                    )
-            return total
-        except Exception as exc:
-            raise FacadeError(
-                code="snapshot_storage_usage_failed",
-                public_message=(
-                    "\u5feb\u7167\u5b58\u50a8\u5360\u7528\u7edf\u8ba1\u5931\u8d25\u3002"
-                ),
-            ) from exc
-
     # -------------------------------------------------------------- analysis
 
     def analyze_file(
@@ -887,9 +797,6 @@ class ChatAnalyzerFacade:
                     conversation_names=conversation_names,
                     conversation_kind=conversation_kind,
                     viewer_speaker_key=viewer_speaker_key,
-                    snapshot_id=session_export.snapshot_id,
-                    data_acquired_at=session_export.acquired_at,
-                    snapshot_reused=session_export.reused_snapshot,
                     progress=progress,
                 )
 
@@ -948,9 +855,6 @@ class ChatAnalyzerFacade:
         conversation_names: Mapping[str, str] | None = None,
         conversation_kind: str = "unknown",
         viewer_speaker_key: str | None = None,
-        snapshot_id: str | None = None,
-        data_acquired_at: datetime | None = None,
-        snapshot_reused: bool = False,
         progress: Callable[[str], None] | None = None,
     ) -> AnalysisOutcome:
         """Run analysis then presentation for one local path."""
@@ -1026,15 +930,12 @@ class ChatAnalyzerFacade:
                     scope_start=scope.start_date,
                     scope_end=scope.end_date,
                     report_generated_at=report_generated_at,
-                    snapshot_id=snapshot_id,
                     session_type=(
                         session.session_type if session is not None else None
                     ),
                     input_identity_summary=_input_identity_summary(
                         source,
                         session,
-                        snapshot_id=snapshot_id,
-                        snapshot_reused=snapshot_reused,
                     ),
                     raw_message_count=getattr(
                         diagnostic_counts,
@@ -1084,9 +985,6 @@ class ChatAnalyzerFacade:
             echo_report_view=echo_report_view,
             history_saved=history_saved,
             history_record_id=history_record_id,
-            snapshot_id=snapshot_id,
-            data_acquired_at=data_acquired_at,
-            snapshot_reused=snapshot_reused,
         )
         _report_progress(progress, "分析完成")
         return outcome
@@ -1187,11 +1085,6 @@ class ChatAnalyzerFacade:
                     )
                 yield _SessionExport(
                     payload_path=Path(acquisition.payload_path),
-                    snapshot_id=getattr(acquisition, "snapshot_id", None),
-                    acquired_at=getattr(acquisition, "acquired_at", None),
-                    reused_snapshot=bool(
-                        getattr(acquisition, "reused_snapshot", False)
-                    ),
                 )
             return
 
@@ -1504,15 +1397,10 @@ def _coerce_source(source: Any) -> ChatSource:
 def _input_identity_summary(
     source: ChatSource,
     session: SessionInfo | None,
-    *,
-    snapshot_id: str | None,
-    snapshot_reused: bool,
 ) -> InputIdentitySummary | None:
     """Describe acquisition state without repeating input identity."""
     if session is None:
         return None
-    if snapshot_id is not None:
-        capture_mode = "snapshot"
     elif source is ChatSource.QQ:
         capture_mode = "provider_export"
     elif source is ChatSource.WECHAT:
@@ -1520,7 +1408,6 @@ def _input_identity_summary(
     else:
         return None
     return InputIdentitySummary(
-        snapshot_reused=snapshot_reused,
         capture_mode=capture_mode,
     )
 

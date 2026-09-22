@@ -1,4 +1,4 @@
-"""Main window hosting the home, workspace, processing, dashboard, and local data pages."""
+﻿"""Main window hosting the home, workspace, processing, dashboard, and local data pages."""
 
 from __future__ import annotations
 
@@ -313,12 +313,6 @@ class MainWindow(QMainWindow):
             )
         else:
             status_message = "\u5206\u6790\u5b8c\u6210"
-        data_acquired_at = getattr(outcome, "data_acquired_at", None)
-        if isinstance(data_acquired_at, datetime):
-            status_message += (
-                " \u00b7 \u6570\u636e\u83b7\u53d6\u65f6\u95f4\uff1a"
-                f"{data_acquired_at.isoformat(sep=' ', timespec='minutes')}"
-            )
         self.analysis_page._status_label.setText(status_message)
         outcome_key = (
             id(outcome),

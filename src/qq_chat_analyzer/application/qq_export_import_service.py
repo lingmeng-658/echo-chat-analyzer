@@ -1,4 +1,4 @@
-"""Orchestrate a QCE service export into the existing import pipeline.
+﻿"""Orchestrate a QCE service export into the existing import pipeline.
 
 This module is a thin seam between two pieces that must not know about each
 other: the QCE HTTP provider produces a local JSON file, and the existing
@@ -30,11 +30,6 @@ from typing import Any, Iterator, Protocol, runtime_checkable
 
 from ..analysis.timestamps import to_epoch_seconds
 from ..qq_chat_exporter_adapter import load_qce_json
-from .chat_data_snapshot import (
-    ChatDataSnapshotManager,
-    ChatDataSource,
-    SnapshotSaveError,
-)
 from .errors import ApplicationServiceError
 from .import_outcome import ImportOutcome
 from .import_request import ImportRequest
@@ -108,12 +103,9 @@ class QQExportImportRequest:
 
 @dataclass(frozen=True, slots=True)
 class QQExportAcquisition:
-    """One QQ export payload plus optional persisted snapshot identity."""
+    """One QQ export payload for the current analysis run."""
 
     payload_path: Path
-    snapshot_id: str | None = None
-    acquired_at: datetime | None = None
-    reused_snapshot: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,8 +134,6 @@ class QQExportImportService:
         import_service: ImportService | None = None,
         *,
         provider_factory: Any = None,
-        cache_directory: str | Path | None = None,
-        snapshot_manager: ChatDataSnapshotManager | None = None,
         transient_workspace: QQTransientExportWorkspace | None = None,
     ) -> None:
         if provider is None and provider_factory is None:
@@ -153,13 +143,10 @@ class QQExportImportService:
         self._injected_provider = provider
         self._provider_factory = provider_factory
         self._import_service = import_service or ImportService()
-        self._snapshot_manager = snapshot_manager or ChatDataSnapshotManager()
         self._transient_workspace = (
             transient_workspace or QQTransientExportWorkspace()
         )
-        # Kept only so existing constructor calls remain valid. Phase 3B does
         # not read, migrate, or delete the legacy metadata cache.
-        del cache_directory
 
     def provider(self) -> QQExportProvider:
         """Return the provider used for exports.
@@ -257,27 +244,28 @@ class QQExportImportService:
         progress: Callable[[QQExportProgress], None] | None = None,
     ) -> Iterator[QQExportAcquisition]:
         """Yield one export while owning any QCE transient run it needs."""
-        cached = self._cached_acquisition(request)
-        if cached is not None:
-            yield cached
-            return
-
         lease = self._transient_workspace.begin_run()
         try:
             acquisition, export_path = self._fresh_acquisition(
-                request,
-                progress,
-                lease=lease,
+                request, progress, lease=lease
             )
-            if acquisition.payload_path != export_path:
-                self._release_lease(lease)
-                lease = None
             yield acquisition
+        except Exception:
+            _LOGGER.error(
+                "Transient export failed; cleaning up %s",
+                lease.output_directory,
+                exc_info=True,
+            )
+            raise
         finally:
-            if lease is not None:
-                self._release_lease(lease)
-
-    @staticmethod
+            try:
+                lease.cleanup()
+            except QQTransientExportCleanupError:
+                _LOGGER.error(
+                    "Failed to clean up transient export %s",
+                    lease.output_directory,
+                    exc_info=True,
+                )
     def _release_lease(lease: QQTransientExportLease) -> None:
         """Release one owned transient run without changing the outcome.
 
@@ -329,8 +317,7 @@ class QQExportImportService:
         *,
         lease: QQTransientExportLease | None = None,
     ) -> tuple[QQExportAcquisition, Path]:
-        session_type = _session_type(request)
-        cacheable = _is_full_session_request(request)
+        """Export without snapshot logic. Always returns transient path."""
         export_path = self._export(
             request,
             progress,
@@ -340,52 +327,7 @@ class QQExportImportService:
             raise QQExportFileMissing()
         if lease is not None:
             export_path = lease.require_owned_export_file(export_path)
-
-        if not cacheable:
-            return QQExportAcquisition(payload_path=export_path), export_path
-        metadata = _snapshot_metadata(export_path)
-        if metadata is None:
-            return QQExportAcquisition(payload_path=export_path), export_path
-        message_count, coverage_start, coverage_end = metadata
-        try:
-            snapshot = self._snapshot_manager.save_snapshot(
-                export_path,
-                source=ChatDataSource.QQ,
-                session_id=str(request.group_code),
-                session_name=request.session_name,
-                session_type=session_type,
-                coverage_start=coverage_start,
-                coverage_end=coverage_end,
-                message_count=message_count,
-                storage_format="qce_json",
-            )
-        except SnapshotSaveError:
-            _LOGGER.warning(
-                "QQ export succeeded but its chat data snapshot could not "
-                "be saved.",
-            )
-            return QQExportAcquisition(payload_path=export_path), export_path
-
-        snapshot_payload = self._snapshot_manager.resolve_payload_path(
-            snapshot.id
-        )
-        if snapshot_payload is None:
-            _LOGGER.warning(
-                "QQ chat data snapshot failed validation after save."
-            )
-            return QQExportAcquisition(payload_path=export_path), export_path
-        return (
-            QQExportAcquisition(
-                payload_path=snapshot_payload,
-                snapshot_id=snapshot.id,
-                acquired_at=snapshot.acquired_at,
-                reused_snapshot=False,
-            ),
-            export_path,
-        )
-
-    # ---------------------------------------------------------------- internals
-
+        return QQExportAcquisition(payload_path=export_path), export_path
     def _export(
         self,
         request: QQExportImportRequest,

@@ -1,4 +1,4 @@
-"""Metadata-only history for completed analyses."""
+﻿"""Metadata-only history for completed analyses."""
 
 from __future__ import annotations
 
@@ -26,7 +26,6 @@ _LEGACY_RECORD_KEYS = {
     "scope_end",
     "report_generated_at",
 }
-_SNAPSHOT_RECORD_KEYS = _LEGACY_RECORD_KEYS | {"snapshot_id"}
 _DIAGNOSTIC_KEYS = {
     "session_type",
     "input_identity_summary",
@@ -36,7 +35,7 @@ _DIAGNOSTIC_KEYS = {
     "filtered_message_count",
     "analyzed_message_count",
 }
-_RECORD_KEYS = _SNAPSHOT_RECORD_KEYS | _DIAGNOSTIC_KEYS
+_RECORD_KEYS = _LEGACY_RECORD_KEYS | _DIAGNOSTIC_KEYS
 _CAPTURE_MODES = frozenset({"snapshot", "provider_export", "live_database"})
 
 
@@ -48,7 +47,6 @@ class _HistoryFileError(ValueError):
 class InputIdentitySummary:
     """Non-identifying state describing how analysis input was acquired."""
 
-    snapshot_reused: bool
     capture_mode: str
 
 
@@ -68,7 +66,6 @@ class AnalysisHistoryRecord:
     report_generated_at: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc),
     )
-    snapshot_id: str | None = None
     session_type: str | None = None
     input_identity_summary: InputIdentitySummary | None = None
     raw_message_count: int | None = None
@@ -99,7 +96,6 @@ class ReportHistoryManager:
         scope_start: date | None,
         scope_end: date | None,
         report_generated_at: datetime,
-        snapshot_id: str | None = None,
         session_type: str | None = None,
         input_identity_summary: InputIdentitySummary | None = None,
         raw_message_count: int | None = None,
@@ -120,7 +116,6 @@ class ReportHistoryManager:
             scope_start=scope_start,
             scope_end=scope_end,
             report_generated_at=report_generated_at,
-            snapshot_id=snapshot_id,
             session_type=session_type,
             input_identity_summary=input_identity_summary,
             raw_message_count=raw_message_count,
@@ -224,11 +219,9 @@ def _record_to_payload(record: AnalysisHistoryRecord) -> dict[str, object]:
             else None
         ),
         "report_generated_at": record.report_generated_at.isoformat(),
-        "snapshot_id": record.snapshot_id,
         "session_type": record.session_type,
         "input_identity_summary": (
             {
-                "snapshot_reused": record.input_identity_summary.snapshot_reused,
                 "capture_mode": record.input_identity_summary.capture_mode,
             }
             if record.input_identity_summary is not None
@@ -243,9 +236,12 @@ def _record_to_payload(record: AnalysisHistoryRecord) -> dict[str, object]:
 
 
 def _record_from_payload(payload: dict[str, object]) -> AnalysisHistoryRecord:
-    if not isinstance(payload, dict) or set(payload) not in (
+    if not isinstance(payload, dict):
+        raise _HistoryFileError("History record must be a dict.")
+    # Tolerate legacy snapshot_id key: strip it so the remaining keys validate.
+    payload = {k: v for k, v in payload.items() if k != "snapshot_id"}
+    if set(payload) not in (
         _LEGACY_RECORD_KEYS,
-        _SNAPSHOT_RECORD_KEYS,
         _RECORD_KEYS,
     ):
         raise _HistoryFileError("Unexpected history record fields.")
@@ -287,7 +283,6 @@ def _record_from_payload(payload: dict[str, object]) -> AnalysisHistoryRecord:
         scope_start=scope_start,
         scope_end=scope_end,
         report_generated_at=_aware_datetime(payload["report_generated_at"]),
-        snapshot_id=_optional_string(payload.get("snapshot_id")),
         session_type=_optional_string(payload.get("session_type")),
         input_identity_summary=_identity_summary(
             payload.get("input_identity_summary")
@@ -336,15 +331,13 @@ def _identity_summary(value: object) -> InputIdentitySummary | None:
     if value is None:
         return None
     if not isinstance(value, dict) or set(value) != {
-        "snapshot_reused",
         "capture_mode",
     }:
         raise _HistoryFileError("Invalid input identity summary.")
-    snapshot_reused = value["snapshot_reused"]
     capture_mode = value["capture_mode"]
-    if not isinstance(snapshot_reused, bool) or capture_mode not in _CAPTURE_MODES:
+    if capture_mode not in _CAPTURE_MODES:
         raise _HistoryFileError("Invalid input identity summary.")
-    return InputIdentitySummary(snapshot_reused, capture_mode)
+    return InputIdentitySummary(capture_mode)
 
 
 def _optional_date(value: object) -> date | None:
