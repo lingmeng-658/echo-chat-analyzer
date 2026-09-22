@@ -341,6 +341,7 @@ class QQWorkspace(QWidget):
         self.session_panel.show_disconnected_placeholder()
         self._set_restart_action()
         self.status_changed.emit(_QQ_AUTH_TIMEOUT_TITLE)
+        self._facade.disconnect_qq()
 
     def _refresh_qq_qrcode(self) -> None:
         """Show the runtime QR only when the facade says it is fresh."""

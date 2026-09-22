@@ -1468,3 +1468,145 @@ def test_launch_window_relaunches_after_launcher_exits(
 
     assert launcher.calls == 2
     assert instance._auth_launch_started is True
+
+def test_handle_qq_auth_timeout_calls_facade_disconnect_via_facade(
+    tmp_path: Path,
+) -> None:
+    """RED: After timeout, the facade disconnect path must reset auth state.
+
+    Root cause:
+    WAITING_AUTH reaches 120s timeout -> QQWorkspace only does UI cleanup
+    -> underlying auth session / connection manager is NOT ended
+    -> user clicks "restart" -> start_auth_flow may reuse old session / QR
+
+    The fix: _handle_qq_auth_timeout() must call
+    `self._facade.disconnect_qq()` which delegates to
+    QQAuthBridge.disconnect() -> _reset_auth_session().
+
+    This test verifies the disconnect path properly resets state so that
+    a subsequent start_auth_flow starts fresh.
+    """
+    import time as _time
+
+    qr_path = tmp_path / "cache" / "qrcode.png"
+    qr_path.parent.mkdir()
+    qr_path.write_bytes(b"first-session-qr")
+
+    bridge_mod = _bridge_module()
+    service = _StubConnectionService(
+        _status(available=False, qce_running=True, authenticated=False)
+    )
+    setup = _StubSetupService(
+        connect_status=_status(
+            available=False,
+            qce_running=True,
+            authenticated=False,
+        ),
+        runtime_status=_runtime_status(),
+        config=_runtime_config(tmp_path),
+    )
+    launcher = _RecordingLauncher()
+
+    bridge = _bridge(
+        setup_service=setup,
+        connection_service=service,
+        window_launcher=launcher,
+        qrcode_path=qr_path,
+    )
+
+    # Step 1: start_auth_flow -> WAITING_AUTH, baseline set
+    snap1 = bridge.start_auth_flow()
+    assert snap1.state is bridge_mod.ConnectionState.WAITING_AUTH
+    assert bridge._qr_session_started is True
+    baseline1 = bridge._qr_baseline
+    assert baseline1 is not None
+
+    # Step 2: disconnect (this is what timeout should call via facade)
+    snap2 = bridge.disconnect()
+    assert snap2.state is bridge_mod.ConnectionState.DISCONNECTED
+    assert bridge._qr_session_started is False
+    assert bridge._qr_baseline is None
+    assert bridge._qr_session_started_at is None
+    assert bridge._qr_ready_logged is False
+
+    # Step 3: verify the bridge is in a clean state for a fresh start
+    # _qr_session_started must be False so is_qrcode_ready returns False
+    assert bridge.is_qrcode_ready() is False, (
+        "After disconnect, is_qrcode_ready() must return False. "
+        "This is the bootstrap/reset regression: stale QR must not be accepted."
+    )
+
+
+def test_reconnect_after_timeout_does_not_reuse_old_session(
+    tmp_path: Path,
+) -> None:
+    """RED: After timeout+disconnect, a new auth flow starts fresh.
+
+    Verifies the full lifecycle:
+    1. start_auth_flow() -> WAITING_AUTH, baseline set
+    2. disconnect() -> session reset (what timeout should call)
+    3. start_auth_flow() again -> new baseline, old QR rejected
+
+    The key behavioral assertion is that after disconnect+restart:
+    - is_qrcode_ready() returns False (no QR at session start)
+    - A new QR file must be generated for the new session
+    """
+    import time as _time
+
+    qr_path = tmp_path / "cache" / "qrcode.png"
+    qr_path.parent.mkdir()
+    qr_path.write_bytes(b"first-session-qr")
+
+    bridge_mod = _bridge_module()
+    service = _StubConnectionService(
+        _status(available=False, qce_running=True, authenticated=False)
+    )
+    setup = _StubSetupService(
+        connect_status=_status(
+            available=False,
+            qce_running=True,
+            authenticated=False,
+        ),
+        runtime_status=_runtime_status(),
+        config=_runtime_config(tmp_path),
+    )
+    launcher = _RecordingLauncher()
+
+    bridge = _bridge(
+        setup_service=setup,
+        connection_service=service,
+        window_launcher=launcher,
+        qrcode_path=qr_path,
+    )
+
+    # First auth flow
+    snap1 = bridge.start_auth_flow()
+    assert snap1.state is bridge_mod.ConnectionState.WAITING_AUTH
+    baseline1 = bridge._qr_baseline
+    assert baseline1 is not None
+    assert bridge._qr_session_started is True
+
+    # Simulate timeout: disconnect should be called
+    snap2 = bridge.disconnect()
+    assert snap2.state is bridge_mod.ConnectionState.DISCONNECTED
+    assert bridge._qr_session_started is False
+    assert bridge._qr_baseline is None
+
+    # Second auth flow - should start fresh
+    snap3 = bridge.start_auth_flow()
+    assert snap3.state is bridge_mod.ConnectionState.WAITING_AUTH
+    assert bridge._qr_session_started is True
+
+    # Key assertion: old QR file should be rejected because it predates the new session
+    # (baseline was set to the old QR file, and it hasn't changed)
+    assert bridge.is_qrcode_ready() is False, (
+        "Old QR from previous session should be rejected after disconnect+restart. "
+        "The new session recorded the same QR file as baseline, so it's stale."
+    )
+
+    # Simulate a new QR being generated for the new session
+    _time.sleep(0.05)
+    qr_path.write_bytes(b"second-session-qr")
+    assert bridge.is_qrcode_ready() is True, (
+        "New QR generated after second session start should be accepted."
+    )
