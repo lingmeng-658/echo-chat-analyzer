@@ -565,18 +565,7 @@ def _facade(
             return config.with_output_directory(output_directory)
         return config
 
-    analyze_file = facade.analyze_file
     analyze_session = facade.analyze_session
-
-    def _analyze_file(path, config=None, progress=None, **kwargs):
-        return _with_test_output(
-            lambda: analyze_file(
-                path,
-                _test_config(config),
-                progress,
-                **kwargs,
-            )
-        )
 
     def _analyze_session(
         source,
@@ -595,7 +584,6 @@ def _facade(
             )
         )
 
-    facade.analyze_file = _analyze_file
     facade.analyze_session = _analyze_session
     return facade
 
@@ -604,6 +592,33 @@ def _export_file(tmp_path: Path, name: str = "export.json") -> Path:
     path = tmp_path / name
     path.write_text('{"messages": []}', encoding="utf-8")
     return path
+
+
+_FICTIONAL_SESSION_ID = "fictional-session"
+
+
+def _qq_session_facade(
+    tmp_path: Path,
+    *,
+    export_name: str = "session-export.json",
+    retain_output: bool = False,
+    **overrides,
+):
+    """Build a facade whose QQ source yields one exported payload.
+
+    ``analyze_session`` is the current public entry point that turns an export
+    into an analysis outcome, so tests that used to hand a bare path to the
+    removed ``analyze_file`` now drive it through a minimal fake QQ service.
+    Returns the facade together with the exported payload path.
+    """
+    export_path = _export_file(tmp_path, export_name)
+    overrides.setdefault("qq_service", _StubQQService(export_path=export_path))
+    facade = _facade(
+        tmp_path=tmp_path,
+        retain_output=retain_output,
+        **overrides,
+    )
+    return facade, export_path
 
 
 # --------------------------------------------------------------- data models
@@ -620,12 +635,12 @@ def test_plain_facade_analysis_uses_test_output_directory(
         raise AssertionError("plain facade tests must not resolve user_data_dir")
 
     monkeypatch.setattr(module, "user_data_dir", _forbidden_user_data_dir)
-    facade = _facade(
+    facade, _ = _qq_session_facade(
+        tmp_path,
         analysis_service=analysis_service,
-        tmp_path=tmp_path,
     )
 
-    facade.analyze_file(_export_file(tmp_path))
+    facade.analyze_session(module.ChatSource.QQ, _FICTIONAL_SESSION_ID)
 
     request = analysis_service.requests[0]
     assert request.output_directory.is_relative_to(tmp_path)
@@ -637,8 +652,14 @@ def test_chat_source_covers_every_supported_origin() -> None:
     assert {source.value for source in module.ChatSource} == {
         "qq",
         "wechat",
-        "local_file",
     }
+
+
+def test_facade_no_longer_exposes_analyze_file() -> None:
+    """Removing LOCAL_FILE drops the free-standing file analysis entry point."""
+    facade = _facade()
+
+    assert not hasattr(facade, "analyze_file")
 
 
 def test_facade_models_are_frozen_dataclasses() -> None:
@@ -705,10 +726,10 @@ def test_list_sources_flags_unwired_sources() -> None:
 
     sources = {info.source: info for info in facade.list_sources()}
 
+    assert set(sources) == {module.ChatSource.QQ, module.ChatSource.WECHAT}
     assert sources[module.ChatSource.QQ].available is True
     assert sources[module.ChatSource.WECHAT].available is False
     assert sources[module.ChatSource.WECHAT].description != ""
-    assert sources[module.ChatSource.LOCAL_FILE].available is True
 
 
 def test_list_sessions_converts_qq_groups_into_session_info() -> None:
@@ -977,10 +998,11 @@ def test_list_sessions_accepts_a_plain_source_string() -> None:
     assert len(sessions) == 1
 
 
-def test_list_sessions_returns_empty_for_local_files() -> None:
+def test_list_sessions_rejects_the_removed_local_file_source() -> None:
     module = _facade_module()
 
-    assert _facade().list_sessions(module.ChatSource.LOCAL_FILE) == []
+    with pytest.raises(module.UnknownChatSource):
+        _facade().list_sessions("local_file")
 
 
 def test_list_sessions_tolerates_a_service_returning_none() -> None:
@@ -1048,16 +1070,11 @@ def test_get_session_message_range_keeps_wechat_provider_behavior() -> None:
     assert message_range == (1700000000, 1700007200)
 
 
-def test_get_session_message_range_returns_none_for_local_files() -> None:
+def test_get_session_message_range_rejects_the_removed_local_file_source() -> None:
     module = _facade_module()
 
-    assert (
-        _facade().get_session_message_range(
-            module.ChatSource.LOCAL_FILE,
-            "local",
-        )
-        is None
-    )
+    with pytest.raises(module.UnknownChatSource):
+        _facade().get_session_message_range("local_file", "local")
 
 
 # --------------------------------------------------------------- connection
@@ -1149,12 +1166,9 @@ def test_get_connection_status_rejects_local_file_source() -> None:
     module = _facade_module()
     facade = _facade()
 
-    try:
-        facade.get_connection_status(module.ChatSource.LOCAL_FILE)
-    except module.FacadeError as error:
-        assert error.code == "unknown_source"
-    else:  # pragma: no cover
-        raise AssertionError("expected a FacadeError")
+    with pytest.raises(module.FacadeError) as caught:
+        facade.get_connection_status("local_file")
+    assert caught.value.code == "unknown_source"
 
 
 def test_qq_source_usable_when_wechat_builder_raises() -> None:
@@ -1276,43 +1290,16 @@ def test_connection_service_errors_become_facade_errors() -> None:
 # ----------------------------------------------------------------- analysis
 
 
-def test_analyze_file_runs_analysis_then_presentation(tmp_path: Path) -> None:
+def test_session_analysis_reports_each_analysis_stage(tmp_path: Path) -> None:
     module = _facade_module()
-    analysis_service = _StubAnalysisService(result=_result(message_count=5))
-    builder = _RecordingBuilder()
-    facade = _facade(
-        analysis_service=analysis_service,
-        presentation_builder=builder,
-        tmp_path=tmp_path,
-    )
-    export_path = _export_file(tmp_path)
-
-    outcome = facade.analyze_file(
-        export_path,
-        module.AnalysisConfig(
-            top=25,
-            output_directory=tmp_path / "out",
-        ),
-    )
-
-    assert len(analysis_service.requests) == 1
-    request = analysis_service.requests[0]
-    assert request.input_path == export_path
-    assert request.top == 25
-    assert request.output_directory == tmp_path / "out"
-    assert (tmp_path / "out").is_dir()
-    assert len(builder.calls) == 1
-    assert outcome.source is module.ChatSource.LOCAL_FILE
-    assert outcome.session is None
-    assert outcome.view.has_data is True
-    assert outcome.result.processed_message_count == 5
-
-
-def test_analyze_file_reports_each_analysis_stage(tmp_path: Path) -> None:
     progress: list[str] = []
-    facade = _facade(tmp_path=tmp_path)
+    facade, _ = _qq_session_facade(tmp_path)
 
-    facade.analyze_file(_export_file(tmp_path), progress=progress.append)
+    facade.analyze_session(
+        module.ChatSource.QQ,
+        _FICTIONAL_SESSION_ID,
+        progress=progress.append,
+    )
 
     assert progress == [
         "正在准备分析...",
@@ -1324,21 +1311,12 @@ def test_analyze_file_reports_each_analysis_stage(tmp_path: Path) -> None:
     ]
 
 
-def test_analyze_file_accepts_a_string_path(tmp_path: Path) -> None:
-    export_path = _export_file(tmp_path)
-    facade = _facade(tmp_path=tmp_path)
-
-    outcome = facade.analyze_file(str(export_path))
-
-    assert outcome.view is not None
-
-
-def test_analyze_file_uses_defaults_without_a_config(tmp_path: Path) -> None:
+def test_session_analysis_uses_defaults_without_a_config(tmp_path: Path) -> None:
     module = _facade_module()
     analysis_service = _StubAnalysisService(result=_result())
-    facade = _facade(analysis_service=analysis_service, tmp_path=tmp_path)
+    facade, _ = _qq_session_facade(tmp_path, analysis_service=analysis_service)
 
-    facade.analyze_file(_export_file(tmp_path))
+    facade.analyze_session(module.ChatSource.QQ, _FICTIONAL_SESSION_ID)
 
     request = analysis_service.requests[0]
     assert request.top == module.DEFAULT_TOP
@@ -1370,9 +1348,12 @@ def test_default_output_keeps_generated_echo_report_after_return(
             )
             return _result_with_echo_artifact()
 
-    facade = _facade(analysis_service=_WritingAnalysisService())
+    facade = _facade(
+        qq_service=_StubQQService(export_path=_export_file(tmp_path)),
+        analysis_service=_WritingAnalysisService(),
+    )
 
-    outcome = facade.analyze_file(_export_file(tmp_path))
+    outcome = facade.analyze_session(module.ChatSource.QQ, _FICTIONAL_SESSION_ID)
 
     assert outcome.report_path is not None
     assert outcome.report_directory is not None
@@ -1434,11 +1415,15 @@ def test_real_analysis_report_survives_facade_return(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     facade = _facade(
+        qq_service=_StubQQService(export_path=input_path),
         analysis_service=application.AnalysisApplicationService(),
         tmp_path=tmp_path,
     )
 
-    outcome = facade.analyze_file(input_path)
+    outcome = facade.analyze_session(
+        _facade_module().ChatSource.QQ,
+        _FICTIONAL_SESSION_ID,
+    )
 
     assert outcome.report_path is not None
     assert Path(outcome.report_path).is_file()
@@ -1464,14 +1449,14 @@ def test_second_analysis_updates_to_the_latest_generated_report(
             )
             return _result_with_echo_artifact()
 
-    facade = _facade(
+    facade, _ = _qq_session_facade(
+        tmp_path,
         analysis_service=_WritingAnalysisService(),
-        tmp_path=tmp_path,
         retain_output=True,
     )
 
-    first = facade.analyze_file(_export_file(tmp_path, "first.json"))
-    second = facade.analyze_file(_export_file(tmp_path, "second.json"))
+    first = facade.analyze_session(module.ChatSource.QQ, _FICTIONAL_SESSION_ID)
+    second = facade.analyze_session(module.ChatSource.QQ, _FICTIONAL_SESSION_ID)
 
     assert second.report_path is not None
     assert second.report_path.is_file()
@@ -1501,12 +1486,13 @@ def test_shutdown_cleans_scratch_but_keeps_packaged_report(
             )
             return _result_with_echo_artifact()
 
-    facade = _facade(
+    module = _facade_module()
+    facade, _ = _qq_session_facade(
+        tmp_path,
         analysis_service=_WritingAnalysisService(),
-        tmp_path=tmp_path,
         retain_output=True,
     )
-    outcome = facade.analyze_file(_export_file(tmp_path))
+    outcome = facade.analyze_session(module.ChatSource.QQ, _FICTIONAL_SESSION_ID)
     assert outcome.report_path is not None
     assert outcome.report_directory is not None
     assert outcome.artifact_directory is not None
@@ -1521,12 +1507,15 @@ def test_shutdown_cleans_scratch_but_keeps_packaged_report(
 
 
 def test_missing_echo_artifact_returns_no_report_path(tmp_path: Path) -> None:
-    facade = _facade(
+    facade, _ = _qq_session_facade(
+        tmp_path,
         analysis_service=_StubAnalysisService(result=_result()),
-        tmp_path=tmp_path,
     )
 
-    outcome = facade.analyze_file(_export_file(tmp_path))
+    outcome = facade.analyze_session(
+        _facade_module().ChatSource.QQ,
+        _FICTIONAL_SESSION_ID,
+    )
 
     assert outcome.report_path is None
     assert outcome.report_directory is None
@@ -1551,12 +1540,15 @@ def test_echo_packaging_failure_falls_back_to_generated_report(
         raise OSError("fictional packaging failure")
 
     monkeypatch.setattr(module, "package_echo_report", _failing_package)
-    facade = _facade(
+    facade, _ = _qq_session_facade(
+        tmp_path,
         analysis_service=_WritingAnalysisService(),
-        tmp_path=tmp_path,
     )
 
-    outcome = facade.analyze_file(_export_file(tmp_path))
+    outcome = facade.analyze_session(
+        _facade_module().ChatSource.QQ,
+        _FICTIONAL_SESSION_ID,
+    )
 
     assert outcome.report_path is not None
     assert outcome.report_path.name == "echo-report.html"
@@ -1592,7 +1584,7 @@ def _share_outcome(
     return module.AnalysisOutcome(
         view=presentation.DashboardView(title="虚构报告"),
         result=_result(),
-        source=module.ChatSource.LOCAL_FILE,
+        source=module.ChatSource.QQ,
         artifact_directory=scratch,
         report_directory=packaged,
         echo_report_view=view,
@@ -1688,7 +1680,7 @@ def test_generate_share_image_without_result_raises_facade_error(
             "qq_chat_analyzer.presentation"
         ).DashboardView(title="虚构报告"),
         result=empty_result,
-        source=module.ChatSource.LOCAL_FILE,
+        source=module.ChatSource.QQ,
     )
     facade = _facade()
 
@@ -1764,15 +1756,16 @@ def test_qq_and_wechat_share_the_same_retained_report_contract(
     assert wechat_outcome.report_directory.is_dir()
 
 
-def test_analyze_file_forwards_speaker_names_and_viewer_key(
+def test_session_analysis_forwards_speaker_names_and_viewer_key(
     tmp_path: Path,
 ) -> None:
     module = _facade_module()
     analysis_service = _StubAnalysisService(result=_result())
-    facade = _facade(analysis_service=analysis_service, tmp_path=tmp_path)
+    facade, _ = _qq_session_facade(tmp_path, analysis_service=analysis_service)
 
-    facade.analyze_file(
-        _export_file(tmp_path),
+    facade.analyze_session(
+        module.ChatSource.QQ,
+        _FICTIONAL_SESSION_ID,
         speaker_names={"u-fictional-1": "Fictional Alice"},
         viewer_speaker_key="u-fictional-1",
     )
@@ -1780,7 +1773,6 @@ def test_analyze_file_forwards_speaker_names_and_viewer_key(
     request = analysis_service.requests[0]
     assert request.speaker_names == {"u-fictional-1": "Fictional Alice"}
     assert request.viewer_speaker_key == "u-fictional-1"
-    assert request.conversation_kind == "unknown"
 
 
 def test_analyze_qq_private_forwards_conversation_kind(
@@ -1809,12 +1801,14 @@ def test_unknown_profile_falls_back_to_the_default_stopwords(
     module = _facade_module()
     analysis_service = _StubAnalysisService(result=_result())
     facade = module.ChatAnalyzerFacade(
+        qq_service=_StubQQService(export_path=_export_file(tmp_path)),
         analysis_service=analysis_service,
         stopwords_directory=tmp_path,
     )
 
-    facade.analyze_file(
-        _export_file(tmp_path),
+    facade.analyze_session(
+        module.ChatSource.QQ,
+        _FICTIONAL_SESSION_ID,
         module.AnalysisConfig(
             profile="not-a-profile",
             output_directory=tmp_path / "facade-output",
@@ -1835,13 +1829,11 @@ def test_default_stopwords_resolve_from_resources(
         monkeypatch.delattr(sys, "_MEIPASS")
     resources = importlib.import_module("qq_chat_analyzer.resources")
     analysis_service = _StubAnalysisService(result=_result())
-    facade = _facade(
-        analysis_service=analysis_service,
-        tmp_path=tmp_path,
-    )
+    facade, _ = _qq_session_facade(tmp_path, analysis_service=analysis_service)
 
-    facade.analyze_file(
-        _export_file(tmp_path),
+    facade.analyze_session(
+        module.ChatSource.QQ,
+        _FICTIONAL_SESSION_ID,
         module.AnalysisConfig(
             profile="topic",
             output_directory=tmp_path / "facade-output",
@@ -1861,13 +1853,11 @@ def test_default_stopwords_use_meipass_in_bundled_mode(
     fake_bundle = tmp_path / "bundle"
     monkeypatch.setattr(sys, "_MEIPASS", str(fake_bundle), raising=False)
     analysis_service = _StubAnalysisService(result=_result())
-    facade = _facade(
-        analysis_service=analysis_service,
-        tmp_path=tmp_path,
-    )
+    facade, _ = _qq_session_facade(tmp_path, analysis_service=analysis_service)
 
-    facade.analyze_file(
-        _export_file(tmp_path),
+    facade.analyze_session(
+        module.ChatSource.QQ,
+        _FICTIONAL_SESSION_ID,
         module.AnalysisConfig(
             profile="culture",
             output_directory=tmp_path / "facade-output",
@@ -2039,22 +2029,26 @@ def test_history_save_failure_does_not_replace_successful_analysis(
     )
     invalid_history_path = tmp_path / "history-is-a-directory"
     invalid_history_path.mkdir()
+    module = _facade_module()
     result = _result(message_count=3)
     expected_view = object()
-    facade = _facade(
+    facade, _ = _qq_session_facade(
+        tmp_path,
         analysis_service=_StubAnalysisService(result=result),
         presentation_builder=_RecordingBuilder(view=expected_view),
         report_history_manager=history_module.ReportHistoryManager(
             invalid_history_path
         ),
-        tmp_path=tmp_path,
     )
 
     with caplog.at_level(
         "ERROR",
         logger="qq_chat_analyzer.desktop.facade",
     ):
-        outcome = facade.analyze_file(_export_file(tmp_path))
+        outcome = facade.analyze_session(
+            module.ChatSource.QQ,
+            _FICTIONAL_SESSION_ID,
+        )
 
     assert outcome.result is result
     assert outcome.view is expected_view
@@ -2076,9 +2070,15 @@ def test_facade_reads_history_through_the_application_boundary(
     history_manager = history_module.ReportHistoryManager(
         tmp_path / "history.jsonl"
     )
-    facade = _facade(report_history_manager=history_manager, tmp_path=tmp_path)
+    facade, _ = _qq_session_facade(
+        tmp_path,
+        report_history_manager=history_manager,
+    )
 
-    outcome = facade.analyze_file(_export_file(tmp_path))
+    outcome = facade.analyze_session(
+        _facade_module().ChatSource.QQ,
+        _FICTIONAL_SESSION_ID,
+    )
 
     records = facade.list_analysis_history()
     assert len(records) == 1
@@ -2096,14 +2096,14 @@ def test_analysis_failure_does_not_create_history(tmp_path: Path) -> None:
     history_manager = history_module.ReportHistoryManager(
         tmp_path / "history.jsonl"
     )
-    facade = _facade(
+    facade, _ = _qq_session_facade(
+        tmp_path,
         analysis_service=_StubAnalysisService(error=errors.InputPathNotFound()),
         report_history_manager=history_manager,
-        tmp_path=tmp_path,
     )
 
     with pytest.raises(module.FacadeError):
-        facade.analyze_file(_export_file(tmp_path))
+        facade.analyze_session(module.ChatSource.QQ, _FICTIONAL_SESSION_ID)
 
     assert history_manager.list_records() == ()
 
@@ -2111,7 +2111,10 @@ def test_analysis_failure_does_not_create_history(tmp_path: Path) -> None:
 def test_facade_without_history_manager_preserves_old_outcome_behavior(
     tmp_path: Path,
 ) -> None:
-    outcome = _facade(tmp_path=tmp_path).analyze_file(_export_file(tmp_path))
+    module = _facade_module()
+    facade, _ = _qq_session_facade(tmp_path)
+
+    outcome = facade.analyze_session(module.ChatSource.QQ, _FICTIONAL_SESSION_ID)
 
     assert outcome.history_saved is None
     assert outcome.history_record_id is None
@@ -2512,31 +2515,28 @@ def test_qq_export_failure_during_analysis_becomes_a_facade_error(
     assert excinfo.value.source is module.ChatSource.QQ
 
 
-def test_analyze_session_rejects_the_local_file_source() -> None:
+def test_analyze_session_rejects_the_removed_local_file_source() -> None:
     module = _facade_module()
     facade = _facade()
 
-    try:
-        facade.analyze_session(module.ChatSource.LOCAL_FILE, "anything")
-    except module.FacadeError as error:
-        assert error.code == "session_not_supported"
-    else:  # pragma: no cover
-        raise AssertionError("expected a FacadeError")
+    with pytest.raises(module.UnknownChatSource):
+        facade.analyze_session("local_file", "anything")
 
 
 def test_analyze_reports_empty_data_without_crashing(tmp_path: Path) -> None:
+    module = _facade_module()
     dto = _dto()
     empty_result = dto.AnalysisResultDTO(
         status=dto.AnalysisStatus.NO_VALID_TEXT,
         processed_message_count=0,
         valid_text_count=0,
     )
-    facade = _facade(
+    facade, _ = _qq_session_facade(
+        tmp_path,
         analysis_service=_StubAnalysisService(result=empty_result),
-        tmp_path=tmp_path,
     )
 
-    outcome = facade.analyze_file(_export_file(tmp_path))
+    outcome = facade.analyze_session(module.ChatSource.QQ, _FICTIONAL_SESSION_ID)
 
     assert outcome.result.processed_message_count == 0
     assert outcome.view.user_cards == ()
@@ -2549,17 +2549,17 @@ def test_analyze_reports_empty_data_without_crashing(tmp_path: Path) -> None:
 def test_application_errors_become_facade_errors(tmp_path: Path) -> None:
     module = _facade_module()
     errors = _errors()
-    facade = _facade(
+    facade, _ = _qq_session_facade(
+        tmp_path,
         analysis_service=_StubAnalysisService(error=errors.InputPathNotFound()),
-        tmp_path=tmp_path,
     )
 
     try:
-        facade.analyze_file(_export_file(tmp_path))
+        facade.analyze_session(module.ChatSource.QQ, _FICTIONAL_SESSION_ID)
     except module.FacadeError as error:
         assert error.code == "input_not_found"
         assert error.public_message != ""
-        assert error.source is module.ChatSource.LOCAL_FILE
+        assert error.source is module.ChatSource.QQ
     else:  # pragma: no cover
         raise AssertionError("expected a FacadeError")
 
@@ -2640,26 +2640,27 @@ def test_unwired_source_raises_a_facade_error() -> None:
 
 def test_missing_analysis_service_raises_a_facade_error(tmp_path: Path) -> None:
     module = _facade_module()
-    facade = module.ChatAnalyzerFacade()
+    facade = module.ChatAnalyzerFacade(
+        qq_service=_StubQQService(export_path=_export_file(tmp_path)),
+    )
 
-    try:
-        facade.analyze_file(_export_file(tmp_path))
-    except module.FacadeError as error:
-        assert error.code == "source_unavailable"
-    else:  # pragma: no cover
-        raise AssertionError("expected a FacadeError")
+    with pytest.raises(module.FacadeError) as caught:
+        facade.analyze_session(module.ChatSource.QQ, _FICTIONAL_SESSION_ID)
+
+    assert caught.value.code == "analysis_service_unavailable"
+    assert caught.value.public_message == "分析服务不可用。"
 
 
 def test_facade_errors_are_not_re_wrapped(tmp_path: Path) -> None:
     module = _facade_module()
     original = module.FacadeError(code="already_wrapped", public_message="x")
-    facade = _facade(
+    facade, _ = _qq_session_facade(
+        tmp_path,
         analysis_service=_StubAnalysisService(error=original),
-        tmp_path=tmp_path,
     )
 
     try:
-        facade.analyze_file(_export_file(tmp_path))
+        facade.analyze_session(module.ChatSource.QQ, _FICTIONAL_SESSION_ID)
     except module.FacadeError as error:
         assert error is original
     else:  # pragma: no cover
@@ -2691,15 +2692,16 @@ def test_every_collaborator_can_be_injected(tmp_path: Path) -> None:
 
 
 def test_injected_builder_receives_reports_untouched(tmp_path: Path) -> None:
+    module = _facade_module()
     result = _result(message_count=7)
     builder = _RecordingBuilder()
-    facade = _facade(
+    facade, _ = _qq_session_facade(
+        tmp_path,
         analysis_service=_StubAnalysisService(result=result),
         presentation_builder=builder,
-        tmp_path=tmp_path,
     )
 
-    facade.analyze_file(_export_file(tmp_path))
+    facade.analyze_session(module.ChatSource.QQ, _FICTIONAL_SESSION_ID)
 
     reports, top_words = builder.calls[0]
     assert reports is result.reports
@@ -2707,10 +2709,11 @@ def test_injected_builder_receives_reports_untouched(tmp_path: Path) -> None:
 
 
 def test_facade_falls_back_to_the_default_builder(tmp_path: Path) -> None:
+    module = _facade_module()
     presentation = importlib.import_module("qq_chat_analyzer.presentation")
-    facade = _facade(tmp_path=tmp_path)
+    facade, _ = _qq_session_facade(tmp_path)
 
-    outcome = facade.analyze_file(_export_file(tmp_path))
+    outcome = facade.analyze_session(module.ChatSource.QQ, _FICTIONAL_SESSION_ID)
 
     assert isinstance(outcome.view, presentation.DashboardView)
 

@@ -12,7 +12,8 @@
 项目要同时满足四个约束：
 
 1. **隐私优先** —— 真实聊天记录只在用户本机处理，不出网络，不进日志。
-2. **多来源** —— QQ、微信、本地导出文件，且后续还会增加。
+2. **多来源** —— GUI 现役来源为 QQ 与微信；本地导出文件（JSON / JSONL）
+   仍可通过独立的 CLI 文件输入进入同一分析核心，且后续还会增加。
 3. **分析核心稳定** —— 新增来源不应该迫使分析逻辑改动。
 4. **面向普通用户** —— 最终形态是桌面应用，而非命令行脚本。
 
@@ -298,14 +299,16 @@ Analysis 仍不得出现平台分支。
 - `get_connection_status(source)` → `QQConnectionStatus`，返回来源连接状态
 - `list_analysis_history()` → `tuple[AnalysisHistoryRecord, ...]`，返回元数据历史
 - `get_analysis_history(analysis_id)` → `AnalysisHistoryRecord | None`
-- `analyze_file(path, config)` → `AnalysisOutcome`
 - `analyze_session(source, session_id, config)` → `AnalysisOutcome`
+
+`ChatSource` 只有 `QQ` 与 `WECHAT` 两个现役来源。`analyze_session` 内部通过
+临时/本地 `payload_path`（导出的 JSON / JSONL 中间文件）把会话送入通用分析核心。
 
 两条重要约定：
 
 1. **异常在此归一。** 底层异常统一转换为 `FacadeError`，
    携带 `code` 与 `public_message`。GUI 只展示 `public_message`，永不展示 traceback。
-2. **中间文件对 GUI 不可见。** `analyze_session` 内部会产生导出文件，
+2. **中间文件对 GUI 不可见。** `analyze_session` 内部会产生导出文件（`payload_path`），
    但这属于实现细节，不出现在返回值与 API 语义里。
 
 依赖注入构造（`qq_service`、`wechat_service`、`analysis_service`、
@@ -324,6 +327,12 @@ GUI 层零业务逻辑。所有报告展示控件为只读
 （`setEditTriggers(NoEditTriggers)`），但保留选中与复制能力。
 分析成功后只在现有状态栏展示历史保存成功或失败；不直接读取历史文件，
 也不提供历史报告恢复页面。
+
+当前 GUI 结构由 `MainWindow` 承载 `HomePage`、`QQWorkspace`、
+`WeChatWorkspace`、处理页、`DashboardPage`、`LocalDataPage`。
+QQ 与微信来源分别由 `QQWorkspace` / `WeChatWorkspace` 负责连接与生命周期，
+会话列表、搜索、排序、时间范围与分析按钮由两者共享的
+`SessionAnalysisPanel` 承担。
 
 ### 4.9 CLI
 
@@ -471,7 +480,7 @@ GUI 只装配控件、转发事件、展示状态。
 | `analysis/peaks.py` / `timestamps.py` | 分析辅助 |
 | `presentation/models.py` | 视图模型 |
 | `presentation/builders.py` / `formatters.py` | 视图构建与格式化 |
-| `gui/main_window.py` / `analysis_page.py` / `dashboard_page.py` | GUI 界面 |
+| `gui/main_window.py` / `dashboard_page.py` | GUI 界面 |
 | `gui/app.py` / `__main__.py` / `workers.py` | GUI 启动与执行 |
 | `cli.py` | 交互适配（CLI） |
 | `exporters.py` | 输出适配 |

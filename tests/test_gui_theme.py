@@ -40,7 +40,6 @@ def test_base_qss_covers_core_widget_selectors() -> None:
 def test_gui_pages_use_shared_theme_styles() -> None:
     gui_dir = SRC_ROOT / "qq_chat_analyzer" / "gui"
     names = (
-        "analysis_page.py",
         "qq_workspace.py",
         "wechat_workspace.py",
         "local_data_page.py",

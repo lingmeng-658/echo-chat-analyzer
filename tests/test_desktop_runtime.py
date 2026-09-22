@@ -193,47 +193,12 @@ def test_global_exception_handler_is_installed(
         sys.excepthook = original
 
 
-def test_headless_analysis_mode_writes_outcome(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    app = importlib.import_module("qq_chat_analyzer.gui.app")
-    local = tmp_path / "Local"
-    local.mkdir(parents=True)
-    monkeypatch.setenv("LOCALAPPDATA", str(local))
-    monkeypatch.setattr(
-        diagnostics_module,
-        "runtime_root",
-        lambda: tmp_path / "Echo",
-    )
-
-    class _FakeResult:
-        processed_message_count = 4
-        valid_text_count = 3
-
-    class _FakeOutcome:
-        result = _FakeResult()
-        artifact_directory = tmp_path / "artifacts"
-
-    class _FakeFacade:
-        def analyze_file(self, path, config=None):
-            return _FakeOutcome()
-
-    monkeypatch.setattr(app, "build_facade", lambda: _FakeFacade())
-
-    exit_code = app._run_headless_analysis(
-        [app.HEADLESS_ANALYSIS_FLAG, str(tmp_path / "fictional.json")]
-    )
-
-    assert exit_code == 0
-
-
-def test_headless_analysis_mode_rejects_missing_input(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_gui_app_no_longer_exposes_headless_analysis_entry() -> None:
+    """The legacy headless local-file entry point is removed with LOCAL_FILE."""
     app = importlib.import_module("qq_chat_analyzer.gui.app")
 
-    assert app._run_headless_analysis([app.HEADLESS_ANALYSIS_FLAG]) == 2
+    assert not hasattr(app, "HEADLESS_ANALYSIS_FLAG")
+    assert not hasattr(app, "_run_headless_analysis")
 
 
 def test_pyinstaller_entry_imports_with_absolute_imports() -> None:

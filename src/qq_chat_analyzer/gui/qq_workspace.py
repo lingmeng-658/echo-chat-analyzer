@@ -91,7 +91,7 @@ _LOADING_SESSIONS = "正在加载会话列表..."
 class QQWorkspace(QWidget):
     """QQ workspace: connection status, QR code, and session analysis.
 
-    This workspace mirrors the QQ half of the GUI-2 AnalysisPage lifecycle:
+    This workspace owns the QQ connection and analysis lifecycle:
     status through ``get_qq_connection_snapshot``, auth through
     ``start_qq_auth_flow``, polling while waiting for login, then session
     loading and analysis through the shared panel.

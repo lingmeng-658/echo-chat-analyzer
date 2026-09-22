@@ -136,7 +136,6 @@ class ChatSource(str, Enum):
 
     QQ = "qq"
     WECHAT = "wechat"
-    LOCAL_FILE = "local_file"
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,15 +232,11 @@ _SOURCE_UNAVAILABLE_MESSAGES = {
     ChatSource.WECHAT: (
         "\u5fae\u4fe1\u6570\u636e\u6e90\u5c1a\u672a\u914d\u7f6e\u3002"
     ),
-    ChatSource.LOCAL_FILE: (
-        "\u672c\u5730\u6587\u4ef6\u5206\u6790\u5c1a\u672a\u914d\u7f6e\u3002"
-    ),
 }
 
 _SOURCE_DISPLAY_NAMES = {
     ChatSource.QQ: "QQ",
     ChatSource.WECHAT: "\u5fae\u4fe1",
-    ChatSource.LOCAL_FILE: "\u672c\u5730\u6587\u4ef6",
 }
 
 
@@ -362,9 +357,6 @@ class ChatAnalyzerFacade:
     def list_sessions(self, source: ChatSource) -> list[SessionInfo]:
         """Return the conversations one source offers, normalised."""
         chat_source = _coerce_source(source)
-        if chat_source is ChatSource.LOCAL_FILE:
-            return []
-
         service = self._require_service(chat_source)
         with _translated_errors(chat_source):
             if chat_source is ChatSource.QQ:
@@ -596,8 +588,6 @@ class ChatAnalyzerFacade:
     ) -> tuple[int, int] | None:
         """Return earliest and latest message timestamps for one session."""
         chat_source = _coerce_source(source)
-        if chat_source is ChatSource.LOCAL_FILE:
-            return None
         service = self._require_service(chat_source)
         try:
             if chat_source is ChatSource.QQ:
@@ -676,37 +666,6 @@ class ChatAnalyzerFacade:
 
     # -------------------------------------------------------------- analysis
 
-    def analyze_file(
-        self,
-        path: str | Path,
-        config: AnalysisConfig | None = None,
-        progress: Callable[[str], None] | None = None,
-        *,
-        speaker_names: Mapping[str, str] | None = None,
-        viewer_speaker_key: str | None = None,
-    ) -> AnalysisOutcome:
-        """Analyze one already-exported local file or directory."""
-        resolved_config = config or AnalysisConfig()
-        resolved_scope = self._resolve_scope(
-            resolved_config,
-            ChatSource.LOCAL_FILE,
-        )
-        _report_progress(progress, "正在准备分析...")
-        input_path = Path(path)
-        _report_progress(progress, "正在读取聊天记录...")
-
-        return self._analyze_path(
-            input_path,
-            resolved_config,
-            source=ChatSource.LOCAL_FILE,
-            session=None,
-            scope=resolved_scope,
-            speaker_names=speaker_names,
-            conversation_kind="unknown",
-            viewer_speaker_key=viewer_speaker_key,
-            progress=progress,
-        )
-
     def analyze_session(
         self,
         source: ChatSource,
@@ -724,17 +683,6 @@ class ChatAnalyzerFacade:
         directory. Neither path refers to QQChatExporter's default exports.
         """
         chat_source = _coerce_source(source)
-        if chat_source is ChatSource.LOCAL_FILE:
-            raise FacadeError(
-                code="session_not_supported",
-                public_message=(
-                    "\u672c\u5730\u6587\u4ef6\u6ca1\u6709\u4f1a\u8bdd"
-                    "\u5217\u8868\uff0c\u8bf7\u76f4\u63a5\u5206\u6790"
-                    "\u6587\u4ef6\u3002"
-                ),
-                source=chat_source,
-            )
-
         resolved_config = config or AnalysisConfig()
         resolved_scope = self._resolve_scope(resolved_config, chat_source)
         _report_progress(progress, "正在准备分析...")
@@ -1124,8 +1072,6 @@ class ChatAnalyzerFacade:
         return self._stopwords_directory / filename
 
     def _is_available(self, source: ChatSource) -> bool:
-        if source is ChatSource.LOCAL_FILE:
-            return self._analysis_service is not None
         return (
             self._services.get(source) is not None
             or source in self._source_builders
@@ -1237,7 +1183,10 @@ class ChatAnalyzerFacade:
 
     def _require_analysis_service(self) -> Any:
         if self._analysis_service is None:
-            raise SourceUnavailable(ChatSource.LOCAL_FILE)
+            raise FacadeError(
+                code="analysis_service_unavailable",
+                public_message="分析服务不可用。",
+            )
         return self._analysis_service
 
 

@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from ..application.facade import ChatAnalyzerFacade, ChatSource
-from ..resources import resources_dir, user_data_dir
+from ..resources import resources_dir
 from .desktop_runtime import (
     STARTUP_FAILED_MESSAGE,
     configure_logging,
@@ -26,7 +26,6 @@ from .theme import BASE_QSS
 
 
 APP_VERSION = "0.8.0"
-HEADLESS_ANALYSIS_FLAG = "--headless-analyze"
 
 
 def build_facade() -> ChatAnalyzerFacade:
@@ -156,8 +155,6 @@ def main(argv: list[str] | None = None) -> int:
     log_startup(APP_VERSION)
 
     arguments = list(sys.argv[1:] if argv is None else argv)
-    if HEADLESS_ANALYSIS_FLAG in arguments:
-        return _run_headless_analysis(arguments)
 
     from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -198,44 +195,6 @@ def _guard_exit_after_event_loop(exit_code: int) -> None:
         name="echo-exit-watchdog",
         daemon=True,
     ).start()
-
-
-def _run_headless_analysis(arguments: list[str]) -> int:
-    """Run one local file analysis for packaging validation."""
-    try:
-        index = arguments.index(HEADLESS_ANALYSIS_FLAG)
-        input_path = arguments[index + 1] if index + 1 < len(arguments) else ""
-    except ValueError:
-        return 2
-    if not input_path:
-        return 2
-
-    from ..application.facade import AnalysisConfig
-
-    try:
-        outcome = build_facade().analyze_file(
-            input_path,
-            AnalysisConfig(output_directory=user_data_dir() / "validation"),
-        )
-    except Exception as error:
-        configure_logging().exception("headless analysis failed", exc_info=error)
-        return 1
-
-    result = getattr(outcome, "result", None)
-    processed = getattr(result, "processed_message_count", 0)
-    valid = getattr(result, "valid_text_count", 0)
-    artifact_directory = getattr(outcome, "artifact_directory", None)
-    configure_logging().info(
-        "headless analysis completed processed=%s valid=%s artifacts=%s",
-        processed,
-        valid,
-        artifact_directory,
-    )
-    print(
-        f"processed={processed} valid={valid} "
-        f"artifacts={artifact_directory}"
-    )
-    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover - manual entry point

@@ -233,7 +233,7 @@ class SessionAnalysisPanel(QWidget):
         if self._analysis_running:
             return
         source = self._selected_source
-        if source is None or source == ChatSource.LOCAL_FILE:
+        if source is None:
             return
         session_id = self.selected_session_id()
         if not session_id:
@@ -320,9 +320,6 @@ class SessionAnalysisPanel(QWidget):
         self._update_analysis_controls_visibility()
         source = self._selected_source
         if source is None:
-            self._analyze_button.setEnabled(False)
-            return
-        if source == ChatSource.LOCAL_FILE:
             self._analyze_button.setEnabled(False)
             return
         item = self._session_list.currentItem()

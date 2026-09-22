@@ -104,8 +104,8 @@ _SESSION_READING_TITLE = "正在读取聊天数据..."
 class WeChatWorkspace(QWidget):
     """WeChat workspace: connection, setup guide, and session analysis.
 
-    This workspace mirrors the WeChat half of the GUI-2 AnalysisPage
-    lifecycle: status through ``get_connection_status(WECHAT)``, one-click
+    This workspace owns the WeChat connection and analysis lifecycle:
+    status through ``get_connection_status(WECHAT)``, one-click
     connect through data-root detection plus environment/key acquisition,
     then session loading and analysis through the shared panel.
     """

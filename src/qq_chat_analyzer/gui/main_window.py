@@ -25,12 +25,11 @@ from PySide6.QtWidgets import (
 )
 
 from ..resources import default_echo_icon_path
-from .analysis_page import AnalysisPage
 from .dashboard_page import DashboardPage
 from .home_page import HomePage
 from .local_data_page import LocalDataPage
 from .qq_workspace import QQWorkspace
-from .theme import WINDOW_TITLE_STYLE
+from .theme import STATUS_STYLE_BASE, WINDOW_TITLE_STYLE
 from .wechat_workspace import WeChatWorkspace
 from .workers import shutdown as shutdown_workers
 from .workers import submit
@@ -59,7 +58,6 @@ WECHAT_WORKSPACE_INDEX = 2
 PROCESSING_PAGE_INDEX = 3
 DASHBOARD_PAGE_INDEX = 4
 LOCAL_DATA_PAGE_INDEX = 5
-ANALYSIS_PAGE_INDEX = 6  # backward compat
 
 
 class MainWindow(QMainWindow):
@@ -106,7 +104,6 @@ class MainWindow(QMainWindow):
         processing_layout.addStretch(1)
         self.dashboard_page = DashboardPage()
         self.local_data_page = LocalDataPage(facade, executor=executor)
-        self.analysis_page = AnalysisPage(facade, executor=executor)  # backward compat
 
         # Header row
         header_layout = QHBoxLayout()
@@ -118,7 +115,11 @@ class MainWindow(QMainWindow):
         self._title_label.setStyleSheet(WINDOW_TITLE_STYLE)
         header_layout.addWidget(self._title_label)
         header_layout.addStretch(1)
-        header_layout.addWidget(self.analysis_page._status_label)
+        self._status_label = QLabel("")
+        self._status_label.setWordWrap(True)
+        self._status_label.setVisible(False)
+        self._status_label.setStyleSheet(STATUS_STYLE_BASE)
+        header_layout.addWidget(self._status_label)
         layout.addLayout(header_layout)
 
         # Stacked pages
@@ -129,7 +130,6 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.processing_page)     # 3
         self.stack.addWidget(self.dashboard_page)      # 4
         self.stack.addWidget(self.local_data_page)     # 5
-        self.stack.addWidget(self.analysis_page)       # 6 (backward compat)
         layout.addWidget(self.stack, stretch=1)
 
         self._open_echo_button = QPushButton(_OPEN_ECHO_LABEL)
@@ -179,12 +179,6 @@ class MainWindow(QMainWindow):
         self.wechat_workspace.analysis_failed.connect(self.show_error)
         self.wechat_workspace.status_changed.connect(self.show_status)
 
-        # Backward compat: keep analysis_page connected
-        self.analysis_page.analysis_started.connect(self.show_processing_page)
-        self.analysis_page.analysis_succeeded.connect(self.show_outcome)
-        self.analysis_page.analysis_failed.connect(self.show_error)
-        self.analysis_page.status_changed.connect(self.show_status)
-
         # Start at home
         self.show_home_page()
 
@@ -212,13 +206,6 @@ class MainWindow(QMainWindow):
         self._back_button.setVisible(False)
         self._clear_echo_report_entry()
         self.wechat_workspace.refresh_connection_status(load_sessions_on_ready=True)
-
-    def show_analysis_page(self) -> None:
-        """Return to the legacy analysis page (backward compat)."""
-        self.stack.setCurrentIndex(ANALYSIS_PAGE_INDEX)
-        self._home_button.setVisible(True)
-        self._back_button.setVisible(False)
-        self._clear_echo_report_entry()
 
     def show_local_data_page(self) -> None:
         """Navigate to the local data management page."""
@@ -259,17 +246,17 @@ class MainWindow(QMainWindow):
         self.show_wechat_workspace()
 
     def _on_back_clicked(self) -> None:
-        """Return to the workspace the user came from, else the analysis page."""
-        self._show_active_workspace_or_analysis_page()
+        """Return to the workspace the user came from, else the home page."""
+        self._show_active_workspace_or_home()
 
-    def _show_active_workspace_or_analysis_page(self) -> None:
-        """Return to the active workspace, or the legacy page for old flows."""
+    def _show_active_workspace_or_home(self) -> None:
+        """Return to the active workspace, or the home page when none is active."""
         if self._active_source == "qq":
             self.show_qq_workspace()
         elif self._active_source == "wechat":
             self.show_wechat_workspace()
         else:
-            self.show_analysis_page()
+            self.show_home_page()
 
     # ---------------------------------------------------------------- analysis lifecycle
 
@@ -277,17 +264,13 @@ class MainWindow(QMainWindow):
         """Cancel the active analysis."""
         self.qq_workspace.cancel_analysis()
         self.wechat_workspace.cancel_analysis()
-        self.analysis_page.cancel_analysis()
-        self._show_active_workspace_or_analysis_page()
-        self.analysis_page._status_label.setText("分析已取消。")
-
-
-
+        self._show_active_workspace_or_home()
+        self._status_label.setText("分析已取消。")
 
 
     def show_status(self, message: str) -> None:
         """Show a compact status in the header row and processing page."""
-        self.analysis_page._status_label.setText(message)
+        self._status_label.setText(message)
         if self.stack.currentIndex() == PROCESSING_PAGE_INDEX:
             self.processing_status_label.setText(message)
 
@@ -313,7 +296,7 @@ class MainWindow(QMainWindow):
             )
         else:
             status_message = "\u5206\u6790\u5b8c\u6210"
-        self.analysis_page._status_label.setText(status_message)
+        self._status_label.setText(status_message)
         outcome_key = (
             id(outcome),
             str(getattr(outcome, "report_path", "")),
@@ -336,7 +319,7 @@ class MainWindow(QMainWindow):
         elif self._active_source == "wechat":
             self.stack.setCurrentIndex(WECHAT_WORKSPACE_INDEX)
         else:
-            self.stack.setCurrentIndex(ANALYSIS_PAGE_INDEX)
+            self.stack.setCurrentIndex(HOME_PAGE_INDEX)
 
     # ---------------------------------------------------------------- echo report
 
@@ -352,7 +335,7 @@ class MainWindow(QMainWindow):
         except Exception:
             opened = False
         if opened is False:
-            self.analysis_page._status_label.setText(
+            self._status_label.setText(
                 "\u65e0\u6cd5\u6253\u5f00 Echo \u62a5\u544a\u3002"
             )
 
@@ -367,7 +350,7 @@ class MainWindow(QMainWindow):
         except Exception:
             opened = False
         if opened is False:
-            self.analysis_page._status_label.setText(
+            self._status_label.setText(
                 _REPORT_DIRECTORY_OPEN_FAILED
             )
 
@@ -384,7 +367,7 @@ class MainWindow(QMainWindow):
                 outcome is not None,
                 callable(generate),
             )
-            self.analysis_page._status_label.setText(_SHARE_UNAVAILABLE)
+            self._status_label.setText(_SHARE_UNAVAILABLE)
             return
         _LOGGER.info(
             "[gui] Share image generation started for outcome report_directory=%s "
@@ -392,7 +375,7 @@ class MainWindow(QMainWindow):
             getattr(outcome, "report_directory", None),
             getattr(outcome, "echo_report_view", None) is not None,
         )
-        self.analysis_page._status_label.setText(_SHARE_GENERATING)
+        self._status_label.setText(_SHARE_GENERATING)
         self._generate_share_button.setEnabled(False)
         try:
             self._executor(
@@ -406,7 +389,7 @@ class MainWindow(QMainWindow):
                 "Share image worker could not be submitted."
             )
             self._generate_share_button.setEnabled(True)
-            self.analysis_page._status_label.setText(_SHARE_SUBMIT_FAILED)
+            self._status_label.setText(_SHARE_SUBMIT_FAILED)
 
     def _on_share_image_generated(self, image_path: Any) -> None:
         try:
@@ -418,7 +401,7 @@ class MainWindow(QMainWindow):
             image_path,
             self._current_share_image_path,
         )
-        self.analysis_page._status_label.setText(_SHARE_READY)
+        self._status_label.setText(_SHARE_READY)
         share_image_exists = (
             self._current_share_image_path is not None
             and _is_file(self._current_share_image_path)
@@ -454,7 +437,7 @@ class MainWindow(QMainWindow):
             code,
             message,
         )
-        self.analysis_page._status_label.setText(message)
+        self._status_label.setText(message)
 
     def _set_echo_report_path(
         self,
@@ -505,8 +488,8 @@ class MainWindow(QMainWindow):
 
     def show_error(self, code: str, message: str) -> None:
         """Show a user-safe message. Never a traceback."""
-        self._show_active_workspace_or_analysis_page()
-        self.analysis_page._status_label.setText(message)
+        self._show_active_workspace_or_home()
+        self._status_label.setText(message)
         QMessageBox.warning(self, _ERROR_TITLE, message)
 
     # ---------------------------------------------------------------- lifecycle
