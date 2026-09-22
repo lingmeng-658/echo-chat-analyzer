@@ -7485,3 +7485,26 @@ def test_waiting_auth_timeout_enters_error_state(qt_app, sources) -> None:
     assert "等待超时" in workspace._status_label.text()
     assert workspace._qq_connect_button.text() == "重新开始"
     assert workspace._qq_connect_button.isEnabled() is True
+
+
+
+def test_qq_auth_timeout_calls_facade_disconnect(qt_app, sources):
+    doc = 'RED: _handle_qq_auth_timeout must call facade.disconnect_qq(). Root cause: WAITING_AUTH reaches 120s timeout -> QQWorkspace only does UI cleanup -> underlying auth session / connection manager is NOT ended -> user clicks restart -> start_auth_flow may reuse old session / QR. After the fix, _handle_qq_auth_timeout() must call self._facade.disconnect_qq() to ensure the old auth session is truly terminated before the user can restart.'
+    module = importlib.import_module('qq_chat_analyzer.gui.qq_workspace')
+    facade = _SnapshotFacade(_qq_snapshot('waiting_auth'), sources=sources)
+    workspace = module.QQWorkspace(facade, executor=_inline_executor())
+    workspace._show_qq_status(
+        _qq_snapshot('waiting_auth'),
+        load_sessions_on_ready=False,
+    )
+    assert workspace._qq_status_timer.isActive() is True
+    workspace._qq_waiting_auth_since = module.time.monotonic() - 121
+    workspace._handle_qq_auth_timeout()
+    assert workspace._qq_status_timer.isActive() is False
+    assert workspace._qq_connect_button.text() == '\u91cd\u65b0\u5f00\u59cb'
+    assert workspace._qq_connect_button.isEnabled() is True
+    assert len(facade.disconnect_qq_calls) >= 1, (
+        '_handle_qq_auth_timeout() must call facade.disconnect_qq() to '
+        'terminate the underlying auth session. Without this call, the '
+        'old WAITING_AUTH session is reused on restart.'
+    )
