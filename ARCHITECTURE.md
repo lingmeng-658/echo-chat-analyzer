@@ -12,8 +12,9 @@
 项目要同时满足四个约束：
 
 1. **隐私优先** —— 真实聊天记录只在用户本机处理，不出网络，不进日志。
-2. **多来源** —— GUI 现役来源为 QQ 与微信；本地导出文件（JSON / JSONL）
-   仍可通过独立的 CLI 文件输入进入同一分析核心，且后续还会增加。
+2. **多来源** —— GUI 现役来源为 QQ 与微信。JSON / JSONL 的 parser 与
+   `ImportService` 保留为统一分析核心的底层导入能力，但不构成 `LOCAL_FILE`
+   GUI 产品入口或 Facade 分析入口。
 3. **分析核心稳定** —— 新增来源不应该迫使分析逻辑改动。
 4. **面向普通用户** —— 最终形态是桌面应用，而非命令行脚本。
 
@@ -190,8 +191,25 @@ Adapter 与 Parser 属于**同一层的两种形态**：
 不做分析，不做导出。
 
 **来源编排服务** —— `QQExportImportService`、`WeChatExportImportService`。
-把"先导出、再导入"串起来，并提供会话列表查询。
-它们是 Provider 的唯一合法调用者。
+把“先获取、再导入”串起来，并提供会话列表查询；它们是 Provider 的唯一合法调用者。
+
+QQ 一次分析的获取生命周期由 `QQExportImportService` 所有：Facade 根据
+`AnalysisScope` 计算 QCE 获取边界，服务创建 Echo-owned transient lease/run
+directory，Provider 将 QCE payload 导出到该目录，导入和分析消费 payload，随后在
+`finally` 清理。QQ 原始 export 不是长期 cache 或资产；每次重新分析都会重新获取。
+Echo Report 才是长期结果资产。异常终止后的 orphan run directory 回收仍是后续
+lifecycle debt，不能表述为已实现能力。
+
+获取范围是减少无关数据的优化边界；`Analysis Scope Filter` 才是最终 correctness
+guarantee。两者必须同时保留，且时间单位按来源区分：QQ/QCE 将 calendar scope
+转换为 epoch milliseconds 后传给 QCE；WeChat 将其转换为 epoch seconds 后用于
+`m.create_time` SQL 条件，不能把两者写成统一单位协议。
+
+WeChat 的一个 session 的 `Msg_*` table 可分布在 0..N 个 `message_N.db` shard。
+Provider 发现全部匹配 shard，对每个 shard 使用同一时间范围查询，再做全局
+`create_time` 排序；显式正数 limit 在全局 merge 后应用。正常消息获取默认不限量，
+`wcdb_cli` 的 no-limit/`limit=0` 表示持续 step 至 statement done，而不是默认
+100000 条上限。
 
 **来源连接服务** —— `QQConnectionService`。把 Provider 的健康检查与凭据状态
 翻译成用户可理解的 `QQConnectionStatus`（是否可用、QCE 是否运行、是否已授权、
@@ -301,8 +319,12 @@ Analysis 仍不得出现平台分支。
 - `get_analysis_history(analysis_id)` → `AnalysisHistoryRecord | None`
 - `analyze_session(source, session_id, config)` → `AnalysisOutcome`
 
-`ChatSource` 只有 `QQ` 与 `WECHAT` 两个现役来源。`analyze_session` 内部通过
-临时/本地 `payload_path`（导出的 JSON / JSONL 中间文件）把会话送入通用分析核心。
+`ChatSource` 只有 `QQ` 与 `WECHAT` 两个现役来源；已无 `LOCAL_FILE`、
+`AnalysisPage`、`Facade.analyze_file` 或 `--headless-analyze` 产品入口。
+`analyze_session` 内部通过来源获取的中间 payload 把会话送入通用分析核心；QQ payload
+位于本次 Echo-owned transient lease 中，消费者完成后清理。底层 parser、
+`ImportService`、JSON / JSONL 与 `AnalysisApplicationService` 能力仍保留，供来源
+中间文件进入统一核心使用。
 
 两条重要约定：
 
@@ -561,12 +583,13 @@ GUI 只装配控件、转发事件、展示状态。
 
 | 内容 | 归属文档 |
 | --- | --- |
-| 进度、版本节点、Roadmap | `PROJECT_STATUS.md` |
+| 当前 Hardening / Active Bug 工作地图 | `docs/HARDENING.md` |
 | 环境搭建、测试命令、Git 流程 | `DEVELOPMENT.md` |
 | AI 协作规范 | `AGENTS.md` |
 | 项目简介与快速上手 | `README.md` |
 | 跨平台字段、identity 与分析语义 | `DATA_SEMANTICS.md` |
-| 当前稳定能力、冻结区域与近期工作 | `DEVELOPMENT_STATE.md` |
+| 已解决且验证的真实工程问题 | `docs/BUG_JOURNAL.md` |
+| `PROJECT_STATUS.md`、`DEVELOPMENT_STATE.md` | 历史快照，正文不再维护 |
 | 历史设计记录 | `docs/design/`、`docs/superpowers/specs/` |
 
 当架构描述与其他文档冲突时，**以本文档为准**。
@@ -594,6 +617,10 @@ GUI 只装配控件、转发事件、展示状态。
 - **当前仅 QQ 使用该结构。**
   未来微信可以复用同一套抽象，但**不提前实现**；
   微信仍走原有连接状态路径。
+- **每个 QQ auth session 都要求 QR freshness。** 新 auth flow 在启动 runtime 前记录
+  当前 QR cache 基线；只有本 session 启动后发生变化的 QR 才可展示或接受。断开或开始
+  新会话会终止旧 runtime session 并 reset 对应的 auth/QR 状态，避免复用旧 runtime 的
+  QR 状态。
 
 调用链：
 

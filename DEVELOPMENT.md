@@ -4,11 +4,13 @@
 
 余音 Echo is a privacy-first local chat analysis tool.
 
-Current supported sources:
+Current GUI / ChatSource product sources:
 - QQChatExporter desktop runtime (QQ login, session analysis)
 - WeChat local database (data directory detection, key acquisition, session analysis)
-- WeChat CipherTalk detailed JSON / chatlab JSONL exports
-- Local exported JSON / JSONL files
+
+JSON / JSONL parser and import capabilities remain in the lower-level pipeline,
+including WeChat detailed JSON / chatlab JSONL formats. They are not the removed
+`LOCAL_FILE` GUI product entry point.
 
 The project is designed to:
 - run locally;
@@ -246,7 +248,10 @@ Completed:
 - QQExportImportService: orchestrates QQ acquisition through a bounded,
   Echo-owned transient lease, then imports through the existing ImportService;
   exposes context-managed acquired_export() and list_groups().
-- CLI qce commands: `qqchat qce list` and `qqchat qce analyze --group <group_code>`.
+- Limited analysis scope is pushed down to QCE in epoch milliseconds; the
+  application scope filter remains the final correctness boundary.
+- WeChat local DB acquisition uses epoch-second SQL bounds, reads every matching
+  message shard, globally orders the merged rows, and is unlimited by default.
 - CLI reaches the QCE flow only through the Application layer; it does not construct a provider directly.
 
 Module responsibilities in the QCE flow:
@@ -290,7 +295,6 @@ Current limits:
 
 - Desktop QQ flow starts the bundled runtime; the CLI `qce` commands still require a running service.
 - Chunked manifest/chunks exports are not supported.
-- Group chat only.
 - JSON format only.
 - Non-text messages are skipped for analysis.
 - Desktop GUI MVP is available.

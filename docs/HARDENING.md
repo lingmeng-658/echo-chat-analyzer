@@ -53,6 +53,8 @@ Echo 已经过了「先证明有没有人愿意用」的阶段。
 - 目前还不能确认失败位于 QCE 导出、文件生成、Import、Analysis、内存 / 性能或其他阶段。
 - 不能提前猜根因。
 - QQ 真实导出进度和 diagnostics 是定位它的重要前置。
+- 已完成的基础设施改善：有限分析范围会下推至 QCE，且一次 acquisition 使用
+  Echo-owned transient lease；这两项不能单独证明“大型 QQ 数据源分析失败”已解决。
 
 状态：未审计
 
@@ -76,10 +78,12 @@ Release Blocker：TBD。
 已知事实：
 
 - 用户无法确信 GUI 所称删除操作真正删除了预期的本地数据。
-- 需要从 filesystem / snapshot / history / persisted result 整条链审计。
-- 与 History / Cache / Snapshot 架构相关，但 Bug 与架构改进要分别判断。
+- 生产路径中的 `ChatDataSnapshot` 已删除；QQ raw export 改为 Echo-owned transient
+  lease，正常分析结束后自动 cleanup，重新分析会重新 acquisition 而不复用长期 stale raw snapshot。
+- 仍需要从 filesystem / transient run / report history / persisted result 整条链审计；
+  上述完成项不等同于完整的“删除全部本地数据”产品语义。
 
-状态：未审计
+状态：部分修复，仍待审计
 
 Release Blocker：Yes。
 
@@ -138,11 +142,22 @@ Release Blocker：No / CLOSED。
 
 ### BUG-06 WeChat 会话数据明显不完整 / 不随新消息更新
 
-真实会话长期有大量聊天，但报告仅读取 19 条；发送新消息后重新分析仍为 19 条。首次分析即发生，暂不支持“旧 Echo 缓存”假设。待审计 WeChat 本地 DB 是否更新、数据目录是否正确、同一会话是否分布在多个 message_*.db shard，以及 Provider 是否只读取单一 shard。
+状态：CLOSED
 
-状态：未审计
+Release Blocker：No / CLOSED
 
-Release Blocker：Yes
+已验证证据：
+
+- 配置的 DB 文件本身仍在更新；直接 DB 读取可见近期数据。
+- 真实目标 session 的同一 `Msg_*` table 分布在多个 `message_N.db` shard。
+- 原 Provider 在第一个 matching shard 即返回，因此只读取旧 shard。
+- 修复后 Provider 读取全部 matching shards，以相同范围查询、merge 并全局排序；
+  真实 GUI 重新分析一个仅在新 shard 中存在的日期范围成功。
+
+同一次 acquisition 审计还发现并独立修复另一个 correctness defect：Provider / native
+helper 将 no-limit / `limit=0` 静默回退到 100000 行。修复后，synthetic 100001-row
+SQLite 验收由 rebuilt binary 返回 100001 行且 `truncated=false`。这与 shard rollover
+根因不同，不能合并为同一根因。
 
 **明确注明：QCE / Windows 权限弹窗不是 Bug。**
 
@@ -209,18 +224,21 @@ QCE 提供 messageCount、progress、status、message，
 
 ### REL-03 Cache / Snapshot / History 生命周期统一
 
-需要明确：
+当前已完成：
 
-- 什么是 acquisition snapshot
-- 什么是 analysis result cache
-- 什么是 history metadata
-- 哪些持久化
-- 谁拥有文件
-- reopen 依赖什么
-- delete 应删除什么
-- 是否存在 orphan files
+- 生产 `ChatDataSnapshot` 已删除；QQ raw acquisition 是一次性 transient lease。
+- 正常分析结束后会清理 transient payload；重新分析会重新 acquisition。
+- Echo Report 是保留的结果资产；history 当前保存的是元数据，不是 raw snapshot。
 
-状态：未审计。
+仍待审计 / 完成：
+
+- 异常终止后的 orphan transient run cleanup；
+- report history reopen；
+- report deletion；
+- retention / max-count policy；
+- “删除全部本地数据”的最终用户措辞。
+
+状态：部分完成，未关闭。
 
 ### REL-04 按阶段区分的用户安全错误提示
 
@@ -326,11 +344,11 @@ Release Blocker：Yes。
 
 ### DOC-01 文档事实源治理
 
-已完成只读审计。
-后续分阶段更新 README / ARCHITECTURE，
-退役 DEVELOPMENT_STATE / PROJECT_STATUS 的 live-fact 身份。
+当前事实源已明确：`ARCHITECTURE.md` 为架构唯一事实源，`docs/HARDENING.md` 为
+Hardening / Active Bug 唯一实时工作地图，`docs/BUG_JOURNAL.md` 只记录已解决并验证的
+真实工程问题；`PROJECT_STATUS.md` 与 `DEVELOPMENT_STATE.md` 为历史快照，正文不再维护。
 
-状态：已审计，未实施。
+状态：CLOSED。
 
 ### DOC-02 AI Onboarding v1
 

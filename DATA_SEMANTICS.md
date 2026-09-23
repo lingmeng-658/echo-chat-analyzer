@@ -59,3 +59,10 @@ group initiator:
 使用 stable sender identity
 
 Echo 不重新计算 session statistics。
+
+## QQ authored-content
+
+Reply relation 和 mention 都是结构化关系语义，不等同于用户写下的正文。QQ reply
+自动附带的 mention 不进入 authored lexical text；结构化 mention 的 display name 也不
+作为普通正文重复计入 lexical statistics。用户实际输入的普通 text 必须保留。reply /
+mention metadata 可以供关系分析使用，但不得污染语言画像或词频等文本统计。

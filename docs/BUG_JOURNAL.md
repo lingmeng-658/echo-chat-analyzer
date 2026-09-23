@@ -360,3 +360,264 @@ CLOSED / merged。
 8cf051889664e37ae76dcd61a29de8404a00151b fix: support WeChat English expression aliases
 1d2942d9dc0642da288479d30e0f8e38be6095b4 Merge branch 'fix/wechat-english-expression-aliases'
 ```
+
+---
+
+## Journal 004 — QQ reply / mention display text 污染 authored content
+
+### 1. 现象
+
+QQ 的 reply 自动附带 `@`，普通 structured mention 也带有供展示的名称；这些展示文本被重复算入 authored lexical content。
+
+### 2. 为什么难查
+
+同一条 payload 同时承载 reply / mention relation 和可供文本分析的内容，显示正常时很难发现统计边界已被污染。
+
+### 3. 当时错误 / 竞争假设
+
+曾需区分是 tokenizer、mention rendering，还是 adapter 在组装 authored text 时重复保留了结构化展示内容。
+
+### 4. 最终根因
+
+reply 自动 mention 与 structured mention display text 被当作普通正文投影；它们实际属于关系元数据，而不是用户 authored lexical text。
+
+### 5. 原代码的隐含假设
+
+任何出现在 QQ message display representation 中的文本都等同于用户亲自输入的正文。
+
+### 6. 为什么开发机或普通场景没暴露
+
+现有证据不足，Journal 不补写未经验证的暴露条件。
+
+### 7. 哪个诊断 / 实验真正钉死根因
+
+最小 QQ reply 和 mention payload 对照，分别断言 relation 仍可表达、display text 不进入 authored text、用户在 mention 后实际输入的 text 仍保留。
+
+### 8. 最终修复
+
+把 reply relation / mention semantics 与 authored text 分离：reply 自动 mention 和 structured mention display text 不进入 lexical content，真正输入的普通 text 保留。
+
+### 9. 可推广的工程经验
+
+展示用文本、结构化关系与 authored text 必须显式建模为不同语义；不能因为它们同处一个 source payload 就共用 lexical 投影。
+
+### 10. 可以反向审计仓库的规则
+
+检查所有 adapter：凡是 relation、reply、mention 或展示 fallback 与正文同时存在的地方，都要确认结构化 display data 不会重复进入词频和语言画像。
+
+### 11. 对应 regression test
+
+- `tests/test_qq_chat_exporter_adapter.py::test_reply_message_excludes_auto_mention_from_authored_text`
+- `tests/test_qq_chat_exporter_adapter.py::test_plain_at_text_does_not_count_mention_display_emoji_as_authored_text`
+- `tests/test_qq_chat_exporter_adapter.py::test_plain_at_text_preserves_emoji_authored_after_mention`
+
+历史状态：CLOSED / merged。覆盖 commit：`d4d68f3`、`a9afca1`。
+
+---
+
+## Journal 005 — QQ 长期 Snapshot 使重新分析可能读取旧数据
+
+### 1. 现象
+
+新消息出现后重新全量分析可能复用旧 raw `ChatDataSnapshot`，而不是重新获取 QQ 数据。
+
+### 2. 为什么难查
+
+分析、报告和历史都能成功完成；错误在 acquisition resource ownership 与生命周期，而非分析算法。
+
+### 3. 当时错误 / 竞争假设
+
+需要区分 QCE 是否未导出新数据、导入是否遗漏，还是 stale snapshot 在重新分析前被复用。
+
+### 4. 最终根因
+
+生产设计允许长期 raw `ChatDataSnapshot`，使后续分析拥有读取旧 acquisition payload 的路径。
+
+### 5. 原代码的隐含假设
+
+raw acquisition snapshot 可以安全地作为长期 cache / asset 被重新使用。
+
+### 6. 为什么开发机或普通场景没暴露
+
+现有证据仅证明新增消息后的真实全量重新分析消息数准确增长；不足以补写更广泛的暴露条件。
+
+### 7. 哪个诊断 / 实验真正钉死根因
+
+真实验收在新增消息后重新全量分析，消息数按预期增长；配合生产 snapshot removal 与 transient lifecycle 回归测试确认不再复用长期 raw payload。
+
+### 8. 最终修复
+
+删除生产 `ChatDataSnapshot`；QQ raw acquisition 改为 Echo-owned transient lease，正常 consumer 完成或抛异常后 cleanup，重新分析重新 acquisition。
+
+### 9. 可推广的工程经验
+
+数据正确性不仅由 parser 决定；raw payload 的 ownership、retention 和 cleanup 也是 correctness contract 的一部分。
+
+### 10. 可以反向审计仓库的规则
+
+检查所有“重新执行”路径：若保存 raw input，必须明确其 owner、失效条件、正常与异常 cleanup，以及是否会绕过新的 acquisition。
+
+### 11. 对应 regression test
+
+- `tests/test_snapshot_removal.py::test_qq_full_analysis_always_calls_provider`
+- `tests/test_snapshot_removal.py::test_qq_full_analysis_does_not_create_persistent_snapshot`
+- `tests/test_full_session_transient.py::test_full_session_run_cleanup_after_consumer`
+- `tests/test_full_session_transient.py::test_full_session_exception_still_cleans_up`
+
+历史状态：CLOSED / merged。覆盖 commit：`69eb42b`、`2194bba`。异常终止后的 orphan run directory 回收不在本项已完成范围内。
+
+---
+
+## Journal 006 — WeChat acquisition 时间单位错配
+
+### 1. 现象
+
+有限时间范围的 WeChat acquisition 全部返回 0；ALL 模式因使用 `None` / `None` 不加时间条件而正常。
+
+### 2. 为什么难查
+
+同一 calendar scope 对 QQ/QCE 有效，导致非空 bounds 看起来像已正确下推；真正的 contract 是来源特有时间单位。
+
+### 3. 当时错误 / 竞争假设
+
+不能只断言 scope bounds 非空，还需排除 SQL、session discovery 和应用层 scope filter 的影响。
+
+### 4. 最终根因
+
+毫秒 QCE helper 被复用于 WeChat `m.create_time` SQL；后者使用 epoch seconds。
+
+### 5. 原代码的隐含假设
+
+所有 source acquisition bounds 可使用同一 epoch 单位。
+
+### 6. 为什么开发机或普通场景没暴露
+
+ALL 模式不传 bounds，因而没有触发单位错配；除此之外的历史暴露条件证据不足。
+
+### 7. 哪个诊断 / 实验真正钉死根因
+
+针对有限 scope 的 RED 锁定 seconds contract，而非仅验证 values 非 `None`；ALL 仍保留无过滤行为。
+
+### 8. 最终修复
+
+以 source-specific seconds helper 生成 WeChat SQL bounds；analysis scope filter 继续作为最终 correctness guarantee。
+
+### 9. 可推广的工程经验
+
+同名的“timestamp”或“range”不是跨来源协议；单位、包含边界和空值语义都必须在 source boundary 明确测试。
+
+### 10. 可以反向审计仓库的规则
+
+检查所有跨 source 共用的时间 helper，逐一确认下游 API / SQL 字段的单位与 sentinel 语义，而不是只检查参数存在。
+
+### 11. 对应 regression test
+
+- `tests/test_facade.py::test_wechat_export_scope_uses_seconds_not_milliseconds`
+- `tests/test_facade.py::test_wechat_export_keeps_none_when_scope_is_all`
+- `tests/test_facade.py::test_wechat_export_pushes_scope_time_window_to_provider`
+
+历史状态：CLOSED / merged。覆盖 commit：`e9c2367`。
+
+---
+
+## Journal 007 — WeChat shard rollover 的 cardinality 建模错误
+
+### 1. 现象
+
+一个真实 WeChat session 的新数据位于后续 `message_N.db` shard，但 Provider 只读到第一个 shard 的旧数据。
+
+### 2. 为什么难查
+
+`Msg_*` table 在每个单独 shard 中都可读，单 shard query 正常；DB 与 Provider 的 divergence 只在跨 shard 的真实会话中出现。
+
+### 3. 当时错误 / 竞争假设
+
+需要区分配置 DB 是否更新、直接 DB 是否可读、时间范围是否错误，以及是否为 Provider 的 shard discovery 过早返回。
+
+### 4. 最终根因
+
+代码将 session/table 到 message DB 的关系隐含建模为 1:1，并在第一个 `_table_exists` 命中后返回。
+
+### 5. 原代码的隐含假设
+
+一个 `Msg_*` table 只会存在于一个 message shard。
+
+### 6. 为什么开发机或普通场景没暴露
+
+现有证据不足，不能把单 shard 数据、较短历史或其他未经验证条件写成确定原因。
+
+### 7. 哪个诊断 / 实验真正钉死根因
+
+真实目标 session 的同一 table 在多个 shard 中被确认；direct DB 能读近期数据，Provider 只读第一 shard，形成明确 divergence。
+
+### 8. 最终修复
+
+发现所有 matching shards，对每个 shard 用同一范围查询，merge 后按 `create_time` 全局排序，并在全局结果上应用 explicit positive limit。
+
+### 9. 可推广的工程经验
+
+底层可能存在 partition、shard、rollover 或 migration 时，资源发现的 cardinality 是 correctness contract，不是实现细节。
+
+### 10. 可以反向审计仓库的规则
+
+凡 `_find_xxx()` 返回单个 resource 的链路，若底层可能分区或滚动，审计 1:1 cardinality 假设是否真实成立。
+
+### 11. 对应 regression test
+
+- `tests/test_wechat_db_source.py::test_read_session_rows_queries_all_shards_with_matching_table`
+- `tests/test_wechat_db_source.py::test_read_session_rows_respects_global_limit_across_shards`
+- `tests/test_wechat_db_source.py::test_read_session_rows_respects_time_scope_across_shards`
+
+历史状态：CLOSED / merged。覆盖 commit：`87b4bae` 的 multi-shard 部分。
+
+---
+
+## Journal 008 — wcdb_cli 的 unlimited sentinel 跨层错配导致 100000 静默截断
+
+### 1. 现象
+
+超过 100000 行的 WeChat acquisition 可被静默截断，且 `truncated` 仍可能为 `false`。
+
+### 2. 为什么难查
+
+Python Provider 的 `_query(limit=0)` 意图是“不设 limit”，而 native helper 对 no-limit / `0` 的 fallback 是另一套行为；单独测试任一层都难以发现错配。
+
+### 3. 当时错误 / 竞争假设
+
+需区分 Provider 是否传参错误、native CLI 是否截断，或结果 metadata 是否错误报告。
+
+### 4. 最终根因
+
+native `wcdb_cli` 将 no-limit / `limit=0` 回退到 100000，和 Provider 的 unlimited sentinel 语义不一致。
+
+### 5. 原代码的隐含假设
+
+跨语言 / 跨进程边界两端对 `0` 的含义天然一致。
+
+### 6. 为什么开发机或普通场景没暴露
+
+需要超过 100000 行才触发；其余历史暴露条件证据不足。
+
+### 7. 哪个诊断 / 实验真正钉死根因
+
+synthetic SQLite 100001 rows 对旧 binary 的端到端 RED 返回 100000；rebuild 后 GREEN 返回 100001 且 `truncated=false`。
+
+### 8. 最终修复
+
+native CLI 将 no-limit / `limit=0` 解释为持续 step 到 statement done；Provider 正常 message acquisition 保持 unlimited 默认。
+
+### 9. 可推广的工程经验
+
+`0`、`None`、`-1` 和 empty 等 sentinel 必须在跨语言 / 跨进程边界以端到端 contract test 固化，不能只分别测试各层。
+
+### 10. 可以反向审计仓库的规则
+
+搜索所有跨层 limit、timeout、offset 和 optional parameter 的 sentinel；验证 caller、transport、native helper 和 result metadata 的语义一致。
+
+### 11. 对应 regression test
+
+- `tests/test_wcdb_cli_unlimited.py::test_native_cli_without_positive_limit_returns_more_than_100000_rows`
+- `tests/test_wechat_db_source.py::test_read_session_rows_default_limit_is_unlimited`
+- `tests/test_wechat_db_source.py::test_export_session_json_default_limit_is_unlimited`
+
+历史状态：CLOSED / merged。覆盖 commit：`87b4bae` 的 unlimited 部分。
