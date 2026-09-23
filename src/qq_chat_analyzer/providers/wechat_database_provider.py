@@ -426,7 +426,7 @@ class WeChatDatabaseProvider:
         output_path: str | Path,
         start_time: int | None = None,
         end_time: int | None = None,
-        limit: int = DEFAULT_MESSAGE_LIMIT,
+        limit: int = 0,
     ) -> Path:
         """Write one conversation's raw rows to ``output_path`` as JSON."""
         rows = self.read_session_rows(
@@ -479,7 +479,7 @@ class WeChatDatabaseProvider:
         session_id: str,
         start_time: int | None = None,
         end_time: int | None = None,
-        limit: int = DEFAULT_MESSAGE_LIMIT,
+        limit: int = 0,
     ) -> list[Any]:
         """Return raw message rows for one conversation, sender names resolved."""
         cleaned_session = (session_id or "").strip()
@@ -487,7 +487,7 @@ class WeChatDatabaseProvider:
             raise SessionNotFound()
 
         table = message_table_name(cleaned_session)
-        message_db = self._find_message_db(table)
+        message_dbs = self._find_all_message_dbs(table)
         conditions = ["(m.local_type & 0xFFFFFFFF) IN (1, 47)"]
         if isinstance(start_time, int) and not isinstance(start_time, bool):
             conditions.append(f"m.create_time >= {start_time}")
@@ -502,12 +502,22 @@ class WeChatDatabaseProvider:
             "LEFT JOIN Name2Id AS n ON n.rowid = m.real_sender_id "
             f"WHERE {where_clause} ORDER BY m.create_time ASC"
         )
-        return self._query(
-            message_db,
-            sql,
-            limit=limit,
-            query_stage="message_rows",
-        )
+        all_rows: list[Any] = []
+        for message_db in message_dbs:
+            shard_rows = self._query(
+                message_db,
+                sql,
+                limit=0,
+                query_stage="message_rows",
+            )
+            all_rows.extend(shard_rows)
+
+        all_rows.sort(key=lambda r: r.get("create_time", 0) if isinstance(r, Mapping) else 0)
+
+        if limit > 0 and limit < len(all_rows):
+            all_rows = all_rows[:limit]
+
+        return all_rows
 
     # --------------------------------------------------------------- internals
 
@@ -720,6 +730,18 @@ class WeChatDatabaseProvider:
         raise DatabaseNotFound()
 
     def _find_message_db(self, table: str) -> Path:
+        """Return the first message shard containing ``table``.
+
+        Kept for backward compatibility (e.g. ``export_session_json``).
+        For multi-shard aware queries use ``_find_all_message_dbs``.
+        """
+        result = self._find_all_message_dbs(table)
+        if result:
+            return result[0]
+        raise SessionNotFound()
+
+    def _find_all_message_dbs(self, table: str) -> list[Path]:
+        """Return every message shard that contains the named table."""
         root = self._resolve_data_root()
         shards = [
             shard
@@ -729,10 +751,13 @@ class WeChatDatabaseProvider:
         if not shards:
             raise DatabaseNotFound()
 
+        matched: list[Path] = []
         for shard in shards:
             if self._table_exists(shard, table):
-                return shard
-        raise SessionNotFound()
+                matched.append(shard)
+        if not matched:
+            raise SessionNotFound()
+        return matched
 
     def _table_exists(self, db_path: Path, table: str) -> bool:
         escaped = table.replace("'", "''")

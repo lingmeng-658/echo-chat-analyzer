@@ -444,8 +444,7 @@ int RunQuery(const QueryOptions& options) {
     DebugPrint(options, "step rows");
     bool first_row = true;
     int row_count = 0;
-    int max_rows = options.limit > 0 ? options.limit : 100000;
-    while (row_count < max_rows) {
+    while (options.limit <= 0 || row_count < options.limit) {
       if (!inner_handle->step()) {
         break;
       }

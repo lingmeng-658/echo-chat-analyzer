@@ -1707,3 +1707,184 @@ def test_database_unreadable_is_exported_for_application_callers() -> None:
     from qq_chat_analyzer import providers
 
     assert providers.DatabaseUnreadable is DatabaseUnreadable
+
+
+# ============================================================
+# Multi-shard / rollover test helpers
+# ============================================================
+
+_ROLLOVER_TABLE = "Msg_0_fictional_rollover_session"
+FICTIONAL_SESSION_FOR_ROLLOVER = "fictional_rollover_session"
+
+
+def _multi_shard_data_root(tmp_path):
+    root = tmp_path / "wechat_multi_shard"
+    # _iter_db_directories uses rglob("db_storage") for exact match
+    # Create multiple db_storage dirs at different depths
+    db_dir_0 = root / "MicroMsg" / "db_storage"
+    db_dir_0.mkdir(parents=True)
+    (db_dir_0 / "message_0.db").write_bytes(b"fake db")
+    # For a second shard, put db_storage in a sibling account dir
+    db_dir_1 = root / "other_account" / "MicroMsg" / "db_storage"
+    db_dir_1.mkdir(parents=True)
+    (db_dir_1 / "message_0.db").write_bytes(b"fake db")
+    return root
+
+def _multi_shard_provider(tmp_path, runner):
+    helper = tmp_path / "wcdb_cli.exe"
+    helper.write_bytes(b"fake")
+    library = tmp_path / "WCDB.dll"
+    library.write_bytes(b"fake")
+    return WeChatDatabaseProvider(
+        data_root=_multi_shard_data_root(tmp_path),
+        db_key=FICTIONAL_KEY,
+        wcdb_cli_path=helper,
+        wcdb_dll_path=library,
+        runner=runner,
+    )
+
+
+def _make_runner_for_rollover(old_rows, new_rows):
+    call_log = []
+
+    def runner(command, timeout, environment):
+        sql_index = command.index("--sql") if "--sql" in command else -1
+        sql = command[sql_index + 1] if sql_index >= 0 else ""
+        db_index = command.index("--db") if "--db" in command else -1
+        db_path = command[db_index + 1] if db_index >= 0 else ""
+
+        # Handle table existence checks from _table_exists (sqlite_master query)
+        if "sqlite_master" in sql and "Msg_" in sql:
+            call_log.append(("table_exists", db_path))
+            # Return the rollover table so _find_all_message_dbs considers this shard valid
+            return _FakeCompleted(stdout=_helper_result([{"name": _ROLLOVER_TABLE}]))
+
+        # Handle message queries: the SQL contains "FROM Msg_" pattern
+        if "FROM Msg_" in sql or "FROM " in sql and "create_time" in sql:
+            call_log.append(("message_query", db_path))
+            if "other_account" not in db_path:
+                return _FakeCompleted(stdout=_helper_result(old_rows))
+            else:
+                return _FakeCompleted(stdout=_helper_result(new_rows))
+
+        return _FakeCompleted(stdout=_helper_result([]))
+
+    return runner, call_log
+
+def test_read_session_rows_queries_all_shards_with_matching_table(tmp_path):
+    old_rows = [
+        _db_row(create_time=100, local_id=1),
+        _db_row(create_time=101, local_id=2),
+        _db_row(create_time=102, local_id=3),
+    ]
+    new_rows = [
+        _db_row(create_time=200, local_id=4),
+        _db_row(create_time=201, local_id=5),
+        _db_row(create_time=202, local_id=6),
+    ]
+
+    runner, call_log = _make_runner_for_rollover(old_rows, new_rows)
+    provider = _multi_shard_provider(tmp_path, runner)
+    rows = provider.read_session_rows(FICTIONAL_SESSION_FOR_ROLLOVER)
+
+    message_queries = [c for c in call_log if c[0] == "message_query"]
+    assert len(message_queries) >= 2, (
+        "Expected at least 2 message queries, got %d. Call log: %s" % (len(message_queries), call_log)
+    )
+    assert len(rows) == 6, "Expected 6 rows from both shards, got %d" % len(rows)
+    times = [r["create_time"] for r in rows]
+    assert times == sorted(times), "Rows should be globally sorted by create_time ASC, got %s" % times
+    assert min(times) == 100
+    assert max(times) == 202
+
+
+def test_read_session_rows_respects_global_limit_across_shards(tmp_path):
+    old_rows = [
+        _db_row(create_time=100, local_id=1),
+        _db_row(create_time=101, local_id=2),
+        _db_row(create_time=102, local_id=3),
+    ]
+    new_rows = [
+        _db_row(create_time=200, local_id=4),
+        _db_row(create_time=201, local_id=5),
+        _db_row(create_time=202, local_id=6),
+    ]
+
+    runner, _ = _make_runner_for_rollover(old_rows, new_rows)
+    provider = _multi_shard_provider(tmp_path, runner)
+    rows = provider.read_session_rows(FICTIONAL_SESSION_FOR_ROLLOVER, limit=4)
+
+    assert len(rows) == 4, "Expected 4 rows with global limit=4, got %d" % len(rows)
+    times = [r["create_time"] for r in rows]
+    assert times == sorted(times)
+    assert times == [100, 101, 102, 200]
+
+
+def test_read_session_rows_respects_time_scope_across_shards(tmp_path):
+    old_rows = [
+        _db_row(create_time=50, local_id=1),
+        _db_row(create_time=100, local_id=2),
+    ]
+    new_rows = [
+        _db_row(create_time=200, local_id=3),
+        _db_row(create_time=500, local_id=4),
+    ]
+
+    captured_sqls = []
+
+    def runner(command, timeout, environment):
+        sql_index = command.index("--sql") if "--sql" in command else -1
+        sql = command[sql_index + 1] if sql_index >= 0 else ""
+        db_index = command.index("--db") if "--db" in command else -1
+        db_path = command[db_index + 1] if db_index >= 0 else ""
+
+        if "sqlite_master" in sql and "Msg_" in sql:
+            return _FakeCompleted(stdout=_helper_result([{"name": _ROLLOVER_TABLE}]))
+
+        if "FROM Msg_" in sql:
+            captured_sqls.append(sql)
+            shard_rows = old_rows if "other_account" not in db_path else new_rows
+            return _FakeCompleted(stdout=_helper_result(shard_rows))
+
+        return _FakeCompleted(stdout=_helper_result([]))
+
+    provider = _multi_shard_provider(tmp_path, runner)
+    rows = provider.read_session_rows(
+        FICTIONAL_SESSION_FOR_ROLLOVER,
+        start_time=90,
+        end_time=210,
+    )
+
+    assert len(rows) == 4, "Mock returns all rows, got %d" % len(rows)
+    assert len(captured_sqls) == 2, "Expected 2 SQL queries, got %d" % len(captured_sqls)
+    for sql in captured_sqls:
+        assert "create_time >= 90" in sql, "SQL missing start_time: %s" % sql
+        assert "create_time <= 210" in sql, "SQL missing end_time: %s" % sql
+
+
+def test_read_session_rows_default_limit_is_unlimited(tmp_path):
+    all_rows = [
+        _db_row(create_time=100 + index, local_id=index + 1)
+        for index in range(100_001)
+    ]
+    runner, _ = _make_runner_for_rollover(all_rows, [])
+    provider = _multi_shard_provider(tmp_path, runner)
+
+    rows = provider.read_session_rows(FICTIONAL_SESSION_FOR_ROLLOVER)
+
+    assert len(rows) == 100_001
+
+
+def test_export_session_json_default_limit_is_unlimited(tmp_path):
+    all_rows = [
+        _db_row(create_time=100 + index, local_id=index + 1)
+        for index in range(100_001)
+    ]
+    runner, _ = _make_runner_for_rollover(all_rows, [])
+    provider = _multi_shard_provider(tmp_path, runner)
+    output_path = tmp_path / "export.json"
+
+    provider.export_session_json(FICTIONAL_SESSION_FOR_ROLLOVER, output_path)
+
+    exported = json.loads(output_path.read_text(encoding="utf-8"))
+    assert len(exported["messages"]) == 100_001
