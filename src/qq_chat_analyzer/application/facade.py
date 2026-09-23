@@ -1045,8 +1045,8 @@ class ChatAnalyzerFacade:
                             output_path=(
                                 scratch_directory / "wechat_export.json"
                             ),
-                            start_time=None,
-                            end_time=None,
+                            start_time=_scope_export_window_seconds(scope)[0],
+                            end_time=_scope_export_window_seconds(scope)[1],
                         )
                     )
                 )
@@ -1327,8 +1327,34 @@ def _scope_export_window(
         None if end_millis is None else end_millis - 1,
     )
 
+def _scope_export_window_seconds(
+    scope: AnalysisScope | None,
+) -> tuple[int | None, int | None]:
+    """Translate an inclusive calendar scope into WeChat epoch-second bounds.
+
+    ``(None, None)`` means "no filter", which keeps the full-history export
+    path unchanged for the ALL scope. The end bound is the last second
+    (23:59:59) of the inclusive end date, matching WeChat second-precision
+    m.create_time column.
+
+    Unlike _scope_export_window, this helper returns epoch seconds because
+    WeChat SQLite stores create_time as epoch seconds, not milliseconds.
+    """
+    if scope is None or scope.start_date is None or scope.end_date is None:
+        return None, None
+    try:
+        start_seconds = _local_midnight_epoch_seconds(scope.start_date)
+        end_exclusive_seconds = _local_midnight_epoch_seconds(
+            scope.end_date + timedelta(days=1)
+        )
+    except (OverflowError, OSError, ValueError):
+        return None, None
+    end_inclusive_seconds = end_exclusive_seconds - 1
+    return (start_seconds, end_inclusive_seconds)
+
 
 def _local_midnight_epoch_seconds(value: date) -> int:
+
     """Return the local-time midnight of one calendar date in epoch seconds."""
     return int(datetime.combine(value, time.min).timestamp())
 

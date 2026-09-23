@@ -2245,8 +2245,9 @@ def test_analyze_session_applies_wechat_time_range_after_export(
     )
 
     request = wechat_service.export_requests[0]
-    assert request.start_time is None
-    assert request.end_time is None
+    # Scope time window is now pushed to the WeChat acquisition request.
+    assert request.start_time is not None
+    assert request.end_time is not None
     assert analysis_service.requests[0].scope == module.AnalysisScope.custom(
         date(2024, 1, 1),
         date(2024, 2, 1),
@@ -2989,3 +2990,122 @@ def test_analyze_session_never_renders_a_qce_percentage(
 
     assert "正在获取 QQ 聊天记录 · 已获取 1,234 条" in progress
     assert not any("%" in message for message in progress)
+
+# --------------------------------------------------------------- WeChat scope push-down
+
+def test_wechat_export_pushes_scope_time_window_to_provider(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """When WeChat analysis uses a date scope, acquisition must receive
+    start_time/end_time from _scope_export_window(scope).
+
+    Regression test: the old code always passed start_time=None,
+    end_time=None to WeChatExportImportRequest, bypassing the provider's
+    SQL-level time filter.
+    """
+    module = _facade_module()
+    export_path = _export_file(tmp_path, "wechat-export.json")
+    wechat_service = _StubWeChatService(export_path=export_path)
+
+    facade = _facade(
+        wechat_service=wechat_service,
+        tmp_path=tmp_path,
+    )
+
+    # Use a custom date scope (last_year) to trigger non-None time bounds.
+    config = module.AnalysisConfig(
+        scope_mode=module.AnalysisScopeMode.LAST_YEAR,
+    )
+
+    facade.analyze_session(
+        module.ChatSource.WECHAT,
+        "wxid_fictional_wechat",
+        config=config,
+    )
+
+    assert len(wechat_service.export_requests) == 1
+    request = wechat_service.export_requests[0]
+    # The request must carry non-None time bounds derived from the scope.
+    assert request.start_time is not None, (
+        "WeChat acquisition must receive start_time from scope, "
+        "got None (full export instead of time-windowed export)"
+    )
+    assert request.end_time is not None, (
+        "WeChat acquisition must receive end_time from scope, "
+        "got None (full export instead of time-windowed export)"
+    )
+
+
+def test_wechat_export_keeps_none_when_scope_is_all(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """When WeChat analysis uses ALL scope, acquisition must still pass
+    start_time=None, end_time=None so the provider exports the full history.
+    """
+    module = _facade_module()
+    export_path = _export_file(tmp_path, "wechat-export.json")
+    wechat_service = _StubWeChatService(export_path=export_path)
+
+    facade = _facade(
+        wechat_service=wechat_service,
+        tmp_path=tmp_path,
+    )
+
+    # ALL scope (default) should keep None/None.
+    config = module.AnalysisConfig(
+        scope_mode=module.AnalysisScopeMode.ALL,
+    )
+
+    facade.analyze_session(
+        module.ChatSource.WECHAT,
+        "wxid_fictional_wechat",
+        config=config,
+    )
+
+    assert len(wechat_service.export_requests) == 1
+    request = wechat_service.export_requests[0]
+    assert request.start_time is None
+    assert request.end_time is None
+
+# --------------------------------------------------------------- WeChat scope unit contract
+
+def test_wechat_export_scope_uses_seconds_not_milliseconds(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _facade_module()
+    export_path = _export_file(tmp_path, "wechat-unit-test.json")
+    wechat_service = _StubWeChatService(export_path=export_path)
+    facade = _facade(wechat_service=wechat_service, tmp_path=tmp_path)
+    config = module.AnalysisConfig(
+        scope_mode=module.AnalysisScopeMode.CUSTOM,
+        start_time="2024-01-01",
+        end_time="2024-02-01",
+    )
+    facade.analyze_session(
+        module.ChatSource.WECHAT,
+        "wxid_fictional_unit_test",
+        config=config,
+    )
+    assert len(wechat_service.export_requests) == 1
+    request = wechat_service.export_requests[0]
+    assert request.start_time is not None
+    assert request.end_time is not None
+    start_dt = datetime.fromtimestamp(request.start_time)
+    assert start_dt.year == 2024, (
+        "WeChat start_time=%d interpreted as datetime gives %s, "
+        "expected year 2024. Value appears to be milliseconds."
+        % (request.start_time, start_dt)
+    )
+    end_dt = datetime.fromtimestamp(request.end_time)
+    assert end_dt.year == 2024, (
+        "WeChat end_time=%d interpreted as datetime gives %s, "
+        "expected year 2024. Value appears to be milliseconds."
+        % (request.end_time, end_dt)
+    )
+    assert end_dt >= datetime(2024, 2, 1), (
+        "WeChat end_time=%d gives %s, expected >= 2024-02-01 inclusive."
+        % (request.end_time, end_dt)
+    )
