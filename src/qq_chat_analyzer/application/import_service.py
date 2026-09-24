@@ -20,6 +20,12 @@ from ..qq_chat_exporter_adapter import (
     qce_conversation_type,
     qce_self_identities,
 )
+from ..qq_db_adapter import (
+    QQ_DB_JSON_FORMAT,
+    is_qq_db_export,
+    load_qq_db_json,
+    parse_qq_db_rich_messages,
+)
 from ..wechat_cli_adapter import (
     is_cli_export as is_wechat_cli_export,
     load_messages as load_wechat_cli_messages,
@@ -215,6 +221,8 @@ def _import_qq_file(
     tuple[str, ...],
     int,
 ]:
+    if is_qq_db_export(input_file):
+        return _import_qq_db_file(input_file)
     if is_qce_export(input_file):
         return _import_qce_file(input_file)
 
@@ -229,6 +237,34 @@ def _import_qq_file(
         file_format,
         warnings,
         len(raw_messages),
+    )
+
+
+def _import_qq_db_file(
+    input_file: Path,
+) -> tuple[
+    str,
+    tuple[ChatMessage, ...],
+    tuple[RichMessage, ...],
+    str,
+    tuple[str, ...],
+    int,
+]:
+    payload = load_qq_db_json(input_file)
+    raw_records = payload.get("records", []) if payload is not None else []
+    rich_messages, parse_warnings = parse_qq_db_rich_messages(payload)
+    parsed_messages = tuple(project_legacy_messages(rich_messages))
+    warnings = (
+        *parse_warnings,
+        *_import_warnings(input_file, "qq", raw_records, parsed_messages),
+    )
+    return (
+        "qq",
+        parsed_messages,
+        tuple(rich_messages),
+        QQ_DB_JSON_FORMAT,
+        warnings,
+        len(raw_records),
     )
 
 
@@ -388,7 +424,11 @@ def _matches_platform_shape(input_file: Path, platform: str) -> bool:
             or is_wechat_cli_export(input_file)
         )
     if platform == "qq":
-        return is_qce_export(input_file) or _looks_like_qq_export(input_file)
+        return (
+            is_qq_db_export(input_file)
+            or is_qce_export(input_file)
+            or _looks_like_qq_export(input_file)
+        )
     return _looks_like_qq_export(input_file)
 
 
@@ -398,7 +438,11 @@ def _looks_like_qq_export(input_file: Path) -> bool:
             return False
         return bool(load_qq_messages(input_file))
 
-    if is_wechat_cli_export(input_file) or is_wechat_db_export(input_file):
+    if (
+        is_wechat_cli_export(input_file)
+        or is_wechat_db_export(input_file)
+        or is_qq_db_export(input_file)
+    ):
         return False
 
     payload = _load_json_object(input_file)
