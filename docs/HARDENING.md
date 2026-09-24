@@ -340,6 +340,28 @@ Release Blocker：Yes。
 
 ---
 
+## QQ Direct DB Feasibility
+
+状态：PASS / feasibility validated；**PASS != production ready**。
+
+已在受控本地实验中验证：
+
+- passphrase capture、SQLite availability，以及只读 DB decrypt/open；
+- `group_msg_table` / `c2c_msg_table` access；
+- controlled group plain-text sample 中的 group、sender、second timestamp candidate；
+- `40800` protobuf、`45002` text type 与 `45101` exact text recovery；
+- temporary plaintext cleanup 与 runtime restore。
+
+当前生产 QQ acquisition 仍为 QCE。Direct DB 仅是 validated candidate，不能据此宣称
+production ready、QCE retirement，或把单一样本字段映射提升为跨版本 schema guarantee。
+
+产品化前仍需关闭的 hardening 风险包括：schema capability detection、schema / QQ /
+NapCat version drift、key/passphrase 与 decrypted plaintext lifecycle、c2c 与 non-text
+message semantics、pagination、completeness、multi-account behavior、fail-soft /
+diagnostics、QCE parity validation，以及 migration / fallback policy。
+
+下一阶段从“是否可行”切换为“QQ DB Provider 的产品化设计与最小 vertical slice”。
+
 ## Engineering Governance
 
 ### DOC-01 文档事实源治理

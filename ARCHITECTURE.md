@@ -200,6 +200,34 @@ directory，Provider 将 QCE payload 导出到该目录，导入和分析消费 
 Echo Report 才是长期结果资产。异常终止后的 orphan run directory 回收仍是后续
 lifecycle debt，不能表述为已实现能力。
 
+#### QQ Direct DB feasibility checkpoint
+
+当前生产 QQ acquisition path 仍为：
+
+```text
+QQ → NapCat / QCE → QCE JSON → QQ Adapter → unified model → Analysis
+```
+
+受控本地实验已验证另一条候选 acquisition path 的最小群聊纯文本 vertical
+slice：
+
+```text
+QQ runtime → captured DB passphrase → read-only nt_msg.db
+→ QQ DB Provider candidate → QQ DB Adapter candidate → unified model → Analysis
+```
+
+该样本能够恢复 conversation、sender、second-level timestamp 与 plain text；其中
+`40030`、`40033`、`40050`、`40800`、`45002` 与 `45101` 的映射仅在本次受控群聊
+纯文本样本中得到实证，绝非跨 QQ 版本的 schema guarantee。因而 Direct DB 是
+**validated acquisition candidate**（feasibility PASS），尚非 production ready；
+QCE 仍是当前生产路径并暂时保留。
+
+Provider / Adapter 分层可容纳第二条 QQ acquisition path：raw DB fields 与 protobuf
+decode 属于 source-specific acquisition / adapter boundary，Provider 不负责统一领域
+模型转换，Analysis 也不得读取这些平台字段。default path、fallback policy、QCE
+retirement 与 rich-message coverage 均尚未决定，只有完成 Provider 实现、兼容性验证
+与 QCE parity 后才可讨论迁移。
+
 获取范围是减少无关数据的优化边界；`Analysis Scope Filter` 才是最终 correctness
 guarantee。两者必须同时保留，且时间单位按来源区分：QQ/QCE 将 calendar scope
 转换为 epoch milliseconds 后传给 QCE；WeChat 将其转换为 epoch seconds 后用于
