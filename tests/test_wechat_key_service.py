@@ -869,10 +869,11 @@ def _streaming_service(tmp_path: Path, popen, progress=None):
 
 
 def test_streaming_reports_progress_per_stderr_line(tmp_path: Path):
-    seen: list[str] = []
+    seen = []
     proc = _FakePopen(
         stdout="cd34" * 16 + "\n",
         stderr_lines=(
+            "2026-08-09T00:00:00.000Z hook_success=true",
             "2026-08-09T00:00:00.000Z elapsed=5s, waiting for key...",
             "2026-08-09T00:00:05.000Z elapsed=10s, waiting for key...",
         ),
@@ -881,18 +882,20 @@ def test_streaming_reports_progress_per_stderr_line(tmp_path: Path):
         tmp_path, lambda *_a, **_k: proc, progress=seen.append
     )
     assert service.acquire() == "cd34" * 16
-    assert len(seen) == 2
-    assert "5" in seen[0] and "10" in seen[1]
+    assert [getattr(event, "name", None) for event in seen] == [
+        "PREPARING", "READY_FOR_LOGIN", "CREDENTIAL_RECEIVED",
+    ]
 
 
 def test_streaming_reader_keeps_receiving_lines_until_exit(tmp_path: Path):
     """The stderr reader must keep draining while stdout is still open."""
-    seen: list[str] = []
+    seen = []
     proc = _FakePopen(
         stdout="ab12" * 16 + "\n",
         stderr_lines=(
             "2026-08-09T00:00:00.000Z elapsed=1s, waiting for key...",
             "2026-08-09T00:00:01.000Z elapsed=2s, waiting for key...",
+            "2026-08-09T00:00:02.000Z hook_success=true",
             "2026-08-09T00:00:02.000Z elapsed=3s, waiting for key...",
         ),
     )
@@ -901,16 +904,18 @@ def test_streaming_reader_keeps_receiving_lines_until_exit(tmp_path: Path):
     )
 
     assert service.acquire() == "ab12" * 16
-    assert len(seen) == 3
-    assert "1" in seen[0] and "2" in seen[1] and "3" in seen[2]
+    assert [getattr(event, "name", None) for event in seen] == [
+        "PREPARING", "READY_FOR_LOGIN", "CREDENTIAL_RECEIVED",
+    ]
 
 
 def test_streaming_communicate_does_not_steal_stderr(tmp_path: Path):
     """communicate() must not consume stderr lines meant for the reader."""
-    seen: list[str] = []
+    seen = []
     proc = _DelayedStdoutPopen(
         key="ef56" * 16,
         stderr_lines=(
+            "2026-08-09T00:00:00.000Z hook_success=true",
             "2026-08-09T00:00:00.000Z elapsed=5s, waiting for key...",
             "2026-08-09T00:00:05.000Z elapsed=10s, waiting for key...",
         ),
@@ -920,8 +925,9 @@ def test_streaming_communicate_does_not_steal_stderr(tmp_path: Path):
     )
 
     assert service.acquire() == "ef56" * 16
-    assert len(seen) == 2
-    assert "5" in seen[0] and "10" in seen[1]
+    assert [getattr(event, "name", None) for event in seen] == [
+        "PREPARING", "READY_FOR_LOGIN", "CREDENTIAL_RECEIVED",
+    ]
     assert proc.killed is False
 
 
@@ -939,9 +945,64 @@ def test_streaming_progress_never_leaks_internal_terms(tmp_path: Path):
         tmp_path, lambda *_a, **_k: proc, progress=seen.append
     )
     service.acquire()
-    joined = " ".join(seen).lower()
+    joined = " ".join(str(event) for event in seen).lower()
     for leaked in ("dll", "initializehook", "koffi", "secret", "pollkeydata"):
         assert leaked not in joined
+
+
+@pytest.mark.parametrize("diagnostic", [
+    "exports loaded: InitializeHook, PollKeyData, CleanupHook",
+    "process_found=true, process_count=1",
+    "elapsed=5s, waiting for key...",
+    "hook_success=false",
+    "diagnostic hook_success=true",
+    'GetStatusMessage -> true, level=0, status="hook_success=true"',
+])
+def test_streaming_cannot_allow_login_without_listener_ready(tmp_path, diagnostic):
+    seen = []
+    proc = _FakePopen(stderr_lines=(diagnostic,), returncode=1)
+    service = _streaming_service(tmp_path, lambda *_a, **_k: proc)
+
+    with pytest.raises(_module().WeChatKeyUnavailable):
+        service.acquire(progress=seen.append)
+
+    assert [getattr(event, "name", None) for event in seen] == ["PREPARING"]
+
+
+def test_injected_listener_reports_ready_only_after_initialize_succeeds(tmp_path):
+    seen = []
+
+    class Listener(_FakeHookApi):
+        def initialize(self, pid):
+            assert [getattr(event, "name", None) for event in seen] == ["PREPARING"]
+            return super().initialize(pid)
+
+        def poll_key(self, buffer, size):
+            assert getattr(seen[-1], "name", None) == "READY_FOR_LOGIN"
+            return super().poll_key(buffer, size)
+
+    service = _service(tmp_path, api=Listener(key="ab12" * 16), pids=[4242])
+    service.acquire(progress=seen.append)
+
+    assert [getattr(event, "name", None) for event in seen] == [
+        "PREPARING", "READY_FOR_LOGIN", "CREDENTIAL_RECEIVED",
+    ]
+
+
+@pytest.mark.parametrize("use_helper", [True, False])
+def test_missing_wechat_does_not_instruct_login_before_retry(tmp_path, use_helper):
+    if use_helper:
+        process = _FakePopen(stderr_lines=("no Weixin process",), returncode=1)
+        service = _streaming_service(tmp_path, lambda *_a, **_k: process)
+    else:
+        service = _service(tmp_path, api=_FakeHookApi(), pids=[])
+
+    with pytest.raises(_module().WeChatKeyUnavailable) as caught:
+        service.acquire()
+
+    assert caught.value.code == "wechat_not_running"
+    assert "登录界面" in caught.value.public_message
+    assert "打开并登录" not in caught.value.public_message
 
 
 def test_streaming_timeout_is_distinct_from_node_failure(tmp_path: Path):
@@ -953,6 +1014,7 @@ def test_streaming_timeout_is_distinct_from_node_failure(tmp_path: Path):
     assert caught.value.code == "wechat_key_timeout"
     message = caught.value.public_message
     assert "Node.js" not in message
+    assert "提示可以登录后" in message
     assert "\u8d85\u65f6" in message or "\u65f6\u9650" in message
     assert proc.killed
 

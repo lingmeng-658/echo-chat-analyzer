@@ -2979,8 +2979,8 @@ def test_wechat_workspace_full_chain_connect_sessions_analyze(
     # one-click connect: detect root -> save environment + key -> connected
     window.wechat_workspace._wechat_connect_button.click()
     assert facade.detect_wechat_data_roots_calls
-    executor.on_progress("等待微信登录")
-    assert "等待微信登录" in window.wechat_workspace._status_label.text()
+    executor.on_progress(module.WeChatConnectionProgress.READY_FOR_LOGIN)
+    assert "现在请登录微信" in window.wechat_workspace._status_label.text()
     executor.operation(lambda _message: None)
     assert facade.setup_wechat_environment_calls
     assert facade.acquire_wechat_db_key_calls
@@ -3776,6 +3776,134 @@ def _wechat_workspace(qt_app, facade):
     from qq_chat_analyzer.gui.wechat_workspace import WeChatWorkspace
 
     return WeChatWorkspace(facade, executor=_inline_executor())
+
+
+def test_wechat_login_prompt_waits_for_structured_ready(qt_app):
+    module = _wechat_guide_module()
+    executor = _DeferredExecutor()
+    workspace = module.WeChatWorkspace(StubFacade(), executor=executor)
+    workspace._start_wechat_connect(_facade_module().WeChatEnvironmentConfig())
+
+    assert "暂时不要登录" in workspace._status_label.text()
+    for text in ("等待微信登录", "现在请登录微信", "hook_success=true"):
+        executor.on_progress(text)
+        assert "暂时不要登录" in workspace._status_label.text()
+        assert "现在请登录微信" not in workspace._wechat_guide_note_label.text()
+
+    progress = _facade_module().WeChatConnectionProgress
+    executor.on_progress(progress.READY_FOR_LOGIN)
+    assert "现在请登录微信" in workspace._status_label.text()
+    assert "现在请登录微信" in workspace._wechat_guide_note_label.text()
+
+
+def test_wechat_login_words_are_not_readiness_signals(qt_app):
+    workspace = _wechat_workspace(qt_app, StubFacade())
+    workspace._status_label.setText("正在准备连接，请暂时不要登录。")
+    before = workspace._status_label.text()
+
+    workspace._handle_wechat_connect_progress("正在准备微信登录监听")
+
+    assert workspace._status_label.text() == before
+
+
+def test_wechat_credential_received_does_not_return_to_login(qt_app):
+    module = _wechat_guide_module()
+    progress = _facade_module().WeChatConnectionProgress
+    executor = _DeferredExecutor()
+    workspace = module.WeChatWorkspace(StubFacade(), executor=executor)
+    config = _facade_module().WeChatEnvironmentConfig()
+    workspace._start_wechat_connect(config)
+    executor.on_progress(progress.READY_FOR_LOGIN)
+    executor.on_progress(progress.CREDENTIAL_RECEIVED)
+    received_status = workspace._status_label.text()
+    assert "已获取" in received_status
+    assert workspace._wechat_guide_note_label.isHidden()
+
+    for event in (progress.READY_FOR_LOGIN, progress.PREPARING, "等待微信登录"):
+        executor.on_progress(event)
+        assert workspace._status_label.text() == received_status
+        assert workspace._wechat_guide_note_label.isHidden()
+
+    # A subsequent explicit connection still starts normally; no attempt IDs.
+    workspace._start_wechat_connect(config)
+    assert "暂时不要登录" in workspace._status_label.text()
+    executor.on_progress(progress.READY_FOR_LOGIN)
+    assert "现在请登录微信" in workspace._status_label.text()
+
+
+def test_wechat_failed_listener_removes_login_prompt(qt_app):
+    workspace = _wechat_workspace(qt_app, StubFacade())
+    progress = _facade_module().WeChatConnectionProgress
+    workspace._handle_wechat_connect_progress(progress.READY_FOR_LOGIN)
+    assert "现在请登录微信" in workspace._wechat_guide_note_label.text()
+
+    workspace._handle_wechat_connect_error("wechat_key_timeout", "等待超时，请重试。")
+
+    assert workspace._wechat_guide_note_label.isHidden()
+    assert workspace._wechat_guide_key_label.isHidden()
+    assert "现在请登录微信" not in workspace._wechat_guide_note_label.text()
+    assert workspace._wechat_connect_button.isEnabled()
+
+
+def test_wechat_structured_progress_crosses_real_facade_and_worker(qt_app, tmp_path):
+    import io
+    from types import SimpleNamespace
+    from qq_chat_analyzer.application.wechat_key_service import WeChatKeyService
+    from qq_chat_analyzer.application.wechat_setup_service import WeChatSetupService
+    from qq_chat_analyzer.application.wechat_environment_config import (
+        WeChatEnvironmentConfigLoader, WeChatEnvironmentConfigWriter,
+    )
+    from qq_chat_analyzer.gui import workers
+
+    dll = tmp_path / "fictional.dll"
+    helper = tmp_path / "fictional.cjs"
+    dll.write_bytes(b"fake")
+    helper.write_text("", encoding="utf-8")
+    process = SimpleNamespace(
+        stdout=io.StringIO("ab12" * 16 + "\n"),
+        stderr=io.StringIO(
+            "exports loaded: InitializeHook, PollKeyData, CleanupHook\n"
+            "2026-08-09T00:00:00.000Z hook_success=true\n"
+        ),
+        returncode=0,
+        wait=lambda **_kwargs: 0,
+    )
+    key_service = WeChatKeyService(
+        dll_path=dll, helper_path=helper,
+        process_launcher=lambda *_args, **_kwargs: process,
+        node_finder=lambda _name: "fictional-node",
+    )
+    target = tmp_path / "wechat.json"
+    setup = WeChatSetupService(
+        config_loader=WeChatEnvironmentConfigLoader(target),
+        config_writer=WeChatEnvironmentConfigWriter(target),
+        key_service=key_service,
+    )
+    facade = _facade_module().ChatAnalyzerFacade(wechat_setup_service=setup)
+    workspace = _wechat_workspace(qt_app, facade)
+    seen, errors = [], []
+    ui_thread = threading.get_ident()
+
+    def on_progress(event):
+        workspace._handle_wechat_connect_progress(event)
+        seen.append((event, workspace._status_label.text(), threading.get_ident()))
+
+    workers.submit(
+        lambda report: facade.acquire_wechat_db_key(progress=report),
+        on_success=lambda _result: None,
+        on_error=lambda code, message: errors.append((code, message)),
+        on_progress=on_progress,
+    )
+    _settle_workers()
+
+    assert errors == []
+    assert [getattr(event, "name", None) for event, _text, _thread in seen] == [
+        "PREPARING", "READY_FOR_LOGIN", "CREDENTIAL_RECEIVED",
+    ]
+    assert all(thread == ui_thread for _event, _text, thread in seen)
+    assert "暂时不要登录" in seen[0][1]
+    assert "现在请登录微信" in seen[1][1]
+    assert "已获取" in seen[2][1]
 
 
 def test_wechat_workspace_guide_shows_status_confirmation(qt_app) -> None:

@@ -38,7 +38,7 @@ _WORKER_LOGGER = logging.getLogger("qq_chat_analyzer.desktop.worker")
 
 
 
-def _invoke(operation: Callable[..., Any], report: Callable[[str], None] | None) -> Any:
+def _invoke(operation: Callable[..., Any], report: Callable[[Any], None] | None) -> Any:
     """Call ``operation``, passing a progress reporter only when one is wanted.
 
     Existing callers pass zero-argument operations, so the reporter is only
@@ -55,7 +55,7 @@ class WorkerSignals(QObject):
     succeeded = Signal(object)
     failed = Signal(str, str)
     finished = Signal()
-    progress = Signal(str)
+    progress = Signal(object)
 
 
 class _CallbackRelay(QObject):
@@ -72,7 +72,7 @@ class _CallbackRelay(QObject):
         on_success: Callable[[Any], None],
         on_error: Callable[[str, str], None],
         on_finished: Callable[[], None] | None,
-        on_progress: Callable[[str], None] | None,
+        on_progress: Callable[[Any], None] | None,
     ) -> None:
         super().__init__()
         self._on_success = on_success
@@ -88,8 +88,8 @@ class _CallbackRelay(QObject):
     def _failed(self, code: str, message: str) -> None:
         self._on_error(code, message)
 
-    @Slot(str)
-    def _progress(self, message: str) -> None:
+    @Slot(object)
+    def _progress(self, message: Any) -> None:
         _WORKER_LOGGER.info("[worker] forward progress: %s", message)
         if self._on_progress is not None:
             self._on_progress(message)
@@ -149,7 +149,7 @@ class FacadeWorker(QRunnable):
     def run(self) -> None:
         _WORKER_LOGGER.info("[worker] facade operation started")
         try:
-            def _report_progress(message: str) -> None:
+            def _report_progress(message: Any) -> None:
                 if self._cancelled.is_set():
                     raise _OperationCancelled
                 _WORKER_LOGGER.info("[wechat worker] emit progress: %s", message)
@@ -212,15 +212,15 @@ def submit(
     on_success: Callable[[Any], None],
     on_error: Callable[[str, str], None],
     on_finished: Callable[[], None] | None = None,
-    on_progress: Callable[[str], None] | None = None,
+    on_progress: Callable[[Any], None] | None = None,
     pool: QThreadPool | None = None,
 ) -> FacadeWorker:
     """Queue ``operation`` and wire its outcome to the given callbacks.
 
     When ``on_progress`` is given, ``operation`` is called with a reporter
     callable it can use to publish intermediate status. The reporter crosses
-    back to the UI thread through a Qt signal, so callers never touch widgets
-    from the worker thread.
+    back to the UI thread through an object signal (strings remain supported),
+    so callers never touch widgets from the worker thread.
     """
     relay = _CallbackRelay(on_success, on_error, on_finished, on_progress)
     worker = FacadeWorker(
@@ -254,7 +254,7 @@ def run_inline(
     on_success: Callable[[Any], None],
     on_error: Callable[[str, str], None],
     on_finished: Callable[[], None] | None = None,
-    on_progress: Callable[[str], None] | None = None,
+    on_progress: Callable[[Any], None] | None = None,
 ) -> None:
     """Run ``operation`` on the calling thread.
 
