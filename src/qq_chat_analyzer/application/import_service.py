@@ -193,6 +193,8 @@ def _import_file(
         return _import_wechat_file(input_file)
     if platform_hint == "qq":
         return _import_qq_file(input_file)
+    if is_qq_db_export(input_file):
+        return _import_qq_db_file(input_file)
     if is_wechat_db_export(input_file):
         return _import_wechat_db_file(input_file)
     if is_wechat_export(input_file):

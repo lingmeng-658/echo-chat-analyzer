@@ -50,7 +50,13 @@ def test_qq_db_payload_projects_one_fictional_group_text_record(tmp_path) -> Non
         "format_version": 0,
         "source": "qq",
         "source_type": "qq-db-json",
-        "query": {"requested_session": "fictional-room-77", "time_range": None},
+        "query": {
+            "requested_session": "fictional-room-77",
+            "session_type": "group",
+            "internal_key": "fictional-key-77",
+            "session_object": "fictional-room-77",
+            "time_range": None,
+        },
         "records": [
             {
                 "record_id": "fictional-row-001",

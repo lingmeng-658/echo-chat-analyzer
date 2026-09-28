@@ -84,9 +84,11 @@ def _qq_provider_factory() -> Any:
 
 
 def _optional_qq_service(provider_factory: Any) -> Any:
-    from ..application.qq_export_import_service import QQExportImportService
+    from ..application.qq_direct_database_import_service import (
+        QQDirectDatabaseImportService,
+    )
 
-    return QQExportImportService(provider_factory=provider_factory)
+    return QQDirectDatabaseImportService()
 
 
 def _optional_qq_connection_service(provider_factory: Any) -> Any:

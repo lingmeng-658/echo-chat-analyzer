@@ -274,6 +274,7 @@ class _SessionExport:
     """Internal export path for one session."""
 
     payload_path: Path
+    session: SessionInfo | None = None
 
 
 class ChatAnalyzerFacade:
@@ -688,6 +689,21 @@ class ChatAnalyzerFacade:
         _report_progress(progress, "正在准备分析...")
         _report_progress(progress, "正在读取聊天记录...")
         service = self._require_service(chat_source)
+        if chat_source is ChatSource.QQ and callable(
+            getattr(service, "acquired_session", None)
+        ):
+            # Direct DB: one acquisition owns both the payload and the session
+            # descriptor. Listing sessions here would acquire a second
+            # generation, so the descriptor is resolved from the acquisition.
+            return self._analyze_direct_db_qq_session(
+                service,
+                session_id,
+                resolved_config,
+                resolved_scope,
+                speaker_names=speaker_names,
+                viewer_speaker_key=viewer_speaker_key,
+                progress=progress,
+            )
         if chat_source in (ChatSource.QQ, ChatSource.WECHAT):
             raw_session = next(
                 (
@@ -741,6 +757,59 @@ class ChatAnalyzerFacade:
                     source=chat_source,
                     session=session,
                     scope=resolved_scope,
+                    speaker_names=speaker_names,
+                    conversation_names=conversation_names,
+                    conversation_kind=conversation_kind,
+                    viewer_speaker_key=viewer_speaker_key,
+                    progress=progress,
+                )
+
+    def _analyze_direct_db_qq_session(
+        self,
+        service: Any,
+        session_id: str,
+        config: AnalysisConfig,
+        scope: AnalysisScope,
+        *,
+        speaker_names: Mapping[str, str] | None = None,
+        viewer_speaker_key: str | None = None,
+        progress: Callable[[str], None] | None = None,
+    ) -> AnalysisOutcome:
+        """Run one Direct DB QQ analysis from a single generation acquisition.
+
+        The session descriptor (display name, type) comes from the same
+        acquisition that materialized the payload, so this path never calls
+        the public ``list_sessions`` before analyzing.
+        """
+        with TemporaryDirectory(prefix="chat-analyzer-export-") as scratch:
+            scratch_directory = Path(scratch)
+            with self._session_export_context(
+                ChatSource.QQ,
+                service,
+                session_id,
+                config,
+                scratch_directory,
+                raw_session=None,
+                scope=scope,
+                progress=progress,
+            ) as session_export:
+                session = session_export.session or SessionInfo(
+                    source=ChatSource.QQ,
+                    session_id=session_id,
+                    display_name=session_id,
+                )
+                conversation_names = {session_id: session.display_name}
+                conversation_kind = (
+                    session.session_type
+                    if session.session_type in ("private", "group")
+                    else "unknown"
+                )
+                return self._analyze_path(
+                    session_export.payload_path,
+                    config,
+                    source=ChatSource.QQ,
+                    session=session,
+                    scope=scope,
                     speaker_names=speaker_names,
                     conversation_names=conversation_names,
                     conversation_kind=conversation_kind,
@@ -948,8 +1017,44 @@ class ChatAnalyzerFacade:
             previous.cleanup()
 
     def shutdown(self) -> None:
-        """Release transient artifacts retained by this facade."""
+        """Release transient artifacts and stop LCA-owned QQ runtime processes.
+
+        Order is deliberate: the Direct DB plaintext snapshot is cleaned up
+        (and any orphan generation recovered) before NapCat / the QQ runtime
+        is stopped, so an abrupt process stop can never strand plaintext on
+        disk.  A Direct DB cleanup failure never skips QQ runtime termination.
+        """
+        self._shutdown_qq_direct_db_service()
         self._replace_retained_output(None)
+        self.shutdown_qq_runtime()
+
+    def _shutdown_qq_direct_db_service(self) -> None:
+        """Ask the Direct DB service to recover orphan plaintext, best-effort."""
+        service = self._qq_service_if_present()
+        shutdown = getattr(service, "shutdown", None)
+        if callable(shutdown):
+            try:
+                shutdown()
+            except Exception:
+                _LOGGER.warning(
+                    "QQ Direct DB plaintext cleanup did not complete during "
+                    "shutdown."
+                )
+
+    def _qq_service_if_present(self) -> Any:
+        """Return the QQ service without building it for the first time.
+
+        A never-built QQ service has never acquired a generation, so there is
+        nothing to clean up; forcing its construction here would be a side
+        effect the shutdown path must not have.
+        """
+        service = self._services.get(ChatSource.QQ)
+        if service is not None:
+            return service
+        bundle = self._built_sources.get(ChatSource.QQ)
+        if bundle is not None:
+            return getattr(bundle, "service", None)
+        return None
 
     def _build_view(self, result: AnalysisResultDTO) -> DashboardView:
         """Hand the reports to the presentation layer without touching them."""
@@ -1008,6 +1113,29 @@ class ChatAnalyzerFacade:
         shortened.
         """
         if source is ChatSource.QQ:
+            direct_acquire = getattr(service, "acquired_session", None)
+            if callable(direct_acquire):
+                start_seconds, end_seconds = _scope_export_window_seconds(scope)
+                with ExitStack() as ownership:
+                    with _translated_errors(source):
+                        acquisition = ownership.enter_context(
+                            direct_acquire(
+                                session_id,
+                                start_time=start_seconds,
+                                end_time=end_seconds,
+                            )
+                        )
+                    raw_session = getattr(acquisition, "session", None)
+                    yield _SessionExport(
+                        payload_path=Path(acquisition.payload_path),
+                        session=(
+                            _to_session_info(source, raw_session)
+                            if raw_session is not None
+                            else None
+                        ),
+                    )
+                return
+
             session_type = _first_string(raw_session, "session_type")
             start_millis, end_millis = _scope_export_window(scope)
             request = QQExportImportRequest(

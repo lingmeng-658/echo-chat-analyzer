@@ -1,0 +1,292 @@
+"""RED-GREEN coverage for the Python snapshot runtime client (Phase 2A).
+
+These tests drive ``QQDirectSnapshotRuntimeClient`` against an injected HTTP
+transport, so no real NapCat bridge or QQ data is touched.  Every identity,
+generation id and response body is fictional.
+
+The client is deliberately narrow: it may only invoke ``EchoSnapshotApi``
+``acquire`` / ``cleanup`` / ``recover`` over a localhost ``/rpc`` bridge, and it
+never accepts an absolute database path from the runtime.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+import qq_chat_analyzer.providers.qq_direct_snapshot_runtime as snapshot_runtime
+
+from qq_chat_analyzer.providers.qq_direct_snapshot_runtime import (
+    QQDirectSnapshotRuntimeClient,
+    QQSnapshotCleanupFailed,
+    QQSnapshotInvalidGenerationId,
+    QQSnapshotRuntimeFailure,
+    QQSnapshotRuntimeInvalidResponse,
+    QQSnapshotRuntimeNotReady,
+    QQSnapshotRuntimeUnavailable,
+    _urllib_transport,
+    validate_generation_id,
+)
+
+
+def _envelope(result: object, *, ok: bool = True) -> str:
+    return json.dumps({"id": 1, "ok": ok, "result": result})
+
+
+def _rpc_error(message: str) -> str:
+    return json.dumps({"id": 1, "ok": False, "error": message})
+
+
+def _acquire_result(generation_id: str, *, ok: bool = True, status: str = "ready") -> dict:
+    if not ok:
+        return {"ok": False, "code": "decrypt_failed", "status": "failed"}
+    return {"ok": True, "generation_id": generation_id, "status": status}
+
+
+class _FakeTransport:
+    """Captures one RPC call and returns a canned response."""
+
+    def __init__(self, status: int = 200, body: str = "", error: Exception | None = None) -> None:
+        self.status = status
+        self.body = body
+        self.error = error
+        self.calls: list[tuple[str, bytes, int]] = []
+
+    def __call__(self, url: str, body: bytes, timeout: int) -> tuple[int, str]:
+        self.calls.append((url, body, timeout))
+        if self.error is not None:
+            raise self.error
+        return self.status, self.body
+
+
+def _client(transport, *, base_url: str = "http://127.0.0.1:40654", root: Path | None = None) -> QQDirectSnapshotRuntimeClient:
+    return QQDirectSnapshotRuntimeClient(
+        base_url=base_url,
+        snapshot_root=root or Path("."),
+        transport=transport,
+    )
+
+
+# ------------------------------------------------------------------ acquire
+
+
+def test_acquire_success_returns_validated_generation_id(tmp_path: Path) -> None:
+    transport = _FakeTransport(body=_envelope(_acquire_result("gen-1234")))
+    client = _client(transport, root=tmp_path)
+
+    assert client.acquire() == "gen-1234"
+    assert transport.calls[0][0] == "http://127.0.0.1:40654/rpc"
+    request = json.loads(transport.calls[0][1].decode("utf-8"))
+    assert request == {"method": "EchoSnapshotApi.acquire", "params": []}
+
+
+def test_acquire_runtime_failure_maps_to_stable_error(tmp_path: Path) -> None:
+    transport = _FakeTransport(body=_envelope(_acquire_result("", ok=False)))
+    client = _client(transport, root=tmp_path)
+
+    with pytest.raises(QQSnapshotRuntimeFailure):
+        client.acquire()
+
+
+def test_acquire_rpc_envelope_failure_maps_to_stable_error(tmp_path: Path) -> None:
+    transport = _FakeTransport(body=_rpc_error("fictional boom"))
+    client = _client(transport, root=tmp_path)
+
+    with pytest.raises(QQSnapshotRuntimeFailure):
+        client.acquire()
+
+
+def test_acquire_malformed_response_maps_to_invalid_response(tmp_path: Path) -> None:
+    transport = _FakeTransport(body="not json at all")
+    client = _client(transport, root=tmp_path)
+
+    with pytest.raises(QQSnapshotRuntimeInvalidResponse):
+        client.acquire()
+
+
+def test_acquire_http_error_maps_to_invalid_response(tmp_path: Path) -> None:
+    transport = _FakeTransport(status=404, body="")
+    client = _client(transport, root=tmp_path)
+
+    with pytest.raises(QQSnapshotRuntimeInvalidResponse):
+        client.acquire()
+
+
+def test_acquire_connection_refused_maps_to_unavailable(tmp_path: Path) -> None:
+    transport = _FakeTransport(error=ConnectionRefusedError("refused"))
+    client = _client(transport, root=tmp_path)
+
+    with pytest.raises(QQSnapshotRuntimeUnavailable):
+        client.acquire()
+
+
+def test_acquire_timeout_maps_to_unavailable(tmp_path: Path) -> None:
+    transport = _FakeTransport(error=TimeoutError("timed out"))
+    client = _client(transport, root=tmp_path)
+
+    with pytest.raises(QQSnapshotRuntimeUnavailable):
+        client.acquire()
+
+
+def test_acquire_rejects_non_ready_status(tmp_path: Path) -> None:
+    transport = _FakeTransport(body=_envelope(_acquire_result("gen-1", status="building")))
+    client = _client(transport, root=tmp_path)
+
+    with pytest.raises(QQSnapshotRuntimeFailure):
+        client.acquire()
+
+
+# ------------------------------------------------------- generation id safety
+
+
+@pytest.mark.parametrize(
+    "generation_id",
+    ["", "   ", ".", "..", "../evil", "a/b", "a\\b", "gen\x00sneaky", 123, None, True],
+)
+def test_generation_id_traversal_or_invalid_is_rejected(generation_id) -> None:
+    with pytest.raises(QQSnapshotInvalidGenerationId):
+        validate_generation_id(generation_id)
+
+
+def test_generation_id_is_normalized(tmp_path: Path) -> None:
+    assert validate_generation_id("  gen-1  ") == "gen-1"
+
+
+def test_generation_directory_rejects_traversal(tmp_path: Path) -> None:
+    client = _client(_FakeTransport(), root=tmp_path)
+
+    with pytest.raises(QQSnapshotInvalidGenerationId):
+        client.generation_directory("../evil")
+
+
+def test_generation_directory_is_under_known_root(tmp_path: Path) -> None:
+    client = _client(_FakeTransport(), root=tmp_path)
+
+    assert client.generation_directory("gen-7") == tmp_path / "generations" / "gen-7"
+
+
+def test_acquire_rejects_traversal_generation_id_from_runtime(tmp_path: Path) -> None:
+    transport = _FakeTransport(body=_envelope(_acquire_result("../evil")))
+    client = _client(transport, root=tmp_path)
+
+    with pytest.raises(QQSnapshotInvalidGenerationId):
+        client.acquire()
+
+
+# ------------------------------------------------------------------ cleanup
+
+
+def test_cleanup_invokes_rpc_with_generation_id(tmp_path: Path) -> None:
+    transport = _FakeTransport(body=_envelope({"ok": True, "status": "cleaned"}))
+    client = _client(transport, root=tmp_path)
+
+    assert client.cleanup("gen-1") is None
+    request = json.loads(transport.calls[0][1].decode("utf-8"))
+    assert request == {"method": "EchoSnapshotApi.cleanup", "params": ["gen-1"]}
+
+
+def test_cleanup_generation_not_found_is_idempotent(tmp_path: Path) -> None:
+    transport = _FakeTransport(
+        body=_envelope({"ok": False, "code": "generation_not_found", "status": "failed"})
+    )
+    client = _client(transport, root=tmp_path)
+
+    assert client.cleanup("gen-1") is None
+
+
+def test_cleanup_failure_maps_to_stable_error(tmp_path: Path) -> None:
+    transport = _FakeTransport(
+        body=_envelope({"ok": False, "code": "cleanup_failed", "status": "failed"})
+    )
+    client = _client(transport, root=tmp_path)
+
+    with pytest.raises(QQSnapshotCleanupFailed):
+        client.cleanup("gen-1")
+
+
+def test_cleanup_rejects_traversal_before_rpc(tmp_path: Path) -> None:
+    transport = _FakeTransport(body=_envelope({"ok": True, "status": "cleaned"}))
+    client = _client(transport, root=tmp_path)
+
+    with pytest.raises(QQSnapshotInvalidGenerationId):
+        client.cleanup("../evil")
+    assert transport.calls == []
+
+
+# ------------------------------------------------------------------ recover
+
+
+def test_recover_invokes_rpc(tmp_path: Path) -> None:
+    transport = _FakeTransport(body=_envelope({"ok": True, "status": "recovered"}))
+    client = _client(transport, root=tmp_path)
+
+    assert client.recover() is None
+    request = json.loads(transport.calls[0][1].decode("utf-8"))
+    assert request == {"method": "EchoSnapshotApi.recover", "params": []}
+
+
+def test_recover_waits_until_echo_snapshot_api_is_registered(tmp_path: Path) -> None:
+    responses = iter(
+        (
+            _rpc_error("NapCatCore method not found: EchoSnapshotApi.recover"),
+            _envelope({"ok": True, "status": "recovered"}),
+        )
+    )
+
+    def transport(url: str, body: bytes, timeout: int) -> tuple[int, str]:
+        return 200, next(responses)
+
+    client = _client(transport, root=tmp_path)
+
+    assert client.recover() is None
+
+
+def test_recover_api_readiness_wait_is_bounded(monkeypatch, tmp_path: Path) -> None:
+    transport = _FakeTransport(
+        body=_rpc_error("NapCatCore method not found: EchoSnapshotApi.recover")
+    )
+    monkeypatch.setattr(snapshot_runtime, "RECOVER_READINESS_ATTEMPTS", 3)
+    monkeypatch.setattr(snapshot_runtime.time, "sleep", lambda _seconds: None)
+    client = _client(transport, root=tmp_path)
+
+    with pytest.raises(QQSnapshotRuntimeNotReady):
+        client.recover()
+
+    assert len(transport.calls) == 3
+
+
+def test_recover_does_not_retry_other_rpc_failures(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    transport = _FakeTransport(body=_rpc_error("fictional runtime failure"))
+    monkeypatch.setattr(snapshot_runtime.time, "sleep", lambda _seconds: None)
+    client = _client(transport, root=tmp_path)
+
+    with pytest.raises(QQSnapshotRuntimeFailure):
+        client.recover()
+
+    assert len(transport.calls) == 1
+
+
+# ------------------------------------------------------------ privacy guards
+
+
+def test_client_errors_never_embed_runtime_or_identity_text(tmp_path: Path) -> None:
+    secret = "10086"
+    transport = _FakeTransport(body=_rpc_error(f"boom {secret} /abs/path passphrase"))
+    client = _client(transport, root=tmp_path)
+
+    with pytest.raises(QQSnapshotRuntimeFailure) as captured:
+        client.acquire()
+
+    assert secret not in str(captured.value)
+    assert secret not in captured.value.public_message
+    assert "/abs/path" not in str(captured.value)
+    assert "passphrase" not in str(captured.value)
+
+
+def test_urllib_transport_rejects_non_localhost() -> None:
+    with pytest.raises(QQSnapshotRuntimeUnavailable):
+        _urllib_transport("http://evil.example/rpc", b"{}", 1)

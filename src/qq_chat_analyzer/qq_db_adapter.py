@@ -15,6 +15,7 @@ from typing import Any
 
 from .legacy_projection import project_legacy_messages
 from .message import ChatMessage
+from .qq_db_identity import QQ_DB_SELF_NAMESPACE, canonical_qq_uin
 from .rich_message import RichMessage, SenderIdentity, TextContent
 
 
@@ -56,8 +57,12 @@ def parse_qq_db_rich_messages(
     parsed_messages: list[RichMessage] = []
     skipped_record = False
     records = payload["records"]
+    session_context = _session_context(payload)
+    if session_context is None:
+        return [], (WARNING_QQ_DB_RECORD_SKIPPED,) if records else ()
+    self_uin = _self_uin(payload)
     for record in records:
-        parsed_message = _parse_group_text_record(record)
+        parsed_message = _parse_text_record(record, session_context, self_uin)
         if parsed_message is None:
             skipped_record = True
         else:
@@ -78,7 +83,11 @@ def _is_qq_db_payload(payload: Mapping[str, Any] | None) -> bool:
     )
 
 
-def _parse_group_text_record(record: Any) -> RichMessage | None:
+def _parse_text_record(
+    record: Any,
+    session_context: tuple[str, str],
+    self_uin: Any,
+) -> RichMessage | None:
     if not isinstance(record, Mapping):
         return None
     fields = record.get("fields")
@@ -87,12 +96,10 @@ def _parse_group_text_record(record: Any) -> RichMessage | None:
 
     # These field numbers only describe the feasibility-supported Adapter v0
     # slice; they are not stable across QQ versions.
-    conversation_id = _stringify_identifier(fields.get("40030"))
     sender_id = _stringify_identifier(fields.get("40033"))
     timestamp = fields.get("40050")
     if (
-        conversation_id is None
-        or sender_id is None
+        sender_id is None
         or not isinstance(timestamp, (int, float, str))
         or isinstance(timestamp, bool)
     ):
@@ -102,17 +109,63 @@ def _parse_group_text_record(record: Any) -> RichMessage | None:
     if text is None:
         return None
 
+    conversation_type, conversation_id = session_context
     return RichMessage(
         message_id=_stringify_identifier(record.get("record_id")),
         source="qq",
         source_type=QQ_DB_JSON_FORMAT,
         conversation_id=conversation_id,
-        conversation_type="group",
+        conversation_type=conversation_type,
         sender=SenderIdentity(identity_id=sender_id, display_name=sender_id),
         timestamp=timestamp,
         message_type="text",
         contents=(TextContent(text=text),),
+        is_self=_resolve_is_self(fields.get("40033"), self_uin),
     )
+
+
+def _self_uin(payload: Mapping[str, Any]) -> Any:
+    """Return the payload's bound self value, or ``None`` when absent.
+
+    The namespace must match the Direct DB ``qq_uin`` namespace exactly; a
+    mismatched or missing context is treated as unknown rather than guessed.
+    """
+    self_context = payload.get("self")
+    if not isinstance(self_context, Mapping):
+        return None
+    if self_context.get("namespace") != QQ_DB_SELF_NAMESPACE:
+        return None
+    return self_context.get("value")
+
+
+def _resolve_is_self(sender_value: Any, self_uin: Any) -> bool | None:
+    """Compare canonical sender (40033) against canonical self identity.
+
+    ``None`` means the source cannot reliably judge the sender; it is never
+    collapsed to peer (``False``).  A zero / NULL / invalid sender or an
+    unreliable self identity both yield ``None``.
+    """
+    canonical_sender = canonical_qq_uin(sender_value)
+    canonical_self = canonical_qq_uin(self_uin)
+    if canonical_sender is None or canonical_self is None:
+        return None
+    return canonical_sender == canonical_self
+
+
+def _session_context(payload: Mapping[str, Any]) -> tuple[str, str] | None:
+    query = payload.get("query")
+    if not isinstance(query, Mapping):
+        return None
+    session_type = query.get("session_type")
+    if session_type not in {"group", "private"}:
+        return None
+    session_object = _nonzero_identifier(query.get("session_object"))
+    if session_object is not None:
+        return session_type, session_object
+    internal_key = _stringify_identifier(query.get("internal_key"))
+    if internal_key is None:
+        return None
+    return session_type, f"{session_type}:{internal_key}"
 
 
 def _extract_text(record: Mapping[str, Any]) -> str | None:
@@ -198,6 +251,11 @@ def _read_varint(data: bytes, offset: int) -> tuple[int, int] | None:
         if not byte & 0x80:
             return value, offset
     return None
+
+
+def _nonzero_identifier(value: Any) -> str | None:
+    identifier = _stringify_identifier(value)
+    return identifier if identifier not in {None, "0"} else None
 
 
 def _stringify_identifier(value: Any) -> str | None:

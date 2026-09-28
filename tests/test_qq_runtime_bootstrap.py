@@ -72,6 +72,45 @@ LAUNCHER_REPLACEMENT = (
     ':end_script\n\nif "%ECHO_MODE%"=="1" exit /b\npause\nexit /b\n'
 )
 
+# The Direct DB helper seam: the upstream QCE plugin entry is patched once (the
+# anchor must occur exactly once in the upstream file), and Echo's own snapshot
+# helper is injected from a tracked template. Neither value is an upstream
+# archive member, so neither may appear under ``requiredFiles``.
+INDEX_PATH = "plugins/napcat-plugin-qce/index.mjs"
+INDEX_ANCHOR = (
+    "    apiLauncher = new QQChatExporterApiLauncher(runtimeCore);\r\n"
+    "    await apiLauncher.startApiServer();\r\n"
+    "  } catch (error) {\r\n"
+)
+INDEX_ADDED_LINE = (
+    "const { registerEchoSnapshotApi } = "
+    "await import('./direct_db_research/snapshot.mjs');"
+)
+INDEX_REPLACEMENT = (
+    "    apiLauncher = new QQChatExporterApiLauncher(runtimeCore);\r\n"
+    "    await apiLauncher.startApiServer();\r\n"
+    "\r\n"
+    "    // Echo-injected Direct DB snapshot seam. Registers an explicit\r\n"
+    "    // acquire/cleanup/recover API on runtimeCore.apis and never decrypts at\r\n"
+    "    // startup; the local-only helper owns a single-flight decrypt + atomic publish.\r\n"
+    "    const { registerEchoSnapshotApi } = await import('./direct_db_research/snapshot.mjs');\r\n"
+    "    registerEchoSnapshotApi(runtimeCore);\r\n"
+    "  } catch (error) {\r\n"
+)
+
+SNAPSHOT_TARGET_PATH = "plugins/napcat-plugin-qce/direct_db_research/snapshot.mjs"
+SNAPSHOT_TEMPLATE_PATH = "qq_direct_db_snapshot/snapshot.mjs"
+SNAPSHOT_TEMPLATE = (
+    b"// fictional Direct DB snapshot helper for the Stage 3B test suite\n"
+    b"export async function createSnapshotFromNapCatCore(core) {}\n"
+)
+
+# Upstream members the bootstrap patches, pinned via launcherPatch/indexPatch
+# instead of requiredFiles; and members the bootstrap injects from a tracked
+# Echo template, which are never upstream archive members at all.
+PATCHED_UPSTREAM_PATHS = {LAUNCHER_PATH, INDEX_PATH}
+ECHO_INJECTED_PATHS = {SNAPSHOT_TARGET_PATH}
+
 OFFICIAL_SOURCE_HOST = "github.com"
 OFFICIAL_REDIRECT_HOSTS = {"github.com", "objects.githubusercontent.com"}
 
@@ -209,6 +248,18 @@ def _fictional_launcher(*, tail: bytes = LAUNCHER_ANCHOR.encode()) -> bytes:
     )
 
 
+def _fictional_index(*, tail: bytes = INDEX_ANCHOR.encode()) -> bytes:
+    """Miniature stand-in for the upstream QCE plugin ``index.mjs``."""
+    return (
+        b"// fictional QCE plugin entry for the Stage 3B test suite\r\n"
+        b"export async function plugin_init() {\r\n"
+        + tail
+        + b"    console.error('fictional catch');\r\n"
+        b"  }\r\n"
+        b"}\r\n"
+    )
+
+
 def _fictional_archive_members(
     *,
     drop: tuple[str, ...] = (),
@@ -218,8 +269,10 @@ def _fictional_archive_members(
     members = {
         relative: f"fictional runtime payload: {relative}\n".encode()
         for relative in _manifest_qq_file_paths()
+        if relative not in ECHO_INJECTED_PATHS
     }
     members[LAUNCHER_PATH] = _fictional_launcher()
+    members[INDEX_PATH] = _fictional_index()
     for relative in ATTRIBUTION_MEMBERS + MACHINE_STATE_MEMBERS:
         members[relative] = f"fictional upstream file: {relative}\n".encode()
     members["config/napcat.json"] = b'{"fictional": "upstream config"}\n'
@@ -255,6 +308,9 @@ def _pin_payload(
     archive_size_bytes: int,
     upstream_launcher_sha256: str,
     patched_launcher_sha256: str,
+    upstream_index_sha256: str,
+    patched_index_sha256: str,
+    snapshot_template_sha256: str,
     required_files: dict[str, str],
     archive_url: str = QCE_ARCHIVE_URL,
     release_url: str = QCE_RELEASE_URL,
@@ -283,6 +339,19 @@ def _pin_payload(
             "replacement": LAUNCHER_REPLACEMENT,
             "addedLine": LAUNCHER_ADDED_LINE,
         },
+        "indexPatch": {
+            "path": INDEX_PATH,
+            "upstreamSha256": upstream_index_sha256,
+            "patchedSha256": patched_index_sha256,
+            "anchor": INDEX_ANCHOR,
+            "replacement": INDEX_REPLACEMENT,
+            "addedLine": INDEX_ADDED_LINE,
+        },
+        "directDbSnapshot": {
+            "templatePath": SNAPSHOT_TEMPLATE_PATH,
+            "templateSha256": snapshot_template_sha256,
+            "targetPath": SNAPSHOT_TARGET_PATH,
+        },
         "requiredFiles": required_files,
         "excludedPaths": list(excluded_paths),
     }
@@ -292,7 +361,7 @@ def _required_file_pins(members: dict[str, bytes]) -> dict[str, str]:
     return {
         relative: _sha256(members[relative])
         for relative in _manifest_qq_file_paths()
-        if relative != LAUNCHER_PATH and relative in members
+        if relative not in PATCHED_UPSTREAM_PATHS and relative in members
     }
 
 
@@ -308,6 +377,9 @@ def _stage_workspace(
     archive_size_bytes: int | None = None,
     upstream_launcher_sha256: str | None = None,
     patched_launcher_sha256: str | None = None,
+    upstream_index_sha256: str | None = None,
+    patched_index_sha256: str | None = None,
+    snapshot_template_sha256: str | None = None,
     required_files: dict[str, str] | None = None,
     traversal_members: tuple[str, ...] = (),
 ) -> tuple[Path, Path, dict[str, bytes]]:
@@ -326,10 +398,17 @@ def _stage_workspace(
     patched = launcher.replace(
         LAUNCHER_ANCHOR.encode(), LAUNCHER_REPLACEMENT.encode(), 1
     )
+    index_entry = payload.get(INDEX_PATH, b"")
+    patched_index = index_entry.replace(
+        INDEX_ANCHOR.encode(), INDEX_REPLACEMENT.encode(), 1
+    )
     scripts = tmp_path / "scripts"
     scripts.mkdir(parents=True, exist_ok=True)
     shutil.copy2(BOOTSTRAP_SCRIPT, scripts / BOOTSTRAP_SCRIPT.name)
     shutil.copy2(MANIFEST_PATH, scripts / MANIFEST_PATH.name)
+    template_dir = scripts / "qq_direct_db_snapshot"
+    template_dir.mkdir(parents=True, exist_ok=True)
+    (template_dir / "snapshot.mjs").write_bytes(SNAPSHOT_TEMPLATE)
     (scripts / "qq_runtime_pins.json").write_text(
         json.dumps(
             _pin_payload(
@@ -344,6 +423,15 @@ def _stage_workspace(
                 ),
                 patched_launcher_sha256=(
                     patched_launcher_sha256 or _sha256(patched)
+                ),
+                upstream_index_sha256=(
+                    upstream_index_sha256 or _sha256(index_entry)
+                ),
+                patched_index_sha256=(
+                    patched_index_sha256 or _sha256(patched_index)
+                ),
+                snapshot_template_sha256=(
+                    snapshot_template_sha256 or _sha256(SNAPSHOT_TEMPLATE)
                 ),
                 required_files=(
                     required_files
@@ -369,9 +457,13 @@ def _is_excluded(relative: str, excluded: set[str]) -> bool:
 
 def _expected_installed_members(payload: dict[str, bytes]) -> list[str]:
     excluded = set(PINS_EXCLUDED_PATHS) | set(_manifest_qq_private_paths())
-    return sorted(
+    installed = {
         relative for relative in payload if not _is_excluded(relative, excluded)
-    )
+    }
+    # The Direct DB helper is injected from a tracked template, so it is never
+    # part of the upstream payload but must still land in the installed runtime.
+    installed.add(SNAPSHOT_TARGET_PATH)
+    return sorted(installed)
 
 
 def _seed_stale_runtime(project_root: Path) -> None:
@@ -383,6 +475,7 @@ def _seed_stale_runtime(project_root: Path) -> None:
         "static/qce/stale-build-id/index.html",
         "node_modules/stale-package/package.json",
         "plugins/stale-plugin/index.mjs",
+        "plugins/napcat-plugin-qce/direct_db_research/snapshot.mjs",
         "launcher-user.bat",
         "qqnt.json",
         "README.txt",
@@ -502,6 +595,40 @@ def test_pins_lock_the_echo_launcher_patch() -> None:
     assert patch["replacement"].endswith("pause\nexit /b\n")
 
 
+def test_pins_lock_the_echo_index_patch() -> None:
+    patch = _pins()["indexPatch"]
+
+    assert patch["path"] == INDEX_PATH
+    assert patch["anchor"] == INDEX_ANCHOR
+    assert patch["replacement"] == INDEX_REPLACEMENT
+    assert patch["addedLine"] == INDEX_ADDED_LINE
+    assert patch["replacement"].count(patch["addedLine"]) == 1
+    assert patch["anchor"].count(patch["addedLine"]) == 0
+    assert patch["anchor"].count("await apiLauncher.startApiServer();") == 1
+    assert patch["upstreamSha256"] != patch["patchedSha256"]
+    assert len(patch["upstreamSha256"]) == 64
+    assert len(patch["patchedSha256"]) == 64
+    # The Direct DB helper is an Echo asset, never an upstream archive member.
+    assert INDEX_PATH not in _pins()["requiredFiles"]
+
+
+def test_pins_lock_the_direct_db_snapshot_template() -> None:
+    pins = _pins()
+    snapshot = pins["directDbSnapshot"]
+
+    assert snapshot["templatePath"] == SNAPSHOT_TEMPLATE_PATH
+    assert snapshot["targetPath"] == SNAPSHOT_TARGET_PATH
+    assert len(snapshot["templateSha256"]) == 64
+    assert snapshot["templateSha256"] == snapshot["templateSha256"].lower()
+    # The injected helper must never be presented as an upstream archive member.
+    assert SNAPSHOT_TARGET_PATH not in pins["requiredFiles"]
+    template = PROJECT_ROOT / "scripts" / "qq_direct_db_snapshot" / "snapshot.mjs"
+    assert template.is_file(), (
+        "the Direct DB helper template is missing: scripts/qq_direct_db_snapshot/snapshot.mjs"
+    )
+    assert _sha256(template.read_bytes()) == snapshot["templateSha256"]
+
+
 def test_pins_lock_the_qqnt_seed_and_the_launcher_detector() -> None:
     required = _pins()["requiredFiles"]
 
@@ -512,7 +639,12 @@ def test_pins_lock_the_qqnt_seed_and_the_launcher_detector() -> None:
 def test_pins_cover_every_contract_file_requirement() -> None:
     """A new contract requirement must be pinned before it can be bootstrapped."""
     pins = _pins()
-    pinned = set(pins["requiredFiles"]) | {pins["launcherPatch"]["path"]}
+    pinned = (
+        set(pins["requiredFiles"])
+        | {pins["launcherPatch"]["path"]}
+        | {pins["indexPatch"]["path"]}
+        | {pins["directDbSnapshot"]["targetPath"]}
+    )
 
     missing = sorted(set(_manifest_qq_file_paths()) - pinned)
     assert missing == [], (
@@ -538,7 +670,14 @@ def test_pins_declare_the_agreed_exclusions() -> None:
 def test_pins_declare_only_the_agreed_fields() -> None:
     pins = _pins()
 
-    assert set(pins) == {"qce", "launcherPatch", "requiredFiles", "excludedPaths"}
+    assert set(pins) == {
+        "qce",
+        "launcherPatch",
+        "indexPatch",
+        "directDbSnapshot",
+        "requiredFiles",
+        "excludedPaths",
+    }
     assert set(pins["qce"]) == {
         "version",
         "project",
@@ -559,6 +698,19 @@ def test_pins_declare_only_the_agreed_fields() -> None:
         "anchor",
         "replacement",
         "addedLine",
+    }
+    assert set(pins["indexPatch"]) == {
+        "path",
+        "upstreamSha256",
+        "patchedSha256",
+        "anchor",
+        "replacement",
+        "addedLine",
+    }
+    assert set(pins["directDbSnapshot"]) == {
+        "templatePath",
+        "templateSha256",
+        "targetPath",
     }
 
 
@@ -741,6 +893,15 @@ def test_bootstrap_restores_the_runtime_from_a_verified_archive(
         LAUNCHER_ANCHOR.encode(), LAUNCHER_REPLACEMENT.encode(), 1
     )
     assert launcher.count(LAUNCHER_ADDED_LINE.encode()) == 1
+    # The Direct DB helper is injected from the tracked template, byte for byte.
+    snapshot = (runtime / SNAPSHOT_TARGET_PATH).read_bytes()
+    assert snapshot == SNAPSHOT_TEMPLATE
+    # The upstream QCE plugin entry is patched deterministically, exactly once.
+    index = (runtime / INDEX_PATH).read_bytes()
+    assert index == payload[INDEX_PATH].replace(
+        INDEX_ANCHOR.encode(), INDEX_REPLACEMENT.encode(), 1
+    )
+    assert index.count(INDEX_ADDED_LINE.encode()) == 1
     # Upstream attribution survives.
     for relative in ATTRIBUTION_MEMBERS:
         assert (runtime / relative).read_bytes() == payload[relative]
@@ -965,4 +1126,98 @@ def test_bootstrap_is_idempotent(tmp_path: Path) -> None:
     assert _relative_files(runtime) == _expected_installed_members(payload)
     launcher = (runtime / LAUNCHER_PATH).read_bytes()
     assert launcher.count(LAUNCHER_ADDED_LINE.encode()) == 1
+    # Re-running the bootstrap never stacks a second Direct DB patch or helper.
+    index = (runtime / INDEX_PATH).read_bytes()
+    assert index.count(INDEX_ADDED_LINE.encode()) == 1
+    snapshot = (runtime / SNAPSHOT_TARGET_PATH).read_bytes()
+    assert snapshot == SNAPSHOT_TEMPLATE
     assert _runtime_leftovers(tmp_path) == []
+
+
+def test_bootstrap_injects_the_direct_db_helper_on_a_clean_bootstrap(
+    tmp_path: Path,
+) -> None:
+    """A clean bootstrap restores both the helper and the patched entry."""
+    script, archive, payload = _stage_workspace(tmp_path)
+
+    completed = _run_bootstrap(script, tmp_path, *_offline_archive(archive))
+
+    assert completed.returncode == 0, _output(completed)
+    runtime = tmp_path / "runtime" / "qq"
+    snapshot = runtime / SNAPSHOT_TARGET_PATH
+    assert snapshot.is_file()
+    assert snapshot.read_bytes() == SNAPSHOT_TEMPLATE
+    index = (runtime / INDEX_PATH).read_bytes()
+    assert index == payload[INDEX_PATH].replace(
+        INDEX_ANCHOR.encode(), INDEX_REPLACEMENT.encode(), 1
+    )
+    assert index.count(INDEX_ADDED_LINE.encode()) == 1
+
+
+def test_bootstrap_replaces_a_stale_direct_db_helper(tmp_path: Path) -> None:
+    """Wholesale replacement restores the helper even over a stale runtime."""
+    script, archive, _ = _stage_workspace(tmp_path)
+    _seed_stale_runtime(tmp_path)
+    stale = tmp_path / "runtime" / "qq" / SNAPSHOT_TARGET_PATH
+    assert stale.read_bytes() != SNAPSHOT_TEMPLATE
+
+    completed = _run_bootstrap(script, tmp_path, *_offline_archive(archive))
+
+    assert completed.returncode == 0, _output(completed)
+    runtime = tmp_path / "runtime" / "qq"
+    assert (runtime / SNAPSHOT_TARGET_PATH).read_bytes() == SNAPSHOT_TEMPLATE
+
+
+def test_bootstrap_rejects_an_index_that_does_not_match_the_pin(
+    tmp_path: Path,
+) -> None:
+    script, archive, _ = _stage_workspace(
+        tmp_path, upstream_index_sha256="1" * 64
+    )
+    _seed_stale_runtime(tmp_path)
+    before = _tree_hashes(tmp_path / "runtime" / "qq")
+
+    completed = _run_bootstrap(script, tmp_path, *_offline_archive(archive))
+
+    assert completed.returncode != 0
+    assert "index.mjs" in _output(completed)
+    assert _tree_hashes(tmp_path / "runtime" / "qq") == before
+
+
+def test_bootstrap_rejects_an_index_without_the_expected_anchor(
+    tmp_path: Path,
+) -> None:
+    members = _fictional_archive_members()
+    members[INDEX_PATH] = _fictional_index(
+        tail=b"    console.error('no anchor');\r\n"
+    )
+    script, archive, _ = _stage_workspace(tmp_path, members=members)
+    _seed_stale_runtime(tmp_path)
+    before = _tree_hashes(tmp_path / "runtime" / "qq")
+
+    completed = _run_bootstrap(script, tmp_path, *_offline_archive(archive))
+
+    assert completed.returncode != 0
+    assert "index.mjs" in _output(completed)
+    assert _tree_hashes(tmp_path / "runtime" / "qq") == before
+
+
+def test_bootstrap_rejects_a_tampered_snapshot_template(tmp_path: Path) -> None:
+    script, archive, _ = _stage_workspace(tmp_path)
+    template = tmp_path / "scripts" / "qq_direct_db_snapshot" / "snapshot.mjs"
+    template.write_bytes(b"// tampered template\n")
+    _seed_stale_runtime(tmp_path)
+    before = _tree_hashes(tmp_path / "runtime" / "qq")
+
+    completed = _run_bootstrap(script, tmp_path, *_offline_archive(archive))
+
+    assert completed.returncode != 0
+    # PowerShell writes to the console in the OEM codepage, so only the ASCII
+    # part of the failure label is reliably decodable by subprocess.run.
+    assert "Direct DB helper" in _output(completed)
+    assert _tree_hashes(tmp_path / "runtime" / "qq") == before
+
+
+def test_runtime_contract_requires_the_direct_db_snapshot_helper() -> None:
+    """The helper is a runtime contract requirement, not an optional extra."""
+    assert SNAPSHOT_TARGET_PATH in _manifest_qq_file_paths()

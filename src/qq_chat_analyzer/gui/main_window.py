@@ -488,23 +488,22 @@ class MainWindow(QMainWindow):
 
     def show_error(self, code: str, message: str) -> None:
         """Show a user-safe message. Never a traceback."""
-        self._show_active_workspace_or_home()
+        if self.stack.currentIndex() == PROCESSING_PAGE_INDEX:
+            self._show_active_workspace_or_home()
         self._status_label.setText(message)
         QMessageBox.warning(self, _ERROR_TITLE, message)
 
     # ---------------------------------------------------------------- lifecycle
 
     def closeEvent(self, event: Any) -> None:
-        """Close quickly, cancelling background work without blocking."""
+        """Close quickly, running owned cleanup off the Qt GUI thread.
+
+        ``facade.shutdown`` owns the exit ordering: it cleans the Direct DB
+        plaintext snapshot (recovering any orphan generation) before it stops
+        NapCat / the QQ runtime, so the GUI must not start a second, racing
+        QQ-runtime shutdown thread of its own.
+        """
         shutdown_workers()
-        shutdown = getattr(self._facade, "shutdown_qq_runtime", None)
-        if callable(shutdown):
-            threading.Thread(
-                target=_best_effort_shutdown,
-                args=(shutdown,),
-                name="echo-qq-shutdown",
-                daemon=True,
-            ).start()
         shutdown = getattr(self._facade, "shutdown", None)
         if callable(shutdown):
             threading.Thread(

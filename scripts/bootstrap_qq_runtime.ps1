@@ -104,6 +104,8 @@ function Get-QqRuntimePins {
     $Pins = (Get-Content -LiteralPath $PinsPath -Raw -Encoding UTF8) | ConvertFrom-Json
     if (-not $Pins.qce) { Fail "pin 文件缺少 'qce' 段: $PinsPath" }
     if (-not $Pins.launcherPatch) { Fail "pin 文件缺少 'launcherPatch' 段: $PinsPath" }
+    if (-not $Pins.indexPatch) { Fail "pin 文件缺少 'indexPatch' 段: $PinsPath" }
+    if (-not $Pins.directDbSnapshot) { Fail "pin 文件缺少 'directDbSnapshot' 段: $PinsPath" }
     if (-not $Pins.requiredFiles) { Fail "pin 文件缺少 'requiredFiles' 段: $PinsPath" }
     if (-not $Pins.excludedPaths) { Fail "pin 文件缺少 'excludedPaths' 段: $PinsPath" }
 
@@ -121,6 +123,18 @@ function Get-QqRuntimePins {
             Fail "pin 文件缺少 'launcherPatch.$Field': $PinsPath"
         }
     }
+    foreach ($Field in @(
+            'path', 'upstreamSha256', 'patchedSha256', 'anchor', 'replacement', 'addedLine'
+        )) {
+        if (-not $Pins.indexPatch.$Field) {
+            Fail "pin 文件缺少 'indexPatch.$Field': $PinsPath"
+        }
+    }
+    foreach ($Field in @('templatePath', 'templateSha256', 'targetPath')) {
+        if (-not $Pins.directDbSnapshot.$Field) {
+            Fail "pin 文件缺少 'directDbSnapshot.$Field': $PinsPath"
+        }
+    }
 
     $ArchiveSha256 = ([string]$Pins.qce.archiveSha256).ToLowerInvariant()
     Assert-Sha256Text -Value $ArchiveSha256 -Label 'qce.archiveSha256'
@@ -131,6 +145,17 @@ function Get-QqRuntimePins {
     Assert-Sha256Text -Value $PatchedLauncher -Label 'launcherPatch.patchedSha256'
     $Pins.launcherPatch.upstreamSha256 = $UpstreamLauncher
     $Pins.launcherPatch.patchedSha256 = $PatchedLauncher
+
+    $UpstreamIndex = ([string]$Pins.indexPatch.upstreamSha256).ToLowerInvariant()
+    $PatchedIndex = ([string]$Pins.indexPatch.patchedSha256).ToLowerInvariant()
+    Assert-Sha256Text -Value $UpstreamIndex -Label 'indexPatch.upstreamSha256'
+    Assert-Sha256Text -Value $PatchedIndex -Label 'indexPatch.patchedSha256'
+    $Pins.indexPatch.upstreamSha256 = $UpstreamIndex
+    $Pins.indexPatch.patchedSha256 = $PatchedIndex
+
+    $SnapshotTemplate = ([string]$Pins.directDbSnapshot.templateSha256).ToLowerInvariant()
+    Assert-Sha256Text -Value $SnapshotTemplate -Label 'directDbSnapshot.templateSha256'
+    $Pins.directDbSnapshot.templateSha256 = $SnapshotTemplate
 
     foreach ($Property in $Pins.requiredFiles.PSObject.Properties) {
         $Value = ([string]$Property.Value).ToLowerInvariant()
@@ -253,6 +278,8 @@ function Assert-QceArchiveEntries {
     }
     $LauncherRelative = ([string]$Pins.launcherPatch.path) -replace '\\', '/'
     $Expected[$LauncherRelative] = ([string]$Pins.launcherPatch.upstreamSha256).ToLowerInvariant()
+    $IndexRelative = ([string]$Pins.indexPatch.path) -replace '\\', '/'
+    $Expected[$IndexRelative] = ([string]$Pins.indexPatch.upstreamSha256).ToLowerInvariant()
 
     $Archive = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
     try {
@@ -400,6 +427,62 @@ function Update-LauncherUserBatch {
     Assert-FileSha256 -Path $Target -Expected ([string]$Pins.launcherPatch.patchedSha256) -Label "Echo 补丁后的 $Relative"
 }
 
+function Inject-DirectDbSnapshot {
+    param(
+        [Parameter(Mandatory = $true)][string]$RuntimeRoot,
+        [Parameter(Mandatory = $true)]$Pins
+    )
+
+    # Echo 自己的 Direct DB helper 模板由 git 追踪，位于本脚本旁；它不属于
+    # 上游 archive，绝不能伪装成 requiredFile。注入前先校验模板哈希，注入后
+    # 再校验目标哈希，确保 clean clone 确定性恢复同一份内容。
+    $TemplateRelative = ([string]$Pins.directDbSnapshot.templatePath) -replace '\\', '/'
+    $Template = Join-Path $PSScriptRoot ($TemplateRelative -replace '/', '\')
+    if (-not (Test-Path -LiteralPath $Template -PathType Leaf)) {
+        Fail "Direct DB helper 模板缺失: scripts\$($TemplateRelative -replace '/', '\')"
+    }
+    Assert-FileSha256 -Path $Template -Expected ([string]$Pins.directDbSnapshot.templateSha256) -Label 'Direct DB helper 模板'
+
+    $TargetRelative = ([string]$Pins.directDbSnapshot.targetPath) -replace '\\', '/'
+    $Target = Join-Path $RuntimeRoot ($TargetRelative -replace '/', '\')
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Target) | Out-Null
+    Copy-Item -LiteralPath $Template -Destination $Target -Force
+    Assert-FileSha256 -Path $Target -Expected ([string]$Pins.directDbSnapshot.templateSha256) -Label "注入后的 $TargetRelative"
+    Write-Ok 'Direct DB helper 已从 tracked 模板注入'
+}
+
+function Update-QcePluginIndex {
+    param(
+        [Parameter(Mandatory = $true)][string]$RuntimeRoot,
+        [Parameter(Mandatory = $true)]$Pins
+    )
+
+    $Relative = ([string]$Pins.indexPatch.path) -replace '\\', '/'
+    $Target = Join-Path $RuntimeRoot ($Relative -replace '/', '\')
+    if (-not (Test-Path -LiteralPath $Target -PathType Leaf)) {
+        Fail "上游 QCE 插件入口缺失: $Relative"
+    }
+    Assert-FileSha256 -Path $Target -Expected ([string]$Pins.indexPatch.upstreamSha256) -Label "上游 $Relative"
+
+    # Latin1 逐字节往返：补丁只替换唯一锚点，不改动其它字节、编码或换行。
+    $Encoding = [System.Text.Encoding]::GetEncoding(28591)
+    $Text = $Encoding.GetString([System.IO.File]::ReadAllBytes($Target))
+    $Anchor = [string]$Pins.indexPatch.anchor
+    $Replacement = [string]$Pins.indexPatch.replacement
+    $Occurrences = ([regex]::Matches($Text, [regex]::Escape($Anchor))).Count
+    if ($Occurrences -ne 1) {
+        Fail "上游 $Relative 的 Direct DB 补丁锚点必须恰好出现一次，实际 $Occurrences 次"
+    }
+
+    $Patched = $Text.Replace($Anchor, $Replacement)
+    $AddedLine = [string]$Pins.indexPatch.addedLine
+    if (([regex]::Matches($Patched, [regex]::Escape($AddedLine))).Count -ne 1) {
+        Fail "Echo Direct DB 补丁必须恰好插入一次: $Relative"
+    }
+    [System.IO.File]::WriteAllBytes($Target, $Encoding.GetBytes($Patched))
+    Assert-FileSha256 -Path $Target -Expected ([string]$Pins.indexPatch.patchedSha256) -Label "Echo Direct DB 补丁后的 $Relative"
+}
+
 function Assert-PinnedRuntimeFiles {
     param(
         [Parameter(Mandatory = $true)][string]$RuntimeRoot,
@@ -523,6 +606,8 @@ try {
     $PreparedRoot = Expand-QceArchive -ArchivePath $Archive -Pins $Pins
     Remove-ExcludedRuntimeState -RuntimeRoot $PreparedRoot -Pins $Pins
     Update-LauncherUserBatch -RuntimeRoot $PreparedRoot -Pins $Pins
+    Inject-DirectDbSnapshot -RuntimeRoot $PreparedRoot -Pins $Pins
+    Update-QcePluginIndex -RuntimeRoot $PreparedRoot -Pins $Pins
     Assert-PinnedRuntimeFiles -RuntimeRoot $PreparedRoot -Pins $Pins
     Assert-QqRuntimeContract -Root $PreparedRoot -Phase 'prepared'
     Assert-ExcludedRuntimeStateAbsent -RuntimeRoot $PreparedRoot -Pins $Pins -Label 'prepared runtime'
@@ -535,6 +620,12 @@ try {
     Assert-FileSha256 -Path (
         Join-Path $TargetRoot ((([string]$Pins.launcherPatch.path) -replace '/', '\'))
     ) -Expected ([string]$Pins.launcherPatch.patchedSha256) -Label 'runtime\qq\launcher-user.bat'
+    Assert-FileSha256 -Path (
+        Join-Path $TargetRoot ((([string]$Pins.indexPatch.path) -replace '/', '\'))
+    ) -Expected ([string]$Pins.indexPatch.patchedSha256) -Label 'runtime\qq\plugins\napcat-plugin-qce\index.mjs'
+    Assert-FileSha256 -Path (
+        Join-Path $TargetRoot ((([string]$Pins.directDbSnapshot.targetPath) -replace '/', '\'))
+    ) -Expected ([string]$Pins.directDbSnapshot.templateSha256) -Label 'runtime\qq\plugins\napcat-plugin-qce\direct_db_research\snapshot.mjs'
 }
 catch {
     $Failed = $true

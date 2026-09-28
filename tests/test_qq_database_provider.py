@@ -14,29 +14,29 @@ def _create_synthetic_group_database(path) -> None:
         connection.execute(
             '''
             CREATE TABLE group_msg_table (
-                row_id INTEGER PRIMARY KEY,
+                "40001" INTEGER PRIMARY KEY,
                 "40030" TEXT NOT NULL,
                 "40033" TEXT NOT NULL,
                 "40050" INTEGER NOT NULL,
                 "40800" BLOB NOT NULL
-            )
+            ) WITHOUT ROWID
             '''
         )
         connection.executemany(
             '''
             INSERT INTO group_msg_table
-                (row_id, "40030", "40033", "40050", "40800")
+                ("40001", "40030", "40033", "40050", "40800")
             VALUES (?, ?, ?, ?, ?)
             ''',
             [
-                (1, "fictional-group-a", "fictional-sender-1", 100, b"blob-a"),
-                (2, "fictional-group-a", "fictional-sender-2", 200, b"blob-b"),
-                (3, "fictional-group-b", "fictional-sender-3", 200, b"blob-c"),
+                (101, "fictional-group-a", "fictional-sender-1", 100, b"blob-a"),
+                (202, "fictional-group-a", "fictional-sender-2", 200, b"blob-b"),
+                (303, "fictional-group-b", "fictional-sender-3", 200, b"blob-c"),
             ],
         )
 
 
-def test_provider_materializes_filtered_raw_payload_without_modifying_database(
+def test_legacy_group_path_uses_40001_without_row_id_dependency(
     tmp_path,
 ) -> None:
     database_path = tmp_path / "fictional-qq.db"
@@ -60,12 +60,16 @@ def test_provider_materializes_filtered_raw_payload_without_modifying_database(
     assert payload["source_type"] == "qq-db-json"
     assert payload["query"] == {
         "requested_session": "fictional-group-a",
+        "session_type": "group",
+        "internal_key": None,
+        "session_object": "fictional-group-a",
         "time_range": {"start": 150, "end": 200},
     }
     assert payload["records"] == [
         {
-            "record_id": "2",
+            "record_id": "202",
             "fields": {
+                "40001": 202,
                 "40030": "fictional-group-a",
                 "40033": "fictional-sender-2",
                 "40050": 200,
@@ -99,4 +103,4 @@ def test_provider_omits_time_range_when_not_requested(tmp_path) -> None:
 
     payload = json.loads(payload_path.read_text(encoding="utf-8"))
     assert payload["query"]["time_range"] is None
-    assert [record["record_id"] for record in payload["records"]] == ["1", "2"]
+    assert [record["record_id"] for record in payload["records"]] == ["101", "202"]
