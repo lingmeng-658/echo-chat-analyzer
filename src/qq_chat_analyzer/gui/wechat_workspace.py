@@ -135,6 +135,7 @@ class WeChatWorkspace(QWidget):
         self._wechat_key_captured = False
         self._wechat_login_progress = WeChatConnectionProgress.PREPARING
         self._connection_task: Any = None
+        self._wechat_attempt_generation = 0
         self._wechat_guide_image_path = default_wechat_login_guide_path()
         self._sessions_loaded = False
 
@@ -296,8 +297,14 @@ class WeChatWorkspace(QWidget):
         self,
         status: Any,
         load_sessions_on_ready: bool,
+        attempt_generation: int | None = None,
     ) -> None:
         """Render WeChat's connection status returned by the facade."""
+        if (
+            attempt_generation is not None
+            and attempt_generation != self._wechat_attempt_generation
+        ):
+            return
         available = bool(getattr(status, "available", False))
         prefix = _CONNECTED_PREFIX if available else _DISCONNECTED_PREFIX
         message = (
@@ -327,7 +334,7 @@ class WeChatWorkspace(QWidget):
         if available and load_sessions_on_ready:
             self._status_label.setText(_WECHAT_LOADING_SESSIONS)
             self.session_panel.show_reading_placeholder()
-            self._load_sessions()
+            self._load_sessions(attempt_generation=attempt_generation)
         elif not available:
             self.session_panel.show_disconnected_placeholder()
 
@@ -459,6 +466,8 @@ class WeChatWorkspace(QWidget):
         another data directory: the key captured earlier in this process is
         still the current one, so no new WeChat login is needed.
         """
+        self._wechat_attempt_generation += 1
+        attempt_generation = self._wechat_attempt_generation
         self._wechat_login_progress = WeChatConnectionProgress.PREPARING
         self._wechat_connect_button.setText(_CANCEL_CONNECTION_LABEL)
         self._wechat_connect_button.setEnabled(True)
@@ -475,13 +484,25 @@ class WeChatWorkspace(QWidget):
                 report,
                 capture_key=not reuse_key,
             ),
-            on_success=self._after_wechat_key_acquired,
-            on_error=lambda code, message: self._handle_wechat_connect_error(
-                code,
-                message,
+            on_success=lambda status: (
+                self._after_wechat_key_acquired(status, attempt_generation)
+                if attempt_generation == self._wechat_attempt_generation
+                else None
             ),
-            on_progress=self._handle_wechat_connect_progress,
-            on_finished=lambda: self._finish_wechat_connect(task),
+            on_error=lambda code, message: (
+                self._handle_wechat_connect_error(code, message)
+                if attempt_generation == self._wechat_attempt_generation
+                else None
+            ),
+            on_progress=lambda progress: (
+                self._handle_wechat_connect_progress(progress)
+                if attempt_generation == self._wechat_attempt_generation
+                else None
+            ),
+            on_finished=lambda: self._finish_wechat_connect(
+                task,
+                attempt_generation,
+            ),
         )
         self._connection_task = task
 
@@ -500,8 +521,17 @@ class WeChatWorkspace(QWidget):
             progress(_WECHAT_READING_DATABASE)
         return self._facade.get_connection_status(ChatSource.WECHAT)
 
-    def _finish_wechat_connect(self, task: Any = None) -> None:
+    def _finish_wechat_connect(
+        self,
+        task: Any = None,
+        attempt_generation: int | None = None,
+    ) -> None:
         """Clean up after the WeChat connection attempt."""
+        if (
+            attempt_generation is not None
+            and attempt_generation != self._wechat_attempt_generation
+        ):
+            return
         if task is not None and self._connection_task is not task:
             return
         self._connection_task = None
@@ -509,11 +539,21 @@ class WeChatWorkspace(QWidget):
         connected = self._status_label.text().startswith(_CONNECTED_PREFIX)
         self._wechat_connect_button.setVisible(not connected)
 
-    def _after_wechat_key_acquired(self, status: Any) -> None:
+    def _after_wechat_key_acquired(
+        self,
+        status: Any,
+        attempt_generation: int | None = None,
+    ) -> None:
+        if (
+            attempt_generation is not None
+            and attempt_generation != self._wechat_attempt_generation
+        ):
+            return
         self._wechat_key_captured = True
         self._show_connection_status(
             status,
             load_sessions_on_ready=True,
+            attempt_generation=attempt_generation,
         )
 
     def _handle_wechat_connect_progress(
@@ -638,6 +678,7 @@ class WeChatWorkspace(QWidget):
 
     def cancel_connection(self) -> None:
         """Cancel an in-flight WeChat connection."""
+        self._wechat_attempt_generation += 1
         if self._connection_task is not None:
             cancel = getattr(self._connection_task, "cancel", None)
             if callable(cancel):
@@ -658,11 +699,21 @@ class WeChatWorkspace(QWidget):
 
     # ---------------------------------------------------------------- sessions
 
-    def _load_sessions(self) -> None:
+    def _load_sessions(self, *, attempt_generation: int | None = None) -> None:
+        def is_current() -> bool:
+            return (
+                attempt_generation is None
+                or attempt_generation == self._wechat_attempt_generation
+            )
+
         self._executor(
             self._load_verified_sessions,
-            on_success=self._handle_sessions_loaded,
-            on_error=self._handle_session_error,
+            on_success=lambda sessions: (
+                self._handle_sessions_loaded(sessions) if is_current() else None
+            ),
+            on_error=lambda code, message: (
+                self._handle_session_error(code, message) if is_current() else None
+            ),
         )
 
     def _load_verified_sessions(self) -> Any:

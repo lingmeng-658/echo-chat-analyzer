@@ -15,6 +15,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -871,6 +872,67 @@ class _DeferredExecutor:
             self.on_error(code, message)
         if self.on_finished is not None:
             self.on_finished()
+
+
+class _IndependentDeferredExecutor:
+    """Keep each submitted callback set available for stale-event tests."""
+
+    class Task:
+        def __init__(
+            self,
+            operation,
+            on_success,
+            on_error,
+            on_finished,
+            on_progress,
+        ):
+            self.operation = operation
+            self.on_success = on_success
+            self.on_error = on_error
+            self.on_finished = on_finished
+            self.on_progress = on_progress
+            self.cancelled = False
+
+        def cancel(self):
+            self.cancelled = True
+
+        def progress(self, message):
+            if self.on_progress is not None:
+                self.on_progress(message)
+
+        def succeed(self, result):
+            if self.on_success is not None:
+                self.on_success(result)
+
+        def fail(self, code, message):
+            if self.on_error is not None:
+                self.on_error(code, message)
+
+        def finish(self):
+            if self.on_finished is not None:
+                self.on_finished()
+
+    def __init__(self):
+        self.tasks = []
+
+    def __call__(
+        self,
+        operation,
+        *,
+        on_success,
+        on_error,
+        on_finished=None,
+        on_progress=None,
+    ):
+        task = self.Task(
+            operation,
+            on_success,
+            on_error,
+            on_finished,
+            on_progress,
+        )
+        self.tasks.append(task)
+        return task
 
 
 def _drain(page):
@@ -3804,6 +3866,127 @@ def test_wechat_login_words_are_not_readiness_signals(qt_app):
     workspace._handle_wechat_connect_progress("正在准备微信登录监听")
 
     assert workspace._status_label.text() == before
+
+
+def _wechat_connection_config():
+    return _facade_module().WeChatEnvironmentConfig()
+
+
+def _wechat_unavailable_status():
+    return SimpleNamespace(available=False, data_found=True, action_hint="")
+
+
+def test_wechat_stale_ready_progress_is_ignored_after_restart(qt_app):
+    module = _wechat_guide_module()
+    executor = _IndependentDeferredExecutor()
+    workspace = module.WeChatWorkspace(StubFacade(), executor=executor)
+
+    workspace._start_wechat_connect(_wechat_connection_config())
+    first = executor.tasks[0]
+    workspace.cancel_connection()
+    workspace._start_wechat_connect(_wechat_connection_config())
+    second = executor.tasks[1]
+
+    first.progress(_facade_module().WeChatConnectionProgress.READY_FOR_LOGIN)
+
+    assert second.cancelled is False
+    assert workspace._wechat_guide_label.text() == module._WECHAT_GUIDE_STATUS
+    assert workspace._status_label.text() == module._WECHAT_CONNECTING
+
+
+def test_wechat_stale_success_is_ignored_after_restart(qt_app):
+    module = _wechat_guide_module()
+    executor = _IndependentDeferredExecutor()
+    workspace = module.WeChatWorkspace(StubFacade(), executor=executor)
+
+    workspace._start_wechat_connect(_wechat_connection_config())
+    first = executor.tasks[0]
+    workspace.cancel_connection()
+    workspace._start_wechat_connect(_wechat_connection_config())
+    second = executor.tasks[1]
+
+    first.succeed(SimpleNamespace(available=True, data_found=True, action_hint=""))
+
+    assert workspace._connection_task is second
+    assert workspace._wechat_disconnect_button.isVisible() is False
+    assert workspace._status_label.text() == module._WECHAT_CONNECTING
+
+
+def test_wechat_stale_error_is_ignored_after_restart(qt_app):
+    module = _wechat_guide_module()
+    executor = _IndependentDeferredExecutor()
+    workspace = module.WeChatWorkspace(StubFacade(), executor=executor)
+
+    workspace._start_wechat_connect(_wechat_connection_config())
+    first = executor.tasks[0]
+    workspace.cancel_connection()
+    workspace._start_wechat_connect(_wechat_connection_config())
+
+    first.fail("wechat_key_timeout", "旧 attempt 错误")
+
+    assert "旧 attempt 错误" not in workspace._status_label.toolTip()
+    assert workspace._status_label.text() == module._WECHAT_CONNECTING
+
+
+def test_wechat_stale_finished_does_not_clear_new_attempt(qt_app):
+    module = _wechat_guide_module()
+    executor = _IndependentDeferredExecutor()
+    workspace = module.WeChatWorkspace(StubFacade(), executor=executor)
+
+    workspace._start_wechat_connect(_wechat_connection_config())
+    first = executor.tasks[0]
+    workspace.cancel_connection()
+    workspace._start_wechat_connect(_wechat_connection_config())
+    second = executor.tasks[1]
+
+    first.finish()
+
+    assert workspace._connection_task is second
+
+
+def test_wechat_cancel_without_restart_rejects_late_events(qt_app):
+    module = _wechat_guide_module()
+    executor = _IndependentDeferredExecutor()
+    workspace = module.WeChatWorkspace(StubFacade(), executor=executor)
+
+    workspace._start_wechat_connect(_wechat_connection_config())
+    first = executor.tasks[0]
+    workspace.cancel_connection()
+    cancelled_status = workspace._status_label.text()
+
+    first.progress(_facade_module().WeChatConnectionProgress.READY_FOR_LOGIN)
+    first.succeed(SimpleNamespace(available=True, data_found=True, action_hint=""))
+    first.fail("wechat_key_timeout", "迟到错误")
+    first.finish()
+
+    assert workspace._status_label.text() == cancelled_status
+    assert "现在请登录微信" not in workspace._wechat_guide_note_label.text()
+    assert workspace._connection_task is None
+
+
+def test_wechat_second_attempt_events_update_gui_normally(qt_app):
+    module = _wechat_guide_module()
+    progress = _facade_module().WeChatConnectionProgress
+    executor = _IndependentDeferredExecutor()
+    workspace = module.WeChatWorkspace(StubFacade(), executor=executor)
+
+    workspace._start_wechat_connect(_wechat_connection_config())
+    first = executor.tasks[0]
+    workspace.cancel_connection()
+    workspace._start_wechat_connect(_wechat_connection_config())
+    second = executor.tasks[1]
+
+    second.progress(progress.READY_FOR_LOGIN)
+    assert "现在请登录微信" in workspace._wechat_guide_note_label.text()
+
+    second.succeed(_wechat_unavailable_status())
+    assert workspace._status_label.text().startswith(module._DISCONNECTED_PREFIX)
+
+    second.fail("wechat_key_timeout", "本次错误")
+    assert workspace._status_label.toolTip() == "本次错误"
+    second.finish()
+    assert workspace._connection_task is None
+    assert first.cancelled is True
 
 
 def test_wechat_credential_received_does_not_return_to_login(qt_app):
