@@ -508,6 +508,46 @@ def test_distinctive_report_reuses_pipeline_tokens_and_stable_sender_keys(
     }
 
 
+def test_analysis_loads_stopwords_once_per_run_and_refreshes_next_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service_module = importlib.import_module(
+        "qq_chat_analyzer.application.analysis_service"
+    )
+    message_module = importlib.import_module("qq_chat_analyzer.message")
+    stopwords_path = tmp_path / "fictional-stopwords.txt"
+    stopwords_path.write_text("alpha\n", encoding="utf-8")
+    messages = [
+        message_module.ChatMessage(
+            timestamp=1704099600 + index,
+            sender="Fictional Alice",
+            message_type="text",
+            text="alpha beta",
+        )
+        for index in range(3)
+    ]
+    original_open = Path.open
+    stopword_opens = 0
+
+    def counting_open(path: Path, *args: object, **kwargs: object):
+        nonlocal stopword_opens
+        if path == stopwords_path and args and args[0] == "r":
+            stopword_opens += 1
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", counting_open)
+
+    first = service_module._analyze_kept_messages(messages, stopwords_path)
+    assert first.tokens == ["beta"] * len(messages)
+    assert stopword_opens == 1
+
+    stopwords_path.write_text("beta\n", encoding="utf-8")
+    second = service_module._analyze_kept_messages(messages, stopwords_path)
+    assert second.tokens == ["alpha"] * len(messages)
+    assert stopword_opens == 2
+
+
 def test_unknown_conversation_does_not_infer_group_distinctive_words(
     tmp_path: Path,
 ) -> None:
@@ -684,6 +724,39 @@ def test_expression_report_reaches_echo_pipeline_from_qce(
     )
     assert payload["expression_culture"] is not None
     assert payload["expression_culture"]["expression_message_count"] == 2
+
+
+def test_completed_analysis_reuses_expression_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = _application_module()
+    service_module = importlib.import_module(
+        "qq_chat_analyzer.application.analysis_service"
+    )
+    input_path = tmp_path / "fictional-expression-chat.json"
+    (tmp_path / "private-output").mkdir()
+    _write_qce_chat(input_path)
+    original_analyze = service_module.ExpressionAnalyzer.analyze
+    expression_reports = []
+
+    def counting_analyze(self, messages, *, rich_messages=()):
+        report = original_analyze(self, messages, rich_messages=rich_messages)
+        expression_reports.append(report)
+        return report
+
+    monkeypatch.setattr(
+        service_module.ExpressionAnalyzer, "analyze", counting_analyze
+    )
+
+    result = application.AnalysisApplicationService().execute(
+        _request(application, tmp_path, input_path)
+    )
+
+    assert result.status is application.AnalysisStatus.COMPLETED
+    assert len(expression_reports) == 1
+    assert result.reports.expression is expression_reports[0]
+    assert result.reports.expression.expression_message_count == 2
 
 
 def test_market_face_reaches_expression_report_from_qce(tmp_path: Path) -> None:

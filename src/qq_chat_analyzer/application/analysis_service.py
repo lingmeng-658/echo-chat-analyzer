@@ -22,7 +22,7 @@ from ..analysis.analyzers import (
     UserProfileAnalyzer,
 )
 from ..analysis.analyzers.expression_analyzer import iter_emoji_clusters
-from ..analysis.models import AnalysisReports
+from ..analysis.models import AnalysisReports, ExpressionReport
 from ..analyzer import (
     WordSpeakerSummary,
     count_word_speakers,
@@ -40,7 +40,7 @@ from ..presentation import (
     export_echo_report_json,
 )
 from ..smart_profile import run_smart_profile
-from ..tokenizer import iter_expression_placeholders, tokenize
+from ..tokenizer import iter_expression_placeholders, load_stopwords, tokenize
 from .dto import (
     AnalysisDiagnosticCounts,
     AnalysisRequestDTO,
@@ -225,6 +225,7 @@ class AnalysisApplicationService:
                 conversation_names=request.conversation_names,
                 conversation_type=conversation_type,
                 rich_messages=outcome.rich_messages,
+                expression_report=expression_report,
             )
         with timed_stage("word_speaker_analysis"):
             speaker_display_names = _speaker_display_names(reports)
@@ -316,6 +317,7 @@ def _build_reports(
     conversation_names: Mapping[str, str] | None = None,
     conversation_type: str = "unknown",
     rich_messages: tuple[RichMessage, ...] = (),
+    expression_report: ExpressionReport | None = None,
 ) -> AnalysisReports:
     """Run every extended analyzer over the messages kept for analysis.
 
@@ -353,10 +355,12 @@ def _build_reports(
             conversation_type=conversation_type,
         )
     with timed_stage("ExpressionAnalyzer.report"):
-        expression = ExpressionAnalyzer().analyze(
-            messages,
-            rich_messages=rich_messages,
-        )
+        expression = expression_report
+        if expression is None:
+            expression = ExpressionAnalyzer().analyze(
+                messages,
+                rich_messages=rich_messages,
+            )
     return AnalysisReports(
         activity=activity,
         message_length=message_length,
@@ -474,16 +478,17 @@ def _analyze_kept_messages(
         for message in rich_messages
         if message.message_id is not None
     }
+    stopwords: set[str] | None = None
 
     for message in messages:
         if ordering is not None:
             ordering.observe(message)
         cleaned_text = clean_text(message.text, platform=message.platform)
-        message_tokens = (
-            tokenize(cleaned_text, str(stopwords_path))
-            if cleaned_text
-            else []
-        )
+        message_tokens = []
+        if cleaned_text:
+            if stopwords is None:
+                stopwords = load_stopwords(str(stopwords_path))
+            message_tokens = tokenize(cleaned_text, stopwords=stopwords)
         if cleaned_text:
             valid_text_count += 1
         tokens.extend(message_tokens)
