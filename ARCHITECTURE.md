@@ -35,18 +35,21 @@ GUI 带来第二个问题：界面若直接调用各个 Service，就会把来�
 ```mermaid
 flowchart TD
     subgraph EXT["外部数据源（进程外）"]
-        QCE["QQChatExporter 桌面版<br/>HTTP API"]
+        QQDB["QQ 本地数据库<br/>NapCat 解密快照"]
+        QCE["QQChatExporter<br/>CLI / 连接与运行时"]
         WXAPP["微信本地数据库"]
         FILE["已导出文件<br/>JSON / JSONL"]
     end
 
     subgraph ACQ["Provider 数据获取"]
+        PQQDB["qq_database_provider"]
         PQQ["qq_chat_exporter_provider"]
         PWXDB["wechat_database_provider"]
         PWXCLI["wechat_cli_provider"]
     end
 
     subgraph ADP["Adapter / Parser 格式转换"]
+        AQQDB["qq_db_adapter"]
         AQQ["qq_chat_exporter_adapter"]
         AWXDB["wechat_db_adapter"]
         AWXCLI["wechat_cli_adapter"]
@@ -58,7 +61,7 @@ flowchart TD
     subgraph APP["Application 应用层"]
         IMPORT["ImportService"]
         SCOPE["Analysis Scope Filter"]
-        ORCH["QQExportImportService<br/>WeChatExportImportService"]
+        ORCH["QQDirectDatabaseImportService<br/>QQExportImportService · WeChatExportImportService"]
         SVC["AnalysisApplicationService"]
         FACADE["ChatAnalyzerFacade"]
         HISTORY["ReportHistoryManager<br/>元数据 JSONL"]
@@ -82,11 +85,13 @@ flowchart TD
         EXP["exporters<br/>CSV · 词云"]
     end
 
+    QQDB --> PQQDB --> AQQDB --> MSG
     QCE --> PQQ --> AQQ --> MSG
     WXAPP --> PWXDB --> AWXDB --> MSG
     WXAPP --> PWXCLI --> AWXCLI --> MSG
     FILE --> PARSER --> MSG
 
+    ORCH --> PQQDB
     ORCH --> PQQ
     ORCH --> PWXDB
     IMPORT --> PARSER
@@ -190,48 +195,59 @@ Adapter 与 Parser 属于**同一层的两种形态**：
 它直接引用全部 parser 与 adapter，是格式识别的集中点。
 不做分析，不做导出。
 
-**来源编排服务** —— `QQExportImportService`、`WeChatExportImportService`。
-把“先获取、再导入”串起来，并提供会话列表查询；它们是 Provider 的唯一合法调用者。
+**来源编排服务** —— 桌面 QQ 使用 `QQDirectDatabaseImportService`，微信使用
+`WeChatExportImportService`；`QQExportImportService` 仍供 QCE CLI 路径使用。
+它们把“先获取、再导入”串起来，并提供会话列表查询。Provider 负责来源数据获取，
+Adapter 负责格式转换，分析核心不读取 QQ 原生字段。
 
-QQ 一次分析的获取生命周期由 `QQExportImportService` 所有：Facade 根据
-`AnalysisScope` 计算 QCE 获取边界，服务创建 Echo-owned transient lease/run
-directory，Provider 将 QCE payload 导出到该目录，导入和分析消费 payload，随后在
-`finally` 清理。QQ 原始 export 不是长期 cache 或资产；每次重新分析都会重新获取。
-Echo Report 才是长期结果资产。异常终止后的 orphan run directory 回收仍是后续
-lifecycle debt，不能表述为已实现能力。
+#### QQ Direct DB 当前主链
 
-#### QQ Direct DB feasibility checkpoint
-
-当前生产 QQ acquisition path 仍为：
+桌面 QQ 会话列表和分析的获取路径为：
 
 ```text
-QQ → NapCat / QCE → QCE JSON → QQ Adapter → unified model → Analysis
+QQ 本地 DB → NapCat in-process decryptDatabase → Echo snapshot generation
+→ QQDatabaseProvider（只读）→ qq-db-json 临时 payload
+→ qq_db_adapter → ChatMessage → ImportService / AnalysisApplicationService
 ```
 
-受控本地实验已验证另一条候选 acquisition path 的最小群聊纯文本 vertical
-slice：
+`gui/app.py` 为 QQ 构造 `QQDirectDatabaseImportService`；Facade 通过该服务获取
+会话和单次分析数据。服务首次启动时先 `recover` 上次遗留 plaintext；每次获取
+都使用新的 generation，执行 `acquire`、校验 manifest、只读查询并物化 payload，
+随后在 `finally` 清理 generation；分析和报告不持有 plaintext DB。正常关闭时先停止新的获取，
+有限等待进行中的获取并 `recover`，再终止 Echo 自有的 QQ runtime 进程树（见第 11 节）。
 
-```text
-QQ runtime → captured DB passphrase → read-only nt_msg.db
-→ QQ DB Provider candidate → QQ DB Adapter candidate → unified model → Analysis
-```
+首次会话查询或分析触发服务启动：在有限的 readiness 窗口内等待本地 RPC bridge
+与 `EchoSnapshotApi.recover` 可用，完成遗留 plaintext 清理后才进入 `ACTIVE`。
+bridge/API 暂未就绪或暂时不可达时返回可重试的 `not_ready`，后续请求可重新启动；
+真正的 recover 清理失败则保持关闭，不允许读取旧 generation。QQ 连接状态可先显示
+已连接，不代表 Direct DB snapshot API 已完成 readiness。
 
-该样本能够恢复 conversation、sender、second-level timestamp 与 plain text；其中
-`40030`、`40033`、`40050`、`40800`、`45002` 与 `45101` 的映射仅在本次受控群聊
-纯文本样本中得到实证，绝非跨 QQ 版本的 schema guarantee。因而 Direct DB 是
-**validated acquisition candidate**（feasibility PASS），尚非 production ready；
-QCE 仍是当前生产路径并暂时保留。
+每次 `acquire` 由 snapshot helper 串行执行：先清除旧 generation、staging 与历史
+plaintext，清理失败则拒绝解密；再分别有限等待 DatabaseApi/passphrase 和本人身份，
+解密到 staging，复核身份未改变后写入 manifest 并原子发布 generation。RPC 客户端的
+acquire 超时覆盖两个顺序等待窗口。QCE API Proxy 的可调用 `then` 不能作为 async
+函数返回值直接返回，否则 Promise 会把它当作 thenable 而永久 pending；helper
+通过普通对象承载该 Proxy。应用服务校验 generation 后只读查询，清理 generation
+后才让下游消费临时 payload；失败时不使用旧 generation。
 
-Provider / Adapter 分层可容纳第二条 QQ acquisition path：raw DB fields 与 protobuf
-decode 属于 source-specific acquisition / adapter boundary，Provider 不负责统一领域
-模型转换，Analysis 也不得读取这些平台字段。default path、fallback policy、QCE
-retirement 与 rich-message coverage 均尚未决定，只有完成 Provider 实现、兼容性验证
-与 QCE parity 后才可讨论迁移。
+这里有两个不同的 transient 资源：`snapshot.db` 属于 runtime generation，会话列表查询
+结束或所选会话的 `qq-db-json` payload 物化完成后立即调用 `cleanup(generation_id)`；
+payload 属于本次分析的临时目录，在导入、分析消费结束或抛异常后清理。两者都不作为
+长期 cache。启动 `recover` 和关闭时的 `recover` 处理遗留的 runtime plaintext；
+cleanup 失败会作为错误上报，不能假装分析已安全完成。
+
+QCE JSON → `qq_chat_exporter_adapter` 路径仍存在于 QCE CLI；QCE Provider 也用于
+当前 QQ 连接与运行时相关能力。桌面 QQ 分析不自动回退到 QCE。DB 原生字段与
+protobuf 解释留在 Provider / Adapter 边界内，不能进入分析核心。已有真人验收确认
+Direct DB `recover` / `acquire`、会话列表和正常 shutdown 清理可用；
+`database disk image is malformed` 偶发问题仍 OPEN、当前不可稳定复现，
+generation/source/snapshot/`quick_check` 诊断已部署，不能表述为已修复。
 
 获取范围是减少无关数据的优化边界；`Analysis Scope Filter` 才是最终 correctness
-guarantee。两者必须同时保留，且时间单位按来源区分：QQ/QCE 将 calendar scope
-转换为 epoch milliseconds 后传给 QCE；WeChat 将其转换为 epoch seconds 后用于
-`m.create_time` SQL 条件，不能把两者写成统一单位协议。
+guarantee。两者必须同时保留，且时间单位按来源区分：QQ Direct DB 获取使用
+epoch seconds 查询；保留的 QCE export 路径使用 epoch milliseconds；
+WeChat 转换为 epoch seconds 用于 `m.create_time` SQL 条件，不能把
+它们写成统一单位协议。
 
 WeChat 的一个 session 的 `Msg_*` table 可分布在 0..N 个 `message_N.db` shard。
 Provider 发现全部匹配 shard，对每个 shard 使用同一时间范围查询，再做全局
@@ -678,3 +694,32 @@ QQ 与微信的页面状态互相隔离。切换来源或返回数据源选择�
 状态文字、会话缓存、搜索条件和引导控件；迟到的异步回调不得更新当前来源页面。
 “返回数据源选择”只放弃当前 GUI 流程，不代表登出、断开或关闭 QQ/微信客户端。
 分析中的取消仍沿用原分析取消流程。
+
+---
+
+## 11. 退出与 shutdown ownership
+
+关闭窗口与停止 Echo 自有的运行时进程是两件独立的事，归属明确分开。
+
+- **GUI 只触发，不等待。** `MainWindow.closeEvent` 关闭窗口后立即返回，
+  主窗口消失；用户不需要盯着一个“正在关闭”窗口。
+- **shutdown protocol 只有一个。** 窗口持有 `ShutdownProtocol`
+  （`gui/shutdown.py`），`begin()` 只允许启动一次，重复 close 不会产生第二个
+  互相竞争的清理流程。
+- **入口点拥有结束权。** `gui/app.py` 在 `app.exec()` 返回后，先调用
+  `window.begin_shutdown()`（幂等），再以有限时长等待同一个 protocol，然后强制进程退出。
+  原因：CPython 不会 join daemon 线程，解释器收尾会冻结清理线程，
+  因此“只启动不等待”的清理会丢失，Echo 启动的进程树会残留。
+- **清理顺序由 Facade 拥有。** `ChatAnalyzerFacade.shutdown()` 按
+  “停止接受新的 Direct DB acquisition → bounded drain / recover plaintext →
+  终止 Echo 自有的 QQ runtime 进程树”执行。每一步都有独立时间窗，
+  某一步失败或卡死都不会跳过后续步骤，也不会让退出无限挂住。
+- **进程所有权只来自记录。** 终止只针对 Echo 自己记录 / 启动的 launcher root PID
+  （`QQProcessRegistry` → `taskkill /PID <pid> /T /F`）。
+  不按进程名扫描，不触碰用户自己启动的 QQ。
+- **超时有明确 fallback。** 超过 bounded 窗口后强制退出；跨步骤总预算与
+  last-resort watchdog 都是有限值。
+
+守护测试：`tests/test_gui_shutdown_protocol.py`、
+`tests/test_desktop_exit_ownership.py`、`tests/test_shutdown_ownership.py`，
+以及 `tests/test_gui.py` 的 close 用例。

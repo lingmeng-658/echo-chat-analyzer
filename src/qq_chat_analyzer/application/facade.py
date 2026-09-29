@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import logging
 import shutil
+import threading
+from time import monotonic as _monotonic
 from tempfile import TemporaryDirectory
 from collections.abc import Mapping
 from contextlib import ExitStack, contextmanager
@@ -130,6 +132,22 @@ _PROFILE_STOPWORD_FILES = {
     "topic": "stopwords_topic.txt",
     "culture": "stopwords_culture.txt",
 }
+
+#: Each ordered shutdown step gets its own bounded window.  A step that
+#: overruns it is abandoned so the steps after it still run - in particular
+#: QQ runtime termination - which keeps the whole shutdown protocol finite.
+DEFAULT_SHUTDOWN_STEP_SECONDS = 10.0
+
+_SHUTDOWN_STEP_THREAD_PREFIX = "echo-shutdown-step-"
+_SHUTDOWN_STEP_DIRECT_DB = "direct_db_cleanup"
+_SHUTDOWN_STEP_RETAINED_OUTPUT = "retained_output_cleanup"
+_SHUTDOWN_STEP_QQ_RUNTIME = "qq_runtime_termination"
+
+#: Extra window the Direct DB step gets on top of the bounded budget the
+#: service declares for itself (drain window plus recover readiness budget).
+#: Without it a normal bounded cleanup is abandoned, the runtime is stopped
+#: underneath it, and the process exit kills it mid-recover.
+_DIRECT_DB_STEP_MARGIN_SECONDS = 5.0
 
 class ChatSource(str, Enum):
     """Every chat origin a caller may choose from."""
@@ -299,6 +317,7 @@ class ChatAnalyzerFacade:
         presentation_builder: Any = None,
         report_history_manager: Any = None,
         stopwords_directory: Path | None = None,
+        shutdown_step_seconds: float = DEFAULT_SHUTDOWN_STEP_SECONDS,
     ) -> None:
         self._services: dict[ChatSource, Any] = {
             ChatSource.QQ: qq_service,
@@ -318,6 +337,7 @@ class ChatAnalyzerFacade:
         self._report_history_manager = report_history_manager
         self._stopwords_directory = stopwords_directory or resources_dir()
         self._retained_output_directory: _RetainedReportDirectory | None = None
+        self._shutdown_step_seconds = shutdown_step_seconds
 
     @property
     def _wechat_connection_service(self) -> Any:
@@ -1022,11 +1042,112 @@ class ChatAnalyzerFacade:
         Order is deliberate: the Direct DB plaintext snapshot is cleaned up
         (and any orphan generation recovered) before NapCat / the QQ runtime
         is stopped, so an abrupt process stop can never strand plaintext on
-        disk.  A Direct DB cleanup failure never skips QQ runtime termination.
+        disk.  Every step is bounded and exception-safe, so neither a failure
+        nor a hung cleanup in one step can skip the steps after it - in
+        particular QQ runtime termination.  Repeated calls are harmless: the
+        Direct DB service refuses a second shutdown, and terminated PIDs are
+        forgotten by the process registry.
         """
-        self._shutdown_qq_direct_db_service()
+        started_at = _monotonic()
+        _LOGGER.info("QQ shutdown requested")
+        self._run_shutdown_step(
+            _SHUTDOWN_STEP_DIRECT_DB,
+            self._shutdown_qq_direct_db_service,
+            window=self._direct_db_step_window(),
+        )
+        self._run_shutdown_step(
+            _SHUTDOWN_STEP_RETAINED_OUTPUT,
+            self._release_retained_output,
+        )
+        self._run_shutdown_step(
+            _SHUTDOWN_STEP_QQ_RUNTIME,
+            self.shutdown_qq_runtime,
+        )
+        _LOGGER.info(
+            "QQ shutdown finished elapsed=%.2fs",
+            _monotonic() - started_at,
+        )
+
+    def _direct_db_step_window(self) -> float:
+        """Return the bounded window the Direct DB cleanup step gets.
+
+        The service knows its own bounded worst case - the drain window plus the
+        recover readiness budget - and this step window is that budget plus a
+        margin.  A normal bounded cleanup therefore finishes and reports,
+        instead of being abandoned and then killed by the process exit while it
+        is still recovering orphan plaintext.
+        """
+        service = self._qq_service_if_present()
+        budget = getattr(service, "shutdown_budget_seconds", None)
+        if (
+            isinstance(budget, bool)
+            or not isinstance(budget, (int, float))
+            or budget <= 0
+        ):
+            return self._shutdown_step_seconds
+        return max(
+            self._shutdown_step_seconds,
+            float(budget) + _DIRECT_DB_STEP_MARGIN_SECONDS,
+        )
+
+    def _release_retained_output(self) -> None:
+        """Drop the last retained scratch report directory, if any."""
         self._replace_retained_output(None)
-        self.shutdown_qq_runtime()
+
+    def _run_shutdown_step(
+        self,
+        label: str,
+        step: Callable[[], None],
+        *,
+        window: float | None = None,
+    ) -> None:
+        """Run one shutdown step inside its own bounded window.
+
+        The step runs on a throwaway daemon thread so a cleanup that never
+        returns - a wedged runtime RPC, a stuck process kill - is abandoned
+        instead of holding the whole protocol, and with it the desktop process
+        exit, hostage.  The window is finite by design, and start, outcome and
+        elapsed time are logged so a real run is diagnosable.
+        """
+        budget = self._shutdown_step_seconds if window is None else window
+        finished = threading.Event()
+        started_at = _monotonic()
+
+        def _run() -> None:
+            try:
+                step()
+            except Exception:
+                _LOGGER.warning(
+                    "QQ shutdown step failed step=%s",
+                    label,
+                    exc_info=True,
+                )
+            finally:
+                finished.set()
+
+        thread = threading.Thread(
+            target=_run,
+            name=f"{_SHUTDOWN_STEP_THREAD_PREFIX}{label}",
+            daemon=True,
+        )
+        _LOGGER.info(
+            "QQ shutdown step started step=%s window=%.2fs",
+            label,
+            budget,
+        )
+        thread.start()
+        if not finished.wait(budget):
+            _LOGGER.warning(
+                "QQ shutdown step exceeded %.1fs and was abandoned step=%s",
+                budget,
+                label,
+            )
+            return
+        _LOGGER.info(
+            "QQ shutdown step finished step=%s elapsed=%.2fs",
+            label,
+            _monotonic() - started_at,
+        )
 
     def _shutdown_qq_direct_db_service(self) -> None:
         """Ask the Direct DB service to recover orphan plaintext, best-effort."""

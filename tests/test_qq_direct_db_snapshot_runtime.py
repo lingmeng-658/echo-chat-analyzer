@@ -73,17 +73,47 @@ console.error = (...args) => {
 };
 
 function buildCore() {
+  const startedAt = Date.now();
   const core = { selfInfo: { uin: config.uin }, apis: {} };
+  const sourceDirectory = config.traceSourceFileState
+    ? path.join(root, 'fictional-source')
+    : null;
+  if (sourceDirectory) {
+    fs.mkdirSync(sourceDirectory, { recursive: true });
+    fs.writeFileSync(path.join(sourceDirectory, 'nt_msg.db'), Buffer.alloc(4096));
+    fs.writeFileSync(path.join(sourceDirectory, 'nt_msg.db-wal'), 'fictional-wal');
+    fs.writeFileSync(path.join(sourceDirectory, 'nt_msg.db-shm'), 'fictional-shm');
+  }
+  if (config.identityReadyAfterMs !== undefined) {
+    core.selfInfo.uin = null;
+    setTimeout(() => { core.selfInfo.uin = config.uin; }, config.identityReadyAfterMs);
+  }
   if (config.databaseApiPresent !== false) {
-    core.apis.DatabaseApi = {
+    const databaseApi = {
+      getNtDbDir() {
+        return sourceDirectory;
+      },
       hasPassphrase() {
-        return config.passphrase !== false;
+        return config.passphrase !== false &&
+          (config.passphraseReadyAfterMs === undefined ||
+           Date.now() - startedAt >= config.passphraseReadyAfterMs);
       },
       async decryptDatabase(source, target) {
         metrics.decryptCalls += 1;
         activeDecrypt += 1;
         metrics.maxActiveDecrypt = Math.max(metrics.maxActiveDecrypt, activeDecrypt);
         try {
+          if (config.traceNativeReadState) {
+            globalThis.__ECHO_DIRECT_DB_READ_STATE__ = {
+              databaseBefore: { present: true, bytes: 4096, mtimeMs: 100 },
+              databaseAfter: { present: true, bytes: 8192, mtimeMs: 200 },
+              walBefore: { present: true, bytes: 120, mtimeMs: 100 },
+              walAfter: { present: true, bytes: 180, mtimeMs: 200 },
+              shmBefore: { present: true, bytes: 32768, mtimeMs: 100 },
+              shmAfter: { present: true, bytes: 32768, mtimeMs: 100 },
+              readBytes: 4096,
+            };
+          }
           if (config.decryptDelayMs) {
             await new Promise((resolveDelay) => setTimeout(resolveDelay, config.decryptDelayMs));
           }
@@ -110,6 +140,18 @@ function buildCore() {
         }
       },
     };
+    core.apis.DatabaseApi = config.databaseApiUnknownMethodFallback
+      ? new Proxy({}, {
+          get(_target, methodName) {
+            const realMethod = databaseApi[methodName];
+            if (typeof realMethod === 'function') {
+              return realMethod.bind(databaseApi);
+            }
+            // Mirrors QCE's createApiAdapter fallback, including for `then`.
+            return async () => ({ result: 0, errMsg: '' });
+          },
+        })
+      : databaseApi;
   }
   return core;
 }
@@ -395,6 +437,178 @@ def test_success_publishes_database_and_identity_in_one_generation(
     # No staging or legacy plaintext survives a successful acquire.
     assert not (tmp_path / "staging").exists()
     assert not (tmp_path / "decrypted").exists()
+
+
+def test_acquire_does_not_assimilate_database_api_adapter_as_a_thenable(
+    tmp_path: Path,
+) -> None:
+    """QCE's unknown-method fallback exposes ``then`` on API namespace proxies."""
+    output = _run_node(
+        tmp_path,
+        _acquire({
+            "uin": FICTIONAL_UIN,
+            "passphrase": True,
+            "databaseApiUnknownMethodFallback": True,
+        }),
+    )
+
+    assert output["results"][0]["result"]["status"] == "ready"
+
+
+def test_acquire_trace_records_safe_phase_boundaries(tmp_path: Path, monkeypatch) -> None:
+    trace_file = tmp_path / "runtime.log"
+    monkeypatch.setenv("QCE_LOG_FILE", str(trace_file))
+
+    output = _run_node(
+        tmp_path,
+        _acquire({"uin": FICTIONAL_UIN, "passphrase": True}),
+    )
+
+    assert output["results"][0]["result"]["status"] == "ready"
+    trace = trace_file.read_text(encoding="utf-8")
+    stages = [line.split("stage=", 1)[1].split()[0] for line in trace.splitlines()]
+    assert stages == [
+        "acquire_queued",
+        "acquire_entered",
+        "slate_ready",
+        "passphrase_wait_started",
+        "passphrase_wait_polled",
+        "passphrase_ready",
+        "identity_ready",
+        "decrypt_started",
+        "decrypt_finished",
+        "generation_ready",
+    ]
+    assert FICTIONAL_UIN not in trace
+    assert str(tmp_path) not in trace
+
+
+def test_acquire_trace_records_privacy_safe_source_file_state(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    trace_file = tmp_path / "runtime.log"
+    monkeypatch.setenv("QCE_LOG_FILE", str(trace_file))
+
+    output = _run_node(
+        tmp_path,
+        _acquire({
+            "uin": FICTIONAL_UIN,
+            "passphrase": True,
+            "traceSourceFileState": True,
+        }),
+    )
+
+    assert output["results"][0]["result"]["status"] == "ready"
+    trace = trace_file.read_text(encoding="utf-8")
+    before = next(
+        line for line in trace.splitlines()
+        if "stage=decrypt_source_before" in line
+    )
+    after = next(
+        line for line in trace.splitlines()
+        if "stage=decrypt_source_after" in line
+    )
+    assert "database_present=true" in before
+    assert "database_bytes=4096" in before
+    assert "wal_present=true" in before
+    assert "shm_present=true" in before
+    assert "database_changed=false" in after
+    assert "wal_changed=false" in after
+    assert "shm_changed=false" in after
+    assert str(tmp_path) not in trace
+    assert FICTIONAL_UIN not in trace
+
+
+def test_acquire_trace_correlates_generation_with_exact_native_read_window(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    trace_file = tmp_path / "runtime.log"
+    monkeypatch.setenv("QCE_LOG_FILE", str(trace_file))
+
+    output = _run_node(
+        tmp_path,
+        _acquire({
+            "uin": FICTIONAL_UIN,
+            "passphrase": True,
+            "traceSourceFileState": True,
+            "traceNativeReadState": True,
+        }),
+    )
+
+    generation_id = output["results"][0]["result"]["generation_id"]
+    trace = trace_file.read_text(encoding="utf-8")
+    read_line = next(
+        line for line in trace.splitlines()
+        if "stage=decrypt_source_read" in line
+    )
+    ready_line = next(
+        line for line in trace.splitlines()
+        if "stage=generation_ready" in line
+    )
+    assert f"generation_id={generation_id}" in read_line
+    assert f"generation_id={generation_id}" in ready_line
+    assert "database_changed=true" in read_line
+    assert "wal_changed=true" in read_line
+    assert "shm_changed=false" in read_line
+    assert "read_bytes=4096" in read_line
+    assert str(tmp_path) not in trace
+    assert FICTIONAL_UIN not in trace
+
+
+def test_passphrase_wait_trace_identifies_a_bounded_false_poll(tmp_path: Path, monkeypatch) -> None:
+    trace_file = tmp_path / "runtime.log"
+    monkeypatch.setenv("QCE_LOG_FILE", str(trace_file))
+
+    output = _run_node(
+        tmp_path,
+        _acquire({"uin": FICTIONAL_UIN, "passphrase": False}),
+    )
+
+    assert output["results"][0]["result"]["code"] == "passphrase_unavailable"
+    stages = [line.split("stage=", 1)[1].strip() for line in trace_file.read_text(encoding="utf-8").splitlines()]
+    assert stages == [
+        "acquire_queued", "acquire_entered", "slate_ready",
+        "passphrase_wait_started", "passphrase_wait_polled",
+        "passphrase_first_poll_completed", "passphrase_first_sleep_scheduled",
+        "passphrase_first_sleep_resumed", "passphrase_second_poll_started",
+        "passphrase_second_api_read", "passphrase_second_method_read",
+        "passphrase_second_method_returned", "passphrase_not_ready",
+    ]
+
+
+def test_passphrase_wait_emits_progress_before_its_deadline(tmp_path: Path, monkeypatch) -> None:
+    trace_file = tmp_path / "runtime.log"
+    monkeypatch.setenv("QCE_LOG_FILE", str(trace_file))
+
+    output = _run_node(tmp_path, _acquire({
+        "uin": FICTIONAL_UIN,
+        "passphrase": False,
+        "timeouts": _test_timeouts(passphraseMs=5300, pollIntervalMs=100),
+    }))
+
+    assert output["results"][0]["result"]["code"] == "passphrase_unavailable"
+    stages = [line.split("stage=", 1)[1].strip() for line in trace_file.read_text(encoding="utf-8").splitlines()]
+    assert stages.count("passphrase_wait_tick") == 1
+    assert stages.index("passphrase_wait_tick") < stages.index("passphrase_not_ready")
+
+
+def test_passphrase_then_identity_become_ready_near_separate_wait_boundaries(
+    tmp_path: Path,
+) -> None:
+    output = _run_node(
+        tmp_path,
+        _acquire({
+            "uin": FICTIONAL_UIN,
+            "passphrase": True,
+            "passphraseReadyAfterMs": 100,
+            "identityReadyAfterMs": 200,
+            "timeouts": _test_timeouts(passphraseMs=150, identityMs=150),
+        }),
+    )
+
+    assert output["results"][0]["result"]["status"] == "ready"
 
 
 def test_each_acquire_uses_a_fresh_opaque_generation_id(tmp_path: Path) -> None:

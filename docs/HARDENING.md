@@ -55,6 +55,8 @@ Echo 已经过了「先证明有没有人愿意用」的阶段。
 - QQ 真实导出进度和 diagnostics 是定位它的重要前置。
 - 已完成的基础设施改善：有限分析范围会下推至 QCE，且一次 acquisition 使用
   Echo-owned transient lease；这两项不能单独证明“大型 QQ 数据源分析失败”已解决。
+- 上述记录属于旧 QCE acquisition 路径；桌面 QQ 当前已改用 Direct DB，不能将旧现象
+  自动视为已修复或直接归因于新路径。
 
 状态：未审计
 
@@ -80,6 +82,8 @@ Release Blocker：TBD。
 - 用户无法确信 GUI 所称删除操作真正删除了预期的本地数据。
 - 生产路径中的 `ChatDataSnapshot` 已删除；QQ raw export 改为 Echo-owned transient
   lease，正常分析结束后自动 cleanup，重新分析会重新 acquisition 而不复用长期 stale raw snapshot。
+- 当前桌面 QQ Direct DB 每次获取使用新的 generation；正常获取完成后清理 plaintext，
+  启动和 shutdown 均有 `recover`。真人验收确认 shutdown 后 `snapshot.db` 无残留。
 - 仍需要从 filesystem / transient run / report history / persisted result 整条链审计；
   上述完成项不等同于完整的“删除全部本地数据”产品语义。
 
@@ -159,6 +163,12 @@ helper 将 no-limit / `limit=0` 静默回退到 100000 行。修复后，synthet
 SQLite 验收由 rebuilt binary 返回 100001 行且 `truncated=false`。这与 shard rollover
 根因不同，不能合并为同一根因。
 
+### BUG-07 Direct DB 偶发 `database disk image is malformed`
+
+状态：OPEN，当前不可稳定复现。自动 generation/source/snapshot/`quick_check` 诊断已部署。
+现有证据不足以确认根因或修复；不主动重复运行以碰概率，不猜测修改。
+再次出现时依据隐私安全诊断定位。Release Blocker：TBD。
+
 **明确注明：QCE / Windows 权限弹窗不是 Bug。**
 
 这是正常权限行为，UX 已经做过优化，不应重新进入 Active Bugs。
@@ -229,10 +239,15 @@ QCE 提供 messageCount、progress、status、message，
 - 生产 `ChatDataSnapshot` 已删除；QQ raw acquisition 是一次性 transient lease。
 - 正常分析结束后会清理 transient payload；重新分析会重新 acquisition。
 - Echo Report 是保留的结果资产；history 当前保存的是元数据，不是 raw snapshot。
+- 桌面 QQ Direct DB generation 在会话查询或 payload 物化后清理；启动与 shutdown
+  的 `recover` 负责遗留 plaintext。真人验收确认正常 shutdown 后 `snapshot.db` 无残留。
+- 所选会话的 `qq-db-json` payload 位于本次分析临时目录，由 consumer 完成或异常退出时
+  清理；它与 runtime generation 的 `snapshot.db` 是两个不同的 transient 资源。
 
 仍待审计 / 完成：
 
-- 异常终止后的 orphan transient run cleanup；
+- 旧 QCE transient run 在异常终止后的 orphan cleanup；Direct DB runtime generation
+  已有启动/关闭 `recover`，不能混为同一项；
 - report history reopen；
 - report deletion；
 - retention / max-count policy；
@@ -340,27 +355,15 @@ Release Blocker：Yes。
 
 ---
 
-## QQ Direct DB Feasibility
+## QQ Direct DB 当前阶段
 
-状态：PASS / feasibility validated；**PASS != production ready**。
+桌面 QQ 会话查询与分析当前使用 Direct DB 主链；QCE CLI 与连接/运行时能力仍保留，
+桌面分析没有自动 QCE fallback。架构与生命周期以 `ARCHITECTURE.md` 为准。
 
-已在受控本地实验中验证：
-
-- passphrase capture、SQLite availability，以及只读 DB decrypt/open；
-- `group_msg_table` / `c2c_msg_table` access；
-- controlled group plain-text sample 中的 group、sender、second timestamp candidate；
-- `40800` protobuf、`45002` text type 与 `45101` exact text recovery；
-- temporary plaintext cleanup 与 runtime restore。
-
-当前生产 QQ acquisition 仍为 QCE。Direct DB 仅是 validated candidate，不能据此宣称
-production ready、QCE retirement，或把单一样本字段映射提升为跨版本 schema guarantee。
-
-产品化前仍需关闭的 hardening 风险包括：schema capability detection、schema / QQ /
-NapCat version drift、key/passphrase 与 decrypted plaintext lifecycle、c2c 与 non-text
-message semantics、pagination、completeness、multi-account behavior、fail-soft /
-diagnostics、QCE parity validation，以及 migration / fallback policy。
-
-下一阶段从“是否可行”切换为“QQ DB Provider 的产品化设计与最小 vertical slice”。
+本阶段已证实：Direct DB `recover` / `acquire` 成功；会话列表显示 140 个会话；
+QCE Proxy 可调用 `then` 导致 acquire 永久 pending 的问题已修复并通过真人验收；
+正常 shutdown 后 QQ、NapCat、qce-server 与 `snapshot.db` 均无残留。
+Fast Suite 实测 0 failed。单一样本中的 DB 字段映射不构成跨 QQ 版本 schema 保证。
 
 ## Engineering Governance
 

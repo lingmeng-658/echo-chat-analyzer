@@ -21,6 +21,7 @@ passphrase and absolute paths never reach an exception's public message.
 from __future__ import annotations
 
 import json
+import logging
 import time
 import urllib.error
 import urllib.request
@@ -30,10 +31,13 @@ from typing import Any, Callable
 
 
 DEFAULT_RPC_TIMEOUT_SECONDS = 30
+DEFAULT_ACQUIRE_RPC_TIMEOUT_SECONDS = 65
 RECOVER_READINESS_ATTEMPTS = 51
 RECOVER_READINESS_POLL_SECONDS = 0.1
 RPC_METHOD_NAMESPACE = "EchoSnapshotApi"
 GENERATIONS_DIRECTORY_NAME = "generations"
+
+_LOGGER = logging.getLogger("qq_chat_analyzer.desktop.qq_direct_snapshot")
 
 _ACQUIRE = "acquire"
 _CLEANUP = "cleanup"
@@ -120,27 +124,44 @@ class QQDirectSnapshotRuntimeClient:
         base_url: str,
         *,
         snapshot_root: str | Path,
-        timeout: int = DEFAULT_RPC_TIMEOUT_SECONDS,
-        transport: Callable[[str, bytes, int], tuple[int, str]] | None = None,
+        timeout: float = DEFAULT_RPC_TIMEOUT_SECONDS,
+        acquire_timeout: float = DEFAULT_ACQUIRE_RPC_TIMEOUT_SECONDS,
+        transport: Callable[[str, bytes, float], tuple[int, str]] | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._snapshot_root = Path(snapshot_root)
         self._timeout = timeout
+        self._acquire_timeout = acquire_timeout
         self._transport = transport or _urllib_transport
 
     # ------------------------------------------------------------------ lifecycle
 
     def acquire(self) -> str:
         """Acquire a fresh generation and return its validated opaque id."""
-        result = self._rpc(_ACQUIRE, [])
-        if not isinstance(result, Mapping):
-            raise QQSnapshotRuntimeInvalidResponse()
-        if result.get("ok") is not True:
-            raise QQSnapshotRuntimeFailure()
-        if result.get("status") != "ready":
-            raise QQSnapshotRuntimeFailure()
-
-        return validate_generation_id(result.get("generation_id"))
+        started_at = time.monotonic()
+        _LOGGER.info("QQ snapshot acquire RPC started timeout=%.1fs", self._acquire_timeout)
+        try:
+            result = self._rpc(_ACQUIRE, [], timeout=self._acquire_timeout)
+            if not isinstance(result, Mapping):
+                raise QQSnapshotRuntimeInvalidResponse()
+            if result.get("ok") is not True:
+                raise QQSnapshotRuntimeFailure()
+            if result.get("status") != "ready":
+                raise QQSnapshotRuntimeFailure()
+            generation_id = validate_generation_id(result.get("generation_id"))
+        except Exception as error:
+            _LOGGER.info(
+                "QQ snapshot acquire RPC finished outcome=%s elapsed=%.2fs",
+                type(error).__name__,
+                time.monotonic() - started_at,
+            )
+            raise
+        _LOGGER.info(
+            "QQ snapshot acquire RPC finished outcome=ready elapsed=%.2fs generation_id=%s",
+            time.monotonic() - started_at,
+            generation_id,
+        )
+        return generation_id
     def cleanup(self, generation_id: str) -> None:
         """Remove one generation.  A missing generation is already cleaned."""
         normalized = validate_generation_id(generation_id)
@@ -154,8 +175,13 @@ class QQDirectSnapshotRuntimeClient:
             return
         raise QQSnapshotCleanupFailed()
 
-    def recover(self) -> None:
+    def recover(self, *, deadline: float | None = None) -> None:
         """Ask the runtime to remove orphan staging and legacy artifacts."""
+        if deadline is not None:
+            result = self._rpc(_RECOVER, [], deadline=deadline)
+            if isinstance(result, Mapping) and result.get("ok") is True:
+                return
+            raise QQSnapshotRuntimeFailure()
         for attempt in range(RECOVER_READINESS_ATTEMPTS):
             try:
                 result = self._rpc(_RECOVER, [])
@@ -177,19 +203,31 @@ class QQDirectSnapshotRuntimeClient:
 
     # ------------------------------------------------------------------ internals
 
-    def _rpc(self, method: str, params: list[Any]) -> Any:
+    def _rpc(
+        self, method: str, params: list[Any], *,
+        deadline: float | None = None, timeout: float | None = None,
+    ) -> Any:
         body = json.dumps(
             {"method": f"{RPC_METHOD_NAMESPACE}.{method}", "params": params},
             ensure_ascii=False,
         ).encode("utf-8")
         url = f"{self._base_url}/rpc"
+        timeout = self._timeout if timeout is None else timeout
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise QQSnapshotRuntimeUnavailable()
+            timeout = min(remaining, self._timeout)
         try:
-            status, text = self._transport(url, body, self._timeout)
+            status, text = self._transport(url, body, timeout)
         except QQSnapshotRuntimeError:
             raise
         except (urllib.error.URLError, OSError, TimeoutError) as error:
             raise QQSnapshotRuntimeUnavailable() from error
-        return _unwrap_rpc(status, text)
+        result = _unwrap_rpc(status, text)
+        if deadline is not None and time.monotonic() >= deadline:
+            raise QQSnapshotRuntimeUnavailable()
+        return result
 
 
 def _unwrap_rpc(status: int, text: str) -> Any:
@@ -220,7 +258,7 @@ def _is_recover_api_not_ready(error: Any) -> bool:
     )
 
 
-def _urllib_transport(url: str, body: bytes, timeout: int) -> tuple[int, str]:
+def _urllib_transport(url: str, body: bytes, timeout: float) -> tuple[int, str]:
     """Perform one POST against the local `/rpc` bridge only."""
     if not url.startswith(("http://127.0.0.1", "http://localhost", "http://[::1]")):
         raise QQSnapshotRuntimeUnavailable()
@@ -250,6 +288,7 @@ def _clean_str(value: Any) -> str:
 
 __all__ = [
     "DEFAULT_RPC_TIMEOUT_SECONDS",
+    "DEFAULT_ACQUIRE_RPC_TIMEOUT_SECONDS",
     "GENERATIONS_DIRECTORY_NAME",
     "QQDirectSnapshotRuntimeClient",
     "QQSnapshotCleanupFailed",

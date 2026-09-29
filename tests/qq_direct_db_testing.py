@@ -44,6 +44,7 @@ class FakeSnapshotRuntime:
         self.acquired: list[str] = []
         self.cleaned: list[str] = []
         self.recover_calls = 0
+        self.recover_deadlines: list[float | None] = []
         # Override hooks for failure scenarios.
         self.acquire_error: Exception | None = None
         self.acquire_result: str | None = None
@@ -74,8 +75,9 @@ class FakeSnapshotRuntime:
         shutil.rmtree(self.generation_directory(generation_id), ignore_errors=True)
         return None
 
-    def recover(self) -> None:
+    def recover(self, *, deadline: float | None = None) -> None:
         self.recover_calls += 1
+        self.recover_deadlines.append(deadline)
         if self.recover_error is not None:
             raise self.recover_error
         if self.recover_clean:

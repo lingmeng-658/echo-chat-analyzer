@@ -621,3 +621,109 @@ native CLI 将 no-limit / `limit=0` 解释为持续 step 到 statement done；Pr
 - `tests/test_wechat_db_source.py::test_export_session_json_default_limit_is_unlimited`
 
 历史状态：CLOSED / merged。覆盖 commit：`87b4bae` 的 unlimited 部分。
+
+---
+
+## Journal 009 — QQ Direct DB acquire 因 Proxy thenable 永久 pending
+
+### 1. 现象
+
+Direct DB 的 acquire 在已拿到 DatabaseApi/passphrase 后仍永久 pending。
+
+### 2. 为什么难查
+
+底层对象已就绪，卡住的位置却是 JavaScript async 返回值的 Promise 解析。
+
+### 3. 当时错误 / 竞争假设
+
+需区分 passphrase 尚未到达、RPC 等待超时和 Proxy 返回值自身无法完成。
+
+### 4. 最终根因
+
+QCE API adapter 是 Proxy，其未知方法 fallback 暴露可调用的 `then`；async 函数直接
+返回该 Proxy 时，Promise 将它作为 thenable 处理，但 fallback 不调用 resolve/reject。
+
+### 5. 原代码的隐含假设
+
+已就绪的 DatabaseApi Proxy 可直接作为 async 函数返回值。
+
+### 6. 为什么开发机或普通场景没有暴露
+
+该行为依赖真实 QCE Proxy；普通对象替身没有同样的 `then` fallback。
+
+### 7. 哪个诊断 / 实验真正钉死根因
+
+针对带可调用 `then` 的虚构 Proxy 回归复现 pending；修复后该回归与真人 acquire 均通过。
+
+### 8. 最终修复
+
+`waitForDatabaseApi` 返回普通对象包装 `{ databaseApi: api }`，避免 Promise 同化 Proxy。
+
+### 9. 可推广的工程经验
+
+跨 async 边界返回第三方 Proxy 时，需确认它是否意外具有 thenable 形状。
+
+### 10. 可以反向审计仓库的规则
+
+检查 async 函数直接返回第三方 Proxy 的位置；必要时以普通对象承载。
+
+### 11. 对应 regression test
+
+- `tests/test_qq_direct_db_snapshot_runtime.py::test_acquire_does_not_assimilate_database_api_adapter_as_a_thenable`
+
+状态：CLOSED / 真人验收通过；本轮尚未提交。
+
+---
+
+## Journal 010 — 桌面关闭后 Echo 自有 QQ 进程树残留
+
+### 1. 现象
+
+窗口关闭后，Echo 启动的 QQ/NapCat/qce-server 进程仍可残留。
+
+### 2. 为什么难查
+
+窗口已消失，但 daemon 清理线程尚未完成；解释器退出与进程终止是两个时间点。
+
+### 3. 当时错误 / 竞争假设
+
+需区分未记录 launcher PID、终止失败与退出过程未等待清理完成。
+
+### 4. 最终根因
+
+仅在窗口关闭时启动 daemon 清理不足以保证完成；解释器结束会中断未完成的清理。
+
+### 5. 原代码的隐含假设
+
+窗口关闭后启动的后台清理可以自然完成，无需桌面入口点持有退出权。
+
+### 6. 为什么开发机或普通场景没有暴露
+
+现有证据不足以补写更广泛的暴露条件。
+
+### 7. 哪个诊断 / 实验真正钉死根因
+
+退出协议与进程所有权回归固定先清理 plaintext、再终止已记录 PID 的顺序；
+真人验收确认 shutdown 后 QQ/NapCat/qce-server 和 `snapshot.db` 均无残留。
+
+### 8. 最终修复
+
+窗口只启动单次 shutdown protocol；桌面入口点在 Qt event loop 返回后有限等待，
+Facade 按顺序清理 Direct DB 与 Echo 自有进程树，超时后有强制退出兜底。
+
+### 9. 可推广的工程经验
+
+资源清理需要明确的 owner 和退出等待边界，不能仅依赖 daemon 线程启动。
+
+### 10. 可以反向审计仓库的规则
+
+检查每条应用退出路径是否等待同一个清理协议，以及终止目标是否仅来自自有 PID 记录。
+
+### 11. 对应 regression test
+
+- `tests/test_gui_shutdown_protocol.py`
+- `tests/test_desktop_exit_ownership.py`
+- `tests/test_shutdown_ownership.py`
+- `tests/test_gui.py::test_main_window_close_owns_shutdown_without_waiting`
+
+状态：CLOSED / 真人验收通过；本轮尚未提交。

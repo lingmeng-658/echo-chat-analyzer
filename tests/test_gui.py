@@ -1236,38 +1236,89 @@ def test_main_window_close_quits_application(
     assert calls == [1]
 
 
-def test_main_window_qq_cleanup_thread_is_daemon(
-    qt_app,
-    sources,
-) -> None:
-    """Shutdown cleanup must not keep the Python process alive.
+def test_main_window_close_owns_shutdown_without_waiting(qt_app, sources) -> None:
+    """The window disappears at once, but Echo keeps shutdown ownership.
 
-    ``closeEvent`` now runs the whole ordered shutdown (Direct DB plaintext
-    cleanup, then QQ runtime termination) on a single daemon thread owned by
-    ``facade.shutdown``, so no second QQ-shutdown thread exists.
+    ``closeEvent`` must not block the GUI thread, and the cleanup must not be
+    left to interpreter finalization: the window exposes the very protocol the
+    desktop entry point waits on, so the ordered shutdown (Direct DB plaintext
+    cleanup, then QQ runtime termination) still completes.
     """
+    module = importlib.import_module("qq_chat_analyzer.gui.shutdown")
+    release = threading.Event()
+
     class _SlowShutdownFacade(StubFacade):
         def shutdown(self):
-            time.sleep(1.0)
+            self.shutdown_calls.append(1)
+            release.wait(5.0)
 
-    window = _main_window(
-        qt_app,
-        _SlowShutdownFacade(sources=sources),
-    )
+    facade = _SlowShutdownFacade(sources=sources)
+    window = _main_window(qt_app, facade)
+    window.show()
+
+    started = time.monotonic()
+    window.close()
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.1
+    assert window.isVisible() is False
+
+    protocol = window.shutdown_protocol
+    assert protocol.started is True
+    assert protocol.finished is False
+    assert module.THREAD_NAME in {
+        thread.name for thread in threading.enumerate()
+    }
+
+    # The entry point still owns the outcome: it can wait for the protocol.
+    release.set()
+    assert window.await_shutdown(2.0) is True
+    assert protocol.finished is True
+    assert facade.shutdown_calls == [1]
+
+
+def test_main_window_shutdown_protocol_thread_is_daemon(qt_app, sources) -> None:
+    """A stuck cleanup must never keep the Python process alive forever."""
+    module = importlib.import_module("qq_chat_analyzer.gui.shutdown")
+    release = threading.Event()
+
+    class _SlowShutdownFacade(StubFacade):
+        def shutdown(self):
+            release.wait(5.0)
+
+    window = _main_window(qt_app, _SlowShutdownFacade(sources=sources))
 
     window.close()
 
-    facade_thread = next(
+    protocol_thread = next(
         (
             candidate
             for candidate in threading.enumerate()
-            if candidate.name == "echo-facade-shutdown"
+            if candidate.name == module.THREAD_NAME
         ),
         None,
     )
-    assert facade_thread is not None
-    assert facade_thread.daemon is True
-    facade_thread.join(timeout=2.0)
+    assert protocol_thread is not None
+    assert protocol_thread.daemon is True
+    release.set()
+    assert window.await_shutdown(2.0) is True
+
+
+def test_main_window_close_starts_only_one_shutdown_protocol(
+    qt_app,
+    sources,
+) -> None:
+    """Repeated closes must never start a competing shutdown."""
+    facade = StubFacade(sources=sources)
+    window = _main_window(qt_app, facade)
+
+    window.close()
+    window.close()
+    assert window.begin_shutdown() is False
+
+    assert window.await_shutdown(2.0) is True
+    assert facade.shutdown_calls == [1]
+    assert facade.shutdown_qq_runtime_calls == [1]
 
 
 def test_main_window_has_minimum_size(qt_app, sources) -> None:

@@ -71,14 +71,40 @@ def _client(transport, *, base_url: str = "http://127.0.0.1:40654", root: Path |
 # ------------------------------------------------------------------ acquire
 
 
-def test_acquire_success_returns_validated_generation_id(tmp_path: Path) -> None:
+def test_acquire_success_returns_and_logs_validated_generation_id(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     transport = _FakeTransport(body=_envelope(_acquire_result("gen-1234")))
     client = _client(transport, root=tmp_path)
 
-    assert client.acquire() == "gen-1234"
+    with caplog.at_level(
+        "INFO",
+        logger="qq_chat_analyzer.desktop.qq_direct_snapshot",
+    ):
+        assert client.acquire() == "gen-1234"
+
+    assert "outcome=ready" in caplog.text
+    assert "generation_id=gen-1234" in caplog.text
     assert transport.calls[0][0] == "http://127.0.0.1:40654/rpc"
     request = json.loads(transport.calls[0][1].decode("utf-8"))
     assert request == {"method": "EchoSnapshotApi.acquire", "params": []}
+
+
+def test_acquire_timeout_covers_sequential_passphrase_and_identity_waits(tmp_path: Path) -> None:
+    transport = _FakeTransport(body=_envelope(_acquire_result("gen-late")))
+    original_transport = transport.__call__
+
+    def delayed_runtime(url: str, body: bytes, timeout: float) -> tuple[int, str]:
+        # The helper may wait 30 s for a passphrase and then 30 s for identity.
+        if timeout <= 60:
+            raise TimeoutError()
+        return original_transport(url, body, timeout)
+
+    client = _client(delayed_runtime, root=tmp_path)
+
+    assert client.acquire() == "gen-late"
+    assert transport.calls[0][2] > 60
 
 
 def test_acquire_runtime_failure_maps_to_stable_error(tmp_path: Path) -> None:
@@ -121,12 +147,17 @@ def test_acquire_connection_refused_maps_to_unavailable(tmp_path: Path) -> None:
         client.acquire()
 
 
-def test_acquire_timeout_maps_to_unavailable(tmp_path: Path) -> None:
+def test_acquire_timeout_maps_to_unavailable(tmp_path: Path, caplog) -> None:
     transport = _FakeTransport(error=TimeoutError("timed out"))
     client = _client(transport, root=tmp_path)
 
-    with pytest.raises(QQSnapshotRuntimeUnavailable):
-        client.acquire()
+    with caplog.at_level("INFO", logger="qq_chat_analyzer.desktop.qq_direct_snapshot"):
+        with pytest.raises(QQSnapshotRuntimeUnavailable):
+            client.acquire()
+
+    assert "QQ snapshot acquire RPC started timeout=65.0s" in caplog.text
+    assert "outcome=QQSnapshotRuntimeUnavailable" in caplog.text
+    assert "timed out" not in caplog.text
 
 
 def test_acquire_rejects_non_ready_status(tmp_path: Path) -> None:
@@ -268,6 +299,65 @@ def test_recover_does_not_retry_other_rpc_failures(
         client.recover()
 
     assert len(transport.calls) == 1
+
+
+def test_shutdown_recover_uses_remaining_deadline_for_one_rpc(monkeypatch, tmp_path: Path) -> None:
+    now = [100.0]
+    monkeypatch.setattr(snapshot_runtime.time, "monotonic", lambda: now[0])
+    transport = _FakeTransport(
+        body=_rpc_error("NapCatCore method not found: EchoSnapshotApi.recover")
+    )
+    client = QQDirectSnapshotRuntimeClient(
+        "http://127.0.0.1:40654", snapshot_root=tmp_path,
+        timeout=30, transport=transport,
+    )
+
+    with pytest.raises(QQSnapshotRuntimeNotReady):
+        client.recover(deadline=105.1)
+
+    assert len(transport.calls) == 1
+    assert transport.calls[0][2] == pytest.approx(5.1)
+
+
+def test_shutdown_recover_does_not_rpc_after_deadline(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(snapshot_runtime.time, "monotonic", lambda: 106.0)
+    transport = _FakeTransport(body=_envelope({"ok": True}))
+    client = _client(transport, root=tmp_path)
+
+    with pytest.raises(QQSnapshotRuntimeUnavailable):
+        client.recover(deadline=105.1)
+
+    assert transport.calls == []
+
+
+def test_shutdown_recover_caps_timeout_at_configured_rpc_timeout(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(snapshot_runtime.time, "monotonic", lambda: 100.0)
+    transport = _FakeTransport(body=_envelope({"ok": True}))
+    client = QQDirectSnapshotRuntimeClient(
+        "http://127.0.0.1:40654", snapshot_root=tmp_path,
+        timeout=2, transport=transport,
+    )
+
+    client.recover(deadline=105.1)
+
+    assert transport.calls[0][2] == 2
+
+
+def test_shutdown_recover_rejects_response_after_total_deadline(monkeypatch, tmp_path: Path) -> None:
+    now = [100.0]
+    monkeypatch.setattr(snapshot_runtime.time, "monotonic", lambda: now[0])
+
+    def delayed_transport(url: str, body: bytes, timeout: float) -> tuple[int, str]:
+        now[0] = 106.0
+        return 200, _envelope({"ok": True})
+
+    client = QQDirectSnapshotRuntimeClient(
+        "http://127.0.0.1:40654", snapshot_root=tmp_path,
+        timeout=30, transport=delayed_transport,
+    )
+
+    with pytest.raises(QQSnapshotRuntimeUnavailable):
+        client.recover(deadline=105.1)
 
 
 # ------------------------------------------------------------ privacy guards

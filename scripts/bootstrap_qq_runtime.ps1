@@ -105,6 +105,7 @@ function Get-QqRuntimePins {
     if (-not $Pins.qce) { Fail "pin 文件缺少 'qce' 段: $PinsPath" }
     if (-not $Pins.launcherPatch) { Fail "pin 文件缺少 'launcherPatch' 段: $PinsPath" }
     if (-not $Pins.indexPatch) { Fail "pin 文件缺少 'indexPatch' 段: $PinsPath" }
+    if (-not $Pins.napcatPatch) { Fail "pin 文件缺少 'napcatPatch' 段: $PinsPath" }
     if (-not $Pins.directDbSnapshot) { Fail "pin 文件缺少 'directDbSnapshot' 段: $PinsPath" }
     if (-not $Pins.requiredFiles) { Fail "pin 文件缺少 'requiredFiles' 段: $PinsPath" }
     if (-not $Pins.excludedPaths) { Fail "pin 文件缺少 'excludedPaths' 段: $PinsPath" }
@@ -135,6 +136,12 @@ function Get-QqRuntimePins {
             Fail "pin 文件缺少 'directDbSnapshot.$Field': $PinsPath"
         }
     }
+    foreach ($Field in @('path', 'upstreamSha256', 'patchedSha256', 'replacements')) {
+        if (-not $Pins.napcatPatch.$Field) { Fail "pin 文件缺少 'napcatPatch.$Field': $PinsPath" }
+    }
+    if (@($Pins.napcatPatch.replacements).Count -ne 4) {
+        Fail "napcatPatch.replacements 必须恰好包含四个固定锚点"
+    }
 
     $ArchiveSha256 = ([string]$Pins.qce.archiveSha256).ToLowerInvariant()
     Assert-Sha256Text -Value $ArchiveSha256 -Label 'qce.archiveSha256'
@@ -152,6 +159,16 @@ function Get-QqRuntimePins {
     Assert-Sha256Text -Value $PatchedIndex -Label 'indexPatch.patchedSha256'
     $Pins.indexPatch.upstreamSha256 = $UpstreamIndex
     $Pins.indexPatch.patchedSha256 = $PatchedIndex
+
+    $UpstreamNapcat = ([string]$Pins.napcatPatch.upstreamSha256).ToLowerInvariant()
+    $PatchedNapcat = ([string]$Pins.napcatPatch.patchedSha256).ToLowerInvariant()
+    Assert-Sha256Text -Value $UpstreamNapcat -Label 'napcatPatch.upstreamSha256'
+    Assert-Sha256Text -Value $PatchedNapcat -Label 'napcatPatch.patchedSha256'
+    $Pins.napcatPatch.upstreamSha256 = $UpstreamNapcat
+    $Pins.napcatPatch.patchedSha256 = $PatchedNapcat
+    if (([string]$Pins.requiredFiles.'napcat.mjs').ToLowerInvariant() -ne $UpstreamNapcat) {
+        Fail 'napcatPatch.upstreamSha256 与 requiredFiles.napcat.mjs 不一致'
+    }
 
     $SnapshotTemplate = ([string]$Pins.directDbSnapshot.templateSha256).ToLowerInvariant()
     Assert-Sha256Text -Value $SnapshotTemplate -Label 'directDbSnapshot.templateSha256'
@@ -483,6 +500,36 @@ function Update-QcePluginIndex {
     Assert-FileSha256 -Path $Target -Expected ([string]$Pins.indexPatch.patchedSha256) -Label "Echo Direct DB 补丁后的 $Relative"
 }
 
+function Update-NapcatPassphraseSync {
+    param(
+        [Parameter(Mandatory = $true)][string]$RuntimeRoot,
+        [Parameter(Mandatory = $true)]$Pins
+    )
+
+    $Relative = ([string]$Pins.napcatPatch.path) -replace '\\', '/'
+    $Target = Join-Path $RuntimeRoot ($Relative -replace '/', '\')
+    if (-not (Test-Path -LiteralPath $Target -PathType Leaf)) {
+        Fail "上游 NapCat 文件缺失: $Relative"
+    }
+    Assert-FileSha256 -Path $Target -Expected ([string]$Pins.napcatPatch.upstreamSha256) -Label "上游 $Relative"
+
+    # Latin1 preserves every original byte, including the bundle's UTF-8 text.
+    $Encoding = [System.Text.Encoding]::GetEncoding(28591)
+    $Text = $Encoding.GetString([System.IO.File]::ReadAllBytes($Target))
+    foreach ($Edit in $Pins.napcatPatch.replacements) {
+        $Anchor = [string]$Edit.anchor
+        $Replacement = [string]$Edit.replacement
+        if (-not $Anchor -or -not $Replacement) { Fail "NapCat 补丁锚点不能为空: $Relative" }
+        $Occurrences = ([regex]::Matches($Text, [regex]::Escape($Anchor))).Count
+        if ($Occurrences -ne 1) {
+            Fail "上游 NapCat 补丁锚点必须恰好出现一次，实际 $Occurrences 次: $Relative"
+        }
+        $Text = $Text.Replace($Anchor, $Replacement)
+    }
+    [System.IO.File]::WriteAllBytes($Target, $Encoding.GetBytes($Text))
+    Assert-FileSha256 -Path $Target -Expected ([string]$Pins.napcatPatch.patchedSha256) -Label "Echo 补丁后的 $Relative"
+}
+
 function Assert-PinnedRuntimeFiles {
     param(
         [Parameter(Mandatory = $true)][string]$RuntimeRoot,
@@ -497,6 +544,9 @@ function Assert-PinnedRuntimeFiles {
         }
         $Actual = Get-FileSha256 -Path $Target
         $Expected = ([string]$Property.Value).ToLowerInvariant()
+        if ($Relative -eq [string]$Pins.napcatPatch.path) {
+            $Expected = [string]$Pins.napcatPatch.patchedSha256
+        }
         if ($Actual -ne $Expected) {
             Fail "runtime\$($Relative -replace '/', '\') SHA256 不匹配: 期望 $Expected，实际 $Actual"
         }
@@ -606,6 +656,7 @@ try {
     $PreparedRoot = Expand-QceArchive -ArchivePath $Archive -Pins $Pins
     Remove-ExcludedRuntimeState -RuntimeRoot $PreparedRoot -Pins $Pins
     Update-LauncherUserBatch -RuntimeRoot $PreparedRoot -Pins $Pins
+    Update-NapcatPassphraseSync -RuntimeRoot $PreparedRoot -Pins $Pins
     Inject-DirectDbSnapshot -RuntimeRoot $PreparedRoot -Pins $Pins
     Update-QcePluginIndex -RuntimeRoot $PreparedRoot -Pins $Pins
     Assert-PinnedRuntimeFiles -RuntimeRoot $PreparedRoot -Pins $Pins
@@ -623,6 +674,9 @@ try {
     Assert-FileSha256 -Path (
         Join-Path $TargetRoot ((([string]$Pins.indexPatch.path) -replace '/', '\'))
     ) -Expected ([string]$Pins.indexPatch.patchedSha256) -Label 'runtime\qq\plugins\napcat-plugin-qce\index.mjs'
+    Assert-FileSha256 -Path (
+        Join-Path $TargetRoot ((([string]$Pins.napcatPatch.path) -replace '/', '\'))
+    ) -Expected ([string]$Pins.napcatPatch.patchedSha256) -Label 'runtime\qq\napcat.mjs'
     Assert-FileSha256 -Path (
         Join-Path $TargetRoot ((([string]$Pins.directDbSnapshot.targetPath) -replace '/', '\'))
     ) -Expected ([string]$Pins.directDbSnapshot.templateSha256) -Label 'runtime\qq\plugins\napcat-plugin-qce\direct_db_research\snapshot.mjs'

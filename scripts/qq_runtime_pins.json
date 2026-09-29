@@ -28,9 +28,32 @@
     "replacement": "    apiLauncher = new QQChatExporterApiLauncher(runtimeCore);\r\n    await apiLauncher.startApiServer();\r\n\r\n    // Echo-injected Direct DB snapshot seam. Registers an explicit\r\n    // acquire/cleanup/recover API on runtimeCore.apis and never decrypts at\r\n    // startup; the local-only helper owns a single-flight decrypt + atomic publish.\r\n    const { registerEchoSnapshotApi } = await import('./direct_db_research/snapshot.mjs');\r\n    registerEchoSnapshotApi(runtimeCore);\r\n  } catch (error) {\r\n",
     "addedLine": "const { registerEchoSnapshotApi } = await import('./direct_db_research/snapshot.mjs');"
   },
+  "napcatPatch": {
+    "path": "napcat.mjs",
+    "upstreamSha256": "59ba500eb824b4064d9f9a763101d15c5aae5cd268475b4cbbb7c3c8e2134aee",
+    "patchedSha256": "16bb8f8c43672880ced39ed79fcceb6f1b055b25f80863168d1970ef9f6d4acf",
+    "replacements": [
+      {
+        "anchor": "  let a;\n  if (r.onCmd(\"OidbSvcTrpcTcp.0xcde_2\"",
+        "replacement": "  let a, core;\n  if (r.onCmd(\"OidbSvcTrpcTcp.0xcde_2\""
+      },
+      {
+        "anchor": "D.inner?.value && (a = D.inner.value, e.log(",
+        "replacement": "D.inner?.value && (a = D.inner.value, core && (core.dbPassphrase = a), e.log("
+      },
+      {
+        "anchor": "  a && (Y.core.dbPassphrase = a), await Y.InitNapCat();",
+        "replacement": "  core = Y.core, a && (core.dbPassphrase = a), await Y.InitNapCat();"
+      },
+      {
+        "anchor": "function LE(t, e, n) {\n  const r = Ge.readFileSync(t), i = UE(r, e);",
+        "replacement": "function LE(t, e, n) {\n  const echoFileState = (p) => { try { const s = Ge.statSync(p); return { present: s.isFile(), bytes: s.isFile() ? s.size : 0, mtimeMs: s.mtimeMs }; } catch { return { present: false, bytes: 0, mtimeMs: 0 }; } }, echoBefore = { database: echoFileState(t), wal: echoFileState(`${t}-wal`), shm: echoFileState(`${t}-shm`) }, r = Ge.readFileSync(t), echoAfter = { database: echoFileState(t), wal: echoFileState(`${t}-wal`), shm: echoFileState(`${t}-shm`) };\n  globalThis.__ECHO_DIRECT_DB_READ_STATE__ = { databaseBefore: echoBefore.database, databaseAfter: echoAfter.database, walBefore: echoBefore.wal, walAfter: echoAfter.wal, shmBefore: echoBefore.shm, shmAfter: echoAfter.shm, readBytes: r.length };\n  const i = UE(r, e);"
+      }
+    ]
+  },
   "directDbSnapshot": {
     "templatePath": "qq_direct_db_snapshot/snapshot.mjs",
-    "templateSha256": "da52c31a48dd20da0853e2311dbadc0b8a127347086f683a92f8b6f2ad5fb8c5",
+    "templateSha256": "1d647911f9056be6c63ea3c2937a854a3526385a0467cea4fc16c8adc565354a",
     "targetPath": "plugins/napcat-plugin-qce/direct_db_research/snapshot.mjs"
   },
   "requiredFiles": {

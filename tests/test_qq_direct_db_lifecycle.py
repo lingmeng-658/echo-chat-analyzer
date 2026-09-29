@@ -16,15 +16,21 @@ from pathlib import Path
 import pytest
 
 from qq_chat_analyzer.application.facade import ChatAnalyzerFacade, ChatSource
+from qq_chat_analyzer.application.connection.models import ConnectionState
+from qq_chat_analyzer.application.qq_connection_service import QQConnectionService
 from qq_chat_analyzer.application.qq_direct_database_import_service import (
+    DEFAULT_SHUTDOWN_RECOVER_SECONDS,
     QQDirectDatabaseImportService,
     QQDirectDatabaseRecoveryFailed,
     QQDirectDatabaseShuttingDown,
     QQDirectDatabaseState,
     QQDirectDatabaseUnavailable,
+    QQDirectDatabaseNotReady,
 )
 from qq_chat_analyzer.providers.qq_direct_snapshot_runtime import (
     QQSnapshotRuntimeFailure,
+    QQSnapshotRuntimeNotReady,
+    QQSnapshotRuntimeUnavailable,
 )
 
 from qq_direct_db_testing import FICTIONAL_UIN, FakeSnapshotRuntime
@@ -265,6 +271,121 @@ def test_shutdown_cleanup_runs_after_inflight_finishes(tmp_path: Path) -> None:
     service.shutdown()
 
     assert runtime.recover_calls == 1
+
+
+def test_connected_qce_waits_for_delayed_snapshot_api_before_listing(tmp_path: Path) -> None:
+    snapshot = tmp_path / "source.db"
+    _create_snapshot(snapshot)
+
+    class DelayedRuntime(FakeSnapshotRuntime):
+        def recover(self, *, deadline=None) -> None:
+            if self.recover_calls < 2:
+                self.recover_calls += 1
+                raise QQSnapshotRuntimeNotReady()
+            super().recover(deadline=deadline)
+
+    class ConnectedQce:
+        def health_check(self):
+            return type("Health", (), {"available": True, "version": "fictional"})()
+
+        def resolve_token(self):
+            return "fictional-token"
+
+        def list_groups(self, limit=1):
+            return []
+
+    runtime = DelayedRuntime(tmp_path, snapshot_path=snapshot)
+    service = _service(runtime)
+    facade = ChatAnalyzerFacade(
+        qq_service=service,
+        qq_connection_service=QQConnectionService(provider=ConnectedQce()),
+    )
+
+    assert facade.get_qq_connection_snapshot().state is ConnectionState.CONNECTED
+    assert [session.session_id for session in facade.list_sessions(ChatSource.QQ)] == [GROUP_SESSION_ID]
+    assert runtime.recover_calls == 3
+    assert service.state is QQDirectDatabaseState.ACTIVE
+
+
+def test_bridge_unavailable_after_first_window_can_recover_on_later_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import qq_chat_analyzer.application.qq_direct_database_import_service as direct_module
+
+    snapshot = tmp_path / "source.db"
+    _create_snapshot(snapshot)
+    runtime = FakeSnapshotRuntime(tmp_path, snapshot_path=snapshot)
+    runtime.recover_error = QQSnapshotRuntimeUnavailable()
+    service = _service(runtime)
+    monkeypatch.setattr(direct_module, "DEFAULT_STARTUP_READINESS_SECONDS", 0)
+
+    with pytest.raises(QQDirectDatabaseNotReady):
+        service.list_sessions()
+    assert service.state is QQDirectDatabaseState.CLOSED
+    assert runtime.acquired == []
+
+    runtime.recover_error = None
+    assert [session.session_id for session in service.list_sessions()] == [GROUP_SESSION_ID]
+    assert runtime.recover_calls == 2
+
+
+def test_real_recover_cleanup_failure_remains_terminal_and_never_reads_old_generation(
+    tmp_path: Path,
+) -> None:
+    snapshot = tmp_path / "source.db"
+    _create_snapshot(snapshot)
+    runtime = FakeSnapshotRuntime(tmp_path, snapshot_path=snapshot)
+    runtime.write_generation("stale-gen")
+    runtime.recover_error = QQSnapshotRuntimeFailure()
+    service = _service(runtime)
+
+    with pytest.raises(QQDirectDatabaseRecoveryFailed):
+        service.list_sessions()
+    runtime.recover_error = None
+    with pytest.raises(QQDirectDatabaseUnavailable):
+        service.list_sessions()
+    assert runtime.acquired == []
+    assert service.state is QQDirectDatabaseState.CLOSED
+
+
+def test_shutdown_passes_one_monotonic_recover_deadline(tmp_path: Path) -> None:
+    snapshot = tmp_path / "source.db"
+    _create_snapshot(snapshot)
+    runtime = FakeSnapshotRuntime(tmp_path, snapshot_path=snapshot)
+    service = _service(runtime)
+    service.start()
+
+    before = time.monotonic()
+    service.shutdown()
+    after = time.monotonic()
+
+    assert runtime.recover_deadlines[0] is not None
+    assert len(runtime.recover_deadlines) == 2
+    assert (
+        before + DEFAULT_SHUTDOWN_RECOVER_SECONDS
+        <= runtime.recover_deadlines[1]
+        <= after + DEFAULT_SHUTDOWN_RECOVER_SECONDS
+    )
+
+
+def test_shutdown_recover_deadline_stays_within_declared_total_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = FakeSnapshotRuntime(tmp_path)
+    service = _service(runtime, shutdown_drain_seconds=0.01)
+    service.start()
+
+    def slow_drain() -> bool:
+        time.sleep(0.05)
+        return True
+
+    monkeypatch.setattr(service, "_drain_acquisitions", slow_drain)
+
+    before = time.monotonic()
+    service.shutdown()
+
+    assert runtime.recover_deadlines[1] is not None
+    assert runtime.recover_deadlines[1] <= before + service.shutdown_budget_seconds + 0.01
 
 
 # ------------------------------------------------------------------ orphans

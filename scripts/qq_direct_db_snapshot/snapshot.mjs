@@ -12,11 +12,12 @@
 // ``runtime_directory.parent / output/qq_direct_db_phase35`` (four parent
 // segments up from this file reach ``runtime/``).
 //
-// Privacy contract: status objects and any log lines may only carry stable
-// error codes and the opaque generation id.  The identity value (QQ UIN),
-// nicknames, message text, the passphrase and absolute paths never appear in
-// a status object, a log line or an exception message.
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+// Privacy contract: status objects and log lines carry only stable codes,
+// fixed stages, timestamps, opaque generation ids, and source-file size/
+// change booleans. The identity value (QQ UIN), nicknames, message text, the
+// passphrase and absolute paths never appear in a status object, log line or
+// exception message.
+import { appendFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -91,6 +92,121 @@ function logDiagnostic(stage) {
   console.error(`qq_direct_db.diagnostic stage=${stage}`);
 }
 
+function traceStage(stage, generationId = null) {
+  // The launcher already uses this file for timestamped runtime diagnostics.
+  // Only fixed stage names are written; a logging failure must not affect data.
+  const logFile = process.env.QCE_LOG_FILE;
+  if (!logFile) return;
+  try {
+    const generation = generationId ? ` generation_id=${generationId}` : '';
+    appendFileSync(logFile, `[${new Date().toISOString()}] [echo-snapshot] stage=${stage}${generation}\n`);
+  } catch {
+    // Best-effort diagnostics only.
+  }
+}
+
+function fileState(path) {
+  try {
+    const stat = statSync(path);
+    return {
+      present: stat.isFile(),
+      bytes: stat.isFile() ? stat.size : 0,
+      mtimeMs: stat.mtimeMs,
+    };
+  } catch {
+    return { present: false, bytes: 0, mtimeMs: 0 };
+  }
+}
+
+function sourceDatabaseState(databaseApi) {
+  try {
+    const getDirectory = databaseApi?.getNtDbDir;
+    if (typeof getDirectory !== 'function') return null;
+    const directory = getDirectory();
+    if (typeof directory !== 'string' || !directory) return null;
+    const database = join(directory, SOURCE_DATABASE_NAME);
+    return {
+      database: fileState(database),
+      wal: fileState(`${database}-wal`),
+      shm: fileState(`${database}-shm`),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function stateChanged(before, after) {
+  return before.present !== after.present ||
+    before.bytes !== after.bytes ||
+    before.mtimeMs !== after.mtimeMs;
+}
+
+function traceSourceDatabaseState(stage, state, before = null, generationId = null) {
+  if (!state) return;
+  const logFile = process.env.QCE_LOG_FILE;
+  if (!logFile) return;
+  const changed = before
+    ? ` database_changed=${stateChanged(before.database, state.database)}` +
+      ` wal_changed=${stateChanged(before.wal, state.wal)}` +
+      ` shm_changed=${stateChanged(before.shm, state.shm)}`
+    : '';
+  const details =
+    `generation_id=${generationId} ` +
+    `database_present=${state.database.present} database_bytes=${state.database.bytes} ` +
+    `wal_present=${state.wal.present} wal_bytes=${state.wal.bytes} ` +
+    `shm_present=${state.shm.present} shm_bytes=${state.shm.bytes}`;
+  try {
+    appendFileSync(
+      logFile,
+      `[${new Date().toISOString()}] [echo-snapshot] stage=${stage} ${details}${changed}\n`,
+    );
+  } catch {
+    // Best-effort diagnostics only.
+  }
+}
+
+function safeReadFileState(value) {
+  return {
+    present: value?.present === true,
+    bytes: Number.isSafeInteger(value?.bytes) && value.bytes >= 0 ? value.bytes : 0,
+    mtimeMs: Number.isFinite(value?.mtimeMs) ? value.mtimeMs : 0,
+  };
+}
+
+function traceSourceReadState(rawState, generationId) {
+  if (!rawState || typeof rawState !== 'object') return;
+  const state = {
+    databaseBefore: safeReadFileState(rawState.databaseBefore),
+    databaseAfter: safeReadFileState(rawState.databaseAfter),
+    walBefore: safeReadFileState(rawState.walBefore),
+    walAfter: safeReadFileState(rawState.walAfter),
+    shmBefore: safeReadFileState(rawState.shmBefore),
+    shmAfter: safeReadFileState(rawState.shmAfter),
+  };
+  const readBytes = Number.isSafeInteger(rawState.readBytes) && rawState.readBytes >= 0
+    ? rawState.readBytes
+    : 0;
+  const logFile = process.env.QCE_LOG_FILE;
+  if (!logFile) return;
+  try {
+    appendFileSync(
+      logFile,
+      `[${new Date().toISOString()}] [echo-snapshot] stage=decrypt_source_read ` +
+      `generation_id=${generationId} ` +
+      `database_changed=${stateChanged(state.databaseBefore, state.databaseAfter)} ` +
+      `wal_changed=${stateChanged(state.walBefore, state.walAfter)} ` +
+      `shm_changed=${stateChanged(state.shmBefore, state.shmAfter)} ` +
+      `database_before_bytes=${state.databaseBefore.bytes} ` +
+      `database_after_bytes=${state.databaseAfter.bytes} ` +
+      `wal_before_bytes=${state.walBefore.bytes} wal_after_bytes=${state.walAfter.bytes} ` +
+      `shm_before_bytes=${state.shmBefore.bytes} shm_after_bytes=${state.shmAfter.bytes} ` +
+      `read_bytes=${readBytes}\n`,
+    );
+  } catch {
+    // Best-effort diagnostics only.
+  }
+}
+
 /**
  * Normalize a caller-supplied generation id into a single path segment, or
  * return ``null`` when it cannot be a generation id.  ``cleanup`` must only
@@ -159,19 +275,46 @@ export function createEchoSnapshotApi(core, options = {}) {
 
   async function waitForDatabaseApi() {
     const deadline = now() + passphraseMs;
+    let firstPollRecorded = false;
+    let pollCount = 0;
+    let nextProgressTrace = now() + 5000;
+    traceStage('passphrase_wait_started');
     while (now() < deadline) {
+      pollCount += 1;
+      if (pollCount === 2) traceStage('passphrase_second_poll_started');
       const api = core?.apis?.DatabaseApi;
+      if (pollCount === 2) traceStage('passphrase_second_api_read');
       if (api && typeof api.hasPassphrase === 'function') {
+        if (pollCount === 2) traceStage('passphrase_second_method_read');
         databaseApiSeen = true;
         try {
-          if (api.hasPassphrase() === true) {
-            return api;
+          const ready = api.hasPassphrase() === true;
+          if (pollCount === 2) traceStage('passphrase_second_method_returned');
+          if (ready) {
+            if (!firstPollRecorded) traceStage('passphrase_wait_polled');
+            // QCE's API adapter is a Proxy whose unknown-method fallback also
+            // exposes a callable `then`. Returning that Proxy directly from an
+            // async function makes Promise resolution treat it as a thenable;
+            // the fallback ignores resolve/reject, so this wait never settles.
+            return { databaseApi: api };
           }
         } catch {
+          if (pollCount === 2) traceStage('passphrase_second_method_threw');
           // Transient read failure; retry within the bounded window.
         }
       }
+      if (!firstPollRecorded) {
+        traceStage('passphrase_wait_polled');
+        firstPollRecorded = true;
+        traceStage('passphrase_first_poll_completed');
+      }
+      if (pollCount === 1) traceStage('passphrase_first_sleep_scheduled');
       await sleep(pollIntervalMs);
+      if (pollCount === 1) traceStage('passphrase_first_sleep_resumed');
+      if (now() >= nextProgressTrace) {
+        traceStage('passphrase_wait_tick');
+        nextProgressTrace = now() + 5000;
+      }
     }
     return null;
   }
@@ -197,29 +340,38 @@ export function createEchoSnapshotApi(core, options = {}) {
   }
 
   async function acquire() {
+    traceStage('acquire_queued');
     return withLock(async () => {
+      traceStage('acquire_entered');
       // 1. Fail-closed cleanup: no decryption may start unless every previous
       //    generation, staging dir and legacy plaintext artifact is gone.
       const slate = cleanSlate();
       if (!slate.ok) {
+        traceStage('slate_failed');
         return fail(CODES.CLEANUP_FAILED);
       }
+      traceStage('slate_ready');
 
       // 2. Bounded wait for the in-process DatabaseApi and its passphrase.
-      const databaseApi = await waitForDatabaseApi();
-      if (!databaseApi) {
+      const databaseApiResult = await waitForDatabaseApi();
+      if (!databaseApiResult) {
+        traceStage(databaseApiSeen ? 'passphrase_not_ready' : 'database_api_not_ready');
         logDiagnostic(
           databaseApiSeen ? 'passphrase_not_ready' : 'database_api_not_ready',
         );
         return fail(CODES.PASSHRASE_UNAVAILABLE);
       }
+      const { databaseApi } = databaseApiResult;
+      traceStage('passphrase_ready');
 
       // 3. Bounded wait for a canonical self identity *before* decryption.
       const identityBefore = await waitForIdentity();
       if (identityBefore === null) {
+        traceStage('identity_not_ready');
         logDiagnostic('identity_not_ready');
         return fail(CODES.IDENTITY_MISSING);
       }
+      traceStage('identity_ready');
 
       const generationId = randomUUID();
       const generationDirectory = join(generationsDirectory, generationId);
@@ -235,6 +387,10 @@ export function createEchoSnapshotApi(core, options = {}) {
       }
 
       let decrypted = false;
+      const sourceStateBefore = sourceDatabaseState(databaseApi);
+      traceSourceDatabaseState('decrypt_source_before', sourceStateBefore, null, generationId);
+      globalThis.__ECHO_DIRECT_DB_READ_STATE__ = null;
+      traceStage('decrypt_started');
       try {
         decrypted = Boolean(
           await databaseApi.decryptDatabase(SOURCE_DATABASE_NAME, stagingDatabase),
@@ -242,6 +398,16 @@ export function createEchoSnapshotApi(core, options = {}) {
       } catch {
         decrypted = false;
       }
+      traceStage('decrypt_finished');
+      const sourceReadState = globalThis.__ECHO_DIRECT_DB_READ_STATE__;
+      globalThis.__ECHO_DIRECT_DB_READ_STATE__ = null;
+      traceSourceReadState(sourceReadState, generationId);
+      traceSourceDatabaseState(
+        'decrypt_source_after',
+        sourceDatabaseState(databaseApi),
+        sourceStateBefore,
+        generationId,
+      );
       if (!decrypted || !existsSync(stagingDatabase)) {
         discardStaging();
         logDiagnostic('decrypt_failed');
@@ -288,6 +454,8 @@ export function createEchoSnapshotApi(core, options = {}) {
         return fail(CODES.PUBLISH_FAILED);
       }
 
+      traceStage('generation_ready', generationId);
+
       return { ok: true, generation_id: generationId, status: 'ready' };
     });
   }
@@ -312,11 +480,15 @@ export function createEchoSnapshotApi(core, options = {}) {
   }
 
   async function recover() {
+    traceStage('recover_queued');
     return withLock(async () => {
+      traceStage('recover_entered');
       const slate = cleanSlate();
       if (!slate.ok) {
+        traceStage('recover_failed');
         return fail(CODES.RECOVER_FAILED);
       }
+      traceStage('recover_finished');
       return { ok: true, status: 'recovered' };
     });
   }

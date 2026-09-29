@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import sqlite3
 import warnings
 from dataclasses import dataclass
@@ -19,6 +20,9 @@ _C2C_MESSAGE_TABLE = "c2c_msg_table"
 _PARTITION_KEY_FIELD = "40027"
 _SESSION_OBJECT_FIELD = "40030"
 _TIMESTAMP_FIELD = "40050"
+
+_LOGGER = logging.getLogger("qq_chat_analyzer.desktop.qq_database")
+_SQLITE_HEADER = b"SQLite format 3\x00"
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +60,7 @@ class QQDatabaseProvider:
 
     def __init__(self, database_path: str | Path) -> None:
         self._database_path = Path(database_path)
+        self._success_diagnostic_recorded = False
 
     def list_sessions(self) -> list[QQSession]:
         """Return all conversations (groups + private) in the database."""
@@ -80,12 +85,11 @@ class QQDatabaseProvider:
             f'GROUP BY "{_PARTITION_KEY_FIELD}" '
             f'ORDER BY last_message_time DESC'
         )
-        connection = sqlite3.connect(self._read_only_uri(), uri=True)
-        connection.row_factory = sqlite3.Row
-        try:
-            rows = connection.execute(query).fetchall()
-        finally:
-            connection.close()
+        rows = self._query_rows(
+            query,
+            operation="list_sessions",
+            table_name=table_name,
+        )
 
         sessions: list[QQSession] = []
         for row in rows:
@@ -212,12 +216,12 @@ class QQDatabaseProvider:
             f"WHERE {' AND '.join(conditions)} "
             'ORDER BY "40001"'
         )
-        connection = sqlite3.connect(self._read_only_uri(), uri=True)
-        connection.row_factory = sqlite3.Row
-        try:
-            rows = connection.execute(query, parameters).fetchall()
-        finally:
-            connection.close()
+        rows = self._query_rows(
+            query,
+            parameters,
+            operation="materialize_group_payload",
+            table_name=_GROUP_MESSAGE_TABLE,
+        )
 
         records = []
         for row in rows:
@@ -249,12 +253,12 @@ class QQDatabaseProvider:
             f"WHERE {' AND '.join(conditions)} "
             'ORDER BY "40001"'
         )
-        connection = sqlite3.connect(self._read_only_uri(), uri=True)
-        connection.row_factory = sqlite3.Row
-        try:
-            rows = connection.execute(query, parameters).fetchall()
-        finally:
-            connection.close()
+        rows = self._query_rows(
+            query,
+            parameters,
+            operation="materialize_session_payload",
+            table_name=table_name,
+        )
 
         records = []
         for row in rows:
@@ -265,6 +269,170 @@ class QQDatabaseProvider:
 
     def _read_only_uri(self) -> str:
         return f"{self._database_path.resolve().as_uri()}?mode=ro"
+
+    def _query_rows(
+        self,
+        query: str,
+        parameters: list[Any] | None = None,
+        *,
+        operation: str,
+        table_name: str,
+    ) -> list[sqlite3.Row]:
+        """Run one read-only query and diagnose SQLite failures in place.
+
+        Diagnostics contain only fixed operation/table identifiers and file
+        structure metadata. No path, session key, message, or SQL parameter is
+        logged. The original SQLite exception is always re-raised unchanged.
+        """
+        connection: sqlite3.Connection | None = None
+        stage = "connect"
+        try:
+            connection = sqlite3.connect(self._read_only_uri(), uri=True)
+            connection.row_factory = sqlite3.Row
+            stage = "query"
+            rows = connection.execute(query, parameters or []).fetchall()
+            if not self._success_diagnostic_recorded:
+                try:
+                    self._log_sqlite_success(
+                        operation=operation,
+                        table_name=table_name,
+                    )
+                    self._success_diagnostic_recorded = True
+                except Exception:
+                    # Diagnostics must never turn a successful read into a failure.
+                    pass
+            return rows
+        except sqlite3.DatabaseError as error:
+            try:
+                self._log_sqlite_failure(
+                    operation=operation,
+                    table_name=table_name,
+                    stage=stage,
+                    error=error,
+                )
+            except Exception:
+                # Diagnostics must never replace the original SQLite failure.
+                pass
+            raise
+        finally:
+            if connection is not None:
+                connection.close()
+
+    def _log_sqlite_success(self, *, operation: str, table_name: str) -> None:
+        metadata = _database_file_metadata(self._database_path)
+        _LOGGER.info(
+            "QQ Direct DB sqlite read succeeded operation=%s table=%s "
+            "database_name=%s file_present=%s file_bytes=%s header_valid=%s "
+            "page_size=%s header_page_count=%s size_page_aligned=%s "
+            "wal_present=%s wal_bytes=%s shm_present=%s shm_bytes=%s",
+            operation,
+            table_name,
+            self._database_path.name,
+            _bool_text(metadata["file_present"]),
+            metadata["file_bytes"],
+            _bool_text(metadata["header_valid"]),
+            metadata["page_size"],
+            metadata["header_page_count"],
+            _bool_text(metadata["size_page_aligned"]),
+            _bool_text(metadata["wal_present"]),
+            metadata["wal_bytes"],
+            _bool_text(metadata["shm_present"]),
+            metadata["shm_bytes"],
+        )
+
+    def _log_sqlite_failure(
+        self,
+        *,
+        operation: str,
+        table_name: str,
+        stage: str,
+        error: sqlite3.DatabaseError,
+    ) -> None:
+        metadata = _database_file_metadata(self._database_path)
+        _LOGGER.warning(
+            "QQ Direct DB sqlite read failed operation=%s table=%s stage=%s "
+            "error=%s database_name=%s file_present=%s file_bytes=%s "
+            "header_valid=%s page_size=%s header_page_count=%s "
+            "size_page_aligned=%s wal_present=%s wal_bytes=%s "
+            "shm_present=%s shm_bytes=%s quick_check=%s",
+            operation,
+            table_name,
+            stage,
+            type(error).__name__,
+            self._database_path.name,
+            _bool_text(metadata["file_present"]),
+            metadata["file_bytes"],
+            _bool_text(metadata["header_valid"]),
+            metadata["page_size"],
+            metadata["header_page_count"],
+            _bool_text(metadata["size_page_aligned"]),
+            _bool_text(metadata["wal_present"]),
+            metadata["wal_bytes"],
+            _bool_text(metadata["shm_present"]),
+            metadata["shm_bytes"],
+            _quick_check(self._database_path),
+        )
+
+
+def _database_file_metadata(database_path: Path) -> dict[str, int | bool]:
+    try:
+        file_bytes = database_path.stat().st_size
+        with database_path.open("rb") as stream:
+            header = stream.read(100)
+    except OSError:
+        file_bytes = 0
+        header = b""
+
+    header_valid = header.startswith(_SQLITE_HEADER)
+    page_size = 0
+    header_page_count = 0
+    if header_valid and len(header) >= 32:
+        page_size = int.from_bytes(header[16:18], "big")
+        if page_size == 1:
+            page_size = 65536
+        header_page_count = int.from_bytes(header[28:32], "big")
+
+    wal_path = database_path.with_name(database_path.name + "-wal")
+    shm_path = database_path.with_name(database_path.name + "-shm")
+    wal_bytes = _file_size(wal_path)
+    shm_bytes = _file_size(shm_path)
+    return {
+        "file_present": database_path.is_file(),
+        "file_bytes": file_bytes,
+        "header_valid": header_valid,
+        "page_size": page_size,
+        "header_page_count": header_page_count,
+        "size_page_aligned": bool(page_size and file_bytes % page_size == 0),
+        "wal_present": wal_path.is_file(),
+        "wal_bytes": wal_bytes,
+        "shm_present": shm_path.is_file(),
+        "shm_bytes": shm_bytes,
+    }
+
+
+def _file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _quick_check(database_path: Path) -> str:
+    connection: sqlite3.Connection | None = None
+    try:
+        uri = f"{database_path.resolve().as_uri()}?mode=ro"
+        connection = sqlite3.connect(uri, uri=True)
+        row = connection.execute("PRAGMA quick_check(1)").fetchone()
+        return "ok" if row and row[0] == "ok" else "failed"
+    except (OSError, sqlite3.DatabaseError):
+        return "error"
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def _bool_text(value: int | bool) -> str:
+    return "true" if value is True else "false"
 
 
 def _nonzero_identifier(value: Any) -> str | None:

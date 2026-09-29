@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -29,6 +28,7 @@ from .dashboard_page import DashboardPage
 from .home_page import HomePage
 from .local_data_page import LocalDataPage
 from .qq_workspace import QQWorkspace
+from .shutdown import ShutdownProtocol
 from .theme import STATUS_STYLE_BASE, WINDOW_TITLE_STYLE
 from .wechat_workspace import WeChatWorkspace
 from .workers import shutdown as shutdown_workers
@@ -85,6 +85,7 @@ class MainWindow(QMainWindow):
         self._directory_opener = directory_opener or _open_directory_path
         self._image_opener = image_opener or _open_image_path
         self._active_source: str | None = None
+        self._shutdown_protocol = ShutdownProtocol()
 
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -496,32 +497,36 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------------- lifecycle
 
     def closeEvent(self, event: Any) -> None:
-        """Close quickly, running owned cleanup off the Qt GUI thread.
+        """Close quickly; one bounded protocol owns the owned-process cleanup.
 
         ``facade.shutdown`` owns the exit ordering: it cleans the Direct DB
         plaintext snapshot (recovering any orphan generation) before it stops
-        NapCat / the QQ runtime, so the GUI must not start a second, racing
-        QQ-runtime shutdown thread of its own.
+        NapCat / the QQ runtime. The GUI thread must not wait for that work -
+        the window has to disappear at once - and it must not start a second,
+        racing cleanup either. So the work runs on the window's single-flight
+        shutdown protocol, and the desktop entry point waits on that same
+        protocol before the process is allowed to leave.
         """
         shutdown_workers()
-        shutdown = getattr(self._facade, "shutdown", None)
-        if callable(shutdown):
-            threading.Thread(
-                target=_best_effort_shutdown,
-                args=(shutdown,),
-                name="echo-facade-shutdown",
-                daemon=True,
-            ).start()
+        self.begin_shutdown()
         super().closeEvent(event)
         _quit_application()
 
+    def begin_shutdown(self) -> bool:
+        """Start the single-flight shutdown protocol; later calls are ignored."""
+        shutdown = getattr(self._facade, "shutdown", None)
+        return self._shutdown_protocol.begin(
+            shutdown if callable(shutdown) else None
+        )
 
-def _best_effort_shutdown(shutdown: Any) -> None:
-    """Run owned-process cleanup away from the Qt GUI thread."""
-    try:
-        shutdown()
-    except Exception:
-        pass
+    def await_shutdown(self, timeout: float | None = None) -> bool:
+        """Wait, bounded, for the started shutdown protocol to finish."""
+        return self._shutdown_protocol.wait(timeout)
+
+    @property
+    def shutdown_protocol(self) -> ShutdownProtocol:
+        """Return the protocol the desktop entry point waits on."""
+        return self._shutdown_protocol
 
 
 def _quit_application() -> None:

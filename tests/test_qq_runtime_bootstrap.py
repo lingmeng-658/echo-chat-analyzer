@@ -98,6 +98,40 @@ INDEX_REPLACEMENT = (
     "  } catch (error) {\r\n"
 )
 
+NAPCAT_PATH = "napcat.mjs"
+NAPCAT_REPLACEMENTS = [
+    {
+        "anchor": "  let a;\n  if (r.onCmd(\"OidbSvcTrpcTcp.0xcde_2\"",
+        "replacement": "  let a, core;\n  if (r.onCmd(\"OidbSvcTrpcTcp.0xcde_2\"",
+    },
+    {
+        "anchor": "D.inner?.value && (a = D.inner.value, e.log(",
+        "replacement": "D.inner?.value && (a = D.inner.value, core && (core.dbPassphrase = a), e.log(",
+    },
+    {
+        "anchor": "  a && (Y.core.dbPassphrase = a), await Y.InitNapCat();",
+        "replacement": "  core = Y.core, a && (core.dbPassphrase = a), await Y.InitNapCat();",
+    },
+    {
+        "anchor": "function LE(t, e, n) {\n  const r = Ge.readFileSync(t), i = UE(r, e);",
+        "replacement": (
+            "function LE(t, e, n) {\n"
+            "  const echoFileState = (p) => { try { const s = Ge.statSync(p); "
+            "return { present: s.isFile(), bytes: s.isFile() ? s.size : 0, mtimeMs: s.mtimeMs }; "
+            "} catch { return { present: false, bytes: 0, mtimeMs: 0 }; } }, "
+            "echoBefore = { database: echoFileState(t), wal: echoFileState(`${t}-wal`), "
+            "shm: echoFileState(`${t}-shm`) }, r = Ge.readFileSync(t), "
+            "echoAfter = { database: echoFileState(t), wal: echoFileState(`${t}-wal`), "
+            "shm: echoFileState(`${t}-shm`) };\n"
+            "  globalThis.__ECHO_DIRECT_DB_READ_STATE__ = { "
+            "databaseBefore: echoBefore.database, databaseAfter: echoAfter.database, "
+            "walBefore: echoBefore.wal, walAfter: echoAfter.wal, "
+            "shmBefore: echoBefore.shm, shmAfter: echoAfter.shm, readBytes: r.length };\n"
+            "  const i = UE(r, e);"
+        ),
+    },
+]
+
 SNAPSHOT_TARGET_PATH = "plugins/napcat-plugin-qce/direct_db_research/snapshot.mjs"
 SNAPSHOT_TEMPLATE_PATH = "qq_direct_db_snapshot/snapshot.mjs"
 SNAPSHOT_TEMPLATE = (
@@ -273,6 +307,13 @@ def _fictional_archive_members(
     }
     members[LAUNCHER_PATH] = _fictional_launcher()
     members[INDEX_PATH] = _fictional_index()
+    members[NAPCAT_PATH] = (
+        b"// fictional pinned NapCat source\n"
+        b"  let a;\n  if (r.onCmd(\"OidbSvcTrpcTcp.0xcde_2\"\n"
+        b"    D.inner?.value && (a = D.inner.value, e.log(\"ready\"));\n"
+        b"  a && (Y.core.dbPassphrase = a), await Y.InitNapCat();\n"
+        b"function LE(t, e, n) {\n  const r = Ge.readFileSync(t), i = UE(r, e);\n"
+    )
     for relative in ATTRIBUTION_MEMBERS + MACHINE_STATE_MEMBERS:
         members[relative] = f"fictional upstream file: {relative}\n".encode()
     members["config/napcat.json"] = b'{"fictional": "upstream config"}\n'
@@ -310,6 +351,8 @@ def _pin_payload(
     patched_launcher_sha256: str,
     upstream_index_sha256: str,
     patched_index_sha256: str,
+    upstream_napcat_sha256: str,
+    patched_napcat_sha256: str,
     snapshot_template_sha256: str,
     required_files: dict[str, str],
     archive_url: str = QCE_ARCHIVE_URL,
@@ -346,6 +389,12 @@ def _pin_payload(
             "anchor": INDEX_ANCHOR,
             "replacement": INDEX_REPLACEMENT,
             "addedLine": INDEX_ADDED_LINE,
+        },
+        "napcatPatch": {
+            "path": NAPCAT_PATH,
+            "upstreamSha256": upstream_napcat_sha256,
+            "patchedSha256": patched_napcat_sha256,
+            "replacements": NAPCAT_REPLACEMENTS,
         },
         "directDbSnapshot": {
             "templatePath": SNAPSHOT_TEMPLATE_PATH,
@@ -402,6 +451,12 @@ def _stage_workspace(
     patched_index = index_entry.replace(
         INDEX_ANCHOR.encode(), INDEX_REPLACEMENT.encode(), 1
     )
+    napcat_entry = payload.get(NAPCAT_PATH, b"")
+    patched_napcat = napcat_entry
+    for edit in NAPCAT_REPLACEMENTS:
+        patched_napcat = patched_napcat.replace(
+            edit["anchor"].encode(), edit["replacement"].encode(), 1
+        )
     scripts = tmp_path / "scripts"
     scripts.mkdir(parents=True, exist_ok=True)
     shutil.copy2(BOOTSTRAP_SCRIPT, scripts / BOOTSTRAP_SCRIPT.name)
@@ -430,6 +485,8 @@ def _stage_workspace(
                 patched_index_sha256=(
                     patched_index_sha256 or _sha256(patched_index)
                 ),
+                upstream_napcat_sha256=_sha256(napcat_entry),
+                patched_napcat_sha256=_sha256(patched_napcat),
                 snapshot_template_sha256=(
                     snapshot_template_sha256 or _sha256(SNAPSHOT_TEMPLATE)
                 ),
@@ -612,6 +669,77 @@ def test_pins_lock_the_echo_index_patch() -> None:
     assert INDEX_PATH not in _pins()["requiredFiles"]
 
 
+def test_pinned_napcat_patch_updates_core_when_passphrase_arrives_after_login() -> None:
+    pins = _pins()
+    patch = pins["napcatPatch"]
+    assert patch["path"] == "napcat.mjs"
+    assert len(patch["replacements"]) == 4
+    assert any("core.dbPassphrase = a" in item["replacement"] for item in patch["replacements"])
+    assert any("core = Y.core" in item["replacement"] for item in patch["replacements"])
+    assert patch["upstreamSha256"] == pins["requiredFiles"]["napcat.mjs"]
+
+    # Execute the exact pinned expressions with fictional bytes in both orderings.
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("the NapCat passphrase race test requires Node")
+    declaration = patch["replacements"][0]["replacement"].split("\n", 1)[0]
+    packet_expression = patch["replacements"][1]["replacement"]
+    login_expression = patch["replacements"][2]["replacement"]
+    script = (
+        f"{declaration}\n"
+        "const e = { log() {} };\n"
+        "const Y = { core: {} };\n"
+        "function onPacket(value) { const D = { inner: { value } }; "
+        f"{packet_expression}'ready')); }}\n"
+        "async function init() { Y.InitNapCat = async () => {}; "
+        f"{login_expression} }}\n"
+        "const fictional = Buffer.from('fictional');\n"
+        "onPacket(fictional); init().then(() => {\n"
+        "  if (!Y.core.dbPassphrase?.equals(fictional)) throw Error('early packet lost');\n"
+        "  a = undefined; core = undefined; Y.core.dbPassphrase = undefined;\n"
+        "  return init();\n"
+        "}).then(() => {\n"
+        "  onPacket(fictional);\n"
+        "  if (!Y.core.dbPassphrase?.equals(fictional)) throw Error('late packet lost');\n"
+        "});\n"
+    )
+    completed = subprocess.run([node, "-e", script], capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_pinned_napcat_patch_captures_only_safe_exact_read_window_state(
+    tmp_path: Path,
+) -> None:
+    patch = _pins()["napcatPatch"]["replacements"][3]
+    assert "readFileSync(t)" in patch["anchor"]
+    assert "__ECHO_DIRECT_DB_READ_STATE__" in patch["replacement"]
+    assert "readBytes" in patch["replacement"]
+    assert "passphrase" not in patch["replacement"].lower()
+
+    source = tmp_path / "fictional.db"
+    source.write_bytes(b"fictional-main")
+    (tmp_path / "fictional.db-wal").write_bytes(b"fictional-wal")
+    (tmp_path / "fictional.db-shm").write_bytes(b"fictional-shm")
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("the NapCat exact-read diagnostic test requires Node")
+    function_source = patch["anchor"].replace(
+        "function LE(t, e, n) {\n  const r = Ge.readFileSync(t), i = UE(r, e);",
+        patch["replacement"],
+    )
+    script = (
+        "const Ge = require('node:fs'); const UE = (value) => value;\n"
+        f"{function_source}\n return i; }}\n"
+        f"LE({json.dumps(str(source))}, null, null);\n"
+        "const state = globalThis.__ECHO_DIRECT_DB_READ_STATE__;\n"
+        "if (state.readBytes !== 14) throw Error('wrong read size');\n"
+        "if (!state.walBefore.present || !state.shmAfter.present) throw Error('missing sidecar state');\n"
+        "if ('path' in state || JSON.stringify(state).includes('fictional.db')) throw Error('path leaked');\n"
+    )
+    completed = subprocess.run([node, "-e", script], capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_pins_lock_the_direct_db_snapshot_template() -> None:
     pins = _pins()
     snapshot = pins["directDbSnapshot"]
@@ -674,6 +802,7 @@ def test_pins_declare_only_the_agreed_fields() -> None:
         "qce",
         "launcherPatch",
         "indexPatch",
+        "napcatPatch",
         "directDbSnapshot",
         "requiredFiles",
         "excludedPaths",
@@ -706,6 +835,9 @@ def test_pins_declare_only_the_agreed_fields() -> None:
         "anchor",
         "replacement",
         "addedLine",
+    }
+    assert set(pins["napcatPatch"]) == {
+        "path", "upstreamSha256", "patchedSha256", "replacements",
     }
     assert set(pins["directDbSnapshot"]) == {
         "templatePath",
@@ -902,6 +1034,10 @@ def test_bootstrap_restores_the_runtime_from_a_verified_archive(
         INDEX_ANCHOR.encode(), INDEX_REPLACEMENT.encode(), 1
     )
     assert index.count(INDEX_ADDED_LINE.encode()) == 1
+    napcat = payload[NAPCAT_PATH]
+    for edit in NAPCAT_REPLACEMENTS:
+        napcat = napcat.replace(edit["anchor"].encode(), edit["replacement"].encode(), 1)
+    assert (runtime / NAPCAT_PATH).read_bytes() == napcat
     # Upstream attribution survives.
     for relative in ATTRIBUTION_MEMBERS:
         assert (runtime / relative).read_bytes() == payload[relative]
