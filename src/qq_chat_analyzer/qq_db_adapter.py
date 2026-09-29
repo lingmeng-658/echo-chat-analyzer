@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .legacy_projection import project_legacy_messages
+from .identity_names import first_identity_name, resolve_member_names
 from .message import ChatMessage
 from .qq_db_identity import QQ_DB_SELF_NAMESPACE, canonical_qq_uin
 from .rich_message import RichMessage, SenderIdentity, TextContent
@@ -110,17 +111,44 @@ def _parse_text_record(
         return None
 
     conversation_type, conversation_id = session_context
+    sender_data = record.get("sender")
+    if not isinstance(sender_data, Mapping):
+        sender_data = {}
+    remark = (
+        first_identity_name(sender_data.get("remark"))
+        if conversation_type == "private"
+        else None
+    )
+    nickname = first_identity_name(sender_data.get("nickname"), sender_data.get("name"))
+    contextual_name = first_identity_name(sender_data.get("groupCard"))
+    is_self = _resolve_is_self(fields.get("40033"), self_uin)
+    display_name, _, _ = resolve_member_names(
+        remark=remark,
+        contextual_name=contextual_name,
+        nickname=nickname,
+        safe_display_fallback=(
+            first_identity_name(sender_data.get("displayName"))
+            or ("我" if is_self else "未知成员")
+        ),
+        conversation_kind=conversation_type,
+    )
     return RichMessage(
         message_id=_stringify_identifier(record.get("record_id")),
         source="qq",
         source_type=QQ_DB_JSON_FORMAT,
         conversation_id=conversation_id,
         conversation_type=conversation_type,
-        sender=SenderIdentity(identity_id=sender_id, display_name=sender_id),
+        sender=SenderIdentity(
+            identity_id=sender_id,
+            display_name=display_name,
+            remark=remark,
+            nickname=nickname,
+            contextual_name=contextual_name,
+        ),
         timestamp=timestamp,
         message_type="text",
         contents=(TextContent(text=text),),
-        is_self=_resolve_is_self(fields.get("40033"), self_uin),
+        is_self=is_self,
     )
 
 

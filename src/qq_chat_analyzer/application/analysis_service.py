@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
+from ..analysis_diagnostics import OrderingHealth, timed_stage
 from ..analysis.identity import stable_sender_key
 from ..analysis.conversation_sessions import analyze_conversation_sessions
 from ..analysis.analyzers import (
@@ -109,14 +110,25 @@ class AnalysisApplicationService:
 
     def execute(self, request: AnalysisRequestDTO) -> AnalysisResultDTO:
         """Analyze supported local exports and return a privacy-safe result."""
+        with timed_stage("total"):
+            return self._execute(request)
+
+    def _execute(self, request: AnalysisRequestDTO) -> AnalysisResultDTO:
         _validate_request(request)
-        outcome = ImportService().execute(
-            ImportRequest(input_path=request.input_path)
-        )
+        with timed_stage("import"):
+            outcome = ImportService().execute(
+                ImportRequest(input_path=request.input_path)
+            )
         _log_identity_diagnostics(outcome.messages)
         processed_message_count = outcome.processed_message_count
-        parsed_messages = list(outcome.messages)
-        scoped_messages = filter_messages(parsed_messages, request.scope)
+        imported_ordering = OrderingHealth("imported")
+        parsed_messages = []
+        for message in outcome.messages:
+            imported_ordering.observe(message)
+            parsed_messages.append(message)
+        imported_ordering.log()
+        with timed_stage("scope_filter"):
+            scoped_messages = filter_messages(parsed_messages, request.scope)
         if (
             request.scope.mode is not AnalysisScopeMode.ALL
             and not scoped_messages
@@ -124,10 +136,12 @@ class AnalysisApplicationService:
             raise NoMessagesInScope()
         if request.scope.mode is not AnalysisScopeMode.ALL:
             processed_message_count = len(scoped_messages)
-        filtering_result = run_smart_profile(scoped_messages)
-        quality_result = apply_message_quality_filter(
-            filtering_result.kept_messages
-        )
+        with timed_stage("smart_profile"):
+            filtering_result = run_smart_profile(scoped_messages)
+        with timed_stage("message_quality_filter"):
+            quality_result = apply_message_quality_filter(
+                filtering_result.kept_messages
+            )
         kept_messages = quality_result.kept_messages
         diagnostic_counts = AnalysisDiagnosticCounts(
             raw_message_count=outcome.processed_message_count,
@@ -136,15 +150,20 @@ class AnalysisApplicationService:
             filtered_message_count=len(kept_messages),
             analyzed_message_count=len(kept_messages),
         )
-        analyzed = _analyze_kept_messages(
-            kept_messages,
-            request.stopwords_path,
-            outcome.rich_messages,
-        )
-        expression_report = ExpressionAnalyzer().analyze(
-            kept_messages,
-            rich_messages=outcome.rich_messages,
-        )
+        kept_ordering = OrderingHealth("kept")
+        with timed_stage("text_analysis"):
+            analyzed = _analyze_kept_messages(
+                kept_messages,
+                request.stopwords_path,
+                outcome.rich_messages,
+                ordering=kept_ordering,
+            )
+        kept_ordering.log()
+        with timed_stage("ExpressionAnalyzer.preflight"):
+            expression_report = ExpressionAnalyzer().analyze(
+                kept_messages,
+                rich_messages=outcome.rich_messages,
+            )
         has_expression_report = expression_report.expression_message_count > 0
 
         if analyzed.valid_text_count == 0 and not has_expression_report:
@@ -177,7 +196,8 @@ class AnalysisApplicationService:
                 expression_source=outcome.result.platform,
             )
 
-        ranked_words = top_words(analyzed.tokens, request.top)
+        with timed_stage("word_ranking"):
+            ranked_words = top_words(analyzed.tokens, request.top)
         if not ranked_words and has_expression_report:
             return _expression_only_result(
                 request=request,
@@ -197,53 +217,56 @@ class AnalysisApplicationService:
                 diagnostic_counts=diagnostic_counts,
             )
 
-        reports = _build_reports(
-            kept_messages,
-            analyzed.sender_tokens,
-            speaker_names=request.speaker_names,
-            conversation_names=request.conversation_names,
-            conversation_type=conversation_type,
-            rich_messages=outcome.rich_messages,
-        )
-        speaker_display_names = _speaker_display_names(reports)
-        word_sender_counts = count_word_speakers(
-            _text_sender_tokens(analyzed.sender_tokens)
-        )
-        speaker_summaries = _display_speaker_summaries(
-            top_word_speaker_summary(word_sender_counts),
-            speaker_display_names,
-        )
-        speaker_frequency_rows = [
-            (
-                summary.word,
-                speaker_display_names.get(sender, sender),
-                count,
+        with timed_stage("report_build"):
+            reports = _build_reports(
+                kept_messages,
+                analyzed.sender_tokens,
+                speaker_names=request.speaker_names,
+                conversation_names=request.conversation_names,
+                conversation_type=conversation_type,
+                rich_messages=outcome.rich_messages,
             )
-            for summary in speaker_summaries
-            for sender, count in sorted(
-                word_sender_counts[summary.word].items(),
-                key=lambda item: -item[1],
+        with timed_stage("word_speaker_analysis"):
+            speaker_display_names = _speaker_display_names(reports)
+            word_sender_counts = count_word_speakers(
+                _text_sender_tokens(analyzed.sender_tokens)
             )
-        ]
-        viewer_speaker_key = _viewer_speaker_key(
-            kept_messages,
-            request.viewer_speaker_key,
-        )
+            speaker_summaries = _display_speaker_summaries(
+                top_word_speaker_summary(word_sender_counts),
+                speaker_display_names,
+            )
+            speaker_frequency_rows = [
+                (
+                    summary.word,
+                    speaker_display_names.get(sender, sender),
+                    count,
+                )
+                for summary in speaker_summaries
+                for sender, count in sorted(
+                    word_sender_counts[summary.word].items(),
+                    key=lambda item: -item[1],
+                )
+            ]
+            viewer_speaker_key = _viewer_speaker_key(
+                kept_messages,
+                request.viewer_speaker_key,
+            )
 
         try:
-            legacy_artifacts = self._write_legacy_artifacts(
-                request,
-                ranked_words,
-                speaker_summaries,
-                speaker_frequency_rows,
-            )
-            echo_report_view = _export_echo_artifacts(
-                request,
-                reports,
-                viewer_speaker_key=viewer_speaker_key,
-                conversation_kind=conversation_type,
-                expression_source=outcome.result.platform,
-            )
+            with timed_stage("artifact_export"):
+                legacy_artifacts = self._write_legacy_artifacts(
+                    request,
+                    ranked_words,
+                    speaker_summaries,
+                    speaker_frequency_rows,
+                )
+                echo_report_view = _export_echo_artifacts(
+                    request,
+                    reports,
+                    viewer_speaker_key=viewer_speaker_key,
+                    conversation_kind=conversation_type,
+                    expression_source=outcome.result.platform,
+                )
         except (OSError, ValueError):
             raise ArtifactGenerationFailed() from None
 
@@ -300,32 +323,50 @@ def _build_reports(
     analysis core therefore stays unaware of QQ or WeChat naming rules, and
     omitting the mappings keeps the previous raw-identifier behavior.
     """
-    return AnalysisReports(
-        activity=ActivityAnalyzer().analyze(messages),
-        message_length=MessageLengthAnalyzer().analyze(messages),
-        user_profiles=UserProfileAnalyzer().analyze(
+    with timed_stage("ActivityAnalyzer"):
+        activity = ActivityAnalyzer().analyze(messages)
+    with timed_stage("MessageLengthAnalyzer"):
+        message_length = MessageLengthAnalyzer().analyze(messages)
+    with timed_stage("UserProfileAnalyzer"):
+        user_profiles = UserProfileAnalyzer().analyze(
             messages,
             sender_tokens=sender_tokens,
             speaker_names=speaker_names,
-        ),
-        conversations=ConversationAnalyzer().analyze(
+        )
+    with timed_stage("ConversationAnalyzer"):
+        conversations = ConversationAnalyzer().analyze(
             messages,
             conversation_names=conversation_names,
-        ),
-        message_composition=MessageCompositionAnalyzer().analyze(messages),
-        conversation_sessions=analyze_conversation_sessions(messages),
-        distinctive_words=DistinctiveWordAnalyzer().analyze(
+        )
+    with timed_stage("MessageCompositionAnalyzer"):
+        message_composition = MessageCompositionAnalyzer().analyze(messages)
+    with timed_stage("conversation_sessions"):
+        conversation_sessions = analyze_conversation_sessions(messages)
+    with timed_stage("DistinctiveWordAnalyzer"):
+        distinctive_words = DistinctiveWordAnalyzer().analyze(
             sender_tokens,
             conversation_type=conversation_type,
-        ),
-        private_language=PrivateLanguageAnalyzer().analyze(
+        )
+    with timed_stage("PrivateLanguageAnalyzer"):
+        private_language = PrivateLanguageAnalyzer().analyze(
             sender_tokens,
             conversation_type=conversation_type,
-        ),
-        expression=ExpressionAnalyzer().analyze(
+        )
+    with timed_stage("ExpressionAnalyzer.report"):
+        expression = ExpressionAnalyzer().analyze(
             messages,
             rich_messages=rich_messages,
-        ),
+        )
+    return AnalysisReports(
+        activity=activity,
+        message_length=message_length,
+        user_profiles=user_profiles,
+        conversations=conversations,
+        message_composition=message_composition,
+        conversation_sessions=conversation_sessions,
+        distinctive_words=distinctive_words,
+        private_language=private_language,
+        expression=expression,
     )
 
 
@@ -342,24 +383,26 @@ def _expression_only_result(
 ) -> AnalysisResultDTO:
     """Build the guarded expression-only result with graceful fallback."""
     try:
-        reports = _build_reports(
-            kept_messages,
-            analyzed.sender_tokens,
-            speaker_names=request.speaker_names,
-            conversation_names=request.conversation_names,
-            conversation_type=conversation_type,
-            rich_messages=rich_messages,
-        )
-        echo_report_view = _export_echo_artifacts(
-            request,
-            reports,
-            viewer_speaker_key=_viewer_speaker_key(
+        with timed_stage("report_build"):
+            reports = _build_reports(
                 kept_messages,
-                request.viewer_speaker_key,
-            ),
-            conversation_kind=conversation_type,
-            expression_source=expression_source,
-        )
+                analyzed.sender_tokens,
+                speaker_names=request.speaker_names,
+                conversation_names=request.conversation_names,
+                conversation_type=conversation_type,
+                rich_messages=rich_messages,
+            )
+        with timed_stage("artifact_export"):
+            echo_report_view = _export_echo_artifacts(
+                request,
+                reports,
+                viewer_speaker_key=_viewer_speaker_key(
+                    kept_messages,
+                    request.viewer_speaker_key,
+                ),
+                conversation_kind=conversation_type,
+                expression_source=expression_source,
+            )
     except Exception:
         _LOGGER.warning(
             "expression-only report generation failed; falling back",
@@ -420,6 +463,8 @@ def _analyze_kept_messages(
     messages: list[ChatMessage],
     stopwords_path: Path,
     rich_messages: tuple[RichMessage, ...] = (),
+    *,
+    ordering: OrderingHealth | None = None,
 ) -> _AnalyzedMessages:
     valid_text_count = 0
     tokens: list[str] = []
@@ -431,6 +476,8 @@ def _analyze_kept_messages(
     }
 
     for message in messages:
+        if ordering is not None:
+            ordering.observe(message)
         cleaned_text = clean_text(message.text, platform=message.platform)
         message_tokens = (
             tokenize(cleaned_text, str(stopwords_path))

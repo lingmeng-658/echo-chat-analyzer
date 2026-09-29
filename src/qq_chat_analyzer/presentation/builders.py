@@ -7,6 +7,7 @@ computed. It performs no counting, averaging, or sorting of raw messages.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from ..identity_names import resolve_member_names
 
 from ..analysis.models import (
     ActivityReport,
@@ -834,31 +835,6 @@ def _build_echo_member(
         ),
         top_words=tuple(word.word for word in profile.top_words),
     )
-
-
-def resolve_member_names(
-    *,
-    remark: str | None,
-    contextual_name: str | None,
-    nickname: str | None,
-    safe_display_fallback: str,
-    conversation_kind: str = "unknown",
-) -> tuple[str, str | None, str | None]:
-    """Resolve primary/secondary display names in the Python report layer."""
-    if conversation_kind == "private":
-        contextual = _first_non_empty(nickname, contextual_name)
-    else:
-        contextual = _first_non_empty(contextual_name, nickname)
-
-    primary = (
-        _first_non_empty(remark, contextual, safe_display_fallback)
-        or safe_display_fallback
-    )
-    secondary = None
-    if remark and contextual:
-        if contextual.strip().casefold() != primary.strip().casefold():
-            secondary = contextual
-    return primary, secondary, contextual
 
 
 def _first_non_empty(*values: str | None) -> str | None:

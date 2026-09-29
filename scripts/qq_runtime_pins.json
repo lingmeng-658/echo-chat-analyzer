@@ -53,7 +53,7 @@
   },
   "directDbSnapshot": {
     "templatePath": "qq_direct_db_snapshot/snapshot.mjs",
-    "templateSha256": "1d647911f9056be6c63ea3c2937a854a3526385a0467cea4fc16c8adc565354a",
+    "templateSha256": "4abfd95cb5b8335889e06c8f5424487aa14d630d7b14eca44e3cd0e757de9c86",
     "targetPath": "plugins/napcat-plugin-qce/direct_db_research/snapshot.mjs"
   },
   "requiredFiles": {

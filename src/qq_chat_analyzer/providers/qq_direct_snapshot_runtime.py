@@ -12,6 +12,8 @@ thin client that may only invoke the three frozen methods `acquire` /
 It never accepts an absolute database path from the runtime.  Callers compute a
 generation directory from the returned opaque id under a known snapshot root,
 and the id is strictly validated so path traversal can never escape that root.
+The only additional NapCat API call exposed here is the fixed
+``GroupApi.getGroupMemberAll`` request used to resolve Direct DB group senders.
 
 Privacy contract: error objects may only carry stable codes and privacy-safe
 messages.  A runtime error message, the QQ UIN, nicknames, message text, the
@@ -42,6 +44,7 @@ _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.qq_direct_snapshot")
 _ACQUIRE = "acquire"
 _CLEANUP = "cleanup"
 _RECOVER = "recover"
+_GROUP_MEMBER_ALL = "getGroupMemberAll"
 
 class QQSnapshotRuntimeError(Exception):
     """Base, privacy-safe error for snapshot runtime client failures."""
@@ -201,14 +204,26 @@ class QQDirectSnapshotRuntimeClient:
         normalized = validate_generation_id(generation_id)
         return self._snapshot_root / GENERATIONS_DIRECTORY_NAME / normalized
 
+    def get_group_member_all(self, group_code: str) -> Mapping[str, Any]:
+        """Fetch one group's member metadata through NapCat's local RPC bridge."""
+        result = self._rpc(
+            _GROUP_MEMBER_ALL,
+            [group_code],
+            namespace="GroupApi",
+        )
+        if not isinstance(result, Mapping):
+            raise QQSnapshotRuntimeInvalidResponse()
+        return result
+
     # ------------------------------------------------------------------ internals
 
     def _rpc(
         self, method: str, params: list[Any], *,
         deadline: float | None = None, timeout: float | None = None,
+        namespace: str = RPC_METHOD_NAMESPACE,
     ) -> Any:
         body = json.dumps(
-            {"method": f"{RPC_METHOD_NAMESPACE}.{method}", "params": params},
+            {"method": f"{namespace}.{method}", "params": params},
             ensure_ascii=False,
         ).encode("utf-8")
         url = f"{self._base_url}/rpc"

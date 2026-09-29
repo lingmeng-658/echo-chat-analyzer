@@ -105,7 +105,7 @@ def _optional_qq_service(provider_factory: Any) -> Any:
         QQDirectDatabaseImportService,
     )
 
-    return QQDirectDatabaseImportService()
+    return QQDirectDatabaseImportService(provider_factory=provider_factory)
 
 
 def _optional_qq_connection_service(provider_factory: Any) -> Any:

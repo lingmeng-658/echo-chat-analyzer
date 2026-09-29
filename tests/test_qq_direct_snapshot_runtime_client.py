@@ -91,6 +91,21 @@ def test_acquire_success_returns_and_logs_validated_generation_id(
     assert request == {"method": "EchoSnapshotApi.acquire", "params": []}
 
 
+def test_group_member_lookup_uses_fixed_napcat_api_over_local_rpc(tmp_path: Path) -> None:
+    members = {"result": {"infos": {"fictional-member": {
+        "uin": "fictional-member", "card": "Fictional Card", "nick": "Fictional Nick"
+    }}}}
+    transport = _FakeTransport(body=_envelope(members))
+    client = _client(transport, root=tmp_path)
+
+    assert client.get_group_member_all("fictional-group") == members
+    assert transport.calls[0][0] == "http://127.0.0.1:40654/rpc"
+    assert json.loads(transport.calls[0][1].decode("utf-8")) == {
+        "method": "GroupApi.getGroupMemberAll",
+        "params": ["fictional-group"],
+    }
+
+
 def test_acquire_timeout_covers_sequential_passphrase_and_identity_waits(tmp_path: Path) -> None:
     transport = _FakeTransport(body=_envelope(_acquire_result("gen-late")))
     original_transport = transport.__call__

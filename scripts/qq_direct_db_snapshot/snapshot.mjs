@@ -39,6 +39,7 @@ const DEFAULT_TIMEOUTS = Object.freeze({
 const CODES = Object.freeze({
   PASSHRASE_UNAVAILABLE: 'passphrase_unavailable',
   DECRYPT_FAILED: 'decrypt_failed',
+  SNAPSHOT_UNSTABLE: 'snapshot_unstable',
   IDENTITY_MISSING: 'identity_missing',
   IDENTITY_CHANGED: 'identity_changed',
   MANIFEST_FAILED: 'manifest_failed',
@@ -139,6 +140,27 @@ function stateChanged(before, after) {
   return before.present !== after.present ||
     before.bytes !== after.bytes ||
     before.mtimeMs !== after.mtimeMs;
+}
+
+function readWindowChanged(state) {
+  // Missing or malformed telemetry is not evidence of a stable source. The
+  // bundled NapCat patch records all four states around its native read.
+  if (!state || typeof state !== 'object') return true;
+  const validState = (value) => value && typeof value === 'object' &&
+    typeof value.present === 'boolean' &&
+    Number.isSafeInteger(value.bytes) && value.bytes >= 0 &&
+    Number.isFinite(value.mtimeMs);
+  if (!validState(state.databaseBefore) || !validState(state.databaseAfter) ||
+      !validState(state.walBefore) || !validState(state.walAfter)) return true;
+  // The native read consumes only the main database file. A main-file change
+  // can produce a torn/inconsistent image; a WAL change separately means the
+  // copied main file may omit committed WAL content. Neither is publishable as
+  // a stable generation, but a WAL change alone does not prove corruption.
+  const database = safeReadFileState(state.databaseBefore);
+  const databaseAfter = safeReadFileState(state.databaseAfter);
+  const wal = safeReadFileState(state.walBefore);
+  const walAfter = safeReadFileState(state.walAfter);
+  return stateChanged(database, databaseAfter) || stateChanged(wal, walAfter);
 }
 
 function traceSourceDatabaseState(stage, state, before = null, generationId = null) {
@@ -414,7 +436,16 @@ export function createEchoSnapshotApi(core, options = {}) {
         return fail(CODES.DECRYPT_FAILED);
       }
 
-      // 5. The canonical self identity must still exist and be unchanged.
+      // 5. The source must have been stable across the native read window.
+      //    A snapshot read while the source database or WAL was changing is a
+      //    mid-write image; publishing it would hand Python a corrupt file.
+      if (readWindowChanged(sourceReadState)) {
+        discardStaging();
+        traceStage('snapshot_unstable', generationId);
+        return fail(CODES.SNAPSHOT_UNSTABLE);
+      }
+
+      // 6. The canonical self identity must still exist and be unchanged.
       const identityAfter = canonicalizeUin(core?.selfInfo?.uin);
       if (identityAfter === null) {
         discardStaging();
@@ -425,7 +456,7 @@ export function createEchoSnapshotApi(core, options = {}) {
         return fail(CODES.IDENTITY_CHANGED);
       }
 
-      // 6. Manifest and database belong to the same generation.  The identity
+      // 7. Manifest and database belong to the same generation.  The identity
       //    value is written to disk only and never logged or returned.
       const manifest = {
         schema_version: SCHEMA_VERSION,
@@ -444,7 +475,7 @@ export function createEchoSnapshotApi(core, options = {}) {
         return fail(CODES.MANIFEST_FAILED);
       }
 
-      // 7. Atomic publish: rename the complete staging directory into place.
+      // 8. Atomic publish: rename the complete staging directory into place.
       try {
         mkdirSync(generationsDirectory, { recursive: true });
         renameSync(stagingDirectory, generationDirectory);

@@ -38,6 +38,7 @@ FICTIONAL_UIN = "10086"
 STABLE_CODES = {
     "passphrase_unavailable",
     "decrypt_failed",
+    "snapshot_unstable",
     "identity_missing",
     "identity_changed",
     "manifest_failed",
@@ -103,12 +104,28 @@ function buildCore() {
         activeDecrypt += 1;
         metrics.maxActiveDecrypt = Math.max(metrics.maxActiveDecrypt, activeDecrypt);
         try {
-          if (config.traceNativeReadState) {
+          if (config.traceNativeReadState || !config.omitNativeReadState) {
+            // ``nativeReadChanged`` controls whether the native read window
+            // observes the source database/WAL changing (the untrustworthy
+            // case) or staying still (the trustworthy case).
+            const changed = config.nativeReadChanged === undefined
+              ? Boolean(config.traceNativeReadState)
+              : config.nativeReadChanged;
+            const databaseChanged = changed === true || changed === 'database-only';
+            const walChanged = changed === true || changed === 'wal-only';
             globalThis.__ECHO_DIRECT_DB_READ_STATE__ = {
               databaseBefore: { present: true, bytes: 4096, mtimeMs: 100 },
-              databaseAfter: { present: true, bytes: 8192, mtimeMs: 200 },
+              databaseAfter: {
+                present: true,
+                bytes: databaseChanged ? 8192 : 4096,
+                mtimeMs: databaseChanged ? 200 : 100,
+              },
               walBefore: { present: true, bytes: 120, mtimeMs: 100 },
-              walAfter: { present: true, bytes: 180, mtimeMs: 200 },
+              walAfter: {
+                present: true,
+                bytes: walChanged ? 180 : 120,
+                mtimeMs: walChanged ? 200 : 100,
+              },
               shmBefore: { present: true, bytes: 32768, mtimeMs: 100 },
               shmAfter: { present: true, bytes: 32768, mtimeMs: 100 },
               readBytes: 4096,
@@ -477,6 +494,7 @@ def test_acquire_trace_records_safe_phase_boundaries(tmp_path: Path, monkeypatch
         "identity_ready",
         "decrypt_started",
         "decrypt_finished",
+        "decrypt_source_read",
         "generation_ready",
     ]
     assert FICTIONAL_UIN not in trace
@@ -534,6 +552,7 @@ def test_acquire_trace_correlates_generation_with_exact_native_read_window(
             "passphrase": True,
             "traceSourceFileState": True,
             "traceNativeReadState": True,
+            "nativeReadChanged": False,
         }),
     )
 
@@ -549,12 +568,77 @@ def test_acquire_trace_correlates_generation_with_exact_native_read_window(
     )
     assert f"generation_id={generation_id}" in read_line
     assert f"generation_id={generation_id}" in ready_line
-    assert "database_changed=true" in read_line
-    assert "wal_changed=true" in read_line
+    assert "database_changed=false" in read_line
+    assert "wal_changed=false" in read_line
     assert "shm_changed=false" in read_line
     assert "read_bytes=4096" in read_line
     assert str(tmp_path) not in trace
     assert FICTIONAL_UIN not in trace
+
+
+def test_acquire_rejects_snapshot_when_source_changed_during_read(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A snapshot whose source changed during the native read window is
+    structurally untrustworthy and must never be published as ready."""
+    trace_file = tmp_path / "runtime.log"
+    monkeypatch.setenv("QCE_LOG_FILE", str(trace_file))
+
+    output = _run_node(
+        tmp_path,
+        _acquire({
+            "uin": FICTIONAL_UIN,
+            "passphrase": True,
+            "traceSourceFileState": True,
+            "traceNativeReadState": True,
+        }),
+    )
+
+    result = output["results"][0]["result"]
+    assert result == {"ok": False, "code": "snapshot_unstable", "status": "failed"}
+    assert _generation_ids(tmp_path) == []
+    assert not (tmp_path / "staging").exists()
+    assert output["metrics"]["decryptCalls"] == 1
+
+
+def test_acquire_rejects_snapshot_when_native_read_state_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    output = _run_node(
+        tmp_path,
+        _acquire({
+            "uin": FICTIONAL_UIN,
+            "passphrase": True,
+            "omitNativeReadState": True,
+        }),
+    )
+
+    assert output["results"][0]["result"] == {
+        "ok": False, "code": "snapshot_unstable", "status": "failed"
+    }
+    assert _generation_ids(tmp_path) == []
+    assert not (tmp_path / "staging").exists()
+
+
+def test_acquire_rejects_snapshot_when_only_wal_changes_during_read(
+    tmp_path: Path,
+) -> None:
+    output = _run_node(
+        tmp_path,
+        _acquire({
+            "uin": FICTIONAL_UIN,
+            "passphrase": True,
+            "traceSourceFileState": True,
+            "traceNativeReadState": True,
+            "nativeReadChanged": "wal-only",
+        }),
+    )
+
+    assert output["results"][0]["result"] == {
+        "ok": False, "code": "snapshot_unstable", "status": "failed"
+    }
+    assert _generation_ids(tmp_path) == []
 
 
 def test_passphrase_wait_trace_identifies_a_bounded_false_poll(tmp_path: Path, monkeypatch) -> None:

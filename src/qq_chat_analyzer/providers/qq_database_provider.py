@@ -49,11 +49,17 @@ class QQSession:
     session_type: str = "other"
     message_count: int | None = None
     last_message_time: int | None = None
+    peer_uin: str = ""
 
     @property
     def session_id(self) -> str:
         """Return the selection identifier scoped by the QQ session type."""
         return f"{self.session_type}:{self.internal_key}"
+
+    @property
+    def conversation_id(self) -> str:
+        """Return the identifier the adapter assigns to this session's messages."""
+        return _nonzero_identifier(self.session_object) or self.session_id
 
 class QQDatabaseProvider:
     """Read a supported QQ group-message database into a raw payload v0."""
@@ -62,18 +68,38 @@ class QQDatabaseProvider:
         self._database_path = Path(database_path)
         self._success_diagnostic_recorded = False
 
-    def list_sessions(self) -> list[QQSession]:
+    @staticmethod
+    def quick_check(database_path: str | Path) -> str:
+        """Run SQLite's real integrity check on a read-only database image."""
+        return _quick_check(Path(database_path))
+
+    def list_sessions(self, *, self_uin: str | None = None) -> list[QQSession]:
         """Return all conversations (groups + private) in the database."""
         groups = self._discover_sessions_from_table(_GROUP_MESSAGE_TABLE, "group")
-        c2c = self._discover_sessions_from_table(_C2C_MESSAGE_TABLE, "private")
+        c2c = self._discover_sessions_from_table(
+            _C2C_MESSAGE_TABLE, "private", self_uin=self_uin
+        )
         return groups + c2c
 
     def _discover_sessions_from_table(
         self,
         table_name: str,
         session_type: str,
+        *,
+        self_uin: str | None = None,
     ) -> list[QQSession]:
         """Query one message table and return per-session aggregates."""
+        peer_column = ""
+        parameters: list[Any] = []
+        if session_type == "private" and canonical_qq_uin(self_uin):
+            peer_column = (
+                ', CASE WHEN COUNT(DISTINCT CASE WHEN '
+                'TRIM(CAST("40033" AS TEXT)) NOT IN (\'\', \'0\', ?) '
+                'THEN "40033" END) = 1 THEN '
+                'MAX(CASE WHEN TRIM(CAST("40033" AS TEXT)) '
+                'NOT IN (\'\', \'0\', ?) THEN "40033" END) END AS peer_uin '
+            )
+            parameters = [self_uin, self_uin]
         query = (
             f'SELECT "{_PARTITION_KEY_FIELD}" AS internal_key, '
             f'MAX(CASE WHEN TRIM(CAST("{_SESSION_OBJECT_FIELD}" AS TEXT)) '
@@ -81,12 +107,14 @@ class QQDatabaseProvider:
             f'AS session_object, '
             f'COUNT(*) AS message_count, '
             f'MAX("40050") AS last_message_time '
+            f'{peer_column} '
             f'FROM "{table_name}" '
             f'GROUP BY "{_PARTITION_KEY_FIELD}" '
             f'ORDER BY last_message_time DESC'
         )
         rows = self._query_rows(
             query,
+            parameters,
             operation="list_sessions",
             table_name=table_name,
         )
@@ -95,7 +123,8 @@ class QQDatabaseProvider:
         for row in rows:
             internal_key_raw = row["internal_key"]
             internal_key = str(internal_key_raw) if internal_key_raw is not None else ""
-            if not internal_key.strip():
+            # Zero carries no usable partition identity for selection.
+            if not internal_key.strip() or internal_key.strip() == "0":
                 continue
             session_object = _nonzero_identifier(row["session_object"]) or ""
             display_name = session_object if session_object.strip() else internal_key
@@ -107,6 +136,10 @@ class QQDatabaseProvider:
                     session_type=session_type,
                     message_count=row["message_count"],
                     last_message_time=row["last_message_time"],
+                    peer_uin=(
+                        _nonzero_identifier(row["peer_uin"])
+                        if peer_column else ""
+                    ) or "",
                 )
             )
         return sessions

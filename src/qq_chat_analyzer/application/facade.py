@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import shutil
 import threading
-from time import monotonic as _monotonic
+from time import monotonic as _monotonic, perf_counter as _perf_counter
 from tempfile import TemporaryDirectory
 from collections.abc import Mapping
 from contextlib import ExitStack, contextmanager
@@ -293,6 +293,7 @@ class _SessionExport:
 
     payload_path: Path
     session: SessionInfo | None = None
+    conversation_id: str | None = None
 
 
 class ChatAnalyzerFacade:
@@ -801,6 +802,7 @@ class ChatAnalyzerFacade:
         acquisition that materialized the payload, so this path never calls
         the public ``list_sessions`` before analyzing.
         """
+        started_at = _perf_counter()
         with TemporaryDirectory(prefix="chat-analyzer-export-") as scratch:
             scratch_directory = Path(scratch)
             with self._session_export_context(
@@ -813,29 +815,48 @@ class ChatAnalyzerFacade:
                 scope=scope,
                 progress=progress,
             ) as session_export:
+                acquired_at = _perf_counter()
+                _LOGGER.info(
+                    "[analysis-timing] stage=facade_acquisition elapsed_ms=%d",
+                    max(0, round((acquired_at - started_at) * 1000)),
+                )
                 session = session_export.session or SessionInfo(
                     source=ChatSource.QQ,
                     session_id=session_id,
                     display_name=session_id,
                 )
-                conversation_names = {session_id: session.display_name}
+                conversation_names = {
+                    session_export.conversation_id or session_id: session.display_name
+                }
                 conversation_kind = (
                     session.session_type
                     if session.session_type in ("private", "group")
                     else "unknown"
                 )
-                return self._analyze_path(
-                    session_export.payload_path,
-                    config,
-                    source=ChatSource.QQ,
-                    session=session,
-                    scope=scope,
-                    speaker_names=speaker_names,
-                    conversation_names=conversation_names,
-                    conversation_kind=conversation_kind,
-                    viewer_speaker_key=viewer_speaker_key,
-                    progress=progress,
-                )
+                analysis_started_at = _perf_counter()
+                completed = False
+                try:
+                    result = self._analyze_path(
+                        session_export.payload_path,
+                        config,
+                        source=ChatSource.QQ,
+                        session=session,
+                        scope=scope,
+                        speaker_names=speaker_names,
+                        conversation_names=conversation_names,
+                        conversation_kind=conversation_kind,
+                        viewer_speaker_key=viewer_speaker_key,
+                        progress=progress,
+                        direct_db_diagnostics=True,
+                    )
+                    completed = True
+                    return result
+                finally:
+                    _LOGGER.info(
+                        "[analysis-timing] stage=facade_analysis elapsed_ms=%d status=%s",
+                        max(0, round((_perf_counter() - analysis_started_at) * 1000)),
+                        "ok" if completed else "failed",
+                    )
 
     def generate_share_image(
         self,
@@ -893,6 +914,7 @@ class ChatAnalyzerFacade:
         conversation_kind: str = "unknown",
         viewer_speaker_key: str | None = None,
         progress: Callable[[str], None] | None = None,
+        direct_db_diagnostics: bool = False,
     ) -> AnalysisOutcome:
         """Run analysis then presentation for one local path."""
         analysis_service = self._require_analysis_service()
@@ -914,7 +936,19 @@ class ChatAnalyzerFacade:
             with _translated_errors(source):
                 _report_progress(progress, "正在处理消息...")
                 _report_progress(progress, "正在分析聊天内容...")
-                result = analysis_service.execute(request)
+                core_started_at = _perf_counter()
+                core_completed = False
+                try:
+                    result = analysis_service.execute(request)
+                    core_completed = True
+                finally:
+                    if direct_db_diagnostics:
+                        _LOGGER.info(
+                            "[analysis-timing] stage=facade_core_analysis "
+                            "elapsed_ms=%d status=%s",
+                            max(0, round((_perf_counter() - core_started_at) * 1000)),
+                            "ok" if core_completed else "failed",
+                        )
 
             _report_progress(progress, "正在生成报告...")
             view = self._build_view(result)
@@ -1249,6 +1283,9 @@ class ChatAnalyzerFacade:
                     raw_session = getattr(acquisition, "session", None)
                     yield _SessionExport(
                         payload_path=Path(acquisition.payload_path),
+                        conversation_id=getattr(
+                            raw_session, "conversation_id", None
+                        ),
                         session=(
                             _to_session_info(source, raw_session)
                             if raw_session is not None

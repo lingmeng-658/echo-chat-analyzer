@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -288,6 +289,63 @@ def _request(application, tmp_path: Path, input_path: Path):
         font_path=None,
         top=5,
     )
+
+
+def test_analysis_logs_each_timing_stage_and_both_ordering_boundaries(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    application = _application_module()
+    input_path = tmp_path / "fictional-chat.json"
+    (tmp_path / "private-output").mkdir()
+    _write_fictional_chat(input_path, [
+        _raw_message(1704099600, "Fictional-Alice", "Python 数据分析 很有趣"),
+        _raw_message(1704099500, "Fictional-Bob", "fictional long text " * 10),
+        _raw_message(1704099660, "Fictional-Bob", "Python 项目 讨论"),
+        _raw_message(1704099720, "Fictional-Carol", "Python 项目 讨论 很好"),
+    ])
+    caplog.set_level("INFO")
+
+    result = application.AnalysisApplicationService().execute(
+        _request(application, tmp_path, input_path)
+    )
+
+    assert result.status is application.AnalysisStatus.COMPLETED
+    timing_lines = [
+        record.message for record in caplog.records
+        if record.message.startswith("[analysis-timing]")
+    ]
+    expected = {
+        "import", "scope_filter", "smart_profile", "message_quality_filter",
+        "text_analysis", "ExpressionAnalyzer.preflight", "word_ranking",
+        "report_build", "word_speaker_analysis", "artifact_export", "total",
+        "ActivityAnalyzer", "MessageLengthAnalyzer", "UserProfileAnalyzer",
+        "ConversationAnalyzer", "MessageCompositionAnalyzer",
+        "conversation_sessions", "DistinctiveWordAnalyzer",
+        "PrivateLanguageAnalyzer", "ExpressionAnalyzer.report",
+        "robot_detector", "template_detector", "interactive_bot_detector",
+        "decision_engine", "filter_pipeline",
+    }
+    actual = {re.search(r"stage=([^ ]+)", line).group(1) for line in timing_lines}
+    assert actual == expected
+    assert all(re.search(r"elapsed_ms=\d+", line) for line in timing_lines)
+    ordering_lines = [
+        record.message for record in caplog.records
+        if record.message.startswith("[analysis-ordering]")
+    ]
+    assert len(ordering_lines) == 2
+    assert any(
+        "boundary=imported message_count=4 valid_timestamp_count=4 "
+        "invalid_timestamp_count=0 adjacent_inversion_count=1 "
+        "max_backward_seconds=100" in line
+        for line in ordering_lines
+    )
+    assert any(
+        "boundary=kept message_count=3 valid_timestamp_count=3 "
+        "invalid_timestamp_count=0 adjacent_inversion_count=0 "
+        "max_backward_seconds=0" in line
+        for line in ordering_lines
+    )
+    assert all("Fictional-" not in line for line in (*timing_lines, *ordering_lines))
 
 
 def test_non_completed_results_keep_the_empty_reports_bundle(tmp_path: Path) -> None:

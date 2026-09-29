@@ -15,10 +15,14 @@ import json
 import logging
 import threading
 import time
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Iterator
+
+from ..identity_names import first_identity_name
 
 from ..providers.qq_database_provider import QQDatabaseProvider, QQSession
 from ..providers.qq_direct_snapshot_runtime import (
@@ -145,10 +149,12 @@ class QQDirectDatabaseImportService:
         self,
         *,
         runtime_client: Any | None = None,
+        provider_factory: Any | None = None,
         config_loader: QQEnvironmentConfigLoader | None = None,
         shutdown_drain_seconds: float = DEFAULT_SHUTDOWN_DRAIN_SECONDS,
     ) -> None:
         self._runtime_client = runtime_client
+        self._provider_factory = provider_factory
         self._config_loader = config_loader or QQEnvironmentConfigLoader()
         self._shutdown_drain_seconds = shutdown_drain_seconds
         self._state = QQDirectDatabaseState.CLOSED
@@ -272,12 +278,12 @@ class QQDirectDatabaseImportService:
             try:
                 try:
                     generation_id = client.acquire()
-                    database_path, _self_uin = _validated_generation(
+                    database_path, self_uin = _validated_generation(
                         client.generation_directory(generation_id),
                         generation_id,
                     )
                     provider = QQDatabaseProvider(database_path)
-                    return provider.list_sessions()
+                    sessions = provider.list_sessions(self_uin=self_uin)
                 except QQSnapshotRuntimeError as error:
                     raise QQDirectSnapshotAcquireFailed() from error
                 finally:
@@ -286,6 +292,7 @@ class QQDirectDatabaseImportService:
                             client.cleanup(generation_id)
                         except QQSnapshotRuntimeError as error:
                             raise QQDirectSnapshotCleanupFailed() from error
+                return self._named_sessions(sessions)
             finally:
                 pass
         finally:
@@ -311,6 +318,7 @@ class QQDirectDatabaseImportService:
         """
         self._begin_acquisition()
         try:
+            started_at = time.perf_counter()
             client = self._require_runtime_client()
             generation_id: str | None = None
             scratch_context: TemporaryDirectory | None = None
@@ -321,15 +329,17 @@ class QQDirectDatabaseImportService:
                         client.generation_directory(generation_id),
                         generation_id,
                     )
+                    snapshot_at = time.perf_counter()
                     provider = QQDatabaseProvider(database_path)
                     session = next(
                         (
                             candidate
-                            for candidate in provider.list_sessions()
+                            for candidate in provider.list_sessions(self_uin=self_uin)
                             if candidate.session_id == session_id
                         ),
                         None,
                     )
+                    lookup_at = time.perf_counter()
                     if session is None:
                         raise QQDirectSessionNotFound()
                     scratch_context = TemporaryDirectory(prefix="chat-analyzer-qq-db-")
@@ -340,6 +350,7 @@ class QQDirectDatabaseImportService:
                         end_time=end_time,
                         self_uin=self_uin,
                     )
+                    materialized_at = time.perf_counter()
                     acquisition = QQDirectDatabaseAcquisition(
                         payload_path=payload_path,
                         self_uin=self_uin,
@@ -353,12 +364,136 @@ class QQDirectDatabaseImportService:
                             client.cleanup(generation_id)
                         except QQSnapshotRuntimeError as error:
                             raise QQDirectSnapshotCleanupFailed() from error
-                yield acquisition
+                cleaned_at = time.perf_counter()
+                group_names, friend_names = self._metadata_names()
+                metadata_at = time.perf_counter()
+                if session.session_type == "group":
+                    get_members = getattr(client, "get_group_member_all", None)
+                    sender_names: dict[str, str] = {}
+                    member_data = _group_member_data(None)
+                    rpc_status = "api_unavailable"
+                    if callable(get_members):
+                        try:
+                            member_data = _group_member_data(get_members(session.session_object))
+                            sender_names = member_data["names"]
+                            rpc_status = member_data["status"]
+                        except Exception:
+                            # Member metadata is optional; do not fail local DB analysis.
+                            rpc_status = "rpc_failed"
+                    participant_uins = _payload_sender_uins(payload_path)
+                    coverage = _identity_coverage_counts(participant_uins, member_data)
+                    _LOGGER.info(
+                        "[qq-direct-identity-coverage] status=%s "
+                        "distinct_sender_count=%d rpc_member_count=%d "
+                        "matched_sender_count=%d unmatched_sender_count=%d "
+                        "matched_with_card_count=%d "
+                        "matched_without_card_with_nick_count=%d "
+                        "matched_without_card_or_nick_count=%d "
+                        "rpc_member_with_card_count=%d rpc_member_with_nick_count=%d",
+                        rpc_status,
+                        coverage["distinct_sender_count"],
+                        coverage["rpc_member_count"],
+                        coverage["matched_sender_count"],
+                        coverage["unmatched_sender_count"],
+                        coverage["matched_with_card_count"],
+                        coverage["matched_without_card_with_nick_count"],
+                        coverage["matched_without_card_or_nick_count"],
+                        coverage["rpc_member_with_card_count"],
+                        coverage["rpc_member_with_nick_count"],
+                    )
+                else:
+                    sender_names = friend_names
+                members_at = time.perf_counter()
+                named_session = self._named_sessions(
+                    [session], group_names=group_names, friend_names=friend_names
+                )[0]
+                ordering = _attach_sender_names(payload_path, sender_names, self_uin)
+                ready_at = time.perf_counter()
+                _LOGGER.info(
+                    "[analysis-ordering] boundary=direct_db_payload order_key=record_id "
+                    "record_count=%d valid_timestamp_count=%d "
+                    "invalid_timestamp_count=%d timestamp_regression_count=%d "
+                    "equal_timestamp_pair_count=%d",
+                    ordering["record_count"], ordering["valid_timestamp_count"],
+                    ordering["invalid_timestamp_count"],
+                    ordering["timestamp_regression_count"],
+                    ordering["equal_timestamp_pair_count"],
+                )
+                _LOGGER.info(
+                    "[analysis-timing] stage=direct_db_acquisition elapsed_ms=%d "
+                    "snapshot_ms=%d lookup_ms=%d materialize_ms=%d "
+                    "cleanup_ms=%d metadata_ms=%d member_ms=%d enrich_ms=%d",
+                    _elapsed_ms(started_at, ready_at),
+                    _elapsed_ms(started_at, snapshot_at),
+                    _elapsed_ms(snapshot_at, lookup_at),
+                    _elapsed_ms(lookup_at, materialized_at),
+                    _elapsed_ms(materialized_at, cleaned_at),
+                    _elapsed_ms(cleaned_at, metadata_at),
+                    _elapsed_ms(metadata_at, members_at),
+                    _elapsed_ms(members_at, ready_at),
+                )
+                yield replace(acquisition, session=named_session)
             finally:
                 if scratch_context is not None:
                     scratch_context.cleanup()
         finally:
             self._end_acquisition()
+
+    def _named_sessions(
+        self,
+        sessions: list[QQSession],
+        *,
+        group_names: dict[str, str] | None = None,
+        friend_names: dict[str, str] | None = None,
+    ) -> list[QQSession]:
+        """Join DB session keys to the existing QQ metadata provider."""
+        if group_names is None or friend_names is None:
+            group_names, friend_names = self._metadata_names()
+        named = []
+        for session in sessions:
+            if session.session_type == "group":
+                name = group_names.get(session.session_object)
+                fallback = "未知群聊"
+            else:
+                name = (
+                    friend_names.get(session.peer_uin)
+                    or friend_names.get(session.session_object)
+                )
+                fallback = "未知联系人"
+            named.append(replace(session, display_name=first_identity_name(name) or fallback))
+        return named
+
+    def _metadata_names(self) -> tuple[dict[str, str], dict[str, str]]:
+        group_names: dict[str, str] = {}
+        friend_names: dict[str, str] = {}
+        if self._provider_factory is not None:
+            try:
+                provider = self._provider_factory.create()
+            except Exception:
+                return group_names, friend_names
+            try:
+                groups = _qq_metadata_pages(provider.list_groups)
+                group_names = {
+                    group.group_code: group.group_name
+                    for group in groups
+                    if first_identity_name(group.group_name)
+                }
+            except Exception:
+                pass
+            try:
+                friends = _qq_metadata_pages(provider.list_friends)
+                friend_names = {
+                    friend.peer_uin: friend.display_name
+                    for friend in friends
+                    if friend.peer_uin
+                    and first_identity_name(friend.display_name)
+                    and friend.display_name != friend.peer_uin
+                }
+            except Exception:
+                # Names are optional metadata; the local message acquisition
+                # remains usable if the metadata endpoint is unavailable.
+                pass
+        return group_names, friend_names
 
     # -------------------------------------------------------------- lifecycle
 
@@ -495,6 +630,11 @@ def _validated_generation(
     database_path = generation_directory / database_name
     if not database_path.is_file():
         raise QQDirectSnapshotInvalid()
+    # Runtime-side file stability telemetry prevents known torn reads. SQLite's
+    # own quick_check is the independent final integrity gate before the app
+    # exposes the generation to session discovery or materialization.
+    if QQDatabaseProvider.quick_check(database_path) != "ok":
+        raise QQDirectSnapshotInvalid()
     return database_path, self_uin
 
 
@@ -508,6 +648,159 @@ def _safe_relative_name(value: Any) -> str | None:
     if "/" in name or "\\" in name or "\x00" in name:
         return None
     return name
+
+
+def _attach_sender_names(
+    payload_path: Path,
+    friend_names: dict[str, str],
+    self_uin: str | None,
+) -> dict[str, int]:
+    """Add known QQ names to the transient payload after DB cleanup."""
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    ordering = _ordering_health(payload.get("records", ()))
+    for record in payload.get("records", ()):
+        fields = record.get("fields", {})
+        sender_uin = canonical_qq_uin(fields.get("40033"))
+        if sender_uin is None or sender_uin == self_uin:
+            continue
+        name = friend_names.get(sender_uin)
+        if name:
+            record["sender"] = {"displayName": name}
+    payload_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return ordering
+
+
+def _ordering_health(records: Any) -> dict[str, int]:
+    """Count timestamp anomalies in the provider's record-id order."""
+    counts = {
+        "record_count": 0,
+        "valid_timestamp_count": 0,
+        "invalid_timestamp_count": 0,
+        "timestamp_regression_count": 0,
+        "equal_timestamp_pair_count": 0,
+    }
+    if not isinstance(records, list):
+        return counts
+    previous: Decimal | None = None
+    for record in records:
+        counts["record_count"] += 1
+        fields = record.get("fields") if isinstance(record, Mapping) else None
+        value = fields.get("40050") if isinstance(fields, Mapping) else None
+        try:
+            if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+                raise InvalidOperation
+            timestamp = Decimal(str(value))
+            if not timestamp.is_finite():
+                raise InvalidOperation
+        except (InvalidOperation, ValueError):
+            counts["invalid_timestamp_count"] += 1
+            previous = None
+            continue
+        counts["valid_timestamp_count"] += 1
+        if previous is not None:
+            if timestamp < previous:
+                counts["timestamp_regression_count"] += 1
+            elif timestamp == previous:
+                counts["equal_timestamp_pair_count"] += 1
+        previous = timestamp
+    return counts
+
+
+def _elapsed_ms(started_at: float, ended_at: float) -> int:
+    return max(0, round((ended_at - started_at) * 1000))
+
+
+def _qq_metadata_pages(fetch: Any) -> list[Any]:
+    """Read the existing paged QQ metadata API with a finite upper bound."""
+    items: list[Any] = []
+    for page in range(1, 51):
+        batch = fetch(page=page, limit=200)
+        items.extend(batch)
+        if len(batch) < 200:
+            break
+    return items
+
+
+def _group_member_data(result: Any) -> dict[str, Any]:
+    """Read the verified NapCat ``result.infos`` member map and safe counts."""
+    empty = {
+        "status": "invalid_response", "names": {}, "uins": set(),
+        "card_uins": set(), "nick_uins": set(),
+    }
+    if not isinstance(result, Mapping):
+        return empty
+    infos = result.get("result")
+    if not isinstance(infos, Mapping):
+        return empty
+    members = infos.get("infos")
+    if not isinstance(members, Mapping):
+        return empty
+    empty["status"] = "ok"
+    names: dict[str, str] = {}
+    uins: set[str] = set()
+    card_uins: set[str] = set()
+    nick_uins: set[str] = set()
+    for member in members.values():
+        if not isinstance(member, Mapping):
+            continue
+        uin = canonical_qq_uin(member.get("uin"))
+        card = first_identity_name(member.get("card"))
+        nick = first_identity_name(member.get("nick"))
+        if uin:
+            uins.add(uin)
+            if card:
+                card_uins.add(uin)
+            if nick:
+                nick_uins.add(uin)
+        name = first_identity_name(member.get("card"), member.get("nick"))
+        if uin and name:
+            names[uin] = name
+    return {
+        "status": "ok",
+        "names": names,
+        "uins": uins,
+        "card_uins": card_uins,
+        "nick_uins": nick_uins,
+    }
+
+
+def _identity_coverage_counts(
+    participant_uins: set[str], member_data: Mapping[str, Any]
+) -> dict[str, int]:
+    """Summarize distinct sender/member UIN coverage without retaining values."""
+    member_uins = member_data["uins"]
+    card_uins = member_data["card_uins"]
+    nick_uins = member_data["nick_uins"]
+    matched = participant_uins & member_uins
+    matched_with_card = matched & card_uins
+    matched_with_nick_only = matched & (nick_uins - card_uins)
+    matched_without_names = matched - card_uins - nick_uins
+    return {
+        "distinct_sender_count": len(participant_uins),
+        "rpc_member_count": len(member_uins),
+        "matched_sender_count": len(matched),
+        "unmatched_sender_count": len(participant_uins - member_uins),
+        "matched_with_card_count": len(matched_with_card),
+        "matched_without_card_with_nick_count": len(matched_with_nick_only),
+        "matched_without_card_or_nick_count": len(matched_without_names),
+        "rpc_member_with_card_count": len(card_uins),
+        "rpc_member_with_nick_count": len(nick_uins),
+    }
+
+
+def _payload_sender_uins(payload_path: Path) -> set[str]:
+    try:
+        payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return set()
+    records = payload.get("records", ()) if isinstance(payload, Mapping) else ()
+    return {
+        sender
+        for record in records
+        if isinstance(record, Mapping)
+        and isinstance(record.get("fields"), Mapping)
+        if (sender := canonical_qq_uin(record["fields"].get("40033"))) is not None
+    }
 
 
 __all__ = [
