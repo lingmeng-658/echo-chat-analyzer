@@ -41,7 +41,7 @@ _CANCEL_CONNECTION_LABEL = "取消连接"
 _RESTART_CONNECTION_LABEL = "重新开始"
 _WECHAT_SETUP_LABEL = "微信环境设置..."
 _WECHAT_STATUS_DISCONNECTED = "微信未连接"
-_WECHAT_STATUS_CONNECTING = "正在准备连接，请暂时不要登录。"
+_WECHAT_STATUS_CONNECTING = "正在准备微信连接，请暂时不要登录。"
 _WECHAT_STATUS_CONNECTED = "微信已连接。"
 _WECHAT_CONNECTING = _WECHAT_STATUS_CONNECTING
 _WECHAT_CONNECT_FAILED = "微信连接未成功"
@@ -54,12 +54,17 @@ _WECHAT_CONNECT_RETRY_HINT = (
 _WECHAT_GUIDE_STATUS = "微信连接准备中。"
 _WECHAT_GUIDE_KEY = _WECHAT_STATUS_CONNECTING
 _WECHAT_GUIDE_WARNING = (
-    "如果微信已经登录，请退出微信，重新打开至登录界面，"
-    "返回 Echo 重新连接微信；等待 Echo 提示可以登录后，再登录。"
+    "请按 Echo 的当前提示操作；等待 Echo 提示可以登录后，再登录。"
 )
-_WECHAT_READY_FOR_LOGIN = "现在请登录微信。"
+_WECHAT_READY_FOR_LOGIN = "现在可以登录微信。"
 _WECHAT_READY_WARNING = "请在微信登录界面完成登录，Echo 会自动继续连接。"
 _WECHAT_CREDENTIAL_RECEIVED = "微信连接信息已获取，正在继续连接..."
+_WECHAT_PROGRESS_INSTRUCTIONS = {
+    WeChatConnectionProgress.PREPARING: _WECHAT_GUIDE_KEY,
+    WeChatConnectionProgress.WAITING_FOR_WECHAT_EXIT: "请完全退出微信。",
+    WeChatConnectionProgress.WAITING_FOR_WECHAT_START: "现在请打开微信，先不要登录。",
+    WeChatConnectionProgress.READY_FOR_LOGIN: _WECHAT_READY_FOR_LOGIN,
+}
 _WECHAT_GUIDE_NOTE = (
     "聊天数据仅在本机读取，不上传、不保存额外副本。"
 )
@@ -368,7 +373,7 @@ class WeChatWorkspace(QWidget):
                 "微信连接已准备好。" if ready else _WECHAT_GUIDE_STATUS
             )
             self._wechat_guide_note_label.setText(
-                f"{_WECHAT_READY_FOR_LOGIN if ready else _WECHAT_GUIDE_KEY}"
+                f"{_WECHAT_PROGRESS_INSTRUCTIONS[progress]}"
                 f"\n\n{_WECHAT_GUIDE_NOTE}"
             )
             self._wechat_guide_note_label.setStyleSheet(GUIDE_STYLE)
@@ -577,11 +582,7 @@ class WeChatWorkspace(QWidget):
             text = _WECHAT_CREDENTIAL_RECEIVED
             self._hide_wechat_guide()
         else:
-            text = (
-                _WECHAT_READY_FOR_LOGIN
-                if progress is WeChatConnectionProgress.READY_FOR_LOGIN
-                else _WECHAT_CONNECTING
-            )
+            text = _WECHAT_PROGRESS_INSTRUCTIONS[progress]
             self._show_wechat_guide(progress=progress)
             self.session_panel.show_connecting_placeholder()
         self._status_label.setVisible(True)
