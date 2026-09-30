@@ -359,8 +359,9 @@ class WeChatWorkspace(QWidget):
         *,
         include_directory_help: bool = False,
         progress: WeChatConnectionProgress = WeChatConnectionProgress.PREPARING,
+        current_step_only: bool = False,
     ) -> None:
-        """Render the first-time WeChat connection guide with plain-text labels."""
+        """Show the current connection action or the existing fallback guide."""
         if include_directory_help:
             self._wechat_guide_label.setText(_WECHAT_GUIDE_DIRECTORY_MISSING)
             self._wechat_guide_note_label.setText(_WECHAT_GUIDE_DIRECTORY_NOTE)
@@ -380,11 +381,16 @@ class WeChatWorkspace(QWidget):
             self._wechat_guide_key_label.setText(
                 _WECHAT_READY_WARNING if ready else _WECHAT_GUIDE_WARNING
             )
-            self._wechat_guide_key_label.setVisible(True)
-        self._wechat_guide_label.setVisible(True)
+            self._wechat_guide_key_label.setVisible(not current_step_only)
+        self._wechat_guide_label.setVisible(
+            include_directory_help or not current_step_only
+        )
         self._wechat_guide_note_label.setVisible(True)
 
-        self._refresh_wechat_guide_image()
+        if current_step_only and not include_directory_help:
+            self._hide_wechat_guide_image()
+        else:
+            self._refresh_wechat_guide_image()
 
     def _refresh_wechat_guide_image(self) -> None:
         """Load the optional guide image without making connection depend on it."""
@@ -479,7 +485,7 @@ class WeChatWorkspace(QWidget):
         self._status_label.setVisible(True)
         self._status_label.setText(_WECHAT_CONNECTING)
         self._status_label.setToolTip("")
-        self._show_wechat_guide()
+        self._show_wechat_guide(current_step_only=True)
         self.session_panel.show_connecting_placeholder()
         self.status_changed.emit(_WECHAT_CONNECTING)
 
@@ -583,7 +589,7 @@ class WeChatWorkspace(QWidget):
             self._hide_wechat_guide()
         else:
             text = _WECHAT_PROGRESS_INSTRUCTIONS[progress]
-            self._show_wechat_guide(progress=progress)
+            self._show_wechat_guide(progress=progress, current_step_only=True)
             self.session_panel.show_connecting_placeholder()
         self._status_label.setVisible(True)
         self._status_label.setText(text)

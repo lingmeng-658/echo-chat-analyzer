@@ -3877,6 +3877,95 @@ def _wechat_unavailable_status():
 
 
 @pytest.mark.parametrize("state, instruction", [
+    ("PREPARING", "正在准备微信连接，请暂时不要登录。"),
+    ("WAITING_FOR_WECHAT_EXIT", "请完全退出微信。"),
+    ("WAITING_FOR_WECHAT_START", "现在请打开微信，先不要登录。"),
+    ("READY_FOR_LOGIN", "现在可以登录微信。"),
+])
+def test_wechat_happy_path_shows_only_current_step(qt_app, state, instruction):
+    from PySide6.QtWidgets import QLabel
+
+    module = _wechat_guide_module()
+    executor = _IndependentDeferredExecutor()
+    workspace = module.WeChatWorkspace(
+        StubFacade(data_roots=["D:/fictional_wechat"]), executor=executor,
+    )
+    workspace._wechat_guide_image_path = PROJECT_ROOT / "wechat_login_guide.png"
+    workspace.show()
+    workspace._wechat_connect_button.setVisible(True)
+    workspace._wechat_connect_button.click()
+    assert not hasattr(workspace, "_wechat_setup_dialog")
+    task = executor.tasks[0]
+    # The initial presentation must already be a single step before callbacks.
+    assert workspace._wechat_guide_key_label.isHidden()
+    task.progress(getattr(_facade_module().WeChatConnectionProgress, state))
+
+    assert workspace._status_label.text() == instruction
+    assert workspace._wechat_guide_note_label.isVisibleTo(workspace)
+    assert workspace._wechat_guide_note_label.text() == (
+        f"{instruction}\n\n{module._WECHAT_GUIDE_NOTE}"
+    )
+    assert workspace._wechat_guide_label.isHidden()
+    assert workspace._wechat_guide_key_label.isHidden()
+    assert workspace._wechat_guide_image_label.isHidden()
+    visible_text = "\n".join(
+        label.text() for label in workspace.findChildren(QLabel)
+        if label.isVisibleTo(workspace)
+    )
+    assert module._WECHAT_GUIDE_DIRECTORY_NOTE not in visible_text
+    assert "1. 进入微信" not in visible_text
+    assert "7. 等待 Echo" not in visible_text
+    assert "Save" not in visible_text
+
+
+@pytest.mark.parametrize("code", ["wechat_key_timeout", "wechat_environment_missing"])
+def test_wechat_happy_path_error_keeps_retry_and_setup(qt_app, code):
+    module = _wechat_guide_module()
+    executor = _IndependentDeferredExecutor()
+    workspace = module.WeChatWorkspace(
+        StubFacade(data_roots=["D:/fictional_wechat"]), executor=executor,
+    )
+    workspace.show()
+    workspace.connect_wechat()
+    first = executor.tasks[0]
+    first.progress(_facade_module().WeChatConnectionProgress.READY_FOR_LOGIN)
+    first.fail(code, "虚构连接失败，请重试。")
+    first.finish()
+    assert workspace._wechat_connect_button.isVisibleTo(workspace)
+    assert workspace._wechat_connect_button.isEnabled()
+    assert workspace._wechat_connect_button.text() == module._RESTART_CONNECTION_LABEL
+    assert workspace._status_label.toolTip() == "虚构连接失败，请重试。"
+    assert workspace._wechat_guide_note_label.isHidden()
+    workspace.open_wechat_setup()
+    assert workspace._wechat_setup_dialog.isVisible()
+    workspace._wechat_setup_dialog.reject()
+    workspace._wechat_connect_button.click()
+    assert len(executor.tasks) == 2
+    assert workspace._status_label.text() == module._WECHAT_CONNECTING
+    assert workspace._wechat_guide_key_label.isHidden()
+
+
+def test_wechat_happy_path_directory_fallback_remains_reachable(qt_app):
+    module = _wechat_guide_module()
+    executor = _IndependentDeferredExecutor()
+    facade = StubFacade(data_roots=["D:/fictional_wechat"])
+    workspace = module.WeChatWorkspace(facade, executor=executor)
+    workspace._wechat_guide_image_path = PROJECT_ROOT / "wechat_login_guide.png"
+    workspace.show()
+    workspace.connect_wechat()
+    executor.tasks[0].progress(_facade_module().WeChatConnectionProgress.READY_FOR_LOGIN)
+    workspace.cancel_connection()
+    workspace.connect_wechat(detect_data_roots=lambda: [])
+
+    assert workspace._wechat_setup_dialog.isVisible()
+    assert workspace._wechat_guide_label.isVisibleTo(workspace)
+    assert workspace._wechat_guide_label.text() == module._WECHAT_GUIDE_DIRECTORY_MISSING
+    assert workspace._wechat_guide_note_label.text() == module._WECHAT_GUIDE_DIRECTORY_NOTE
+    assert workspace._wechat_guide_note_label.isVisibleTo(workspace)
+    assert workspace._wechat_guide_image_label.isVisibleTo(workspace)
+
+
+@pytest.mark.parametrize("state, instruction", [
     ("PREPARING", "正在准备微信连接"),
     ("WAITING_FOR_WECHAT_EXIT", "请完全退出微信"),
     ("WAITING_FOR_WECHAT_START", "现在请打开微信，先不要登录"),
