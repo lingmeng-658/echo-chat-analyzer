@@ -41,7 +41,7 @@ _CANCEL_CONNECTION_LABEL = "取消连接"
 _RESTART_CONNECTION_LABEL = "重新开始"
 _WECHAT_SETUP_LABEL = "微信环境设置..."
 _WECHAT_STATUS_DISCONNECTED = "微信未连接"
-_WECHAT_STATUS_CONNECTING = "正在准备微信连接，请暂时不要登录。"
+_WECHAT_STATUS_CONNECTING = "正在准备微信连接"
 _WECHAT_STATUS_CONNECTED = "微信已连接。"
 _WECHAT_CONNECTING = _WECHAT_STATUS_CONNECTING
 _WECHAT_CONNECT_FAILED = "微信连接未成功"
@@ -58,12 +58,40 @@ _WECHAT_GUIDE_WARNING = (
 )
 _WECHAT_READY_FOR_LOGIN = "现在可以登录微信。"
 _WECHAT_READY_WARNING = "请在微信登录界面完成登录，Echo 会自动继续连接。"
-_WECHAT_CREDENTIAL_RECEIVED = "微信连接信息已获取，正在继续连接..."
+_WECHAT_CREDENTIAL_RECEIVED = "正在连接微信"
+_WECHAT_PROGRESS_STATUS = {
+    WeChatConnectionProgress.PREPARING: _WECHAT_STATUS_CONNECTING,
+    WeChatConnectionProgress.WAITING_FOR_WECHAT_EXIT: "请先退出微信",
+    WeChatConnectionProgress.WAITING_FOR_WECHAT_START: "现在请打开微信",
+    WeChatConnectionProgress.READY_FOR_LOGIN: "现在可以登录微信了",
+    WeChatConnectionProgress.CREDENTIAL_RECEIVED: _WECHAT_CREDENTIAL_RECEIVED,
+}
 _WECHAT_PROGRESS_INSTRUCTIONS = {
-    WeChatConnectionProgress.PREPARING: _WECHAT_GUIDE_KEY,
+    WeChatConnectionProgress.PREPARING: "正在检查微信连接状态，请稍候。",
     WeChatConnectionProgress.WAITING_FOR_WECHAT_EXIT: "请完全退出微信。",
-    WeChatConnectionProgress.WAITING_FOR_WECHAT_START: "现在请打开微信，先不要登录。",
+    WeChatConnectionProgress.WAITING_FOR_WECHAT_START: "现在请打开微信，但先不要登录。",
     WeChatConnectionProgress.READY_FOR_LOGIN: _WECHAT_READY_FOR_LOGIN,
+    WeChatConnectionProgress.CREDENTIAL_RECEIVED: "已获取微信连接信息，正在继续连接……",
+}
+_WECHAT_PROGRESS_EXPLANATIONS = {
+    WeChatConnectionProgress.PREPARING:
+        "暂时不需要操作微信，Echo 检查完成后会告诉你下一步怎么做。",
+    WeChatConnectionProgress.WAITING_FOR_WECHAT_EXIT: (
+        "关闭微信窗口后，如果微信仍在后台运行，\n"
+        "请在任务栏右下角找到微信图标并退出微信。\n\n"
+        "退出后不用点击 Echo 中的任何按钮，Echo 会自动继续。"
+    ),
+    WeChatConnectionProgress.WAITING_FOR_WECHAT_START: (
+        "打开微信后，请停留在登录界面。\n"
+        "如果看到“进入微信”或登录按钮，先不要点击。\n\n"
+        "Echo 检测到微信后，会自动告诉你什么时候可以登录。\n"
+        "不需要返回 Echo 点击下一步。"
+    ),
+    WeChatConnectionProgress.READY_FOR_LOGIN: (
+        "请回到微信，点击“进入微信”或正常完成登录。\n\n"
+        "登录成功后不用操作 Echo，Echo 会自动继续连接。"
+    ),
+    WeChatConnectionProgress.CREDENTIAL_RECEIVED: "请稍候，无需操作。",
 }
 _WECHAT_GUIDE_NOTE = (
     "聊天数据仅在本机读取，不上传、不保存额外副本。"
@@ -74,7 +102,7 @@ _WECHAT_GUIDE_DIRECTORY_MISSING = (
 _WECHAT_GUIDE_DIRECTORY_NOTE = (
     "1. 进入微信：设置 → 存储位置 → 更改；\n"
     "2. 右键 xwechat_files，选择 复制地址；\n"
-    "3. 彻底退出微信，并重新打开微信，使微信回到登录界面（如图片所示）；\n"
+    "3. 彻底退出微信，并重新打开微信，使微信回到登录界面；\n"
     "4. 返回 Echo，将复制的地址直接粘贴到上方输入框；\n"
     "5. 点击 Save；\n"
     "6. Save 后 Echo 会开始准备连接，请暂时不要登录；\n"
@@ -188,6 +216,9 @@ class WeChatWorkspace(QWidget):
         )
         self._wechat_guide_label.setVisible(False)
         self._wechat_guide_label.setStyleSheet(GUIDE_STYLE)
+        action_font = self._wechat_guide_label.font()
+        action_font.setBold(True)
+        self._wechat_guide_label.setFont(action_font)
 
         self._wechat_guide_key_label = QLabel("")
         self._wechat_guide_key_label.setWordWrap(True)
@@ -234,6 +265,11 @@ class WeChatWorkspace(QWidget):
             stretch=1,
         )
         main_layout.addLayout(self._wechat_guide_row)
+        # Keep the current action above the primary action and secondary settings.
+        for button in (self._wechat_connect_button, self._wechat_disconnect_button,
+                       self._wechat_setup_button):
+            main_layout.removeWidget(button)
+            main_layout.addWidget(button)
 
         self.session_panel = SessionAnalysisPanel()
         self.session_panel.configure(
@@ -249,6 +285,7 @@ class WeChatWorkspace(QWidget):
         self.session_panel.status_changed.connect(self._on_panel_status)
 
         self.session_panel.show_unconnected_placeholder()
+        self._show_wechat_idle()
 
     # ---------------------------------------------------------------- public API
 
@@ -270,11 +307,9 @@ class WeChatWorkspace(QWidget):
     ) -> None:
         """Ask the facade for WeChat's connection state and render it."""
         self._status_label.setVisible(True)
-        self._status_label.setText(
-            _CONNECTION_STATUS_LOADING.format(source="微信")
-        )
+        self._show_wechat_idle()
         self._status_label.setToolTip("")
-        self.session_panel.show_connecting_placeholder()
+        self.session_panel.show_unconnected_placeholder()
         if load_sessions_on_ready:
             self._executor(
                 lambda: self._facade.get_connection_status(ChatSource.WECHAT),
@@ -315,16 +350,19 @@ class WeChatWorkspace(QWidget):
         message = (
             _WECHAT_STATUS_CONNECTED
             if available
-            else _wechat_unavailable_message(status)
+            else (_WECHAT_STATUS_DISCONNECTED if attempt_generation is None
+                  else _wechat_unavailable_message(status))
         )
         action_hint = getattr(status, "action_hint", "") or ""
         self._status_label.setText(f"{prefix}{message}")
         self._status_label.setToolTip(action_hint)
         self._status_label.setVisible(True)
 
-        self._wechat_setup_button.setVisible(False)
+        self._wechat_setup_button.setVisible(not available)
         if available:
             self._hide_wechat_guide()
+        elif attempt_generation is None:
+            self._show_wechat_idle()
         else:
             self._show_wechat_guide()
         self._wechat_connect_button.setText(_WECHAT_CONNECT_LABEL)
@@ -343,16 +381,24 @@ class WeChatWorkspace(QWidget):
         elif not available:
             self.session_panel.show_disconnected_placeholder()
 
-        if (
-            load_sessions_on_ready
-            and not available
-            and not bool(getattr(status, "data_found", False))
-            and self._connection_task is None
-            and not self._wechat_connect_pending
-        ):
-            self.connect_wechat()
-
     # ---------------------------------------------------------------- guide
+
+    def _show_wechat_idle(self) -> None:
+        """Present an invitation to connect, before any connection attempt."""
+        self._status_label.setText(_WECHAT_STATUS_DISCONNECTED)
+        self._status_label.setVisible(True)
+        self._wechat_guide_label.setText(_WECHAT_CONNECT_LABEL)
+        self._wechat_guide_note_label.setText(
+            "点击“连接微信”后，Echo 会一步一步提示你完成连接。"
+        )
+        self._wechat_guide_key_label.setText(_WECHAT_GUIDE_NOTE)
+        for label in (self._wechat_guide_label, self._wechat_guide_note_label,
+                      self._wechat_guide_key_label):
+            label.setStyleSheet(GUIDE_STYLE)
+            label.setVisible(True)
+        self._hide_wechat_guide_image()
+        self._wechat_connect_button.setVisible(True)
+        self._wechat_setup_button.setVisible(True)
 
     def _show_wechat_guide(
         self,
@@ -368,6 +414,13 @@ class WeChatWorkspace(QWidget):
             self._wechat_guide_note_label.setStyleSheet(GUIDE_STYLE_EMPHASIS)
             self._wechat_guide_key_label.clear()
             self._wechat_guide_key_label.setVisible(False)
+        elif current_step_only:
+            self._wechat_guide_label.setText(_WECHAT_PROGRESS_INSTRUCTIONS[progress])
+            self._wechat_guide_note_label.setText(_WECHAT_PROGRESS_EXPLANATIONS[progress])
+            self._wechat_guide_note_label.setStyleSheet(GUIDE_STYLE)
+            self._wechat_guide_key_label.setText(_WECHAT_GUIDE_NOTE)
+            self._wechat_guide_key_label.setStyleSheet(GUIDE_STYLE)
+            self._wechat_guide_key_label.setVisible(True)
         else:
             ready = progress is WeChatConnectionProgress.READY_FOR_LOGIN
             self._wechat_guide_label.setText(
@@ -381,16 +434,18 @@ class WeChatWorkspace(QWidget):
             self._wechat_guide_key_label.setText(
                 _WECHAT_READY_WARNING if ready else _WECHAT_GUIDE_WARNING
             )
+            self._wechat_guide_key_label.setStyleSheet(GUIDE_STYLE_EMPHASIS)
             self._wechat_guide_key_label.setVisible(not current_step_only)
-        self._wechat_guide_label.setVisible(
-            include_directory_help or not current_step_only
-        )
+        self._wechat_guide_label.setVisible(True)
         self._wechat_guide_note_label.setVisible(True)
 
-        if current_step_only and not include_directory_help:
-            self._hide_wechat_guide_image()
-        else:
+        if (
+            not include_directory_help
+            and progress is WeChatConnectionProgress.READY_FOR_LOGIN
+        ):
             self._refresh_wechat_guide_image()
+        else:
+            self._hide_wechat_guide_image()
 
     def _refresh_wechat_guide_image(self) -> None:
         """Load the optional guide image without making connection depend on it."""
@@ -584,13 +639,9 @@ class WeChatWorkspace(QWidget):
             return
 
         self._wechat_login_progress = progress
-        if progress is WeChatConnectionProgress.CREDENTIAL_RECEIVED:
-            text = _WECHAT_CREDENTIAL_RECEIVED
-            self._hide_wechat_guide()
-        else:
-            text = _WECHAT_PROGRESS_INSTRUCTIONS[progress]
-            self._show_wechat_guide(progress=progress, current_step_only=True)
-            self.session_panel.show_connecting_placeholder()
+        text = _WECHAT_PROGRESS_STATUS[progress]
+        self._show_wechat_guide(progress=progress, current_step_only=True)
+        self.session_panel.show_connecting_placeholder()
         self._status_label.setVisible(True)
         self._status_label.setText(text)
         self.status_changed.emit(text)
