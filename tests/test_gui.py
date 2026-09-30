@@ -4028,10 +4028,12 @@ def test_wechat_failed_listener_removes_login_prompt(qt_app):
     assert workspace._wechat_connect_button.isEnabled()
 
 
-def test_wechat_structured_progress_crosses_real_facade_and_worker(qt_app, tmp_path):
+def test_wechat_structured_progress_crosses_real_facade_and_worker(
+    qt_app, tmp_path, monkeypatch,
+):
     import io
     from types import SimpleNamespace
-    from qq_chat_analyzer.application.wechat_key_service import WeChatKeyService
+    from qq_chat_analyzer.application import wechat_key_service
     from qq_chat_analyzer.application.wechat_setup_service import WeChatSetupService
     from qq_chat_analyzer.application.wechat_environment_config import (
         WeChatEnvironmentConfigLoader, WeChatEnvironmentConfigWriter,
@@ -4051,9 +4053,20 @@ def test_wechat_structured_progress_crosses_real_facade_and_worker(qt_app, tmp_p
         returncode=0,
         wait=lambda **_kwargs: 0,
     )
-    key_service = WeChatKeyService(
+    snapshots = iter([[], [4242]])
+    monkeypatch.setattr(
+        wechat_key_service, "_find_weixin_pids",
+        lambda: next(snapshots, [4242]),
+    )
+    helper_commands = []
+
+    def launch(command, **_kwargs):
+        helper_commands.append(command)
+        return process
+
+    key_service = wechat_key_service.WeChatKeyService(
         dll_path=dll, helper_path=helper,
-        process_launcher=lambda *_args, **_kwargs: process,
+        process_launcher=launch,
         node_finder=lambda _name: "fictional-node",
     )
     target = tmp_path / "wechat.json"
@@ -4080,13 +4093,19 @@ def test_wechat_structured_progress_crosses_real_facade_and_worker(qt_app, tmp_p
     _settle_workers()
 
     assert errors == []
+    assert key_service._legacy_injected is False
+    assert len(helper_commands) == 1
+    command = helper_commands[0]
+    assert command[:2] == ["fictional-node", str(helper)]
+    assert command[command.index("--pid") + 1] == "4242"
     assert [getattr(event, "name", None) for event, _text, _thread in seen] == [
-        "PREPARING", "READY_FOR_LOGIN", "CREDENTIAL_RECEIVED",
+        "PREPARING", "WAITING_FOR_WECHAT_START", "READY_FOR_LOGIN",
+        "CREDENTIAL_RECEIVED",
     ]
     assert all(thread == ui_thread for _event, _text, thread in seen)
     assert "暂时不要登录" in seen[0][1]
-    assert "现在请登录微信" in seen[1][1]
-    assert "已获取" in seen[2][1]
+    assert "现在请登录微信" in seen[2][1]
+    assert "已获取" in seen[3][1]
 
 
 def test_wechat_workspace_guide_shows_status_confirmation(qt_app) -> None:
