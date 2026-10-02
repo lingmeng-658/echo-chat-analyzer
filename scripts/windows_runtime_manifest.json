@@ -253,6 +253,26 @@
       "description": "Helper module root exposed to the helper process."
     }
   ],
+  "packageDirectories": [
+    {
+      "path": "qq/node_modules",
+      "source": "qq",
+      "type": "directory",
+      "description": "NapCat program dependencies copied recursively."
+    },
+    {
+      "path": "qq/static/qce",
+      "source": "qq",
+      "type": "directory",
+      "description": "QCE frontend program assets, including auth and sessions routes."
+    },
+    {
+      "path": "wechat/node_modules/koffi",
+      "source": "wechat",
+      "type": "directory",
+      "description": "Complete Koffi program dependency copied recursively."
+    }
+  ],
   "privatePaths": [
     {
       "path": "qq/cache",

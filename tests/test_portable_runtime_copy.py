@@ -472,3 +472,65 @@ def test_runtime_build_rejects_empty_qce_static_directory(
     assert "qq/static/qce" in (completed.stderr + completed.stdout).replace(
         "\\", "/"
     )
+
+
+def test_runtime_copy_ships_program_assets_without_mutable_state(tmp_path: Path) -> None:
+    runtime = _fictional_runtime(tmp_path)
+    private_paths = ["unlisted-program.exe", "qq/unlisted-plugin/state.json"]
+    for directory in (
+        "output", "logs", "cache", "temp", "tmp", "staging", "generations",
+        "decrypted", "scratch", "data", "reports", "session", "sessions", "auth",
+    ):
+        for parent in ("", "qq/", "wechat/", "qq/plugins/napcat-plugin-qce/"):
+            private_paths.append(f"{parent}{directory}/fictional.plaintext.db")
+    private_paths.extend([
+        "qq/plugins/napcat-plugin-qce/direct_db_research/generations/fictional/snapshot.db",
+        "qq/plugins/napcat-plugin-qce/direct_db_research/credentials.json",
+        "wechat/node_modules/koffi/scratch/fictional.plaintext.db",
+        "qq/node_modules/fictional-package/output/report.json",
+        "qq/node_modules/fictional-package/records.jsonl",
+        "qq/node_modules/fictional-package/session.json",
+        "qq/node_modules/fictional-package/token.txt",
+        ".codex/local.txt", "docs/research/local.md", "build/rc-environment-backup/local.txt",
+    ])
+    for relative in private_paths:
+        _write(runtime / relative, "fictional private state")
+    # These are immutable frontend routes, not local authentication/session state.
+    for route in ("auth", "sessions"):
+        _write(runtime / f"qq/static/qce/{route}/index.html", "fictional frontend route")
+    source_before = {p.relative_to(runtime): p.read_bytes() for p in runtime.rglob("*") if p.is_file()}
+
+    completed = _copy_runtime(tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    portable = tmp_path / "dist/Echo/runtime"
+    assert not (portable / "output").exists()
+    assert not any(portable.rglob("*.plaintext.db"))
+    assert not any((portable / relative).exists() for relative in private_paths)
+    for requirement in RUNTIME_CONTRACT["requirements"]:
+        if requirement["type"] == "file":
+            assert (portable / requirement["path"]).is_file()
+    for filename in ("snapshot.mjs", "main_wal.mjs", "workspace.mjs"):
+        assert (portable / "qq/plugins/napcat-plugin-qce/direct_db_research" / filename).is_file()
+    for source in ("qq", "wechat"):
+        for filename in ("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"):
+            assert (portable / source / filename).is_file()
+    for route in ("auth", "sessions"):
+        assert (portable / f"qq/static/qce/{route}/index.html").is_file()
+    assert {p.relative_to(runtime): p.read_bytes() for p in runtime.rglob("*") if p.is_file()} == source_before
+
+
+def test_runtime_copy_rejects_junctions_inside_program_assets(tmp_path: Path) -> None:
+    import _winapi
+
+    runtime = _fictional_runtime(tmp_path)
+    private = tmp_path / "fictional-private"
+    _write(private / "private.json", "fictional user state")
+    _winapi.CreateJunction(str(private), str(runtime / "qq/node_modules/linked-package"))
+
+    completed = _copy_runtime(tmp_path)
+
+    assert completed.returncode != 0
+    assert "reparse point" in completed.stderr + completed.stdout
+    assert not (tmp_path / "dist/Echo/runtime/qq/node_modules/linked-package/private.json").exists()
+    assert (private / "private.json").read_text(encoding="utf-8") == "fictional user state"
