@@ -330,6 +330,12 @@ def _optional_count(value: object) -> int | None:
 def _identity_summary(value: object) -> InputIdentitySummary | None:
     if value is None:
         return None
+    if isinstance(value, dict) and "snapshot_reused" in value:
+        # Accept the old persisted schema without reviving snapshot reuse in
+        # the current model. All other fields still undergo strict validation.
+        if not isinstance(value["snapshot_reused"], bool):
+            raise _HistoryFileError("Invalid input identity summary.")
+        value = {key: item for key, item in value.items() if key != "snapshot_reused"}
     if not isinstance(value, dict) or set(value) != {
         "capture_mode",
     }:

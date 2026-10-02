@@ -240,6 +240,53 @@ def test_legacy_history_row_without_snapshot_id_remains_readable(tmp_path):
     assert records[0].analyzed_message_count is None
 
 
+@pytest.mark.parametrize("snapshot_reused", [True, False])
+def test_legacy_snapshot_reused_history_can_be_read_and_appended(tmp_path, snapshot_reused):
+    from dataclasses import fields
+    from qq_chat_analyzer.application.report_history import _record_to_payload
+
+    history_path = tmp_path / "fictional-legacy-history.jsonl"
+    manager = ReportHistoryManager(history_path)
+    legacy_record = _save_record(manager, input_identity_summary=InputIdentitySummary("snapshot"))
+    payload = json.loads(history_path.read_text(encoding="utf-8"))
+    payload["input_identity_summary"]["snapshot_reused"] = snapshot_reused
+    history_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    original = history_path.read_bytes()
+
+    records = manager.list_records()
+    assert records == (legacy_record,)
+    assert records[0].input_identity_summary == InputIdentitySummary("snapshot")
+    assert "snapshot_reused" not in _record_to_payload(records[0])["input_identity_summary"]
+    assert {field.name for field in fields(InputIdentitySummary)} == {"capture_mode"}
+    new_record = _save_record(manager, input_identity_summary=InputIdentitySummary("live_database"))
+    assert manager.list_records() == (new_record, legacy_record)
+    assert history_path.read_bytes().startswith(original)  # No rewrite of old rows.
+    new_payload = json.loads(history_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert new_payload["input_identity_summary"] == {"capture_mode": "live_database"}
+
+
+@pytest.mark.parametrize("invalid_summary", [
+    {"capture_mode": "snapshot", "snapshot_reused": "true"},
+    {"capture_mode": "snapshot", "snapshot_reused": 1},
+    {"capture_mode": "snapshot", "snapshot_reused": None},
+    {"capture_mode": "invalid", "snapshot_reused": True},
+    {"capture_mode": "snapshot", "snapshot_reused": True, "unexpected": "value"},
+    {"snapshot_reused": True},
+])
+def test_legacy_identity_compatibility_still_rejects_invalid_metadata(tmp_path, invalid_summary):
+    history_path = tmp_path / "fictional-invalid-history.jsonl"
+    manager = ReportHistoryManager(history_path)
+    _save_record(manager)
+    payload = json.loads(history_path.read_text(encoding="utf-8"))
+    payload["input_identity_summary"] = invalid_summary
+    history_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    original = history_path.read_bytes()
+    assert manager.list_records() == ()
+    with pytest.raises(ReportHistoryWriteError):
+        _save_record(manager)
+    assert history_path.read_bytes() == original
+
+
 @pytest.mark.parametrize("invalid_count", [-1, True])
 def test_invalid_diagnostic_count_refuses_append(tmp_path, invalid_count):
     history_path = tmp_path / "history.jsonl"

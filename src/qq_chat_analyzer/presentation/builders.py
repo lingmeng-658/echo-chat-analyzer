@@ -300,9 +300,10 @@ def _build_echo_language_profile(
                             :ECHO_LANGUAGE_PRIMARY_WORD_LIMIT
                         ]
                     ),
-                    context_words=member.top_words[
-                        :ECHO_LANGUAGE_CONTEXT_WORD_LIMIT
-                    ],
+                    context_words=tuple(
+                        word for word in member.top_words
+                        if not word.startswith("expression:")
+                    )[:ECHO_LANGUAGE_CONTEXT_WORD_LIMIT],
                 )
             )
         return EchoLanguageProfile(
@@ -336,9 +337,10 @@ def _build_echo_language_profile(
                     member,
                     viewer_speaker_key=known_viewer_key,
                 ),
-                primary_words=member.top_words[
-                    :ECHO_LANGUAGE_PRIMARY_WORD_LIMIT
-                ],
+                primary_words=tuple(
+                    word for word in member.top_words
+                    if not word.startswith("expression:")
+                )[:ECHO_LANGUAGE_PRIMARY_WORD_LIMIT],
                 expression_habits=_echo_expression_habits(
                     profile_by_key.get(member.speaker_key)
                 ),
@@ -416,6 +418,7 @@ def _private_shared_word_layers(
         item
         for item in report.shared_words
         if item.speaker_a in member_keys and item.speaker_b in member_keys
+        and not item.word.startswith("expression:")
     ]
     shared_words = tuple(
         _to_echo_shared_word(item, viewer_key, emphasis="shared")

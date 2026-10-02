@@ -899,6 +899,66 @@ def test_wechat_expression_placeholders_are_not_language_words(
     assert "表情" not in profile_words
 
 
+@pytest.mark.parametrize("source", ["wechat", "qq"])
+def test_private_expression_tokens_do_not_reenter_language_profile(tmp_path: Path, source: str) -> None:
+    application = _application_module()
+    input_path = tmp_path / "fictional-private-expressions.json"
+    (tmp_path / "private-output").mkdir()
+    if source == "qq":
+        _write_private_qce_expression_fallback_export(input_path)
+    else:
+        rows = []
+        for sender in ("wxid_fictional_self", "wxid_fictional_peer"):
+            for kind, text in (
+                (1, "公园散步[表情]"), (1, "表情"),
+                (1, "[Facepalm]😂"), (47, '<msg><emoji md5="fictional-sticker"/></msg>'),
+            ):
+                rows.append({
+                    "local_id": len(rows) + 1,
+                    "server_id": 9000 + len(rows),
+                    "create_time": 1704099600 + len(rows) * 60,
+                    "local_type": kind, "message_content": text, "user_name": sender,
+                })
+        input_path.write_text(json.dumps({
+            "source": "wechat-db",
+            "conversation": {"username": "wxid_fictional_peer", "session_type": "private", "self_username": "wxid_fictional_self"},
+            "messages": rows,
+        }, ensure_ascii=False), encoding="utf-8")
+
+    result = application.AnalysisApplicationService().execute(_request(application, tmp_path, input_path))
+    assert result.status in {application.AnalysisStatus.COMPLETED, application.AnalysisStatus.EXPRESSION_ONLY}
+    assert result.reports.expression.expression_occurrence_count > 0
+    assert all(word.word != "表情" and not word.word.startswith("expression:") for word in result.top_words)
+    profile = result.echo_report_view.language_profile
+    assert profile.available
+    assert all(not word.startswith("expression:") for member in profile.members for word in member.primary_words)
+    assert all(not word.word.startswith("expression:") for word in (*profile.shared_words, *profile.side_preference_words))
+    payload = json.loads((tmp_path / "private-output" / "echo-report.json").read_text(encoding="utf-8"))
+    assert payload["expression_culture"] is not None
+    assert '"表情"' not in json.dumps(payload["language_profile"], ensure_ascii=False)
+
+
+def test_private_semantic_expression_word_remains_a_language_word(tmp_path: Path) -> None:
+    application = _application_module()
+    input_path = tmp_path / "fictional-semantic-expression-word.json"
+    (tmp_path / "private-output").mkdir()
+    rows = [{
+        "local_id": index + 1, "server_id": 9000 + index,
+        "create_time": 1704099600 + index * 60, "local_type": 1,
+        "message_content": "你的表情很自然",
+        "user_name": "wxid_fictional_self" if index % 2 else "wxid_fictional_peer",
+    } for index in range(8)]
+    input_path.write_text(json.dumps({
+        "source": "wechat-db",
+        "conversation": {"username": "wxid_fictional_peer", "session_type": "private", "self_username": "wxid_fictional_self"},
+        "messages": rows,
+    }, ensure_ascii=False), encoding="utf-8")
+    result = application.AnalysisApplicationService().execute(_request(application, tmp_path, input_path))
+    assert "表情" in {word.word for word in result.top_words}
+    assert all("表情" in member.primary_words for member in result.echo_report_view.language_profile.members)
+    assert "表情" in {word.word for word in result.echo_report_view.language_profile.shared_words}
+
+
 def test_expression_only_failure_falls_back_without_artifacts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
