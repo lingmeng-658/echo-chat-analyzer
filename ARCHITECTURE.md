@@ -205,9 +205,11 @@ Adapter 负责格式转换，分析核心不读取 QQ 原生字段。
 桌面 QQ 会话列表和分析的获取路径为：
 
 ```text
-QQ 本地 DB → NapCat in-process decryptDatabase → Echo snapshot generation
+QQ 本地 main+WAL+SHM → hardened committed boundary B capture
+→ staging 加密合并 DB → NapCat in-process decryptDatabase → Echo snapshot generation
 → QQDatabaseProvider（只读）→ qq-db-json 临时 payload
 → qq_db_adapter → ChatMessage → ImportService / AnalysisApplicationService
+→ Analysis Core → Presentation → Echo JSON / HTML Report
 ```
 
 `gui/app.py` 为 QQ 构造 `QQDirectDatabaseImportService`；Facade 通过该服务获取
@@ -224,11 +226,28 @@ bridge/API 暂未就绪或暂时不可达时返回可重试的 `not_ready`，后
 
 每次 `acquire` 由 snapshot helper 串行执行：先清除旧 generation、staging 与历史
 plaintext，清理失败则拒绝解密；再分别有限等待 DatabaseApi/passphrase 和本人身份，
-解密到 staging，复核身份未改变后写入 manifest 并原子发布 generation。RPC 客户端的
+获取先固定 SHM 见证的 committed boundary B，校验 WAL header/salt/checksum 和完整前缀、
+main identity/stat/content 稳定性及 checkpoint witness；B 后 append 可以继续，checkpoint、
+main 改变、WAL reset/truncate 或无法证明一致性均 fail closed，不回退 main-only。
+复用同一个 hardened capture 模块生成 staging 加密合并文件，交给现有 NapCat 解密；
+native read telemetry 校验的是该 staging 输入。发布前删除加密合并文件，复核身份未改变后
+写入原 schema manifest 并原子发布 generation。RPC 客户端的
 acquire 超时覆盖两个顺序等待窗口。QCE API Proxy 的可调用 `then` 不能作为 async
 函数返回值直接返回，否则 Promise 会把它当作 thenable 而永久 pending；helper
 通过普通对象承载该 Proxy。应用服务校验 generation 后只读查询，清理 generation
 后才让下游消费临时 payload；失败时不使用旧 generation。
+
+RPC 客户端仅对 `snapshot_unstable` 执行 bounded retry；每次重试仍获取新的
+generation，耗尽后明确失败，不绕过任何 guard。Windows/libuv 文件 identity
+比较已统一使用 descriptor `fstat`，路径探测先 open 再 fstat，保留 `dev` 与 `ino`
+双重保护，避免同一文件的 path stat / descriptor stat 来源差异造成误拒绝。
+
+同一 snapshot root 的 Windows OS 独占 lease 从获取前 recover 持有到 generation 消费后
+cleanup，进程内 mutating 操作仍串行。root/staging ownership marker、generation manifest 和
+固定文件 allowlist 约束删除范围；未知文件、目录或 junction 拒绝清理。全部成员验证后才删除，
+ownership proof 最后删除；清理失败明确返回失败并保留可恢复残留。runtime 强杀后 OS handle
+释放，下一次 startup/acquire 在 lease 内恢复，不通过 PID 存活猜测接管。lease 由隐藏的
+PowerShell 子进程持有，stdin EOF 释放，不需要另一套 Python 环境。
 
 这里有两个不同的 transient 资源：`snapshot.db` 属于 runtime generation，会话列表查询
 结束或所选会话的 `qq-db-json` payload 物化完成后立即调用 `cleanup(generation_id)`；
@@ -239,9 +258,25 @@ cleanup 失败会作为错误上报，不能假装分析已安全完成。
 QCE JSON → `qq_chat_exporter_adapter` 路径仍存在于 QCE CLI；QCE Provider 也用于
 当前 QQ 连接与运行时相关能力。桌面 QQ 分析不自动回退到 QCE。DB 原生字段与
 protobuf 解释留在 Provider / Adapter 边界内，不能进入分析核心。已有真人验收确认
-Direct DB `recover` / `acquire`、会话列表和正常 shutdown 清理可用；
-`database disk image is malformed` 偶发问题仍 OPEN、当前不可稳定复现，
-generation/source/snapshot/`quick_check` 诊断已部署，不能表述为已修复。
+正式 hardened main+WAL acquisition、解密、会话列表、分析、JSON / HTML 报告
+和正常 shutdown 清理可用。2026-10-02 最终验收已关闭 Stage 3.5、A4、A5、A6，
+Final Cleanup / Final Smoke 均 PASS；此前 main-only 损坏快照问题已关闭。
+验收范围与跨机器 RC 等开放事项见 `docs/HARDENING.md`，不将本机验收扩大为
+跨机器或跨 QQ 版本 schema 保证。
+
+群成员元数据使用已验证的 `result.infos`：优先 `cardName`，缺失时回退 `nick`；
+不通过好友列表假定群成员关系，也不为缺失元数据猜名称。Provider 按
+`40050 ASC, 40001 ASC` 查询消息，Adapter / Import 保留该顺序。
+Adapter 按段序保留多段文本与 QQ face，Unicode emoji 继续由来源中立的表达分析处理；
+group reply 按可唯一匹配的序列建立 ReplyRelation，mention 保留结构化关系，
+引用及 mention 元数据不混入 authored text。图片段映射为 `NonTextContent("image")`，
+其他未识别段只保留 `NonTextContent("unknown")`，不猜具体媒体类型；重复段不去重。
+legacy 正文只投影 TextContent，纯图片也可完成分析并生成消息统计与空词频报告。
+
+Final Cleanup 已移除 `analysis-ordering` 专用计数/日志与闲置 `pollCount`；
+保留 `analysis-timing`、DEBUG member-shape、identity coverage，以及
+failure_stage / guard_code、WAL/SHM/identity/checkpoint witness、native telemetry、
+generation/source/snapshot/`quick_check`、cleanup/recover/shutdown 等长期诊断。
 
 获取范围是减少无关数据的优化边界；`Analysis Scope Filter` 才是最终 correctness
 guarantee。两者必须同时保留，且时间单位按来源区分：QQ Direct DB 获取使用

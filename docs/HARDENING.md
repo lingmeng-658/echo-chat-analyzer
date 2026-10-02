@@ -165,9 +165,14 @@ SQLite 验收由 rebuilt binary 返回 100001 行且 `truncated=false`。这与 
 
 ### BUG-07 Direct DB 偶发 `database disk image is malformed`
 
-状态：OPEN，当前不可稳定复现。自动 generation/source/snapshot/`quick_check` 诊断已部署。
-现有证据不足以确认根因或修复；不主动重复运行以碰概率，不猜测修改。
-再次出现时依据隐私安全诊断定位。Release Blocker：TBD。
+状态：CLOSED（2026-10-02 最终真人验收）。Release Blocker：No。
+
+历史 main-only 解密路径未纳入 committed WAL；正式链路已替换为 hardened
+main+WAL acquisition，在固定 SHM committed boundary 内校验、合并，再解密。
+Windows/libuv identity 比较统一为 descriptor fstat，保留 dev / ino 保护；
+瞬时 `snapshot_unstable` 允许 bounded retry，无法证明一致性时仍 fail closed。
+Stage 3.5 已关闭，正式真人 E2E 与最终 smoke 均 PASS。长期 correctness 诊断继续保留；
+本机验收不替代跨机器 Direct DB RC 验证。历史研究结论仍保留在 `docs/research/`。
 
 **明确注明：QCE / Windows 权限弹窗不是 Bug。**
 
@@ -355,15 +360,61 @@ Release Blocker：Yes。
 
 ---
 
-## QQ Direct DB 当前阶段
+## QQ Direct DB 最终验收 checkpoint（2026-10-02）
 
 桌面 QQ 会话查询与分析当前使用 Direct DB 主链；QCE CLI 与连接/运行时能力仍保留，
 桌面分析没有自动 QCE fallback。架构与生命周期以 `ARCHITECTURE.md` 为准。
 
-本阶段已证实：Direct DB `recover` / `acquire` 成功；会话列表显示 140 个会话；
-QCE Proxy 可调用 `then` 导致 acquire 永久 pending 的问题已修复并通过真人验收；
-正常 shutdown 后 QQ、NapCat、qce-server 与 `snapshot.db` 均无残留。
-Fast Suite 实测 0 failed。单一样本中的 DB 字段映射不构成跨 QQ 版本 schema 保证。
+最终状态：Stage 3.5 CLOSED、A4 CLOSED、A5 CLOSED、A6 CLOSED、
+Final Cleanup PASS、Final Smoke PASS。本分支 QQ Direct DB replacement 已完成最终
+真人验收，不再修改产品代码；跨机器 RC 与以下 backlog 不作为本分支 blocker。
+
+已完成并验证：
+
+- Stage 3.5：正式 hardened main+WAL acquisition → decrypt → provider → adapter
+  → analysis → report。保留 SHM / WAL / main / checkpoint guards、lease、native
+  telemetry 与 SQLite quick_check；不回退 main-only，也不消费旧 generation。
+  仅对 snapshot_unstable bounded retry。Windows/libuv identity 修复保留 dev / ino
+  双重保护。QCE Proxy thenable 永久 pending 修复也已通过真人验收。
+- A4：群成员元数据按已验证的 `result.infos` 读取，`cardName` 优先、`nick` 回退；
+  缺失或已离群成员保留可靠身份与未知名称，不猜名称。
+- A5：Provider 按时间与 record ID 排序，payload / imported / kept 的真人逆序计数均为 0；
+  排序行为 regression tests 保留。
+- A6：保留多段文本、QQ face 与 Unicode emoji；group reply / mention 保留结构化关系，
+  元数据不污染 authored lexical text。图片与 unknown 非文本段按段次数保留，重复不去重，
+  多图片与图文段顺序已真人验证；legacy 正文仅投影 TextContent。
+  纯图片范围 `result.status=completed`，词频为空但消息统计及 JSON / HTML 正常。
+  MarketFace 有实现与虚构测试，但不宣称充分真人覆盖；unknown 只保留 unknown，
+  不推断具体媒体类型。
+- 正式真人 E2E / 最终产品 smoke：冷启动后获取会话列表，选择已验证真实群聊，
+  acquisition 最终成功，分析 completed，JSON / HTML 正常且数据一致，report_path
+  有效并实际在浏览器打开；群成员名称和基础 reply / mention / face / image 语义正常。
+  generation / staging / payload / 获取 scratch 清理正常；正常 shutdown 的自有进程树
+  与 plaintext 清理也已验收。最新 smoke 日志无新增非 history ERROR，单条已知
+  history metadata 兼容错误单独记录，不作为本轮失败。
+- Final Cleanup：删除 analysis-ordering 三个边界的专用计数/日志及相应日志测试断言，
+  删除闲置 pollCount，已同步 deployed runtime helper 与 pin。排序、隐私断言、
+  analysis-timing、DEBUG member-shape、identity coverage、failure_stage / guard_code、
+  WAL/SHM/identity/checkpoint witness、quick_check、cleanup/recover/shutdown 和 native
+  telemetry 均保留。源模板、pin、部署 helper 哈希一致；无已确认的阶段诊断残留。
+
+Final Cleanup 后的回归记录（本次 checkpoint 快照，不作为固定测试数量要求）：
+
+- Focused 修改前 / 后均通过；Fast 无失败。
+- Full：2664 passed、19 skipped，唯一失败为既有 `known_failure`
+  `tests/test_gui.py::test_generate_share_button_creates_and_opens_share_image`；无新增失败。
+- git diff --check 通过。本轮 documentation checkpoint 不重跑产品回归。
+
+仍开放、非本分支 blocker（未在本轮修复）：
+
+- history metadata `snapshot_reused` 兼容：旧记录与当前 identity summary 校验不兼容。
+- unknown session/member UX 折叠。
+- MarketFace 真人覆盖不足。
+- unknown element 真人覆盖有限：仅确认自然出现的 unknown 段保留，不推断媒体类型。
+- GUI share-image 既有 known_failure。
+- 快捷登录尚未实现；现有 QQ 授权/连接闭环验收不等同于该功能完成。
+- 跨机器 Direct DB RC 验证尚未完成；当前真人验收限定本机与已有场景，
+  不构成跨 QQ 版本 schema 保证或全体发布环境准入。
 
 ## Engineering Governance
 
