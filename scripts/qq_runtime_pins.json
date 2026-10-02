@@ -53,8 +53,20 @@
   },
   "directDbSnapshot": {
     "templatePath": "qq_direct_db_snapshot/snapshot.mjs",
-    "templateSha256": "4abfd95cb5b8335889e06c8f5424487aa14d630d7b14eca44e3cd0e757de9c86",
-    "targetPath": "plugins/napcat-plugin-qce/direct_db_research/snapshot.mjs"
+    "templateSha256": "52470294873b238c82f55867bac38d73ff4d56bf55913947d099969cbe93d4a1",
+    "targetPath": "plugins/napcat-plugin-qce/direct_db_research/snapshot.mjs",
+    "dependencies": [
+      {
+        "templatePath": "qq_direct_db_snapshot/main_wal.mjs",
+        "templateSha256": "0a2ee3a37f31a7dbb861d60f944247e95ee55069eb5a0eb90a31a1cbc71c1be0",
+        "targetPath": "plugins/napcat-plugin-qce/direct_db_research/main_wal.mjs"
+      },
+      {
+        "templatePath": "qq_direct_db_snapshot/workspace.mjs",
+        "templateSha256": "9c8d74e02ad3b59048a13c6678574b87d31085a81a10e47c9d5ed3095a1ee3de",
+        "targetPath": "plugins/napcat-plugin-qce/direct_db_research/workspace.mjs"
+      }
+    ]
   },
   "requiredFiles": {
     "NapCatWinBootHook.dll": "962bd5caf59e9792c37eed99c9130bf1464d619d0209820be570874017d66925",

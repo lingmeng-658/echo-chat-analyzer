@@ -14,6 +14,9 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import tempfile
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -76,15 +79,7 @@ console.error = (...args) => {
 function buildCore() {
   const startedAt = Date.now();
   const core = { selfInfo: { uin: config.uin }, apis: {} };
-  const sourceDirectory = config.traceSourceFileState
-    ? path.join(root, 'fictional-source')
-    : null;
-  if (sourceDirectory) {
-    fs.mkdirSync(sourceDirectory, { recursive: true });
-    fs.writeFileSync(path.join(sourceDirectory, 'nt_msg.db'), Buffer.alloc(4096));
-    fs.writeFileSync(path.join(sourceDirectory, 'nt_msg.db-wal'), 'fictional-wal');
-    fs.writeFileSync(path.join(sourceDirectory, 'nt_msg.db-shm'), 'fictional-shm');
-  }
+  const sourceDirectory = config.sourceDirectory;
   if (config.identityReadyAfterMs !== undefined) {
     core.selfInfo.uin = null;
     setTimeout(() => { core.selfInfo.uin = config.uin; }, config.identityReadyAfterMs);
@@ -236,13 +231,25 @@ def _run_node(root: Path, config: dict, driver_dir: Path | None = None) -> dict:
         _DRIVER.replace("__SNAPSHOT_URL__", _snapshot_url()),
         encoding="utf-8",
     )
-    completed = subprocess.run(
-        [NODE, str(driver), str(root), json.dumps(config)],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        check=False,
-    )
+    from test_qq_direct_main_wal_poc import _reserve_48_bytes, _run
+    with tempfile.TemporaryDirectory() as source_dir:
+        source = Path(source_dir)
+        plain = source / 'plain.db'
+        _reserve_48_bytes(plain)
+        with closing(sqlite3.connect(plain)) as writer:
+            writer.execute('PRAGMA journal_mode=WAL')
+            writer.execute('PRAGMA wal_autocheckpoint=0')
+            writer.execute('CREATE TABLE entries(body TEXT)')
+            writer.commit()
+            writer.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+            writer.execute("INSERT INTO entries VALUES('fictional')")
+            writer.commit()
+            _run('fixture', plain, Path(f'{plain}-wal'), source / 'nt_msg.db', source / 'nt_msg.db-wal')
+        config = {**config, 'sourceDirectory': str(source)}
+        completed = subprocess.run(
+            [NODE, str(driver), str(root), json.dumps(config)],
+            capture_output=True, text=True, encoding='utf-8', check=False, timeout=30,
+        )
     assert completed.returncode == 0, completed.stderr
     return json.loads(completed.stdout)
 
@@ -284,8 +291,9 @@ def _seed_legacy_plaintext(root: Path) -> None:
 
 
 def _seed_staging(root: Path) -> None:
-    staging = root / "staging" / "partial"
+    staging = root / "staging"
     staging.mkdir(parents=True)
+    (staging / 'owner.json').write_text(json.dumps({'kind': 'echo-qq-snapshot', 'version': 1}))
     (staging / "snapshot.db").write_bytes(b"fictional-partial-db")
 
 
@@ -424,7 +432,13 @@ def test_manifest_or_publish_failure_leaves_no_ready_generation(
     result = output["results"][0]["result"]
     assert result["ok"] is False
     assert result["status"] == "failed"
-    assert result["code"] in {"manifest_failed", "publish_failed"}
+    # A directory injected where the manifest should be is unknown ownership;
+    # fail-closed cleanup must preserve it and report the cleanup failure.
+    expected = 'cleanup_failed' if failure_flag == 'decryptCreatesManifestDir' else 'publish_failed'
+    assert result["code"] == expected
+    if failure_flag == 'decryptCreatesManifestDir':
+        assert (tmp_path / 'staging/owner.json').is_file()
+        assert (tmp_path / 'staging/manifest.json').is_dir()
     assert _generation_ids(tmp_path) == []
 
 
@@ -483,7 +497,17 @@ def test_acquire_trace_records_safe_phase_boundaries(tmp_path: Path, monkeypatch
 
     assert output["results"][0]["result"]["status"] == "ready"
     trace = trace_file.read_text(encoding="utf-8")
-    stages = [line.split("stage=", 1)[1].split()[0] for line in trace.splitlines()]
+    diagnostic_lines = [line for line in trace.splitlines() if "stage=acquisition_diagnostic " in line]
+    assert diagnostic_lines
+    provenance_lines = [line for line in diagnostic_lines if "snapshot_code_hash=" in line]
+    assert len(provenance_lines) == 1
+    assert "capture_stage=shm_witness" in provenance_lines[0]
+    assert "shm_identity_stable=true" in provenance_lines[0]
+    for field in ("snapshot_code_hash", "capture_code_hash", "workspace_code_hash",
+                  "node_version", "libuv_version"):
+        assert sum(f"{field}=" in line for line in diagnostic_lines) == 1
+    stages = [line.split("stage=", 1)[1].split()[0] for line in trace.splitlines()
+              if "stage=acquisition_diagnostic " not in line]
     assert stages == [
         "acquire_queued",
         "acquire_entered",
@@ -492,9 +516,13 @@ def test_acquire_trace_records_safe_phase_boundaries(tmp_path: Path, monkeypatch
         "passphrase_wait_polled",
         "passphrase_ready",
         "identity_ready",
+        "main_wal_boundary_verified",
+        "main_wal_capture_complete",
+        "decrypt_source_before",
         "decrypt_started",
         "decrypt_finished",
         "decrypt_source_read",
+        "decrypt_source_after",
         "generation_ready",
     ]
     assert FICTIONAL_UIN not in trace
@@ -528,7 +556,7 @@ def test_acquire_trace_records_privacy_safe_source_file_state(
         if "stage=decrypt_source_after" in line
     )
     assert "database_present=true" in before
-    assert "database_bytes=4096" in before
+    assert "database_bytes=" in before
     assert "wal_present=true" in before
     assert "shm_present=true" in before
     assert "database_changed=false" in after
@@ -601,6 +629,13 @@ def test_acquire_rejects_snapshot_when_source_changed_during_read(
     assert not (tmp_path / "staging").exists()
     assert output["metrics"]["decryptCalls"] == 1
 
+    failure_line = next(line for line in trace_file.read_text(encoding="utf-8").splitlines()
+                        if "failure_stage=telemetry guard_code=telemetry_invalid_or_changed" in line)
+    for field in ("snapshot_code_hash", "capture_code_hash", "workspace_code_hash",
+                  "node_version", "libuv_version"):
+        assert f"{field}=" in failure_line
+    assert FICTIONAL_UIN not in failure_line and str(tmp_path) not in failure_line
+
 
 def test_acquire_rejects_snapshot_when_native_read_state_is_unavailable(
     tmp_path: Path,
@@ -655,10 +690,7 @@ def test_passphrase_wait_trace_identifies_a_bounded_false_poll(tmp_path: Path, m
     assert stages == [
         "acquire_queued", "acquire_entered", "slate_ready",
         "passphrase_wait_started", "passphrase_wait_polled",
-        "passphrase_first_poll_completed", "passphrase_first_sleep_scheduled",
-        "passphrase_first_sleep_resumed", "passphrase_second_poll_started",
-        "passphrase_second_api_read", "passphrase_second_method_read",
-        "passphrase_second_method_returned", "passphrase_not_ready",
+        "passphrase_not_ready",
     ]
 
 

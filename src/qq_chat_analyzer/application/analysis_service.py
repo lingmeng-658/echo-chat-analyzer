@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
-from ..analysis_diagnostics import OrderingHealth, timed_stage
+from ..analysis_diagnostics import timed_stage
 from ..analysis.identity import stable_sender_key
 from ..analysis.conversation_sessions import analyze_conversation_sessions
 from ..analysis.analyzers import (
@@ -32,7 +32,7 @@ from ..analyzer import (
 from ..cleaner import clean_text
 from ..message import ChatMessage
 from ..message_quality_filter import apply_message_quality_filter
-from ..rich_message import ExpressionContent, RichMessage
+from ..rich_message import ExpressionContent, NonTextContent, RichMessage
 from ..presentation import (
     EchoReportView,
     build_echo_report_view,
@@ -121,12 +121,7 @@ class AnalysisApplicationService:
             )
         _log_identity_diagnostics(outcome.messages)
         processed_message_count = outcome.processed_message_count
-        imported_ordering = OrderingHealth("imported")
-        parsed_messages = []
-        for message in outcome.messages:
-            imported_ordering.observe(message)
-            parsed_messages.append(message)
-        imported_ordering.log()
+        parsed_messages = list(outcome.messages)
         with timed_stage("scope_filter"):
             scoped_messages = filter_messages(parsed_messages, request.scope)
         if (
@@ -150,21 +145,41 @@ class AnalysisApplicationService:
             filtered_message_count=len(kept_messages),
             analyzed_message_count=len(kept_messages),
         )
-        kept_ordering = OrderingHealth("kept")
         with timed_stage("text_analysis"):
             analyzed = _analyze_kept_messages(
                 kept_messages,
                 request.stopwords_path,
                 outcome.rich_messages,
-                ordering=kept_ordering,
             )
-        kept_ordering.log()
         with timed_stage("ExpressionAnalyzer.preflight"):
             expression_report = ExpressionAnalyzer().analyze(
                 kept_messages,
                 rich_messages=outcome.rich_messages,
             )
         has_expression_report = expression_report.expression_message_count > 0
+
+        kept_keys = {
+            (message.message_id, message.conversation_id, message.sender_id, message.timestamp)
+            for message in kept_messages
+        }
+        has_nontext = any(
+            (message.message_id, message.conversation_id, message.sender.identity_id, message.timestamp)
+            in kept_keys
+            and any(isinstance(part, NonTextContent) for part in message.contents)
+            for message in outcome.rich_messages
+        )
+        if not analyzed.tokens and has_nontext:
+            return _expression_only_result(
+                request=request,
+                kept_messages=kept_messages,
+                analyzed=analyzed,
+                diagnostic_counts=diagnostic_counts,
+                processed_message_count=processed_message_count,
+                rich_messages=outcome.rich_messages,
+                conversation_type=_resolve_conversation_type(kept_messages, request.conversation_kind),
+                expression_source=outcome.result.platform,
+                success_status=(AnalysisStatus.EXPRESSION_ONLY if has_expression_report else AnalysisStatus.COMPLETED),
+            )
 
         if analyzed.valid_text_count == 0 and not has_expression_report:
             return AnalysisResultDTO(
@@ -384,8 +399,9 @@ def _expression_only_result(
     rich_messages: tuple[RichMessage, ...],
     conversation_type: str,
     expression_source: str | None,
+    success_status: AnalysisStatus = AnalysisStatus.EXPRESSION_ONLY,
 ) -> AnalysisResultDTO:
-    """Build the guarded expression-only result with graceful fallback."""
+    """Build reports without lexical tokens, preserving content facts."""
     try:
         with timed_stage("report_build"):
             reports = _build_reports(
@@ -409,7 +425,7 @@ def _expression_only_result(
             )
     except Exception:
         _LOGGER.warning(
-            "expression-only report generation failed; falling back",
+            "content-only report generation failed; falling back",
             exc_info=True,
         )
         for filename in (
@@ -427,7 +443,7 @@ def _expression_only_result(
             diagnostic_counts=diagnostic_counts,
         )
     return AnalysisResultDTO(
-        status=AnalysisStatus.EXPRESSION_ONLY,
+        status=success_status,
         processed_message_count=processed_message_count,
         valid_text_count=analyzed.valid_text_count,
         diagnostic_counts=diagnostic_counts,
@@ -467,8 +483,6 @@ def _analyze_kept_messages(
     messages: list[ChatMessage],
     stopwords_path: Path,
     rich_messages: tuple[RichMessage, ...] = (),
-    *,
-    ordering: OrderingHealth | None = None,
 ) -> _AnalyzedMessages:
     valid_text_count = 0
     tokens: list[str] = []
@@ -481,8 +495,6 @@ def _analyze_kept_messages(
     stopwords: set[str] | None = None
 
     for message in messages:
-        if ordering is not None:
-            ordering.observe(message)
         cleaned_text = clean_text(message.text, platform=message.platform)
         message_tokens = []
         if cleaned_text:

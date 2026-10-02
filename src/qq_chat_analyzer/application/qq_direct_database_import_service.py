@@ -17,7 +17,6 @@ import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Iterator
@@ -374,7 +373,9 @@ class QQDirectDatabaseImportService:
                     rpc_status = "api_unavailable"
                     if callable(get_members):
                         try:
-                            member_data = _group_member_data(get_members(session.session_object))
+                            member_result = get_members(session.session_object)
+                            _log_group_member_shape(member_result)
+                            member_data = _group_member_data(member_result)
                             sender_names = member_data["names"]
                             rpc_status = member_data["status"]
                         except Exception:
@@ -407,18 +408,8 @@ class QQDirectDatabaseImportService:
                 named_session = self._named_sessions(
                     [session], group_names=group_names, friend_names=friend_names
                 )[0]
-                ordering = _attach_sender_names(payload_path, sender_names, self_uin)
+                _attach_sender_names(payload_path, sender_names, self_uin)
                 ready_at = time.perf_counter()
-                _LOGGER.info(
-                    "[analysis-ordering] boundary=direct_db_payload order_key=record_id "
-                    "record_count=%d valid_timestamp_count=%d "
-                    "invalid_timestamp_count=%d timestamp_regression_count=%d "
-                    "equal_timestamp_pair_count=%d",
-                    ordering["record_count"], ordering["valid_timestamp_count"],
-                    ordering["invalid_timestamp_count"],
-                    ordering["timestamp_regression_count"],
-                    ordering["equal_timestamp_pair_count"],
-                )
                 _LOGGER.info(
                     "[analysis-timing] stage=direct_db_acquisition elapsed_ms=%d "
                     "snapshot_ms=%d lookup_ms=%d materialize_ms=%d "
@@ -654,10 +645,9 @@ def _attach_sender_names(
     payload_path: Path,
     friend_names: dict[str, str],
     self_uin: str | None,
-) -> dict[str, int]:
+) -> None:
     """Add known QQ names to the transient payload after DB cleanup."""
     payload = json.loads(payload_path.read_text(encoding="utf-8"))
-    ordering = _ordering_health(payload.get("records", ()))
     for record in payload.get("records", ()):
         fields = record.get("fields", {})
         sender_uin = canonical_qq_uin(fields.get("40033"))
@@ -667,43 +657,6 @@ def _attach_sender_names(
         if name:
             record["sender"] = {"displayName": name}
     payload_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    return ordering
-
-
-def _ordering_health(records: Any) -> dict[str, int]:
-    """Count timestamp anomalies in the provider's record-id order."""
-    counts = {
-        "record_count": 0,
-        "valid_timestamp_count": 0,
-        "invalid_timestamp_count": 0,
-        "timestamp_regression_count": 0,
-        "equal_timestamp_pair_count": 0,
-    }
-    if not isinstance(records, list):
-        return counts
-    previous: Decimal | None = None
-    for record in records:
-        counts["record_count"] += 1
-        fields = record.get("fields") if isinstance(record, Mapping) else None
-        value = fields.get("40050") if isinstance(fields, Mapping) else None
-        try:
-            if isinstance(value, bool) or not isinstance(value, (int, float, str)):
-                raise InvalidOperation
-            timestamp = Decimal(str(value))
-            if not timestamp.is_finite():
-                raise InvalidOperation
-        except (InvalidOperation, ValueError):
-            counts["invalid_timestamp_count"] += 1
-            previous = None
-            continue
-        counts["valid_timestamp_count"] += 1
-        if previous is not None:
-            if timestamp < previous:
-                counts["timestamp_regression_count"] += 1
-            elif timestamp == previous:
-                counts["equal_timestamp_pair_count"] += 1
-        previous = timestamp
-    return counts
 
 
 def _elapsed_ms(started_at: float, ended_at: float) -> int:
@@ -719,6 +672,50 @@ def _qq_metadata_pages(fetch: Any) -> list[Any]:
         if len(batch) < 200:
             break
     return items
+
+
+def _log_group_member_shape(result: Any) -> None:
+    """Log only counts for fixed name fields in the raw member RPC response."""
+    if not isinstance(result, Mapping):
+        return
+    inner = result.get("result")
+    if not isinstance(inner, Mapping):
+        return
+    members = inner.get("infos")
+    if not isinstance(members, Mapping):
+        return
+
+    fields = ("cardName", "card", "nick", "nickname", "remark", "displayName")
+    counts = {field: [0, 0, 0, 0, 0] for field in fields}
+    for member in members.values():
+        if not isinstance(member, Mapping):
+            continue
+        for field in fields:
+            if field not in member:
+                continue
+            field_counts = counts[field]
+            field_counts[0] += 1  # present
+            value = member[field]
+            if isinstance(value, str):
+                field_counts[2] += 1  # string
+                if value.strip():
+                    field_counts[1] += 1  # nonempty string
+            elif value is None:
+                field_counts[3] += 1  # null
+            else:
+                field_counts[4] += 1  # other type
+
+    parts = [f"member_count={len(members)}"]
+    for field in fields:
+        present, nonempty, string, null, other = counts[field]
+        parts.extend((
+            f"{field}_present_count={present}",
+            f"{field}_nonempty_string_count={nonempty}",
+            f"{field}_string_count={string}",
+            f"{field}_null_count={null}",
+            f"{field}_other_type_count={other}",
+        ))
+    _LOGGER.debug("[qq-direct-member-shape] %s", " ".join(parts))
 
 
 def _group_member_data(result: Any) -> dict[str, Any]:
@@ -744,7 +741,7 @@ def _group_member_data(result: Any) -> dict[str, Any]:
         if not isinstance(member, Mapping):
             continue
         uin = canonical_qq_uin(member.get("uin"))
-        card = first_identity_name(member.get("card"))
+        card = first_identity_name(member.get("cardName"))
         nick = first_identity_name(member.get("nick"))
         if uin:
             uins.add(uin)
@@ -752,7 +749,7 @@ def _group_member_data(result: Any) -> dict[str, Any]:
                 card_uins.add(uin)
             if nick:
                 nick_uins.add(uin)
-        name = first_identity_name(member.get("card"), member.get("nick"))
+        name = first_identity_name(card, nick)
         if uin and name:
             names[uin] = name
     return {

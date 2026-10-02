@@ -291,7 +291,7 @@ def _request(application, tmp_path: Path, input_path: Path):
     )
 
 
-def test_analysis_logs_each_timing_stage_and_both_ordering_boundaries(
+def test_analysis_logs_each_timing_stage_without_private_content(
     tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:
     application = _application_module()
@@ -328,24 +328,7 @@ def test_analysis_logs_each_timing_stage_and_both_ordering_boundaries(
     actual = {re.search(r"stage=([^ ]+)", line).group(1) for line in timing_lines}
     assert actual == expected
     assert all(re.search(r"elapsed_ms=\d+", line) for line in timing_lines)
-    ordering_lines = [
-        record.message for record in caplog.records
-        if record.message.startswith("[analysis-ordering]")
-    ]
-    assert len(ordering_lines) == 2
-    assert any(
-        "boundary=imported message_count=4 valid_timestamp_count=4 "
-        "invalid_timestamp_count=0 adjacent_inversion_count=1 "
-        "max_backward_seconds=100" in line
-        for line in ordering_lines
-    )
-    assert any(
-        "boundary=kept message_count=3 valid_timestamp_count=3 "
-        "invalid_timestamp_count=0 adjacent_inversion_count=0 "
-        "max_backward_seconds=0" in line
-        for line in ordering_lines
-    )
-    assert all("Fictional-" not in line for line in (*timing_lines, *ordering_lines))
+    assert all("Fictional-" not in line for line in timing_lines)
 
 
 def test_non_completed_results_keep_the_empty_reports_bundle(tmp_path: Path) -> None:

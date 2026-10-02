@@ -173,6 +173,15 @@ function Get-QqRuntimePins {
     $SnapshotTemplate = ([string]$Pins.directDbSnapshot.templateSha256).ToLowerInvariant()
     Assert-Sha256Text -Value $SnapshotTemplate -Label 'directDbSnapshot.templateSha256'
     $Pins.directDbSnapshot.templateSha256 = $SnapshotTemplate
+    if (@($Pins.directDbSnapshot.dependencies).Count -ne 2) {
+        Fail 'directDbSnapshot.dependencies must contain the capture and workspace modules'
+    }
+    foreach ($Dependency in $Pins.directDbSnapshot.dependencies) {
+        foreach ($Field in @('templatePath', 'templateSha256', 'targetPath')) {
+            if (-not $Dependency.$Field) { Fail "directDbSnapshot dependency missing $Field" }
+        }
+        Assert-Sha256Text -Value ([string]$Dependency.templateSha256) -Label 'directDbSnapshot dependency hash'
+    }
 
     foreach ($Property in $Pins.requiredFiles.PSObject.Properties) {
         $Value = ([string]$Property.Value).ToLowerInvariant()
@@ -465,6 +474,14 @@ function Inject-DirectDbSnapshot {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Target) | Out-Null
     Copy-Item -LiteralPath $Template -Destination $Target -Force
     Assert-FileSha256 -Path $Target -Expected ([string]$Pins.directDbSnapshot.templateSha256) -Label "注入后的 $TargetRelative"
+    foreach ($Dependency in @($Pins.directDbSnapshot.dependencies)) {
+        if (-not $Dependency) { continue }
+        $DependencyTemplate = Join-Path $PSScriptRoot ([string]$Dependency.templatePath)
+        $DependencyTarget = Join-Path $RuntimeRoot ([string]$Dependency.targetPath)
+        Assert-FileSha256 -Path $DependencyTemplate -Expected ([string]$Dependency.templateSha256) -Label 'Direct DB dependency template'
+        Copy-Item -LiteralPath $DependencyTemplate -Destination $DependencyTarget -Force
+        Assert-FileSha256 -Path $DependencyTarget -Expected ([string]$Dependency.templateSha256) -Label 'Injected Direct DB dependency'
+    }
     Write-Ok 'Direct DB helper 已从 tracked 模板注入'
 }
 
@@ -680,6 +697,10 @@ try {
     Assert-FileSha256 -Path (
         Join-Path $TargetRoot ((([string]$Pins.directDbSnapshot.targetPath) -replace '/', '\'))
     ) -Expected ([string]$Pins.directDbSnapshot.templateSha256) -Label 'runtime\qq\plugins\napcat-plugin-qce\direct_db_research\snapshot.mjs'
+    foreach ($Dependency in @($Pins.directDbSnapshot.dependencies)) {
+        if (-not $Dependency) { continue }
+        Assert-FileSha256 -Path (Join-Path $TargetRoot ([string]$Dependency.targetPath)) -Expected ([string]$Dependency.templateSha256) -Label 'Published Direct DB dependency'
+    }
 }
 catch {
     $Failed = $true

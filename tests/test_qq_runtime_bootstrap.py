@@ -143,7 +143,10 @@ SNAPSHOT_TEMPLATE = (
 # instead of requiredFiles; and members the bootstrap injects from a tracked
 # Echo template, which are never upstream archive members at all.
 PATCHED_UPSTREAM_PATHS = {LAUNCHER_PATH, INDEX_PATH}
-ECHO_INJECTED_PATHS = {SNAPSHOT_TARGET_PATH}
+SNAPSHOT_DEPENDENCIES = ('main_wal.mjs', 'workspace.mjs')
+ECHO_INJECTED_PATHS = {SNAPSHOT_TARGET_PATH} | {
+    f'plugins/napcat-plugin-qce/direct_db_research/{name}' for name in SNAPSHOT_DEPENDENCIES
+}
 
 OFFICIAL_SOURCE_HOST = "github.com"
 OFFICIAL_REDIRECT_HOSTS = {"github.com", "objects.githubusercontent.com"}
@@ -400,6 +403,12 @@ def _pin_payload(
             "templatePath": SNAPSHOT_TEMPLATE_PATH,
             "templateSha256": snapshot_template_sha256,
             "targetPath": SNAPSHOT_TARGET_PATH,
+            "dependencies": [
+                {"templatePath": f'qq_direct_db_snapshot/{name}',
+                 "templateSha256": _sha256(f'// fictional {name}\n'.encode()),
+                 "targetPath": f'plugins/napcat-plugin-qce/direct_db_research/{name}'}
+                for name in SNAPSHOT_DEPENDENCIES
+            ],
         },
         "requiredFiles": required_files,
         "excludedPaths": list(excluded_paths),
@@ -464,6 +473,8 @@ def _stage_workspace(
     template_dir = scripts / "qq_direct_db_snapshot"
     template_dir.mkdir(parents=True, exist_ok=True)
     (template_dir / "snapshot.mjs").write_bytes(SNAPSHOT_TEMPLATE)
+    for name in SNAPSHOT_DEPENDENCIES:
+        (template_dir / name).write_bytes(f'// fictional {name}\n'.encode())
     (scripts / "qq_runtime_pins.json").write_text(
         json.dumps(
             _pin_payload(
@@ -519,7 +530,7 @@ def _expected_installed_members(payload: dict[str, bytes]) -> list[str]:
     }
     # The Direct DB helper is injected from a tracked template, so it is never
     # part of the upstream payload but must still land in the installed runtime.
-    installed.add(SNAPSHOT_TARGET_PATH)
+    installed.update(ECHO_INJECTED_PATHS)
     return sorted(installed)
 
 
@@ -755,6 +766,9 @@ def test_pins_lock_the_direct_db_snapshot_template() -> None:
         "the Direct DB helper template is missing: scripts/qq_direct_db_snapshot/snapshot.mjs"
     )
     assert _sha256(template.read_bytes()) == snapshot["templateSha256"]
+    assert {Path(item['templatePath']).name for item in snapshot['dependencies']} == set(SNAPSHOT_DEPENDENCIES)
+    for item in snapshot['dependencies']:
+        assert _sha256((PROJECT_ROOT / 'scripts' / item['templatePath']).read_bytes()) == item['templateSha256']
 
 
 def test_pins_lock_the_qqnt_seed_and_the_launcher_detector() -> None:
@@ -772,6 +786,7 @@ def test_pins_cover_every_contract_file_requirement() -> None:
         | {pins["launcherPatch"]["path"]}
         | {pins["indexPatch"]["path"]}
         | {pins["directDbSnapshot"]["targetPath"]}
+        | {item['targetPath'] for item in pins['directDbSnapshot']['dependencies']}
     )
 
     missing = sorted(set(_manifest_qq_file_paths()) - pinned)
@@ -843,6 +858,7 @@ def test_pins_declare_only_the_agreed_fields() -> None:
         "templatePath",
         "templateSha256",
         "targetPath",
+        "dependencies",
     }
 
 
@@ -1357,3 +1373,17 @@ def test_bootstrap_rejects_a_tampered_snapshot_template(tmp_path: Path) -> None:
 def test_runtime_contract_requires_the_direct_db_snapshot_helper() -> None:
     """The helper is a runtime contract requirement, not an optional extra."""
     assert SNAPSHOT_TARGET_PATH in _manifest_qq_file_paths()
+    assert ECHO_INJECTED_PATHS <= set(_manifest_qq_file_paths())
+
+
+@pytest.mark.parametrize('name', SNAPSHOT_DEPENDENCIES)
+@pytest.mark.slow_integration
+def test_bootstrap_rejects_tampered_snapshot_dependency(tmp_path: Path, name: str) -> None:
+    script, archive, _ = _stage_workspace(tmp_path)
+    (tmp_path / 'scripts/qq_direct_db_snapshot' / name).write_bytes(b'// tampered\n')
+    _seed_stale_runtime(tmp_path)
+    before = _tree_hashes(tmp_path / 'runtime/qq')
+    completed = _run_bootstrap(script, tmp_path, *_offline_archive(archive))
+    assert completed.returncode != 0
+    assert 'Direct DB dependency' in _output(completed)
+    assert _tree_hashes(tmp_path / 'runtime/qq') == before

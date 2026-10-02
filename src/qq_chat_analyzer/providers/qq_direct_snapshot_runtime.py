@@ -34,6 +34,8 @@ from typing import Any, Callable
 
 DEFAULT_RPC_TIMEOUT_SECONDS = 30
 DEFAULT_ACQUIRE_RPC_TIMEOUT_SECONDS = 65
+_SNAPSHOT_UNSTABLE_MAX_ATTEMPTS = 3
+_SNAPSHOT_UNSTABLE_RETRY_DELAY_SECONDS = 0.25
 RECOVER_READINESS_ATTEMPTS = 51
 RECOVER_READINESS_POLL_SECONDS = 0.1
 RPC_METHOD_NAMESPACE = "EchoSnapshotApi"
@@ -45,6 +47,16 @@ _ACQUIRE = "acquire"
 _CLEANUP = "cleanup"
 _RECOVER = "recover"
 _GROUP_MEMBER_ALL = "getGroupMemberAll"
+_SAFE_ACQUIRE_FAILURE_CODES = frozenset({
+    "cleanup_failed",
+    "passphrase_unavailable",
+    "identity_missing",
+    "decrypt_failed",
+    "snapshot_unstable",
+    "identity_changed",
+    "manifest_failed",
+    "publish_failed",
+})
 
 class QQSnapshotRuntimeError(Exception):
     """Base, privacy-safe error for snapshot runtime client failures."""
@@ -144,14 +156,25 @@ class QQDirectSnapshotRuntimeClient:
         started_at = time.monotonic()
         _LOGGER.info("QQ snapshot acquire RPC started timeout=%.1fs", self._acquire_timeout)
         try:
-            result = self._rpc(_ACQUIRE, [], timeout=self._acquire_timeout)
-            if not isinstance(result, Mapping):
-                raise QQSnapshotRuntimeInvalidResponse()
-            if result.get("ok") is not True:
-                raise QQSnapshotRuntimeFailure()
-            if result.get("status") != "ready":
-                raise QQSnapshotRuntimeFailure()
-            generation_id = validate_generation_id(result.get("generation_id"))
+            for attempt in range(1, _SNAPSHOT_UNSTABLE_MAX_ATTEMPTS + 1):
+                result = self._rpc(_ACQUIRE, [], timeout=self._acquire_timeout)
+                if not isinstance(result, Mapping):
+                    raise QQSnapshotRuntimeInvalidResponse()
+                if result.get("ok") is not True or result.get("status") != "ready":
+                    code = result.get("code")
+                    if isinstance(code, str) and code in _SAFE_ACQUIRE_FAILURE_CODES:
+                        _LOGGER.info(
+                            "QQ snapshot acquire RPC attempt=%d max_attempts=%d failure_code=%s",
+                            attempt, _SNAPSHOT_UNSTABLE_MAX_ATTEMPTS, code,
+                        )
+                    if (result.get("ok") is False and result.get("status") == "failed"
+                            and code == "snapshot_unstable"
+                            and attempt < _SNAPSHOT_UNSTABLE_MAX_ATTEMPTS):
+                        time.sleep(_SNAPSHOT_UNSTABLE_RETRY_DELAY_SECONDS)
+                        continue
+                    raise QQSnapshotRuntimeFailure()
+                generation_id = validate_generation_id(result.get("generation_id"))
+                break
         except Exception as error:
             _LOGGER.info(
                 "QQ snapshot acquire RPC finished outcome=%s elapsed=%.2fs",

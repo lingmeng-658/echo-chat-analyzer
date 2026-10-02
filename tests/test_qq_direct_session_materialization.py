@@ -109,6 +109,50 @@ def _load_payload(path: Path) -> dict:
         return json.load(f)
 
 
+@pytest.mark.parametrize(
+    ("session_type", "legacy_group_selector"),
+    [("group", False), ("private", False), ("group", True)],
+)
+def test_provider_orders_messages_by_time_then_numeric_message_id(
+    tmp_path: Path, session_type: str, legacy_group_selector: bool,
+) -> None:
+    database_path = tmp_path / "fictional-ordering.db"
+    _create_materialize_db(database_path)
+    table = "group_msg_table" if session_type == "group" else "c2c_msg_table"
+    # Message IDs increase while timestamps go backwards. IDs 2 and 10
+    # share a timestamp and must use numeric, rather than lexical, ordering.
+    source_rows = [(1, 3000), (2, 2000), (10, 2000), (20, 1000)]
+    with sqlite3.connect(database_path) as connection:
+        connection.executemany(
+            f'INSERT INTO {table} '
+            '(row_id, "40001", "40027", "40030", "40033", "40050", "40800") '
+            'VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [
+                (100 + index, message_id, "ordering-key", "fictional-ordering-peer",
+                 "fictional-sender", timestamp, b"fictional-blob")
+                for index, (message_id, timestamp) in enumerate(source_rows)
+            ],
+        )
+    database_before = database_path.read_bytes()
+    provider = QQDatabaseProvider(database_path)
+    payload_path = tmp_path / "ordered-payload.json"
+    if legacy_group_selector:
+        provider.materialize_group_payload("fictional-ordering-peer", payload_path)
+    else:
+        provider.materialize_session_payload(
+            QQSession("ordering-key", "fictional-ordering-peer", "Fictional Session",
+                      session_type),
+            payload_path,
+        )
+
+    records = _load_payload(payload_path)["records"]
+    assert len(records) == len(source_rows)
+    assert [record["fields"]["40050"] for record in records] == [1000, 2000, 2000, 3000]
+    assert [record["fields"]["40001"] for record in records] == [20, 2, 10, 1]
+    assert {record["record_id"] for record in records} == {"1", "2", "10", "20"}
+    assert database_path.read_bytes() == database_before
+
+
 # ---------------------------------------------------------------------------
 # Test: group acquisition with 40001
 # ---------------------------------------------------------------------------

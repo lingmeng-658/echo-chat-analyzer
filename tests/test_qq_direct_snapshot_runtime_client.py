@@ -60,6 +60,26 @@ class _FakeTransport:
         return self.status, self.body
 
 
+class _SequenceTransport:
+    """Return fictional acquire responses in order and track overlapping calls."""
+
+    def __init__(self, results: list[dict]) -> None:
+        self.results = iter(results)
+        self.calls = 0
+        self.active = 0
+        self.max_active = 0
+
+    def __call__(self, url: str, body: bytes, timeout: float) -> tuple[int, str]:
+        assert json.loads(body) == {"method": "EchoSnapshotApi.acquire", "params": []}
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
+            self.calls += 1
+            return 200, _envelope(next(self.results))
+        finally:
+            self.active -= 1
+
+
 def _client(transport, *, base_url: str = "http://127.0.0.1:40654", root: Path | None = None) -> QQDirectSnapshotRuntimeClient:
     return QQDirectSnapshotRuntimeClient(
         base_url=base_url,
@@ -93,7 +113,7 @@ def test_acquire_success_returns_and_logs_validated_generation_id(
 
 def test_group_member_lookup_uses_fixed_napcat_api_over_local_rpc(tmp_path: Path) -> None:
     members = {"result": {"infos": {"fictional-member": {
-        "uin": "fictional-member", "card": "Fictional Card", "nick": "Fictional Nick"
+        "uin": "fictional-member", "cardName": "Fictional Card", "nick": "Fictional Nick"
     }}}}
     transport = _FakeTransport(body=_envelope(members))
     client = _client(transport, root=tmp_path)
@@ -128,6 +148,162 @@ def test_acquire_runtime_failure_maps_to_stable_error(tmp_path: Path) -> None:
 
     with pytest.raises(QQSnapshotRuntimeFailure):
         client.acquire()
+
+
+def test_acquire_retries_snapshot_unstable_then_succeeds_serially(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    delays: list[float] = []
+    monkeypatch.setattr(snapshot_runtime.time, "sleep", delays.append)
+    transport = _SequenceTransport([
+        {"ok": False, "code": "snapshot_unstable", "status": "failed"},
+        _acquire_result("gen-retried"),
+    ])
+
+    with caplog.at_level("INFO", logger="qq_chat_analyzer.desktop.qq_direct_snapshot"):
+        assert _client(transport, root=tmp_path).acquire() == "gen-retried"
+
+    assert transport.calls == 2
+    assert transport.max_active == 1
+    assert len(delays) == 1 and 0 < delays[0] <= 1
+    assert "attempt=1 max_attempts=3 failure_code=snapshot_unstable" in caplog.text
+
+
+def test_acquire_stops_after_three_unstable_attempts_with_existing_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    delays: list[float] = []
+    monkeypatch.setattr(snapshot_runtime.time, "sleep", delays.append)
+    transport = _SequenceTransport([
+        {"ok": False, "code": "snapshot_unstable", "status": "failed"}
+        for _ in range(3)
+    ])
+
+    with pytest.raises(QQSnapshotRuntimeFailure) as captured:
+        _client(transport, root=tmp_path).acquire()
+
+    assert captured.value.code == "qq_snapshot_runtime_failure"
+    assert captured.value.public_message == QQSnapshotRuntimeFailure.public_message
+    assert transport.calls == 3
+    assert transport.max_active == 1
+    assert len(delays) == 2 and all(0 < delay <= 1 for delay in delays)
+
+
+@pytest.mark.parametrize("failure_code", ["decrypt_failed", "identity_missing"])
+def test_acquire_does_not_retry_other_runtime_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_code: str,
+) -> None:
+    delays: list[float] = []
+    monkeypatch.setattr(snapshot_runtime.time, "sleep", delays.append)
+    transport = _SequenceTransport([
+        {"ok": False, "code": failure_code, "status": "failed"},
+        _acquire_result("must-not-be-used"),
+    ])
+
+    with pytest.raises(QQSnapshotRuntimeFailure):
+        _client(transport, root=tmp_path).acquire()
+
+    assert transport.calls == 1
+    assert delays == []
+
+
+def test_acquire_does_not_retry_unstable_code_without_failed_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    delays: list[float] = []
+    monkeypatch.setattr(snapshot_runtime.time, "sleep", delays.append)
+    transport = _SequenceTransport([
+        {"ok": False, "code": "snapshot_unstable", "status": "unknown"},
+        _acquire_result("must-not-be-used"),
+    ])
+
+    with pytest.raises(QQSnapshotRuntimeFailure):
+        _client(transport, root=tmp_path).acquire()
+
+    assert transport.calls == 1
+    assert delays == []
+
+
+def test_acquire_stops_when_retry_returns_non_transient_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    delays: list[float] = []
+    monkeypatch.setattr(snapshot_runtime.time, "sleep", delays.append)
+    transport = _SequenceTransport([
+        {"ok": False, "code": "snapshot_unstable", "status": "failed"},
+        {"ok": False, "code": "decrypt_failed", "status": "failed"},
+        _acquire_result("must-not-be-used"),
+    ])
+
+    with pytest.raises(QQSnapshotRuntimeFailure):
+        _client(transport, root=tmp_path).acquire()
+
+    assert transport.calls == 2
+    assert len(delays) == 1
+
+
+@pytest.mark.parametrize(
+    "failure_code",
+    [
+        "cleanup_failed",
+        "passphrase_unavailable",
+        "identity_missing",
+        "decrypt_failed",
+        "snapshot_unstable",
+        "identity_changed",
+        "manifest_failed",
+        "publish_failed",
+    ],
+)
+def test_acquire_logs_only_known_anonymous_failure_code(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    failure_code: str,
+) -> None:
+    transport = _FakeTransport(body=_envelope({
+        "ok": False, "code": failure_code, "status": "failed",
+        "message": "fictional private message /fictional/path",
+    }))
+    client = _client(transport, root=tmp_path)
+
+    with caplog.at_level("INFO", logger="qq_chat_analyzer.desktop.qq_direct_snapshot"):
+        with pytest.raises(QQSnapshotRuntimeFailure) as captured:
+            client.acquire()
+
+    assert captured.value.code == "qq_snapshot_runtime_failure"
+    assert f"failure_code={failure_code}" in caplog.text
+    assert "fictional private message" not in caplog.text
+    assert "/fictional/path" not in caplog.text
+
+
+def test_acquire_unknown_failure_code_does_not_leak_payload(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    transport = _FakeTransport(body=_envelope({
+        "ok": False,
+        "code": "private-code-987654 /fictional/path",
+        "status": "failed",
+        "message": "fictional private message",
+    }))
+    client = _client(transport, root=tmp_path)
+
+    with caplog.at_level("INFO", logger="qq_chat_analyzer.desktop.qq_direct_snapshot"):
+        with pytest.raises(QQSnapshotRuntimeFailure) as captured:
+            client.acquire()
+
+    assert captured.value.code == "qq_snapshot_runtime_failure"
+    assert "failure_code=" not in caplog.text
+    assert "private-code-987654" not in caplog.text
+    assert "/fictional/path" not in caplog.text
+    assert "fictional private message" not in caplog.text
 
 
 def test_acquire_rpc_envelope_failure_maps_to_stable_error(tmp_path: Path) -> None:

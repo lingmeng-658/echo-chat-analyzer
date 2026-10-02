@@ -308,7 +308,10 @@ def test_direct_group_name_reaches_conversation_report(tmp_path: Path) -> None:
     )
 
 
-def test_direct_group_members_get_names_from_napcat_rpc_shape(tmp_path: Path) -> None:
+def test_direct_group_members_get_names_from_napcat_rpc_shape(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level("DEBUG", logger="qq_chat_analyzer.desktop.qq_direct_database")
     service, runtime, _ = _service(tmp_path)
     group_codes: list[str] = []
 
@@ -319,7 +322,7 @@ def test_direct_group_members_get_names_from_napcat_rpc_shape(tmp_path: Path) ->
             "infos": {
                 9001: {
                     "uin": "fictional-group-sender",
-                    "card": "Fictional Group Card",
+                    "cardName": "Fictional Group Card",
                     "nick": "Fictional Nick",
                 }
             }
@@ -335,6 +338,11 @@ def test_direct_group_members_get_names_from_napcat_rpc_shape(tmp_path: Path) ->
         "displayName": "Fictional Group Card"
     }
     assert group_codes == ["fictional-group"]
+    assert "[qq-direct-member-shape] member_count=1" in caplog.text
+    assert "cardName_present_count=1 cardName_nonempty_string_count=1" in caplog.text
+    assert "card_present_count=0 card_nonempty_string_count=0" in caplog.text
+    assert "Fictional Group Card" not in caplog.text
+    assert "fictional-group-sender" not in caplog.text
 
 
 def test_group_sender_outside_current_member_list_stays_unknown(
@@ -346,7 +354,7 @@ def test_group_sender_outside_current_member_list_stays_unknown(
     runtime.get_group_member_all = lambda _group_code: {
         "result": {"infos": {
             "other-member": {
-                "uin": "other-member", "card": "Other Current Member", "nick": "Other Nick"
+                "uin": "other-member", "cardName": "Other Current Member", "nick": "Other Nick"
             }
         }}
     }
@@ -383,7 +391,7 @@ def test_group_member_nick_is_used_when_card_is_empty(tmp_path: Path) -> None:
     runtime.get_group_member_all = lambda _group_code: {
         "result": {"infos": {
             "numeric-or-string-key": {
-                "uin": "fictional-group-sender", "card": "", "nick": "Fictional Nick"
+                "uin": "fictional-group-sender", "cardName": "", "nick": "Fictional Nick"
             }
         }}
     }
@@ -392,6 +400,60 @@ def test_group_member_nick_is_used_when_card_is_empty(tmp_path: Path) -> None:
         payload = json.loads(acquisition.payload_path.read_text(encoding="utf-8"))
 
     assert payload["records"][0]["sender"] == {"displayName": "Fictional Nick"}
+
+
+def test_group_report_member_contract_keeps_self_and_departed_messages(tmp_path: Path) -> None:
+    service, runtime, snapshot = _service(tmp_path)
+    senders = [FICTIONAL_UIN, "fictional-group-sender", "nick-only", "nameless", "departed"]
+    texts = ["今天准备去公园散步顺便欣赏花朵", "周末一起研究新的数学题目吧",
+             "刚刚读完一本关于旅行的有趣小说", "晚上想尝试做一道番茄鸡蛋汤",
+             "以前大家一起讨论音乐的时光很快乐"]
+    with sqlite3.connect(snapshot) as connection:
+        connection.execute('DELETE FROM group_msg_table')
+        connection.executemany(
+            'INSERT INTO group_msg_table VALUES (?, ?, ?, ?, ?, ?)',
+            [(101 + index, "group-partition", "fictional-group", sender,
+              1760000001 + index, _text_blob(texts[index]))
+             for index, sender in enumerate(senders)],
+        )
+    runtime.get_group_member_all = lambda _group_code: {"result": {"infos": {
+        "self-key": {"uin": FICTIONAL_UIN, "cardName": "Self Group Card", "nick": "Self Nick"},
+        "card-key": {"uin": senders[1], "cardName": "Fictional Group Card", "nick": "Fictional Nick"},
+        "nick-key": {"uin": "nick-only", "cardName": "", "nick": "Fictional Nick Only"},
+        "unknown-key": {"uin": "nameless", "cardName": "", "nick": "",
+                        "remark": "RPC Friend Remark"},
+    }}}
+
+    class MetadataProvider:
+        def list_groups(self, *, page=1, limit=200):
+            return []
+
+        def list_friends(self, *, page=1, limit=200):
+            return [SimpleNamespace(peer_uin=sender, display_name="Fictional Friend Remark")
+                    for sender in senders]
+
+    service._provider_factory = SimpleNamespace(create=lambda: MetadataProvider())
+    outcome = _facade(service).analyze_session(
+        ChatSource.QQ, GROUP_SESSION_ID,
+        AnalysisConfig(output_directory=tmp_path / "report"),
+    )
+    profiles = outcome.result.reports.user_profiles
+    assert profiles.total_message_count == 5
+    expected_names = {
+        FICTIONAL_UIN: "我",
+        "fictional-group-sender": "Fictional Group Card",
+        "nick-only": "Fictional Nick Only",
+        "nameless": "未知成员",
+        "departed": "未知成员",
+    }
+    assert {profile.speaker_key: profile.resolved_display_name for profile in profiles.profiles} == expected_names
+    assert all(profile.message_count == 1 for profile in profiles.profiles)
+    report = json.loads((tmp_path / "report/echo-report.json").read_text(encoding="utf-8"))
+    assert {member["speaker_key"]: member["display_name"] for member in report["members"]} == expected_names
+    assert report["overview"]["total_message_count"] == 5
+    assert (tmp_path / "report/echo-report.html").is_file()
+    assert outcome.result.status.value == "completed"
+    assert runtime.acquired == runtime.cleaned == ["gen-0001"]
 
 
 def test_group_member_rpc_failure_emits_anonymous_coverage_status(
@@ -415,7 +477,7 @@ def test_group_member_rpc_failure_emits_anonymous_coverage_status(
     assert "fictional account" not in caplog.text
 
 
-def test_direct_ordering_health_counts_timestamp_regressions_without_values(
+def test_direct_timestamp_order_reaches_import_without_private_logs(
     tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:
     service, _, snapshot = _service(tmp_path)
@@ -429,14 +491,14 @@ def test_direct_ordering_health_counts_timestamp_regressions_without_values(
         )
     caplog.set_level("INFO")
 
-    with service.acquired_session(GROUP_SESSION_ID):
-        pass
+    with service.acquired_session(GROUP_SESSION_ID) as acquisition:
+        imported = ImportService().execute(ImportRequest(input_path=acquisition.payload_path))
 
-    assert (
-        "[analysis-ordering] boundary=direct_db_payload order_key=record_id record_count=2 "
-        "valid_timestamp_count=2 invalid_timestamp_count=0 "
-        "timestamp_regression_count=1 equal_timestamp_pair_count=0"
-    ) in caplog.text
+    assert len(imported.messages) == len(imported.rich_messages) == 2
+    assert [message.timestamp for message in imported.messages] == [1759999999, 1760000001]
+    assert [message.message_id for message in imported.messages] == ["102", "101"]
+    assert [message.message_id for message in imported.rich_messages] == ["102", "101"]
+
     assert "fictional-group-sender" not in caplog.text
     assert "1759999999" not in caplog.text
 
@@ -469,12 +531,6 @@ def test_direct_analysis_emits_anonymous_phase_timing(
         assert "fictional-group" not in line
         assert "group-partition" not in line
     assert "[qq-direct-identity-coverage]" in caplog.text
-    assert {
-        re.search(r"boundary=([^ ]+)", record.message).group(1)
-        for record in caplog.records
-        if record.message.startswith("[analysis-ordering]")
-    } == {"direct_db_payload", "imported", "kept"}
-    assert "[qq-direct-ordering-health]" not in caplog.text
     assert "[qq-direct-analysis-timing]" not in caplog.text
 
 

@@ -1,4 +1,4 @@
-"""Minimal adapter for the Phase 1 QQ DB JSON payload slice.
+"""Adapter for QQ DB text, expressions, group replies and mention facts.
 
 This module only interprets an already-materialized raw payload.  It does not
 open a QQ database or otherwise acquire source data.
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -17,7 +18,19 @@ from .legacy_projection import project_legacy_messages
 from .identity_names import first_identity_name, resolve_member_names
 from .message import ChatMessage
 from .qq_db_identity import QQ_DB_SELF_NAMESPACE, canonical_qq_uin
-from .rich_message import RichMessage, SenderIdentity, TextContent
+from .rich_message import (
+    EXPRESSION_KIND_PLATFORM_FACE,
+    EXPRESSION_KIND_STICKER,
+    ExpressionContent,
+    MentionRelation,
+    NonTextContent,
+    MessageRelation,
+    ReplyRelation,
+    RichContent,
+    RichMessage,
+    SenderIdentity,
+    TextContent,
+)
 
 
 QQ_DB_JSON_FORMAT = "qq-db-json"
@@ -51,7 +64,7 @@ def parse_qq_db_messages(
 def parse_qq_db_rich_messages(
     payload: Mapping[str, Any] | None,
 ) -> tuple[list[RichMessage], tuple[str, ...]]:
-    """Interpret the Phase 1 group-text records into source-neutral facts."""
+    """Interpret supported group/private content into source-neutral facts."""
     if not _is_qq_db_payload(payload):
         return [], ()
 
@@ -62,8 +75,24 @@ def parse_qq_db_rich_messages(
     if session_context is None:
         return [], (WARNING_QQ_DB_RECORD_SKIPPED,) if records else ()
     self_uin = _self_uin(payload)
+    query = payload["query"]
+    reply_targets: dict[str, list[str | None]] = {}
+    if session_context[0] == "group":
+        for record in records:
+            if not _record_in_session(record, query):
+                continue
+            sequence = _sequence_key(record["fields"].get("40003"))
+            if sequence is not None:
+                reply_targets.setdefault(sequence, []).append(
+                    _stringify_identifier(record.get("record_id"))
+                )
     for record in records:
-        parsed_message = _parse_text_record(record, session_context, self_uin)
+        parsed_message = _parse_record(
+            record,
+            session_context,
+            self_uin,
+            reply_targets if _record_in_session(record, query) else {},
+        )
         if parsed_message is None:
             skipped_record = True
         else:
@@ -84,10 +113,11 @@ def _is_qq_db_payload(payload: Mapping[str, Any] | None) -> bool:
     )
 
 
-def _parse_text_record(
+def _parse_record(
     record: Any,
     session_context: tuple[str, str],
     self_uin: Any,
+    reply_targets: dict[str, list[str | None]],
 ) -> RichMessage | None:
     if not isinstance(record, Mapping):
         return None
@@ -106,8 +136,8 @@ def _parse_text_record(
     ):
         return None
 
-    text = _extract_text(record)
-    if text is None:
+    contents, relations, has_reply = _extract_semantics(record, reply_targets)
+    if not contents and not relations and not has_reply:
         return None
 
     conversation_type, conversation_id = session_context
@@ -146,10 +176,20 @@ def _parse_text_record(
             contextual_name=contextual_name,
         ),
         timestamp=timestamp,
-        message_type="text",
-        contents=(TextContent(text=text),),
+        message_type="reply" if has_reply else _content_message_type(contents),
+        contents=contents,
+        relations=relations,
         is_self=is_self,
     )
+
+
+def _content_message_type(contents: tuple[RichContent, ...]) -> str:
+    nontext = [part for part in contents if isinstance(part, NonTextContent)]
+    if not nontext:
+        return "text"
+    if len(nontext) != len(contents) or len({part.kind for part in nontext}) > 1:
+        return "mixed"
+    return nontext[0].kind
 
 
 def _self_uin(payload: Mapping[str, Any]) -> Any:
@@ -196,41 +236,155 @@ def _session_context(payload: Mapping[str, Any]) -> tuple[str, str] | None:
     return session_type, f"{session_type}:{internal_key}"
 
 
-def _extract_text(record: Mapping[str, Any]) -> str | None:
-    if record.get("blob_encoding") != "base64":
-        return None
-    blob = record.get("message_blob")
-    if not isinstance(blob, str):
-        return None
-    try:
-        decoded = base64.b64decode(blob, validate=True)
-    except binascii.Error:
-        return None
+def _record_in_session(record: Any, query: Mapping[str, Any]) -> bool:
+    if (
+        not isinstance(record, Mapping)
+        or not isinstance(record.get("fields"), Mapping)
+    ):
+        return False
+    fields = record["fields"]
+    source_meta = record.get("source_meta")
+    if isinstance(source_meta, Mapping):
+        table = source_meta.get("table")
+        expected = (
+            "group_msg_table"
+            if query.get("session_type") == "group"
+            else "c2c_msg_table"
+        )
+        if table is not None and table != expected:
+            return False
+    internal_key = _stringify_identifier(query.get("internal_key"))
+    if internal_key is not None:
+        return _stringify_identifier(fields.get("40027")) == internal_key
+    session_object = _nonzero_identifier(query.get("session_object"))
+    return (
+        session_object is not None
+        and _nonzero_identifier(fields.get("40030")) == session_object
+    )
 
-    # These field numbers only describe the feasibility-supported Adapter v0
-    # slice; they are not stable across QQ versions.
-    for field_number, wire_type, value in _protobuf_fields(decoded):
-        if field_number != 40800 or wire_type != 2:
-            continue
-        text = _text_from_segment(value)
-        if text is not None:
-            return text
+
+def _sequence_key(value: Any) -> str | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return str(value) if value > 0 else None
+    if isinstance(value, str) and value.isascii() and value.isdecimal():
+        try:
+            number = int(value)
+        except ValueError:
+            return None
+        return str(number) if number > 0 else None
     return None
 
 
-def _text_from_segment(segment: bytes) -> str | None:
-    message_type: int | None = None
-    text_bytes: bytes | None = None
-    for field_number, wire_type, value in _protobuf_fields(segment):
-        if field_number == 45002 and wire_type == 0:
-            message_type = value
-        elif field_number == 45101 and wire_type == 2:
-            text_bytes = value
+def _extract_semantics(
+    record: Mapping[str, Any],
+    reply_targets: dict[str, list[str | None]],
+) -> tuple[tuple[RichContent, ...], tuple[MessageRelation, ...], bool]:
+    if record.get("blob_encoding") != "base64":
+        return (), (), False
+    blob = record.get("message_blob")
+    if not isinstance(blob, str):
+        return (), (), False
+    try:
+        decoded = base64.b64decode(blob, validate=True)
+    except (binascii.Error, ValueError):
+        return (), (), False
 
-    if message_type != 1 or text_bytes is None:
+    # These field numbers only describe the feasibility-supported Adapter v0
+    # slice; they are not stable across QQ versions.
+    contents: list[RichContent] = []
+    relations: list[MessageRelation] = []
+    has_reply = False
+    expression_position = 0
+    for field_number, wire_type, value in _protobuf_fields(decoded):
+        if field_number != 40800 or wire_type != 2:
+            continue
+        fields = _protobuf_fields(value)
+        values = {(tag, wire): data for tag, wire, data in fields}
+        content_type = values.get((45002, 0))
+        if content_type == 7:
+            has_reply = True
+            sequence = _sequence_key(values.get((47402, 0)))
+            targets = reply_targets.get(sequence, []) if sequence is not None else []
+            if len(targets) == 1 and targets[0] is not None:
+                relations.append(ReplyRelation(target_message_id=targets[0]))
+            continue
+        mention_type = values.get((45102, 0))
+        if (
+            content_type == 1
+            and isinstance(mention_type, int)
+            and mention_type != 0
+        ):
+            # 45105 is an NT UID, not this adapter's QQ UIN namespace.
+            # Preserve the mention occurrence without inventing a UIN target.
+            relations.append(
+                MentionRelation(
+                    target_identity_id=None,
+                    display_text=_utf8_text(values.get((45101, 2))),
+                )
+            )
+            continue
+        content = _content_from_segment(fields, expression_position)
+        if content is not None:
+            contents.append(content)
+            if isinstance(content, ExpressionContent):
+                expression_position += 1
+    return tuple(contents), tuple(relations), has_reply
+
+
+def _content_from_segment(
+    fields: tuple[tuple[int, int, int | bytes], ...], expression_position: int,
+) -> RichContent | None:
+    values = {(tag, wire): value for tag, wire, value in fields}
+    content_type = values.get((45002, 0))
+    if content_type == 1:
+        text = _utf8_text(values.get((45101, 2)))
+        return TextContent(text) if text is not None else None
+    if content_type == 2:
+        return NonTextContent("image")
+    if content_type == 6:
+        face_index = values.get((47601, 0))
+        if not isinstance(face_index, int):
+            return None
+        key = str(face_index)
+        kind = EXPRESSION_KIND_PLATFORM_FACE
+        label = _utf8_text(values.get((47602, 2)))
+        fallback = f"[QQ表情 {key}]"
+    elif content_type == 11:
+        identity = values.get((45600, 2))
+        if not isinstance(identity, bytes) or not identity:
+            return None
+        # Opaque content-derived identity, not a decoded QQ emoji ID or a
+        # resource MD5. Keep its namespace separate from numeric QQ faces.
+        key = "qq-marketface:sha256:" + hashlib.sha256(identity).hexdigest()
+        kind = EXPRESSION_KIND_STICKER
+        label = _utf8_text(values.get((80900, 2)))
+        fallback = "[贴图]"
+    else:
+        # In particular, do not recurse into ReplyBlock quoted content or
+        # interpret 80900 outside the MarketFace context.
+        return NonTextContent("unknown")
+    if not label:
+        label = next(
+            (text for tag, wire, value in fields
+             if tag == 45815 and wire == 2 and (text := _utf8_text(value))),
+            None,
+        )
+    return ExpressionContent(
+        expression_kind=kind,
+        expression_key=key,
+        display_text=label or fallback,
+        source="qq",
+        position=expression_position,
+    )
+
+
+def _utf8_text(value: int | bytes | None) -> str | None:
+    if not isinstance(value, bytes):
         return None
     try:
-        return text_bytes.decode("utf-8")
+        return value.decode("utf-8")
     except UnicodeDecodeError:
         return None
 

@@ -244,10 +244,11 @@ class QQDatabaseProvider:
             parameters.append(end_time)
 
         query = (
-            'SELECT "40001", "40030", "40033", "40050", "40800" '
+            'SELECT "40001", "40030", "40033", "40050", "40800"'
+            f'{self._group_sequence_selection()} '
             f'FROM {_GROUP_MESSAGE_TABLE} '
             f"WHERE {' AND '.join(conditions)} "
-            'ORDER BY "40001"'
+            'ORDER BY "40050" ASC, "40001" ASC'
         )
         rows = self._query_rows(
             query,
@@ -281,10 +282,11 @@ class QQDatabaseProvider:
             parameters.append(end_time)
 
         query = (
-            'SELECT "40001", "40027", "40030", "40033", "40050", "40800" '
+            'SELECT "40001", "40027", "40030", "40033", "40050", "40800"'
+            f'{self._group_sequence_selection() if table_name == _GROUP_MESSAGE_TABLE else ""} '
             f'FROM "{table_name}" '
             f"WHERE {' AND '.join(conditions)} "
-            'ORDER BY "40001"'
+            'ORDER BY "40050" ASC, "40001" ASC'
         )
         rows = self._query_rows(
             query,
@@ -299,6 +301,15 @@ class QQDatabaseProvider:
             if record is not None:
                 records.append(record)
         return records
+
+    def _group_sequence_selection(self) -> str:
+        """Read 40003 when present; older text-only schemas stay importable."""
+        columns = self._query_rows(
+            f"PRAGMA table_info({_GROUP_MESSAGE_TABLE})",
+            operation="materialize_group_payload",
+            table_name=_GROUP_MESSAGE_TABLE,
+        )
+        return ', "40003"' if any(row["name"] == "40003" for row in columns) else ""
 
     def _read_only_uri(self) -> str:
         return f"{self._database_path.resolve().as_uri()}?mode=ro"
@@ -488,6 +499,7 @@ def _raw_record(row: sqlite3.Row) -> dict[str, Any] | None:
             "40033": row["40033"],
             "40001": row["40001"],
             "40050": row["40050"],
+            **({"40003": row["40003"]} if "40003" in row.keys() else {}),
         },
         "message_blob": base64.b64encode(blob).decode("ascii"),
         "blob_encoding": "base64",
@@ -511,6 +523,7 @@ def _session_record(row: sqlite3.Row, table_name: str) -> dict[str, Any] | None:
             "40030": row["40030"],
             "40033": row["40033"],
             "40050": row["40050"],
+            **({"40003": row["40003"]} if "40003" in row.keys() else {}),
         },
         "message_blob": base64.b64encode(blob).decode("ascii"),
         "blob_encoding": "base64",
