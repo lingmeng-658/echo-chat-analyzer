@@ -44,7 +44,7 @@ function Get-RuntimeContract {
     $Contract = (
         Get-Content -LiteralPath $RuntimeContractPath -Raw -Encoding UTF8
     ) | ConvertFrom-Json
-    if (-not $Contract.requirements -or -not $Contract.privatePaths) {
+    if (-not $Contract.requirements -or -not $Contract.privatePaths -or -not $Contract.packageDirectories) {
         throw "Runtime contract manifest is incomplete: scripts\windows_runtime_manifest.json"
     }
     $script:RuntimeContract = $Contract
@@ -127,6 +127,82 @@ function Assert-PrivateRuntimeStateAbsent {
     }
 }
 
+function Test-MutableRuntimePath([string]$RelativePath) {
+    # One policy for state accidentally placed inside an allowed program tree.
+    # Static auth/sessions folders are frontend routes, not user state.
+    $Parts = $RelativePath.ToLowerInvariant() -split '/'
+    $Directories = @('output', 'logs', 'cache', 'temp', 'tmp', 'staging',
+        'generations', 'decrypted', 'scratch', 'data', 'reports', '.codex',
+        'session', 'sessions', 'auth')
+    for ($Index = 0; $Index -lt $Parts.Count - 1; $Index++) {
+        if ($Parts[$Index] -in $Directories) {
+            if ($RelativePath -like 'qq/static/qce/*' -and
+                $Index -eq 3 -and $Parts[$Index] -in @('auth', 'sessions')) { continue }
+            return $true
+        }
+    }
+    $Name = $Parts[-1]
+    return ($Name -match '\.(?:db(?:-(?:wal|shm|journal))?|sqlite(?:3)?|jsonl|log)$' -or
+        $Name -eq '.env' -or
+        $Name -match '^(?:token|key|cookie|password|passphrase|credentials|security|session|auth|account)(?:[._-].*)?\.(?:json|txt|ini|env)$')
+}
+
+function Assert-ProgramPathNotLinked([string]$Path) {
+    $Current = [IO.Path]::GetFullPath($Path)
+    while ($Current) {
+        if ((Get-Item -LiteralPath $Current -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw 'Runtime program asset is a reparse point; refusing to package it.'
+        }
+        $Parent = Split-Path -Parent $Current
+        if ($Parent -eq $Current) { break }
+        $Current = $Parent
+    }
+}
+
+function Copy-RuntimeProgramAssets([string]$SourceRoot, [string]$DestinationRoot) {
+    # requirements is a presence contract, not permission to copy broad roots
+    # such as qq/plugins. Only its explicit files and packageDirectories ship.
+    $Files = @{}
+    $Contract = Get-RuntimeContract
+    foreach ($Entry in @($Contract.requirements | Where-Object { $_.type -eq 'file' }) +
+        @($Contract.packageDirectories)) {
+        $Relative = [string]$Entry.path
+        if ($Relative -match '(^/|\\|:|(^|/)\.\.(/|$))' -or
+            -not $Relative.StartsWith(([string]$Entry.source + '/'))) {
+            throw 'Invalid runtime program asset path in manifest.'
+        }
+        $Source = Join-Path $SourceRoot $Relative
+        Assert-ProgramPathNotLinked $Source
+        if ([string]$Entry.type -eq 'file') {
+            if (Test-MutableRuntimePath $Relative) { throw 'Manifest names a mutable runtime asset.' }
+            $Files[$Relative] = $Source
+        }
+        elseif ([string]$Entry.type -eq 'directory') {
+            $Pending = [Collections.Generic.Stack[string]]::new()
+            $Pending.Push($Source)
+            while ($Pending.Count) {
+                foreach ($Child in Get-ChildItem -LiteralPath $Pending.Pop() -Force) {
+                    if ($Child.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                        throw 'Runtime program asset is a reparse point; refusing to package it.'
+                    }
+                    $ChildRelative = $Child.FullName.Substring($SourceRoot.Length + 1) -replace '\\', '/'
+                    $PolicyPath = if ($Child.PSIsContainer) { $ChildRelative + '/entry' } else { $ChildRelative }
+                    if (Test-MutableRuntimePath $PolicyPath) { continue }
+                    if ($Child.PSIsContainer) { $Pending.Push($Child.FullName) }
+                    else { $Files[$ChildRelative] = $Child.FullName }
+                }
+            }
+        }
+        else { throw 'Invalid runtime program asset type in manifest.' }
+    }
+    # Enumerate and validate before copying; never visit the live output tree.
+    foreach ($Relative in $Files.Keys) {
+        $Destination = Join-Path $DestinationRoot $Relative
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Destination) | Out-Null
+        Copy-Item -LiteralPath $Files[$Relative] -Destination $Destination
+    }
+}
+
 # NapCat bundles native addons for every Node.js platform/arch pair it supports
 # and selects exactly one variant at runtime via
 # `process.platform + "." + process.arch` (native\ffmpeg, native\napi2native,
@@ -206,7 +282,7 @@ try {
     if (Test-Path -LiteralPath $PortableRuntime) {
         Remove-Item -LiteralPath $PortableRuntime -Recurse -Force
     }
-    Copy-Item -LiteralPath $RuntimeSource -Destination $PortableRuntime -Recurse
+    Copy-RuntimeProgramAssets -SourceRoot $RuntimeSource -DestinationRoot $PortableRuntime
 
     # Ship only the native addons this Windows x64 distribution loads; see the
     # pruning policy above.

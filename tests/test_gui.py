@@ -371,6 +371,10 @@ class StubFacade:
 
     def shutdown(self):
         self.shutdown_calls.append(1)
+        # The real facade orders Direct DB plaintext cleanup before QQ runtime
+        # termination; the stub mirrors that by delegating to its own runtime
+        # shutdown so closeEvent keeps exercising the same single shutdown path.
+        self.shutdown_qq_runtime()
 
     def disconnect_qq(self):
         self.disconnect_qq_calls.append(1)
@@ -1294,47 +1298,89 @@ def test_main_window_close_quits_application(
     assert calls == [1]
 
 
-def test_main_window_qq_cleanup_thread_is_daemon(
-    qt_app,
-    sources,
-) -> None:
-    """QQ shutdown cleanup must not keep the Python process alive."""
+def test_main_window_close_owns_shutdown_without_waiting(qt_app, sources) -> None:
+    """The window disappears at once, but Echo keeps shutdown ownership.
+
+    ``closeEvent`` must not block the GUI thread, and the cleanup must not be
+    left to interpreter finalization: the window exposes the very protocol the
+    desktop entry point waits on, so the ordered shutdown (Direct DB plaintext
+    cleanup, then QQ runtime termination) still completes.
+    """
+    module = importlib.import_module("qq_chat_analyzer.gui.shutdown")
+    release = threading.Event()
+
     class _SlowShutdownFacade(StubFacade):
-        def shutdown_qq_runtime(self):
-            time.sleep(1.0)
-
         def shutdown(self):
-            time.sleep(1.0)
+            self.shutdown_calls.append(1)
+            release.wait(5.0)
 
-    window = _main_window(
-        qt_app,
-        _SlowShutdownFacade(sources=sources),
-    )
+    facade = _SlowShutdownFacade(sources=sources)
+    window = _main_window(qt_app, facade)
+    window.show()
+
+    started = time.monotonic()
+    window.close()
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.1
+    assert window.isVisible() is False
+
+    protocol = window.shutdown_protocol
+    assert protocol.started is True
+    assert protocol.finished is False
+    assert module.THREAD_NAME in {
+        thread.name for thread in threading.enumerate()
+    }
+
+    # The entry point still owns the outcome: it can wait for the protocol.
+    release.set()
+    assert window.await_shutdown(2.0) is True
+    assert protocol.finished is True
+    assert facade.shutdown_calls == [1]
+
+
+def test_main_window_shutdown_protocol_thread_is_daemon(qt_app, sources) -> None:
+    """A stuck cleanup must never keep the Python process alive forever."""
+    module = importlib.import_module("qq_chat_analyzer.gui.shutdown")
+    release = threading.Event()
+
+    class _SlowShutdownFacade(StubFacade):
+        def shutdown(self):
+            release.wait(5.0)
+
+    window = _main_window(qt_app, _SlowShutdownFacade(sources=sources))
 
     window.close()
 
-    thread = next(
+    protocol_thread = next(
         (
             candidate
             for candidate in threading.enumerate()
-            if candidate.name == "echo-qq-shutdown"
+            if candidate.name == module.THREAD_NAME
         ),
         None,
     )
-    facade_thread = next(
-        (
-            candidate
-            for candidate in threading.enumerate()
-            if candidate.name == "echo-facade-shutdown"
-        ),
-        None,
-    )
-    assert thread is not None
-    assert thread.daemon is True
-    assert facade_thread is not None
-    assert facade_thread.daemon is True
-    thread.join(timeout=2.0)
-    facade_thread.join(timeout=2.0)
+    assert protocol_thread is not None
+    assert protocol_thread.daemon is True
+    release.set()
+    assert window.await_shutdown(2.0) is True
+
+
+def test_main_window_close_starts_only_one_shutdown_protocol(
+    qt_app,
+    sources,
+) -> None:
+    """Repeated closes must never start a competing shutdown."""
+    facade = StubFacade(sources=sources)
+    window = _main_window(qt_app, facade)
+
+    window.close()
+    window.close()
+    assert window.begin_shutdown() is False
+
+    assert window.await_shutdown(2.0) is True
+    assert facade.shutdown_calls == [1]
+    assert facade.shutdown_qq_runtime_calls == [1]
 
 
 def test_main_window_has_minimum_size(qt_app, sources) -> None:
@@ -1729,6 +1775,41 @@ def test_missing_report_and_failed_analysis_leave_echo_entry_unavailable(
     assert not window._generate_share_button.isEnabled()
 
 
+def test_session_discovery_error_does_not_restart_active_qq_workspace(
+    qt_app,
+    sources,
+    monkeypatch,
+) -> None:
+    """A QQ session-list failure must not submit a recursive status refresh."""
+    module = importlib.import_module("qq_chat_analyzer.gui.main_window")
+    executor = _DeferredExecutor()
+    window = _main_window(
+        qt_app,
+        StubFacade(sources=sources),
+        executor=executor,
+    )
+    warnings = []
+    monkeypatch.setattr(
+        module.QMessageBox,
+        "warning",
+        lambda _parent, title, message: warnings.append((title, message)),
+    )
+
+    window.navigate_to_qq()
+    assert executor.submission_count == 1
+
+    window.qq_workspace.analysis_failed.emit(
+        "qq_direct_database_recovery_failed",
+        "Fictional local QQ data recovery failure.",
+    )
+
+    assert window.stack.currentIndex() == module.QQ_WORKSPACE_INDEX
+    assert executor.submission_count == 1
+    assert warnings == [
+        (module._ERROR_TITLE, "Fictional local QQ data recovery failure.")
+    ]
+
+
 def test_echo_open_failure_is_recoverable_and_does_not_crash(
     qt_app,
     sources,
@@ -2105,6 +2186,240 @@ def _qq_snapshot(state, message="", action_hint="", version=None):
         action_hint=action_hint,
         version=version,
     )
+
+
+def test_qq_session_loading_coalesces_connected_callbacks_until_final_success(qt_app):
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+
+    executor = _DeferredExecutor()
+    workspace = QQWorkspace(StubFacade(), executor=executor)
+    errors = []
+    workspace.analysis_failed.connect(lambda *args: errors.append(args))
+    snapshot = _qq_snapshot("connected")
+    workspace._show_qq_status(snapshot, True)
+    workspace._show_qq_status(snapshot, True)
+
+    assert executor.submission_count == 1
+    sessions = [_session(_facade_module().ChatSource.QQ, "fictional", "Fictional group")]
+    executor.succeed(sessions)
+    assert workspace._sessions_loaded
+    assert workspace.session_panel._sessions_ready
+    assert errors == []
+    workspace._show_qq_status(snapshot, True)
+    assert executor.submission_count == 1
+    assert workspace.session_panel._sessions_data == sessions
+
+
+def test_qq_session_loading_transient_acquisition_then_success_has_no_error(
+    qt_app, tmp_path, monkeypatch,
+):
+    import json
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+    from qq_chat_analyzer.providers import qq_direct_snapshot_runtime as runtime
+
+    monkeypatch.setattr(runtime.time, "sleep", lambda _seconds: None)
+    executor = _DeferredExecutor()
+    facade = StubFacade()
+    workspace = QQWorkspace(facade, executor=executor)
+    errors = []
+    workspace.analysis_failed.connect(lambda *args: errors.append(args))
+    attempts = []
+
+    def transport(_url, _payload, _timeout):
+        attempts.append(True)
+        if len(attempts) == 1:
+            workspace._show_qq_status(_qq_snapshot("connected"), True)
+            result = {"ok": False, "status": "failed", "code": "snapshot_unstable"}
+        else:
+            result = {"ok": True, "status": "ready", "generation_id": "fictional"}
+        return 200, json.dumps({"id": "fictional", "ok": True, "result": result})
+
+    client = runtime.QQDirectSnapshotRuntimeClient(
+        "http://127.0.0.1:1", snapshot_root=tmp_path, transport=transport,
+    )
+    sessions = [_session(_facade_module().ChatSource.QQ, "fictional", "Fictional group")]
+
+    def list_sessions(_source):
+        client.acquire()  # Real bounded retry; GUI sees only the final result.
+        return sessions
+
+    facade.list_sessions = list_sessions
+    workspace._load_sessions()
+    operation = executor.operation
+    executor.succeed(operation())
+    assert len(attempts) == 2
+    assert executor.submission_count == 1
+    assert workspace.session_panel._sessions_data == sessions
+    assert errors == []
+
+
+@pytest.mark.parametrize("old_failure_first", [True, False])
+def test_qq_session_loading_ignores_old_failure_across_source_reset(qt_app, old_failure_first):
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+
+    executor = _DeferredExecutor()
+    workspace = QQWorkspace(StubFacade(), executor=executor)
+    errors = []
+    workspace.analysis_failed.connect(lambda *args: errors.append(args))
+    workspace._load_sessions()
+    old_failure = executor.on_error
+    workspace.select_source(_facade_module().ChatSource.QQ)
+    workspace._load_sessions()
+    sessions = [_session(_facade_module().ChatSource.QQ, "fictional", "Fictional group")]
+    if old_failure_first:
+        old_failure("qq_direct_snapshot_acquire_failed", "Fictional failure")
+    executor.succeed(sessions)
+    if not old_failure_first:
+        old_failure("qq_direct_snapshot_acquire_failed", "Fictional failure")
+    assert workspace._sessions_loaded
+    assert workspace.session_panel._sessions_ready
+    assert errors == []
+
+
+@pytest.mark.parametrize("code", [
+    "qq_direct_database_not_ready", "qq_direct_snapshot_acquire_failed",
+    "qq_direct_snapshot_invalid", "qq_direct_snapshot_cleanup_failed",
+    "qq_direct_database_recovery_failed", "unexpected_error",
+])
+def test_qq_session_loading_preserves_final_failure(qt_app, code):
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+
+    executor = _DeferredExecutor()
+    workspace = QQWorkspace(StubFacade(), executor=executor)
+    errors = []
+    workspace.analysis_failed.connect(lambda *args: errors.append(args))
+    workspace._load_sessions()
+    executor.fail(code, "Fictional failure")
+    assert errors == [(code, "Fictional failure")]
+    assert not workspace._sessions_loaded
+    assert not workspace.session_panel._sessions_ready
+    assert executor.submission_count == 1  # No GUI retries of acquisition errors.
+    workspace._load_sessions()
+    assert executor.submission_count == 2  # A later user action is still allowed.
+
+
+def test_qq_session_loading_ignores_old_success_during_new_load(qt_app):
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+
+    executor = _DeferredExecutor()
+    workspace = QQWorkspace(StubFacade(), executor=executor)
+    workspace._load_sessions()
+    old_success = executor.on_success
+    workspace.select_source(_facade_module().ChatSource.QQ)
+    workspace._load_sessions()
+    old_success([])
+    assert not workspace._sessions_loaded
+    assert not workspace.session_panel._sessions_ready
+
+
+def test_qq_session_loading_reconnect_starts_a_fresh_load(qt_app, instant_qq_connect):
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+
+    executor = _DeferredExecutor()
+    workspace = QQWorkspace(StubFacade(), executor=executor)
+    workspace._load_sessions()
+    executor.succeed([])
+    workspace.connect_qq()
+    executor.succeed(_qq_snapshot("connected"))
+    _drain(workspace)
+    assert executor.submission_count == 3  # Initial load, connect, fresh load.
+    assert not workspace._sessions_loaded
+
+
+def test_qq_session_loading_indicator_starts_immediately_and_success_replaces_it(qt_app):
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+
+    executor = _DeferredExecutor()
+    workspace = QQWorkspace(StubFacade(), executor=executor)
+    workspace._show_qq_status(_qq_snapshot("connected", "Connected"), True)
+    assert workspace._session_loading.isVisibleTo(workspace)
+    assert workspace._session_loading_indicator.minimum() == 0
+    assert workspace._session_loading_indicator.maximum() == 0
+    assert not workspace._session_loading_indicator.isTextVisible()
+    assert workspace._status_label.text().endswith("Connected")
+    sessions = [_session(_facade_module().ChatSource.QQ, "fictional", "Fictional group")]
+    executor.succeed(sessions)
+    assert not workspace._session_loading.isVisibleTo(workspace)
+    assert workspace.session_panel._session_box.isVisibleTo(workspace)
+    assert workspace.session_panel._sessions_data == sessions
+    workspace._show_qq_status(_qq_snapshot("connected", "Connected"), True)
+    assert not workspace._session_loading.isVisibleTo(workspace)
+    assert executor.submission_count == 1
+
+
+def test_qq_session_loading_indicator_ends_before_final_error_and_returns_on_retry(qt_app):
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+
+    executor = _DeferredExecutor()
+    workspace = QQWorkspace(StubFacade(), executor=executor)
+    observed = []
+    workspace.analysis_failed.connect(
+        lambda code, message: observed.append(
+            (code, message, workspace._session_loading.isVisibleTo(workspace))
+        )
+    )
+    workspace._load_sessions()
+    assert workspace._session_loading.isVisibleTo(workspace)
+    executor.fail("qq_direct_snapshot_acquire_failed", "Fictional failure")
+    assert observed == [("qq_direct_snapshot_acquire_failed", "Fictional failure", False)]
+    workspace._load_sessions()
+    assert workspace._session_loading.isVisibleTo(workspace)
+    executor.succeed([])
+    assert not workspace._session_loading.isVisibleTo(workspace)
+
+
+@pytest.mark.parametrize("callback", ["on_success", "on_error"])
+def test_qq_session_loading_stale_callback_keeps_current_indicator(qt_app, callback):
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+
+    executor = _DeferredExecutor()
+    workspace = QQWorkspace(StubFacade(), executor=executor)
+    workspace._load_sessions()
+    old_callback = getattr(executor, callback)
+    workspace.select_source(_facade_module().ChatSource.QQ)
+    assert not workspace._session_loading.isVisibleTo(workspace)
+    workspace._load_sessions()
+    if callback == "on_success":
+        old_callback([])
+    else:
+        old_callback("qq_direct_snapshot_acquire_failed", "Fictional old failure")
+    assert workspace._session_loading.isVisibleTo(workspace)
+    assert not workspace._sessions_loaded
+    executor.succeed([])
+    assert not workspace._session_loading.isVisibleTo(workspace)
+
+
+def test_qq_session_loading_reconnect_indicator_waits_for_fresh_request(qt_app, instant_qq_connect):
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+
+    executor = _DeferredExecutor()
+    workspace = QQWorkspace(StubFacade(), executor=executor)
+    workspace._load_sessions()
+    workspace.connect_qq()
+    assert not workspace._session_loading.isVisibleTo(workspace)
+    executor.succeed(_qq_snapshot("connected"))
+    _drain(workspace)
+    assert workspace._session_loading.isVisibleTo(workspace)
+    executor.succeed([])
+    assert not workspace._session_loading.isVisibleTo(workspace)
+
+
+def test_qq_session_loading_timing_logs_contain_only_stage_and_durations(qt_app, caplog):
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+
+    executor = _DeferredExecutor()
+    workspace = QQWorkspace(StubFacade(), executor=executor)
+    with caplog.at_level("INFO", logger="qq_chat_analyzer.desktop.qq_workspace"):
+        workspace._load_sessions()
+        executor.succeed([
+            _session(_facade_module().ChatSource.QQ, "fictional-private-id", "Fictional private name")
+        ])
+    messages = [record.getMessage() for record in caplog.records if "[qq sessions]" in record.getMessage()]
+    assert messages[0] == "[qq sessions] request started"
+    assert messages[1].startswith("[qq sessions] request completed elapsed=")
+    assert " render_elapsed=" in messages[1]
+    assert "fictional-private-id" not in " ".join(messages)
+    assert "Fictional private name" not in " ".join(messages)
 
 
 class _SnapshotFacade(StubFacade):

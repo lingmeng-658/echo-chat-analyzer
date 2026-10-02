@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import logging
 import shutil
+import threading
+from time import monotonic as _monotonic, perf_counter as _perf_counter
 from tempfile import TemporaryDirectory
 from collections.abc import Mapping
 from contextlib import ExitStack, contextmanager
@@ -131,6 +133,22 @@ _PROFILE_STOPWORD_FILES = {
     "topic": "stopwords_topic.txt",
     "culture": "stopwords_culture.txt",
 }
+
+#: Each ordered shutdown step gets its own bounded window.  A step that
+#: overruns it is abandoned so the steps after it still run - in particular
+#: QQ runtime termination - which keeps the whole shutdown protocol finite.
+DEFAULT_SHUTDOWN_STEP_SECONDS = 10.0
+
+_SHUTDOWN_STEP_THREAD_PREFIX = "echo-shutdown-step-"
+_SHUTDOWN_STEP_DIRECT_DB = "direct_db_cleanup"
+_SHUTDOWN_STEP_RETAINED_OUTPUT = "retained_output_cleanup"
+_SHUTDOWN_STEP_QQ_RUNTIME = "qq_runtime_termination"
+
+#: Extra window the Direct DB step gets on top of the bounded budget the
+#: service declares for itself (drain window plus recover readiness budget).
+#: Without it a normal bounded cleanup is abandoned, the runtime is stopped
+#: underneath it, and the process exit kills it mid-recover.
+_DIRECT_DB_STEP_MARGIN_SECONDS = 5.0
 
 class ChatSource(str, Enum):
     """Every chat origin a caller may choose from."""
@@ -275,6 +293,8 @@ class _SessionExport:
     """Internal export path for one session."""
 
     payload_path: Path
+    session: SessionInfo | None = None
+    conversation_id: str | None = None
 
 
 class ChatAnalyzerFacade:
@@ -299,6 +319,7 @@ class ChatAnalyzerFacade:
         presentation_builder: Any = None,
         report_history_manager: Any = None,
         stopwords_directory: Path | None = None,
+        shutdown_step_seconds: float = DEFAULT_SHUTDOWN_STEP_SECONDS,
     ) -> None:
         self._services: dict[ChatSource, Any] = {
             ChatSource.QQ: qq_service,
@@ -318,6 +339,7 @@ class ChatAnalyzerFacade:
         self._report_history_manager = report_history_manager
         self._stopwords_directory = stopwords_directory or resources_dir()
         self._retained_output_directory: _RetainedReportDirectory | None = None
+        self._shutdown_step_seconds = shutdown_step_seconds
 
     @property
     def _wechat_connection_service(self) -> Any:
@@ -689,6 +711,21 @@ class ChatAnalyzerFacade:
         _report_progress(progress, "正在准备分析...")
         _report_progress(progress, "正在读取聊天记录...")
         service = self._require_service(chat_source)
+        if chat_source is ChatSource.QQ and callable(
+            getattr(service, "acquired_session", None)
+        ):
+            # Direct DB: one acquisition owns both the payload and the session
+            # descriptor. Listing sessions here would acquire a second
+            # generation, so the descriptor is resolved from the acquisition.
+            return self._analyze_direct_db_qq_session(
+                service,
+                session_id,
+                resolved_config,
+                resolved_scope,
+                speaker_names=speaker_names,
+                viewer_speaker_key=viewer_speaker_key,
+                progress=progress,
+            )
         if chat_source in (ChatSource.QQ, ChatSource.WECHAT):
             raw_session = next(
                 (
@@ -749,6 +786,79 @@ class ChatAnalyzerFacade:
                     progress=progress,
                 )
 
+    def _analyze_direct_db_qq_session(
+        self,
+        service: Any,
+        session_id: str,
+        config: AnalysisConfig,
+        scope: AnalysisScope,
+        *,
+        speaker_names: Mapping[str, str] | None = None,
+        viewer_speaker_key: str | None = None,
+        progress: Callable[[str], None] | None = None,
+    ) -> AnalysisOutcome:
+        """Run one Direct DB QQ analysis from a single generation acquisition.
+
+        The session descriptor (display name, type) comes from the same
+        acquisition that materialized the payload, so this path never calls
+        the public ``list_sessions`` before analyzing.
+        """
+        started_at = _perf_counter()
+        with TemporaryDirectory(prefix="chat-analyzer-export-") as scratch:
+            scratch_directory = Path(scratch)
+            with self._session_export_context(
+                ChatSource.QQ,
+                service,
+                session_id,
+                config,
+                scratch_directory,
+                raw_session=None,
+                scope=scope,
+                progress=progress,
+            ) as session_export:
+                acquired_at = _perf_counter()
+                _LOGGER.info(
+                    "[analysis-timing] stage=facade_acquisition elapsed_ms=%d",
+                    max(0, round((acquired_at - started_at) * 1000)),
+                )
+                session = session_export.session or SessionInfo(
+                    source=ChatSource.QQ,
+                    session_id=session_id,
+                    display_name=session_id,
+                )
+                conversation_names = {
+                    session_export.conversation_id or session_id: session.display_name
+                }
+                conversation_kind = (
+                    session.session_type
+                    if session.session_type in ("private", "group")
+                    else "unknown"
+                )
+                analysis_started_at = _perf_counter()
+                completed = False
+                try:
+                    result = self._analyze_path(
+                        session_export.payload_path,
+                        config,
+                        source=ChatSource.QQ,
+                        session=session,
+                        scope=scope,
+                        speaker_names=speaker_names,
+                        conversation_names=conversation_names,
+                        conversation_kind=conversation_kind,
+                        viewer_speaker_key=viewer_speaker_key,
+                        progress=progress,
+                        direct_db_diagnostics=True,
+                    )
+                    completed = True
+                    return result
+                finally:
+                    _LOGGER.info(
+                        "[analysis-timing] stage=facade_analysis elapsed_ms=%d status=%s",
+                        max(0, round((_perf_counter() - analysis_started_at) * 1000)),
+                        "ok" if completed else "failed",
+                    )
+
     def generate_share_image(
         self,
         outcome: AnalysisOutcome,
@@ -805,6 +915,7 @@ class ChatAnalyzerFacade:
         conversation_kind: str = "unknown",
         viewer_speaker_key: str | None = None,
         progress: Callable[[str], None] | None = None,
+        direct_db_diagnostics: bool = False,
     ) -> AnalysisOutcome:
         """Run analysis then presentation for one local path."""
         analysis_service = self._require_analysis_service()
@@ -826,7 +937,19 @@ class ChatAnalyzerFacade:
             with _translated_errors(source):
                 _report_progress(progress, "正在处理消息...")
                 _report_progress(progress, "正在分析聊天内容...")
-                result = analysis_service.execute(request)
+                core_started_at = _perf_counter()
+                core_completed = False
+                try:
+                    result = analysis_service.execute(request)
+                    core_completed = True
+                finally:
+                    if direct_db_diagnostics:
+                        _LOGGER.info(
+                            "[analysis-timing] stage=facade_core_analysis "
+                            "elapsed_ms=%d status=%s",
+                            max(0, round((_perf_counter() - core_started_at) * 1000)),
+                            "ok" if core_completed else "failed",
+                        )
 
             _report_progress(progress, "正在生成报告...")
             view = self._build_view(result)
@@ -949,8 +1072,145 @@ class ChatAnalyzerFacade:
             previous.cleanup()
 
     def shutdown(self) -> None:
-        """Release transient artifacts retained by this facade."""
+        """Release transient artifacts and stop LCA-owned QQ runtime processes.
+
+        Order is deliberate: the Direct DB plaintext snapshot is cleaned up
+        (and any orphan generation recovered) before NapCat / the QQ runtime
+        is stopped, so an abrupt process stop can never strand plaintext on
+        disk.  Every step is bounded and exception-safe, so neither a failure
+        nor a hung cleanup in one step can skip the steps after it - in
+        particular QQ runtime termination.  Repeated calls are harmless: the
+        Direct DB service refuses a second shutdown, and terminated PIDs are
+        forgotten by the process registry.
+        """
+        started_at = _monotonic()
+        _LOGGER.info("QQ shutdown requested")
+        self._run_shutdown_step(
+            _SHUTDOWN_STEP_DIRECT_DB,
+            self._shutdown_qq_direct_db_service,
+            window=self._direct_db_step_window(),
+        )
+        self._run_shutdown_step(
+            _SHUTDOWN_STEP_RETAINED_OUTPUT,
+            self._release_retained_output,
+        )
+        self._run_shutdown_step(
+            _SHUTDOWN_STEP_QQ_RUNTIME,
+            self.shutdown_qq_runtime,
+        )
+        _LOGGER.info(
+            "QQ shutdown finished elapsed=%.2fs",
+            _monotonic() - started_at,
+        )
+
+    def _direct_db_step_window(self) -> float:
+        """Return the bounded window the Direct DB cleanup step gets.
+
+        The service knows its own bounded worst case - the drain window plus the
+        recover readiness budget - and this step window is that budget plus a
+        margin.  A normal bounded cleanup therefore finishes and reports,
+        instead of being abandoned and then killed by the process exit while it
+        is still recovering orphan plaintext.
+        """
+        service = self._qq_service_if_present()
+        budget = getattr(service, "shutdown_budget_seconds", None)
+        if (
+            isinstance(budget, bool)
+            or not isinstance(budget, (int, float))
+            or budget <= 0
+        ):
+            return self._shutdown_step_seconds
+        return max(
+            self._shutdown_step_seconds,
+            float(budget) + _DIRECT_DB_STEP_MARGIN_SECONDS,
+        )
+
+    def _release_retained_output(self) -> None:
+        """Drop the last retained scratch report directory, if any."""
         self._replace_retained_output(None)
+
+    def _run_shutdown_step(
+        self,
+        label: str,
+        step: Callable[[], None],
+        *,
+        window: float | None = None,
+    ) -> None:
+        """Run one shutdown step inside its own bounded window.
+
+        The step runs on a throwaway daemon thread so a cleanup that never
+        returns - a wedged runtime RPC, a stuck process kill - is abandoned
+        instead of holding the whole protocol, and with it the desktop process
+        exit, hostage.  The window is finite by design, and start, outcome and
+        elapsed time are logged so a real run is diagnosable.
+        """
+        budget = self._shutdown_step_seconds if window is None else window
+        finished = threading.Event()
+        started_at = _monotonic()
+
+        def _run() -> None:
+            try:
+                step()
+            except Exception:
+                _LOGGER.warning(
+                    "QQ shutdown step failed step=%s",
+                    label,
+                    exc_info=True,
+                )
+            finally:
+                finished.set()
+
+        thread = threading.Thread(
+            target=_run,
+            name=f"{_SHUTDOWN_STEP_THREAD_PREFIX}{label}",
+            daemon=True,
+        )
+        _LOGGER.info(
+            "QQ shutdown step started step=%s window=%.2fs",
+            label,
+            budget,
+        )
+        thread.start()
+        if not finished.wait(budget):
+            _LOGGER.warning(
+                "QQ shutdown step exceeded %.1fs and was abandoned step=%s",
+                budget,
+                label,
+            )
+            return
+        _LOGGER.info(
+            "QQ shutdown step finished step=%s elapsed=%.2fs",
+            label,
+            _monotonic() - started_at,
+        )
+
+    def _shutdown_qq_direct_db_service(self) -> None:
+        """Ask the Direct DB service to recover orphan plaintext, best-effort."""
+        service = self._qq_service_if_present()
+        shutdown = getattr(service, "shutdown", None)
+        if callable(shutdown):
+            try:
+                shutdown()
+            except Exception:
+                _LOGGER.warning(
+                    "QQ Direct DB plaintext cleanup did not complete during "
+                    "shutdown."
+                )
+
+    def _qq_service_if_present(self) -> Any:
+        """Return the QQ service without building it for the first time.
+
+        A never-built QQ service has never acquired a generation, so there is
+        nothing to clean up; forcing its construction here would be a side
+        effect the shutdown path must not have.
+        """
+        service = self._services.get(ChatSource.QQ)
+        if service is not None:
+            return service
+        bundle = self._built_sources.get(ChatSource.QQ)
+        if bundle is not None:
+            return getattr(bundle, "service", None)
+        return None
 
     def _build_view(self, result: AnalysisResultDTO) -> DashboardView:
         """Hand the reports to the presentation layer without touching them."""
@@ -1009,6 +1269,32 @@ class ChatAnalyzerFacade:
         shortened.
         """
         if source is ChatSource.QQ:
+            direct_acquire = getattr(service, "acquired_session", None)
+            if callable(direct_acquire):
+                start_seconds, end_seconds = _scope_export_window_seconds(scope)
+                with ExitStack() as ownership:
+                    with _translated_errors(source):
+                        acquisition = ownership.enter_context(
+                            direct_acquire(
+                                session_id,
+                                start_time=start_seconds,
+                                end_time=end_seconds,
+                            )
+                        )
+                    raw_session = getattr(acquisition, "session", None)
+                    yield _SessionExport(
+                        payload_path=Path(acquisition.payload_path),
+                        conversation_id=getattr(
+                            raw_session, "conversation_id", None
+                        ),
+                        session=(
+                            _to_session_info(source, raw_session)
+                            if raw_session is not None
+                            else None
+                        ),
+                    )
+                return
+
             session_type = _first_string(raw_session, "session_type")
             start_millis, end_millis = _scope_export_window(scope)
             request = QQExportImportRequest(

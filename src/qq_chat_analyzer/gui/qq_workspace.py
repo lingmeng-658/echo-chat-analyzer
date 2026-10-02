@@ -12,6 +12,7 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
     QLabel,
+    QProgressBar,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -118,6 +119,7 @@ class QQWorkspace(QWidget):
         self._qq_waiting_auth_since: float | None = None
         self._qq_qrcode_path = _default_qq_qrcode_path()
         self._sessions_loaded = False
+        self._session_request: object | None = None
 
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(12)
@@ -156,6 +158,16 @@ class QQWorkspace(QWidget):
 
         self.session_panel = SessionAnalysisPanel()
         self.session_panel.configure(facade, ChatSource.QQ, executor=self._executor)
+        self._session_loading = QWidget(self.session_panel)
+        loading_layout = QVBoxLayout(self._session_loading)
+        loading_layout.addWidget(QLabel("正在读取聊天列表…"))
+        loading_layout.addWidget(QLabel("首次读取可能需要一点时间"))
+        self._session_loading_indicator = QProgressBar()
+        self._session_loading_indicator.setRange(0, 0)
+        self._session_loading_indicator.setTextVisible(False)
+        loading_layout.addWidget(self._session_loading_indicator)
+        self.session_panel.layout().insertWidget(0, self._session_loading)
+        self._session_loading.hide()
         main_layout.addWidget(self.session_panel, stretch=1)
 
         self.session_panel.analysis_started.connect(self._on_analysis_started)
@@ -174,6 +186,7 @@ class QQWorkspace(QWidget):
     def select_source(self, source: Any) -> None:
         """Configure the panel for QQ and reset transient state."""
         self.session_panel.configure(self._facade, ChatSource.QQ, executor=self._executor)
+        self._invalidate_session_request()
         self._sessions_loaded = False
         self._stop_qq_status_polling()
         self._hide_qq_qrcode()
@@ -271,9 +284,8 @@ class QQWorkspace(QWidget):
             self.status_changed.emit(message)
 
         if state == _QQ_STATE_CONNECTED and load_sessions_on_ready:
-            self.session_panel.show_reading_placeholder()
-            self.status_changed.emit(_LOADING_SESSIONS)
-            self._load_sessions()
+            if not self._sessions_loaded:
+                self._load_sessions()
         elif state in _QQ_PROGRESS_STATES or state == _QQ_STATE_WAITING_AUTH:
             self.session_panel.show_connecting_placeholder()
         elif state != _QQ_STATE_CONNECTED:
@@ -399,6 +411,7 @@ class QQWorkspace(QWidget):
             self.cancel_connection()
             return
         _LOGGER.info("[qq gui] connect_qq requested")
+        self._invalidate_session_request()
         started_at = time.monotonic()
         self._qq_waiting_auth_since = None
         self._qq_connect_in_flight = True
@@ -556,6 +569,7 @@ class QQWorkspace(QWidget):
             self.cancel_connection()
             return
         _LOGGER.info("[qq gui] disconnect_qq requested")
+        self._invalidate_session_request()
         self._stop_qq_status_polling()
         self._hide_qq_qrcode()
         self._hide_qq_login_guide()
@@ -592,6 +606,7 @@ class QQWorkspace(QWidget):
         self._connection_task = None
         self._qq_connect_in_flight = False
         self._qq_waiting_auth_since = None
+        self._invalidate_session_request()
         self._stop_qq_status_polling()
         self._hide_qq_qrcode()
         self._hide_qq_login_guide()
@@ -609,15 +624,53 @@ class QQWorkspace(QWidget):
     # ---------------------------------------------------------------- sessions
 
     def _load_sessions(self) -> None:
+        # Several queued connection snapshots can resolve to connected. They
+        # belong to one load, not independent acquisitions of the live DB.
+        if self._session_request is not None:
+            return
+        request = object()
+        self._session_request = request
+        started_at = time.monotonic()
+        self._sessions_loaded = False
+        self.session_panel.show_reading_placeholder()
+        self._session_loading.show()
+        self.status_changed.emit(_LOADING_SESSIONS)
+        _LOGGER.info("[qq sessions] request started")
+
+        def succeeded(sessions: Any) -> None:
+            if self._session_request is not request:
+                return
+            render_started_at = time.monotonic()
+            self._session_request = None
+            self._handle_sessions_loaded(sessions)
+            _LOGGER.info(
+                "[qq sessions] request completed elapsed=%.3fs render_elapsed=%.3fs",
+                time.monotonic() - started_at,
+                time.monotonic() - render_started_at,
+            )
+
+        def failed(code: str, message: str) -> None:
+            if self._session_request is not request:
+                return
+            self._session_request = None
+            self._handle_session_error(code, message)
+
         self._executor(
             lambda: self._facade.list_sessions(ChatSource.QQ),
-            on_success=self._handle_sessions_loaded,
-            on_error=self._handle_session_error,
+            on_success=succeeded,
+            on_error=failed,
         )
+
+    def _invalidate_session_request(self) -> None:
+        # Do not interrupt acquisition/cleanup. Only invalidate its GUI result.
+        self._session_request = None
+        self._sessions_loaded = False
+        self._session_loading.hide()
 
     def _handle_sessions_loaded(self, sessions: Any) -> None:
         self._sessions_loaded = True
         self.session_panel.populate_sessions(sessions)
+        self._session_loading.hide()
         self.status_changed.emit(
             self._last_qq_status_message
             or _QQ_STATE_MESSAGES[_QQ_STATE_CONNECTED]
@@ -625,6 +678,7 @@ class QQWorkspace(QWidget):
 
     def _handle_session_error(self, code: str, message: str) -> None:
         self._sessions_loaded = False
+        self._session_loading.hide()
         self.session_panel.show_disconnected_placeholder()
         self.analysis_failed.emit(code, message)
 

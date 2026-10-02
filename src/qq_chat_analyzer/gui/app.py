@@ -7,12 +7,13 @@ with stubs.
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import threading
 import time
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Callable
 
 from ..application.facade import ChatAnalyzerFacade, ChatSource
 from ..resources import resources_dir
@@ -22,10 +23,26 @@ from .desktop_runtime import (
     install_global_exception_handler,
     log_startup,
 )
+from .shutdown import DEFAULT_SHUTDOWN_WAIT_SECONDS
 from .theme import BASE_QSS
 
 
 APP_VERSION = "0.8.0"
+
+_LOGGER = logging.getLogger("qq_chat_analyzer.desktop.app")
+
+#: How long the entry point waits for the window's shutdown protocol before it
+#: gives up and forces the process out.  The protocol is bounded by the facade,
+#: which gives each ordered shutdown step its own window, so this only has to
+#: cover the worst-case sum of those steps.
+SHUTDOWN_WAIT_SECONDS = DEFAULT_SHUTDOWN_WAIT_SECONDS
+
+#: Last-resort delay before the process is forced out even if a shutdown step
+#: ignores every bound.  Deliberately larger than ``SHUTDOWN_WAIT_SECONDS`` so
+#: the protocol always gets its full window first.
+FORCED_EXIT_SECONDS = SHUTDOWN_WAIT_SECONDS + 10.0
+
+FORCED_EXIT_THREAD_NAME = "echo-exit-watchdog"
 
 
 def build_facade() -> ChatAnalyzerFacade:
@@ -84,9 +101,11 @@ def _qq_provider_factory() -> Any:
 
 
 def _optional_qq_service(provider_factory: Any) -> Any:
-    from ..application.qq_export_import_service import QQExportImportService
+    from ..application.qq_direct_database_import_service import (
+        QQDirectDatabaseImportService,
+    )
 
-    return QQExportImportService(provider_factory=provider_factory)
+    return QQDirectDatabaseImportService(provider_factory=provider_factory)
 
 
 def _optional_qq_connection_service(provider_factory: Any) -> Any:
@@ -168,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         window.resize(960, 720)
         window.show()
         exit_code = app.exec()
-        _guard_exit_after_event_loop(exit_code)
+        _finish_process_exit(exit_code, window=window)
         return exit_code
     except Exception as error:
         configure_logging().exception("desktop startup failed", exc_info=error)
@@ -178,23 +197,106 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
 
-def _guard_exit_after_event_loop(exit_code: int) -> None:
-    """Last-resort process exit guard once the Qt event loop has ended.
+def _finish_process_exit(
+    exit_code: int,
+    *,
+    window: Any = None,
+    hard_exit: Callable[[int], None] | None = None,
+) -> None:
+    """Wait, bounded, for the started shutdown protocol, then force the exit.
 
-    Normal cleanup still runs first. This daemon only fires if teardown is
-    still stuck after a short grace period, so a hung Qt/thread-pool shutdown
-    cannot leave an invisible Echo process behind.
+    Qt and CPython teardown must not decide whether Echo's owned QQ process
+    tree is stopped: daemon threads are frozen when the interpreter finalizes,
+    so a shutdown that was merely *started* used to be lost. The entry point
+    therefore owns the outcome - it starts the window's single-flight protocol
+    if the close handler had not done so, gives it one bounded window, and then
+    forces the process out either way.
     """
+    force_exit = hard_exit or _hard_exit
+    _arm_forced_exit(exit_code, force_exit)
+    _begin_window_shutdown(window)
+    if _await_window_shutdown(window):
+        _LOGGER.info("Echo shutdown protocol completed before process exit")
+    else:
+        _LOGGER.warning(
+            "Echo shutdown protocol exceeded its %.1fs window; forcing exit",
+            SHUTDOWN_WAIT_SECONDS,
+        )
+    _flush_desktop_logging()
+    force_exit(exit_code)
+
+
+def _begin_window_shutdown(window: Any) -> None:
+    """Start the window's shutdown protocol; repeated calls are ignored."""
+    begin = getattr(window, "begin_shutdown", None)
+    if not callable(begin):
+        return
+    try:
+        begin()
+    except Exception as error:
+        _LOGGER.warning(
+            "Echo shutdown protocol could not be started error=%s",
+            type(error).__name__,
+        )
+
+
+def _await_window_shutdown(window: Any) -> bool:
+    """Wait, bounded, for the window's shutdown protocol."""
+    await_shutdown = getattr(window, "await_shutdown", None)
+    if not callable(await_shutdown):
+        return True
+    try:
+        return bool(await_shutdown(SHUTDOWN_WAIT_SECONDS))
+    except Exception as error:
+        _LOGGER.warning(
+            "Echo shutdown wait failed error=%s",
+            type(error).__name__,
+        )
+        return False
+
+
+def _arm_forced_exit(
+    exit_code: int,
+    hard_exit: Callable[[int], None],
+    *,
+    delay: float = FORCED_EXIT_SECONDS,
+) -> None:
+    """Force the process out if a shutdown step ignores every bound."""
 
     def _watchdog() -> None:
-        time.sleep(1.0)
-        os._exit(exit_code)
+        time.sleep(delay)
+        hard_exit(exit_code)
 
     threading.Thread(
         target=_watchdog,
-        name="echo-exit-watchdog",
+        name=FORCED_EXIT_THREAD_NAME,
         daemon=True,
     ).start()
+
+
+def _hard_exit(exit_code: int) -> None:
+    """Force the process out without waiting for interpreter/Qt finalization."""
+    os._exit(exit_code)
+
+
+def _flush_desktop_logging() -> None:
+    """Flush diagnostics handlers so the final shutdown lines survive."""
+    loggers: list[logging.Logger] = [logging.getLogger()]
+    loggers.extend(
+        value
+        for value in logging.root.manager.loggerDict.values()
+        if isinstance(value, logging.Logger)
+    )
+    seen: set[int] = set()
+    for logger in loggers:
+        for handler in logger.handlers:
+            if id(handler) in seen:
+                continue
+            seen.add(id(handler))
+            try:
+                handler.flush()
+            except Exception:
+                continue
 
 
 if __name__ == "__main__":  # pragma: no cover - manual entry point

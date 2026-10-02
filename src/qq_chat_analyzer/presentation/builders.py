@@ -7,6 +7,7 @@ computed. It performs no counting, averaging, or sorting of raw messages.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from ..identity_names import resolve_member_names
 
 from ..analysis.models import (
     ActivityReport,
@@ -299,9 +300,10 @@ def _build_echo_language_profile(
                             :ECHO_LANGUAGE_PRIMARY_WORD_LIMIT
                         ]
                     ),
-                    context_words=member.top_words[
-                        :ECHO_LANGUAGE_CONTEXT_WORD_LIMIT
-                    ],
+                    context_words=tuple(
+                        word for word in member.top_words
+                        if not word.startswith("expression:")
+                    )[:ECHO_LANGUAGE_CONTEXT_WORD_LIMIT],
                 )
             )
         return EchoLanguageProfile(
@@ -335,9 +337,10 @@ def _build_echo_language_profile(
                     member,
                     viewer_speaker_key=known_viewer_key,
                 ),
-                primary_words=member.top_words[
-                    :ECHO_LANGUAGE_PRIMARY_WORD_LIMIT
-                ],
+                primary_words=tuple(
+                    word for word in member.top_words
+                    if not word.startswith("expression:")
+                )[:ECHO_LANGUAGE_PRIMARY_WORD_LIMIT],
                 expression_habits=_echo_expression_habits(
                     profile_by_key.get(member.speaker_key)
                 ),
@@ -415,6 +418,7 @@ def _private_shared_word_layers(
         item
         for item in report.shared_words
         if item.speaker_a in member_keys and item.speaker_b in member_keys
+        and not item.word.startswith("expression:")
     ]
     shared_words = tuple(
         _to_echo_shared_word(item, viewer_key, emphasis="shared")
@@ -834,31 +838,6 @@ def _build_echo_member(
         ),
         top_words=tuple(word.word for word in profile.top_words),
     )
-
-
-def resolve_member_names(
-    *,
-    remark: str | None,
-    contextual_name: str | None,
-    nickname: str | None,
-    safe_display_fallback: str,
-    conversation_kind: str = "unknown",
-) -> tuple[str, str | None, str | None]:
-    """Resolve primary/secondary display names in the Python report layer."""
-    if conversation_kind == "private":
-        contextual = _first_non_empty(nickname, contextual_name)
-    else:
-        contextual = _first_non_empty(contextual_name, nickname)
-
-    primary = (
-        _first_non_empty(remark, contextual, safe_display_fallback)
-        or safe_display_fallback
-    )
-    secondary = None
-    if remark and contextual:
-        if contextual.strip().casefold() != primary.strip().casefold():
-            secondary = contextual
-    return primary, secondary, contextual
 
 
 def _first_non_empty(*values: str | None) -> str | None:

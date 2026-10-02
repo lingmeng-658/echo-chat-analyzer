@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 
 EXPRESSION_KIND_UNICODE = "unicode"
@@ -50,9 +51,9 @@ class ReplyRelation:
 
 @dataclass(frozen=True, slots=True)
 class MentionRelation:
-    """Relation from the current message to a mentioned identity."""
+    """Mention fact; ``None`` means its target identity is unresolved."""
 
-    target_identity_id: str
+    target_identity_id: str | None
     display_text: str | None = None
 
 
@@ -72,7 +73,18 @@ class RecallEvent:
     timestamp: int | float | str | None = None
 
 
-RichContent = TextContent | ExpressionContent
+@dataclass(frozen=True, slots=True)
+class NonTextContent:
+    """One bounded content occurrence, without resources or display text."""
+
+    kind: Literal["image", "unknown"]
+
+    def __post_init__(self) -> None:
+        if self.kind not in ("image", "unknown"):
+            raise ValueError("Unsupported non-text content kind")
+
+
+RichContent = TextContent | ExpressionContent | NonTextContent
 MessageRelation = ReplyRelation | MentionRelation
 
 

@@ -70,6 +70,8 @@ QQ_REQUIRED_FILES = {
     # ApiLauncher.mjs:4 chain into the QCE runtime modules.
     "qq/plugins/napcat-plugin-qce/package.json",
     "qq/plugins/napcat-plugin-qce/index.mjs",
+    # Echo-injected Direct DB helper; the patched index.mjs imports it.
+    "qq/plugins/napcat-plugin-qce/direct_db_research/snapshot.mjs",
     "qq/plugins/napcat-plugin-qce/runtime/ApiLauncher.mjs",
     "qq/plugins/napcat-plugin-qce/runtime/rustBridge.mjs",
     # ApiLauncher.mjs:11-21 accepts static/qce only when index.html exists.
@@ -161,9 +163,9 @@ def _build_script_text() -> str:
 def test_manifest_uses_the_minimal_agreed_schema() -> None:
     manifest = _load_manifest()
 
-    assert set(manifest) == {"requirements", "privatePaths"}
+    assert set(manifest) == {"requirements", "privatePaths", "packageDirectories"}
 
-    for key in ("requirements", "privatePaths"):
+    for key in ("requirements", "privatePaths", "packageDirectories"):
         for entry in _entries(manifest, key):
             assert set(entry) <= ALLOWED_ENTRY_KEYS, entry
             assert "path" in entry and "source" in entry and "type" in entry, entry
@@ -183,7 +185,7 @@ def test_manifest_uses_presence_types_only_for_requirements() -> None:
 def test_manifest_paths_are_relative_and_normalised() -> None:
     manifest = _load_manifest()
 
-    for key in ("requirements", "privatePaths"):
+    for key in ("requirements", "privatePaths", "packageDirectories"):
         for entry in _entries(manifest, key):
             path = str(entry["path"])
             assert not path.startswith(("/", "\\")), path
@@ -195,7 +197,7 @@ def test_manifest_paths_are_relative_and_normalised() -> None:
 def test_manifest_entries_belong_to_their_declared_source() -> None:
     manifest = _load_manifest()
 
-    for key in ("requirements", "privatePaths"):
+    for key in ("requirements", "privatePaths", "packageDirectories"):
         for entry in _entries(manifest, key):
             assert str(entry["path"]).startswith(f"{entry['source']}/"), entry
 
@@ -211,7 +213,7 @@ def test_manifest_carries_no_endpoints_or_credential_vocabulary() -> None:
 def test_manifest_never_names_an_install_scoped_config_file() -> None:
     manifest = _load_manifest()
 
-    for key in ("requirements", "privatePaths"):
+    for key in ("requirements", "privatePaths", "packageDirectories"):
         for entry in _entries(manifest, key):
             name = str(entry["path"]).rsplit("/", 1)[-1].lower()
             for prefix in INSTALL_SCOPED_PREFIXES:
@@ -356,3 +358,9 @@ def test_build_script_loads_the_contract_before_packaging() -> None:
     assert manifest_index < pyinstaller_index, (
         "the runtime contract must be validated before packaging starts"
     )
+
+
+def test_manifest_limits_recursive_copy_to_program_payloads() -> None:
+    assert _paths(_load_manifest(), "packageDirectories") == {
+        "qq/node_modules", "qq/static/qce", "wechat/node_modules/koffi",
+    }

@@ -31,7 +31,11 @@ Echo 的设计前提是：真实聊天数据属于用户自己。
 
 ### QQ
 
-当前主要通过 QQChatExporter / 本地 QQ 接入链路读取并统一为内部 ChatMessage 模型。
+桌面 QQ 会话列表和分析已由正式 QQ Direct DB 链路承担：在本机读取 QQ 数据库，
+统一为内部 ChatMessage 模型后生成报告。该链路已完成真人 E2E 和最终 smoke 验收。
+QQChatExporter 的 CLI、连接及运行时能力仍保留。当前验收状态和开放事项见
+[Hardening 工作地图](docs/HARDENING.md#qq-direct-db-最终验收-checkpoint2026-10-02)，
+架构以 [ARCHITECTURE.md](ARCHITECTURE.md) 为准。
 
 ### 微信
 
