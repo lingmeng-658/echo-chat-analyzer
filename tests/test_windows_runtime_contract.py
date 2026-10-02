@@ -70,6 +70,8 @@ QQ_REQUIRED_FILES = {
     # ApiLauncher.mjs:4 chain into the QCE runtime modules.
     "qq/plugins/napcat-plugin-qce/package.json",
     "qq/plugins/napcat-plugin-qce/index.mjs",
+    # Echo-injected Direct DB helper; the patched index.mjs imports it.
+    "qq/plugins/napcat-plugin-qce/direct_db_research/snapshot.mjs",
     "qq/plugins/napcat-plugin-qce/runtime/ApiLauncher.mjs",
     "qq/plugins/napcat-plugin-qce/runtime/rustBridge.mjs",
     # ApiLauncher.mjs:11-21 accepts static/qce only when index.html exists.

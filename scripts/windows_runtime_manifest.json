@@ -79,6 +79,24 @@
       "description": "QCE plugin entry created by the NapCat plugin loader."
     },
     {
+      "path": "qq/plugins/napcat-plugin-qce/direct_db_research/snapshot.mjs",
+      "source": "qq",
+      "type": "file",
+      "description": "Echo-injected Direct DB snapshot helper imported by the patched QCE plugin entry."
+    },
+    {
+      "path": "qq/plugins/napcat-plugin-qce/direct_db_research/main_wal.mjs",
+      "source": "qq",
+      "type": "file",
+      "description": "Echo snapshot capture and ownership dependency injected from pinned tracked templates."
+    },
+    {
+      "path": "qq/plugins/napcat-plugin-qce/direct_db_research/workspace.mjs",
+      "source": "qq",
+      "type": "file",
+      "description": "Echo snapshot capture and ownership dependency injected from pinned tracked templates."
+    },
+    {
       "path": "qq/plugins/napcat-plugin-qce/runtime/ApiLauncher.mjs",
       "source": "qq",
       "type": "file",

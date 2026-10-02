@@ -14,6 +14,7 @@ from qq_chat_analyzer.candidates import Candidate
 from qq_chat_analyzer.decision_engine import create_filter_decisions
 from qq_chat_analyzer.filter_decisions import FilterDecision
 from qq_chat_analyzer.filter_pipeline import FilterPipeline
+from qq_chat_analyzer import filter_pipeline
 from qq_chat_analyzer.parser import ParsedMessage
 
 
@@ -323,3 +324,90 @@ def _decision(
         reason="synthetic_test_decision",
         source="user",
     )
+
+
+def _legacy_apply(messages, decisions):
+    """The original exhaustive scan, retained as an equivalence oracle."""
+    decisions = list(decisions)
+    kept, filtered = [], []
+    applied = [False] * len(decisions)
+    for message in messages:
+        should_filter = False
+        for index, decision in enumerate(decisions):
+            if decision.action != "ignore":
+                continue
+            if filter_pipeline._decision_matches_message(decision, message):
+                should_filter = True
+                applied[index] = True
+        (filtered if should_filter else kept).append(message)
+    return kept, filtered, [d for d, matched in zip(decisions, applied) if matched]
+
+
+def test_mixed_decisions_preserve_every_match_and_metadata() -> None:
+    messages = [
+        _message("bot_a", "Welcome  Alice!", 1),
+        _message("bot_b", "Ticket 123456", 2),
+        _message("person", "Welcome Bob", 3),
+        _message("person", "ordinary", 4),
+    ]
+    sender_a = FilterDecision("bot_a", "sender", "ignore", 0.91, "robot_a", "auto", {"category": "robot"})
+    sender_b = FilterDecision("bot_b", "sender", "ignore", 0.92, "robot_b", "auto", {"category": "robot"})
+    template_welcome = FilterDecision("Welcome {user}", "template", "ignore", 0.93, "welcome", "auto", {"category": "template"})
+    template_ticket = FilterDecision("Ticket {id}", "template", "ignore", 0.94, "ticket", "auto", {"category": "template"})
+    duplicate_sender = FilterDecision("bot_a", "sender", "ignore", 0.95, "other_reason", "user", {"category": "manual"})
+    inert = [
+        FilterDecision("person", "sender", "keep", 1.0, "manual_keep", "user"),
+        FilterDecision("ordinary", "template", "review", 0.5, "review", "auto"),
+        FilterDecision("ordinary", "stopword", "ignore", 1.0, "unknown_type", "auto"),
+    ]
+    decisions = [template_ticket, sender_a, *inert, template_welcome, sender_b, duplicate_sender]
+    expected = _legacy_apply(messages, decisions)
+    result = FilterPipeline().apply_filter_decisions(iter(messages), iter(decisions))
+    assert (result.kept_messages, result.filtered_messages, result.applied_decisions) == expected
+    assert result.applied_decisions == [template_ticket, sender_a, template_welcome, sender_b, duplicate_sender]
+    assert result.applied_decisions[1] is sender_a
+    assert result.applied_decisions[-1] is duplicate_sender
+
+
+def test_decision_order_changes_applied_order_but_not_partition() -> None:
+    message = _message("bot", "Welcome Alice", 1)
+    sender = FilterDecision("bot", "sender", "ignore", 0.8, "sender", "auto")
+    template = FilterDecision("Welcome {user}", "template", "ignore", 0.9, "template", "auto")
+    first = FilterPipeline().apply_filter_decisions([message], [sender, template])
+    second = FilterPipeline().apply_filter_decisions([message], [template, sender])
+    assert first.filtered_messages == second.filtered_messages == [message]
+    assert first.applied_decisions == [sender, template]
+    assert second.applied_decisions == [template, sender]
+
+
+def test_empty_messages_match_legacy_result() -> None:
+    decision = _decision("bot", "sender", "ignore")
+    result = FilterPipeline().apply_filter_decisions([], [decision])
+    assert (result.kept_messages, result.filtered_messages, result.applied_decisions) == _legacy_apply([], [decision])
+
+
+def test_template_preparation_happens_once_per_ignore_decision(monkeypatch) -> None:
+    pattern_calls = []
+    compile_calls = []
+    original_pattern = filter_pipeline._template_pattern
+    original_compile = filter_pipeline.re.compile
+
+    def track_pattern(template):
+        pattern_calls.append(template)
+        return original_pattern(template)
+
+    def track_compile(pattern, *args, **kwargs):
+        compile_calls.append(pattern)
+        return original_compile(pattern, *args, **kwargs)
+
+    monkeypatch.setattr(filter_pipeline, "_template_pattern", track_pattern)
+    monkeypatch.setattr(filter_pipeline.re, "compile", track_compile)
+    decisions = [
+        _decision("Welcome {user}", "template", "ignore"),
+        _decision("Ticket {id}", "template", "ignore"),
+        _decision("Unused {number}", "template", "keep"),
+    ]
+    messages = [_message("person", f"Welcome User{i}", i) for i in range(20)]
+    FilterPipeline().apply_filter_decisions(messages, decisions)
+    assert len(pattern_calls) == 2
+    assert len(compile_calls) == 2

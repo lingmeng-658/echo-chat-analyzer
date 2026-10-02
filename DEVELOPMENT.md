@@ -5,7 +5,7 @@
 余音 Echo is a privacy-first local chat analysis tool.
 
 Current GUI / ChatSource product sources:
-- QQChatExporter desktop runtime (QQ login, session analysis)
+- QQ Direct DB for desktop session discovery and analysis; bundled QQ / NapCat / QCE runtime for connection
 - WeChat local database (data directory detection, key acquisition, session analysis)
 
 JSON / JSONL parser and import capabilities remain in the lower-level pipeline,
@@ -196,6 +196,7 @@ ImportService handles:
 - returning ChatMessage, ImportResult, and raw message count.
 
 Source parsers:
+- QQ Direct DB adapter converts the transient qq-db-json payload into source-neutral rich messages and ChatMessage;
 - QQ parser converts QQChatExporter JSON/JSONL into ChatMessage;
 - WeChat parser converts WeChat detailed JSON/JSONL into ChatMessage;
 - parsers must not depend on analysis core or UI layers.
@@ -241,6 +242,12 @@ desktop application.
 
 ## 7.3 QQChatExporter Data Source Integration
 
+This section describes the retained QCE CLI flow and its historical acceptance.
+Desktop QQ session discovery and analysis now use the formally accepted Direct DB
+flow composed by `gui/app.py`; they do not fall back to QCE exports. Architecture
+is defined in `ARCHITECTURE.md`; current acceptance and backlog are recorded in
+`docs/HARDENING.md`.
+
 Completed:
 
 - QCE HTTP Provider: health check, security.json token, group list, export task creation and polling.
@@ -270,7 +277,7 @@ Architecture rules for this integration:
 - Provider only fetches data from the QCE HTTP service.
 - Adapter only converts QCE JSON to ChatMessage.
 - Application layer owns orchestration.
-- CLI and future GUI call Application layer services.
+- CLI calls Application layer services; GUI uses ChatAnalyzerFacade.
 - parser.py, provider internals, and ImportService core routing were not modified.
 
 Real QCE desktop acceptance:
@@ -291,12 +298,14 @@ Token path compatibility fix:
 - The legacy `~/.qq-chat-exporter/security.json` fallback remains supported.
 - Candidate resolution is covered by provider tests.
 
-Current limits:
+Limits of this retained QCE flow:
 
 - Desktop QQ flow starts the bundled runtime; the CLI `qce` commands still require a running service.
 - Chunked manifest/chunks exports are not supported.
 - JSON format only.
-- Non-text messages are skipped for analysis.
+- This section does not define Direct DB content coverage. Direct DB preserves
+  image / unknown content occurrences, and pure-image analysis can complete with
+  empty word frequencies; see the current architecture and acceptance checkpoint.
 - Desktop GUI MVP is available.
 
 

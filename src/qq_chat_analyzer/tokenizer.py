@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Set
 from pathlib import Path
 
 import jieba
@@ -46,13 +46,16 @@ def tokenize(
     text: str,
     stopwords_path: str | None = None,
     user_dict_path: str | None = None,
+    *,
+    stopwords: Set[str] | None = None,
 ) -> list[str]:
     """Tokenize text and remove stopped or low-information tokens."""
     if not isinstance(text, str) or not text.strip():
         return []
 
     _load_user_dictionary(user_dict_path)
-    stopwords = _load_stopwords(stopwords_path)
+    if stopwords is None:
+        stopwords = load_stopwords(stopwords_path)
     # Mask expression markers before hyphen protection: a hyphenated bracket
     # code such as ``[Pooh-pooh]`` would otherwise be placeholder-protected
     # out of reach of the expression pattern and leak as a language token.
@@ -105,7 +108,8 @@ def _protect_hyphenated_ascii(text: str) -> tuple[str, dict[str, str]]:
     return protected_text, protected_tokens
 
 
-def _load_stopwords(stopwords_path: str | None) -> set[str]:
+def load_stopwords(stopwords_path: str | None) -> set[str]:
+    """Read stopwords for callers that reuse them within one analysis run."""
     if stopwords_path is None:
         return set()
 

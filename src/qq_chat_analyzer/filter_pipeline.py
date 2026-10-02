@@ -45,16 +45,33 @@ class FilterPipeline:
         applied_flags = [False] * len(decision_list)
         kept_messages: list[ChatMessage] = []
         filtered_messages: list[ChatMessage] = []
+        sender_indexes: dict[str, list[int]] = {}
+        template_matchers: list[tuple[int, re.Pattern[str]]] = []
+
+        for index, decision in enumerate(decision_list):
+            if decision.action != "ignore":
+                continue
+            if decision.target_type == "sender":
+                sender_indexes.setdefault(decision.target, []).append(index)
+            elif decision.target_type == "template":
+                normalized_template = _normalize_template_text(decision.target)
+                template_matchers.append(
+                    (index, re.compile(_template_pattern(normalized_template)))
+                )
 
         for message in messages:
             should_filter = False
 
-            for index, decision in enumerate(decision_list):
-                if decision.action != "ignore":
-                    continue
-                if _decision_matches_message(decision, message):
-                    should_filter = True
-                    applied_flags[index] = True
+            for index in sender_indexes.get(message.sender, ()):
+                should_filter = True
+                applied_flags[index] = True
+
+            if template_matchers:
+                normalized_text = _normalize_template_text(message.text)
+                for index, matcher in template_matchers:
+                    if matcher.fullmatch(normalized_text) is not None:
+                        should_filter = True
+                        applied_flags[index] = True
 
             if should_filter:
                 filtered_messages.append(message)

@@ -1,5 +1,9 @@
 # QQ Direct DB Provider — Phase 0 Design Freeze
 
+> **历史设计声明（2026-10-02 checkpoint）**：以下正文保留 2026-09-24 设计冻结时的
+> 状态与边界，不再代表当前生产入口。QQ Direct DB replacement 已完成正式接入和
+> 最终真人验收；当前架构见 `ARCHITECTURE.md`，验收和开放事项见 `docs/HARDENING.md`。
+
 **状态：** 仅设计冻结。本阶段不实现产品代码，不修改现有行为。
 **日期：** 2026-09-24
 **前置事实：** QQ Direct DB feasibility spike 已 PASS。最小群聊纯文本链路已在本机受控实验中验证可行。
