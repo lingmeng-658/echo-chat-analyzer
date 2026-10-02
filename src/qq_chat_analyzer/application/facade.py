@@ -67,6 +67,7 @@ from .qq_setup_service import QQSetupStatus
 from .echo_report_export import ECHO_REPORT_HTML_NAME, package_echo_report
 from .report_history import InputIdentitySummary
 from .wechat_connection_service import WeChatConnectionStatus
+from .wechat_connection_progress import WeChatConnectionProgress
 from .wechat_environment_config import WeChatEnvironmentConfig
 from .wechat_export_import_service import WeChatExportImportRequest
 from .wechat_setup_service import WeChatSetupStatus
@@ -586,14 +587,14 @@ class ChatAnalyzerFacade:
 
     def acquire_wechat_db_key(
         self,
-        progress: Callable[[str], None] | None = None,
+        progress: Callable[[WeChatConnectionProgress], None] | None = None,
     ) -> str | None:
         """Acquire and persist the WeChat database key for the connect flow.
 
         Saving the data root deliberately no longer does this, because the
         key can only be captured while WeChat is at a login moment. The
         connect flow calls this second step explicitly. ``progress`` is
-        relayed to the key acquisition so long waits can surface status.
+        relayed unchanged; only READY_FOR_LOGIN permits a login prompt.
         """
         service = self._require_setup_service()
         _LOGGER.info(

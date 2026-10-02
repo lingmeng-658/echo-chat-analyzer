@@ -24,6 +24,7 @@ from typing import Any, Callable
 
 from ..resources import default_wechat_wx_key_dll_path
 from .errors import ApplicationServiceError
+from .wechat_connection_progress import WeChatConnectionProgress
 
 
 KEY_LENGTH = 64
@@ -38,7 +39,9 @@ _KEY_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 # obtained key is exposed to child processes for the lifetime of this process
 # only (never persisted, never logged, never printed).
 KEY_ENVIRONMENT_VARIABLE = "ECHO_WX_DB_KEY"
-_ELAPSED_PATTERN = re.compile(r"elapsed=(\d+)s")
+_HELPER_READY_PATTERN = re.compile(
+    r"(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z )?hook_success=true"
+)
 _HELPER_PIDS_PATTERN = re.compile(
     r"weixin pids:\s*([0-9,\s]*)", re.IGNORECASE
 )
@@ -54,11 +57,6 @@ _HELPER_STAGE_PATTERN = re.compile(
 _HELPER_PROCESS_PATTERN = re.compile(
     r"process_found=(true|false),\s*process_count=(\d+)", re.IGNORECASE
 )
-_COMPONENTS_READY_MESSAGE = (
-    "\u5fae\u4fe1\u8fde\u63a5\u7ec4\u4ef6\u5df2\u51c6\u5907\u5b8c\u6210\uff0c"
-    "\u8bf7\u73b0\u5728\u6253\u5f00\u5fae\u4fe1\u5e76\u767b\u5f55"
-)
-_KEY_RECEIVED_MESSAGE = "\u5fae\u4fe1\u8fde\u63a5\u51c6\u5907\u5b8c\u6210"
 MESSAGE_KEY_NOT_CAPTURED = (
     "无法获取微信登录密钥。\n可能原因：\n"
     "- 微信未处于可连接状态\n"
@@ -72,7 +70,11 @@ MESSAGE_HOOK_FAILED = (
     "- 微信未处于可连接状态"
 )
 MESSAGE_WAIT_TIMEOUT = (
-    "等待微信登录超时，请重新点击连接并在微信登录界面完成登录。"
+    "等待微信登录超时，请重新点击连接，等待 Echo 提示可以登录后，再完成登录。"
+)
+MESSAGE_WECHAT_NOT_RUNNING = (
+    "未检测到微信，请先打开微信并停留在登录界面，"
+    "返回 Echo 重试连接，等待提示可以登录后再登录。"
 )
 
 _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.wechat_key_service")
@@ -115,7 +117,7 @@ class WeChatKeyService:
         subprocess_runner: Callable[..., Any] | None = None,
         koffi_module_path: str | Path | None = None,
         process_launcher: Callable[..., Any] | None = None,
-        progress_callback: Callable[[str], None] | None = None,
+        progress_callback: Callable[[WeChatConnectionProgress], None] | None = None,
     ) -> None:
         self._dll_path = (
             Path(dll_path)
@@ -152,12 +154,31 @@ class WeChatKeyService:
     def acquire(
         self,
         timeout: float | None = None,
-        progress: Callable[[str], None] | None = None,
+        progress: Callable[[WeChatConnectionProgress], None] | None = None,
     ) -> str:
         """Return one 64-hex database key, raising a user-safe error."""
         _LOGGER.info("wechat.connect.start")
+        timeout_seconds = self._timeout if timeout is None else timeout
+        deadline = self._monotonic() + max(0.0, timeout_seconds)
+        last_progress: WeChatConnectionProgress | None = None
+        progress_lock = threading.Lock()
+
+        def report(stage: WeChatConnectionProgress) -> None:
+            # stderr arrives on a reader thread. Once credentials arrive,
+            # delayed diagnostics must not invite another login.
+            nonlocal last_progress
+            with progress_lock:
+                if (
+                    last_progress is WeChatConnectionProgress.CREDENTIAL_RECEIVED
+                    or stage is last_progress
+                ):
+                    return
+                last_progress = stage
+                self._report_progress(stage, progress)
+
+        report(WeChatConnectionProgress.PREPARING)
         try:
-            key = self._acquire(timeout=timeout, progress=progress)
+            key = self._acquire(deadline=deadline, progress=report)
         except Exception as error:
             _LOGGER.warning(
                 "wechat.key.capture success=false error_type=%s code=%s",
@@ -166,12 +187,13 @@ class WeChatKeyService:
             )
             raise
         _LOGGER.info("wechat.key.capture success=true key_capture_success=true")
+        report(WeChatConnectionProgress.CREDENTIAL_RECEIVED)
         return key
 
     def _acquire(
         self,
-        timeout: float | None = None,
-        progress: Callable[[str], None] | None = None,
+        deadline: float,
+        progress: Callable[[WeChatConnectionProgress], None] | None = None,
     ) -> str:
         """Return one 64-hex database key, raising a user-safe error."""
         _clear_key_environment()
@@ -184,34 +206,18 @@ class WeChatKeyService:
             )
 
         if not self._legacy_injected:
-            key = self._acquire_with_helper(timeout, progress)
+            key = self._acquire_with_helper(deadline, progress)
             _expose_key_to_environment(key)
             return key
 
-        pids = self._process_finder()
-        if not pids:
-            _LOGGER.warning(
-                "wechat.key.process process_found=false process_count=0"
-            )
-            raise WeChatKeyUnavailable(
-                "\u672a\u68c0\u6d4b\u5230\u5fae\u4fe1\uff0c"
-                "\u8bf7\u5148\u6253\u5f00\u5e76\u767b\u5f55"
-                "\u5fae\u4fe1\u7535\u8111\u7248\u3002",
-                code="wechat_not_running",
-            )
-        _LOGGER.info(
-            "wechat.key.process process_found=true process_count=%d",
-            len(pids),
-        )
-
-        timeout_seconds = self._timeout if timeout is None else timeout
+        pids = self._wait_for_new_pids(deadline, progress)
         api = self._dll_loader(self._dll_path)
 
         hook_succeeded = False
         hook_failed = False
         capture_failed = False
         for pid in pids:
-            deadline = self._monotonic() + timeout_seconds
+            self._remaining_budget(deadline)
             try:
                 hooked = bool(api.initialize(pid))
             except Exception:
@@ -227,8 +233,13 @@ class WeChatKeyService:
             hook_succeeded = True
             _LOGGER.info("wechat.key.hook hook_success=true")
             try:
+                self._remaining_budget(deadline)
+                self._report_progress(
+                    WeChatConnectionProgress.READY_FOR_LOGIN, progress
+                )
                 key = self._poll_key(api, deadline)
                 if key:
+                    self._remaining_budget(deadline)
                     _expose_key_to_environment(key)
                     _LOGGER.info("wechat.key.capture key_capture_success=true")
                     return key
@@ -240,6 +251,7 @@ class WeChatKeyService:
             capture_failed = True
             _LOGGER.warning("wechat.key.capture key_capture_success=false")
 
+        self._remaining_budget(deadline)
         if hook_failed and not hook_succeeded:
             raise WeChatKeyUnavailable(
                 MESSAGE_HOOK_FAILED,
@@ -255,10 +267,57 @@ class WeChatKeyService:
             code="wechat_key_timeout",
         )
 
+    def _wait_for_new_pids(
+        self,
+        deadline: float,
+        progress: Callable[[WeChatConnectionProgress], None] | None,
+    ) -> list[int]:
+        """Observe every initial PID absent before accepting start candidates.
+
+        After that observation, a reused PID is eligible. A restart entirely
+        between snapshots with the same PID conservatively remains waiting.
+        """
+        old_pids = set(self._process_finder())
+        _LOGGER.info(
+            "wechat.key.process process_found=%s process_count=%d",
+            "true" if old_pids else "false",
+            len(old_pids),
+        )
+        waiting_for_exit = bool(old_pids)
+        self._report_progress(
+            WeChatConnectionProgress.WAITING_FOR_WECHAT_EXIT
+            if waiting_for_exit else WeChatConnectionProgress.WAITING_FOR_WECHAT_START,
+            progress,
+        )
+        while True:
+            self._remaining_budget(deadline)
+            pids = self._process_finder()
+            remaining = self._remaining_budget(deadline)
+            if waiting_for_exit and old_pids.isdisjoint(pids):
+                waiting_for_exit = False
+                self._report_progress(
+                    WeChatConnectionProgress.WAITING_FOR_WECHAT_START, progress
+                )
+            if not waiting_for_exit and pids:
+                _LOGGER.info(
+                    "wechat.key.process process_found=true process_count=%d",
+                    len(pids),
+                )
+                return list(dict.fromkeys(pids))
+            self._sleep(min(self._poll_interval, remaining))
+
+    def _remaining_budget(self, deadline: float) -> float:
+        remaining = deadline - self._monotonic()
+        if remaining <= 0:
+            raise WeChatKeyUnavailable(
+                MESSAGE_WAIT_TIMEOUT, code="wechat_key_timeout"
+            )
+        return remaining
+
     def _acquire_with_helper(
         self,
-        timeout: float | None,
-        progress: Callable[[str], None] | None,
+        deadline: float,
+        progress: Callable[[WeChatConnectionProgress], None] | None,
     ) -> str:
         if not self._helper_path.is_file():
             raise WeChatKeyUnavailable(
@@ -267,12 +326,43 @@ class WeChatKeyService:
                 "\u540e\u91cd\u8bd5\u3002",
                 code="wechat_environment_missing",
             )
-        timeout_seconds = self._timeout if timeout is None else timeout
-        command, options = self._build_helper_invocation(timeout_seconds)
-
-        if self._subprocess_runner is not None:
-            return self._run_helper_buffered(command, options)
-        return self._run_helper_streaming(command, options, progress)
+        command, options = self._build_helper_invocation(
+            self._remaining_budget(deadline)
+        )
+        pids = self._wait_for_new_pids(deadline, progress)
+        last_error: WeChatKeyUnavailable | None = None
+        for index, pid in enumerate(pids):
+            # Divide only the remaining acquisition budget, reserving time for
+            # other candidates even if this listener never captures a key.
+            budget = self._remaining_budget(deadline) / (len(pids) - index)
+            candidate_command = list(command)
+            candidate_command[candidate_command.index("--timeout-ms") + 1] = str(
+                int(budget * 1000)
+            )
+            candidate_command.extend(["--pid", str(pid)])
+            candidate_options = dict(options, timeout=budget)
+            try:
+                if self._subprocess_runner is not None:
+                    key = self._run_helper_buffered(
+                        candidate_command, candidate_options
+                    )
+                else:
+                    key = self._run_helper_streaming(
+                        candidate_command, candidate_options, progress, deadline
+                    )
+            except WeChatKeyUnavailable as error:
+                if error.code not in {
+                    "wechat_hook_failed", "wechat_key_not_captured",
+                    "wechat_key_timeout", "wechat_not_running",
+                }:
+                    raise
+                last_error = error
+                continue
+            self._remaining_budget(deadline)
+            return key
+        self._remaining_budget(deadline)
+        assert last_error is not None
+        raise last_error
 
     def _build_helper_invocation(
         self, timeout_seconds: float
@@ -292,7 +382,7 @@ class WeChatKeyService:
             "text": True,
             "encoding": "utf-8",
             "errors": "replace",
-            "timeout": max(1.0, timeout_seconds + 5.0),
+            "timeout": max(0.0, timeout_seconds),
             "env": environment,
             "cwd": str(self._helper_path.parent),
         }
@@ -350,12 +440,13 @@ class WeChatKeyService:
         self,
         command: list[str],
         options: dict[str, Any],
-        progress: Callable[[str], None] | None,
+        progress: Callable[[WeChatConnectionProgress], None] | None,
+        deadline: float,
     ) -> str:
         """Run the helper and report each stderr line while it still runs.
 
         The helper writes only the key to stdout and every diagnostic to
-        stderr, so a reader thread drains stderr into user-safe progress text
+        stderr, so a reader thread drains stderr into acquisition milestones
         while the main thread waits for stdout. Timeouts are distinguished from
         launch failures because they need different user guidance.
         """
@@ -366,6 +457,7 @@ class WeChatKeyService:
         popen_options["stderr"] = subprocess.PIPE
         popen_options["stdin"] = subprocess.DEVNULL
 
+        started = self._monotonic()
         try:
             process = launcher(command, **popen_options)
         except subprocess.TimeoutExpired:
@@ -404,9 +496,11 @@ class WeChatKeyService:
         )
         stdout_reader.start()
 
-        deadline = time.monotonic() + wait_timeout
         try:
-            remaining = max(0.0, deadline - time.monotonic())
+            now = self._monotonic()
+            remaining = max(
+                0.0, min(deadline - now, wait_timeout - (now - started))
+            )
             process.wait(timeout=remaining)
         except subprocess.TimeoutExpired:
             self._terminate(process)
@@ -435,16 +529,15 @@ class WeChatKeyService:
                 "\n".join(recent_errors), process.returncode
             )
             raise
-        self._report_progress(_KEY_RECEIVED_MESSAGE, progress)
         return key
 
     def _drain_progress(
         self,
         stream: Any,
         recent_errors: list[str],
-        progress: Callable[[str], None] | None = None,
+        progress: Callable[[WeChatConnectionProgress], None] | None = None,
     ) -> None:
-        """Turn helper stderr lines into user-safe progress, never raising."""
+        """Translate helper readiness facts, never forwarding diagnostic text."""
         if stream is None:
             return
         try:
@@ -458,23 +551,23 @@ class WeChatKeyService:
                 if len(recent_errors) >= _MAX_RETAINED_ERROR_LINES:
                     recent_errors.pop(0)
                 recent_errors.append(text)
-                self._report_progress(text, progress)
+                if _HELPER_READY_PATTERN.fullmatch(text):
+                    self._report_progress(
+                        WeChatConnectionProgress.READY_FOR_LOGIN, progress
+                    )
         except Exception:
             return
 
     def _report_progress(
         self,
-        line: str,
-        progress: Callable[[str], None] | None = None,
+        stage: WeChatConnectionProgress,
+        progress: Callable[[WeChatConnectionProgress], None] | None = None,
     ) -> None:
         callback = progress or self._progress_callback
         if callback is None:
             return
-        message = _progress_message(line)
-        if message is None:
-            return
         try:
-            callback(message)
+            callback(stage)
         except Exception as error:
             _LOGGER.warning(
                 "wechat.progress.callback success=false error_type=%s",
@@ -517,7 +610,10 @@ class WeChatKeyService:
                 key = _extract_key(buffer)
                 if key:
                     return key
-            self._sleep(self._poll_interval)
+            remaining = deadline - self._monotonic()
+            if remaining <= 0:
+                return None
+            self._sleep(min(self._poll_interval, remaining))
         return None
 
 def _expose_key_to_environment(key: str) -> None:
@@ -545,30 +641,11 @@ def _helper_launch_message() -> str:
     )
 
 
-def _progress_message(line: str) -> str | None:
-    """Map one helper stderr line to user-safe progress, or drop it.
-
-    Only a whitelist becomes user-visible: helper diagnostics carry DLL paths
-    and native export names that must never reach the GUI.
-    """
-    if "exports loaded" in line:
-        return _COMPONENTS_READY_MESSAGE
-    match = _ELAPSED_PATTERN.search(line)
-    if match:
-        return (
-            "\u6b63\u5728\u7b49\u5f85\u5fae\u4fe1\u767b\u5f55\u2026"
-            "\uff08\u5df2\u7b49\u5f85 "
-            + match.group(1)
-            + " \u79d2\uff09"
-        )
-    return None
-
-
 def _helper_failure_message(stderr: Any) -> str:
     # Native/helper details stay out of the public error surface.
     detail = str(stderr or "").strip().lower()
     if "no weixin process" in detail:
-        return "未检测到微信，请先打开并登录微信电脑版。"
+        return MESSAGE_WECHAT_NOT_RUNNING
     if "key unavailable" in detail:
         return MESSAGE_KEY_NOT_CAPTURED
     if "initializehook" in detail and "-> true" not in detail:

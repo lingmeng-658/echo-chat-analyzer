@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .errors import ApplicationServiceError
+from .wechat_connection_progress import WeChatConnectionProgress
 from .wechat_data_detector import (
     detect_wechat_data_roots,
     is_valid_wechat_data_root,
@@ -246,14 +247,14 @@ class WeChatSetupService:
 
     def acquire_db_key(
         self,
-        progress: Callable[[str], None] | None = None,
+        progress: Callable[[WeChatConnectionProgress], None] | None = None,
     ) -> str | None:
         """Acquire the WeChat database key and persist it, for the connect flow.
 
         Returns the key, or ``None`` when no key service is configured. A
         failure propagates the key service's own user-safe error so the caller
         can show it verbatim. ``progress`` is forwarded to the key service so
-        long waits can surface user-safe status lines.
+        acquisition milestones reach the caller without native details.
         """
         if self._key_service is None:
             return None

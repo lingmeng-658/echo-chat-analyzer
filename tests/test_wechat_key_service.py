@@ -79,15 +79,338 @@ def _service(
     dll_path = tmp_path / "wx_key.dll"
     dll_path.write_bytes(b"fake")
     module = _module()
+    snapshots = iter([[], pids])
+    elapsed = 0.0
+
+    def sleep(seconds):
+        nonlocal elapsed
+        elapsed += seconds
+
     return module.WeChatKeyService(
         dll_path=dll_path,
-        process_finder=lambda: pids,
+        process_finder=lambda: next(snapshots, pids),
         dll_loader=lambda _path: api,
         buffer_factory=lambda size: bytearray(size),
-        sleep=lambda _seconds: None,
-        monotonic=monotonic or (lambda: 0.0),
+        sleep=sleep,
+        monotonic=monotonic or (lambda: elapsed),
         timeout=timeout,
     )
+
+
+def _lifecycle_service(tmp_path, snapshots, *, hook_ok=True, timeout=5.0):
+    """Drive process snapshots and elapsed time without real processes."""
+    api = _FakeHookApi(key="ab12" * 16, hook_ok=hook_ok)
+    service = _service(tmp_path, api=api, pids=[])
+    remaining = iter(snapshots)
+    current = []
+    elapsed = 0.0
+    seen = []
+
+    def find():
+        nonlocal current
+        current = next(remaining, current)
+        # No listener may be installed while waiting for process transitions.
+        assert api.initialize_calls == []
+        assert "READY_FOR_LOGIN" not in seen
+        return current
+
+    def sleep(seconds):
+        nonlocal elapsed
+        elapsed += seconds
+
+    service._process_finder = find
+    service._sleep = sleep
+    service._monotonic = lambda: elapsed
+    service._timeout = timeout
+    return service, api, seen
+
+
+@pytest.mark.parametrize("snapshots, expected", [
+    ([[101, 202], [202, 303], [303]], [
+        "PREPARING", "WAITING_FOR_WECHAT_EXIT", "WAITING_FOR_WECHAT_START",
+        "READY_FOR_LOGIN", "CREDENTIAL_RECEIVED",
+    ]),
+    ([[], [], [303]], [
+        "PREPARING", "WAITING_FOR_WECHAT_START", "READY_FOR_LOGIN",
+        "CREDENTIAL_RECEIVED",
+    ]),
+    ([[101], [], [], [303]], [
+        "PREPARING", "WAITING_FOR_WECHAT_EXIT", "WAITING_FOR_WECHAT_START",
+        "READY_FOR_LOGIN", "CREDENTIAL_RECEIVED",
+    ]),
+])
+def test_lifecycle_waits_for_new_pid_before_ready(tmp_path, snapshots, expected):
+    service, api, seen = _lifecycle_service(tmp_path, snapshots)
+
+    class Listener(_FakeHookApi):
+        def initialize(self, pid):
+            assert seen[-1] == "WAITING_FOR_WECHAT_START"
+            return super().initialize(pid)
+
+        def poll_key(self, buffer, size):
+            assert seen[-1] == "READY_FOR_LOGIN"
+            return super().poll_key(buffer, size)
+
+    listener = Listener(key=api.key)
+    service._dll_loader = lambda _path: listener
+    assert service.acquire(progress=lambda event: seen.append(event.name)) == api.key
+    assert listener.initialize_calls == [303]
+    assert listener.cleanup_calls == 1
+    assert seen == expected
+
+
+@pytest.mark.parametrize("snapshots, expected", [
+    ([[101, 202], [202]], ["PREPARING", "WAITING_FOR_WECHAT_EXIT"]),
+    ([[101], [], []], [
+        "PREPARING", "WAITING_FOR_WECHAT_EXIT", "WAITING_FOR_WECHAT_START",
+    ]),
+    ([[]], ["PREPARING", "WAITING_FOR_WECHAT_START"]),
+])
+def test_lifecycle_process_wait_timeout(tmp_path, snapshots, expected):
+    service, api, seen = _lifecycle_service(tmp_path, snapshots, timeout=0.5)
+    with pytest.raises(_module().WeChatKeyUnavailable) as caught:
+        service.acquire(progress=lambda event: seen.append(event.name))
+    assert caught.value.code == "wechat_key_timeout"
+    assert api.initialize_calls == []
+    assert api.poll_calls == 0
+    assert seen == expected
+
+
+def test_lifecycle_failed_new_pid_hook_never_reports_ready(tmp_path):
+    service, api, seen = _lifecycle_service(tmp_path, [[], [303]], hook_ok=False)
+    with pytest.raises(_module().WeChatKeyUnavailable) as caught:
+        service.acquire(progress=lambda event: seen.append(event.name))
+    assert caught.value.code == "wechat_hook_failed"
+    assert api.initialize_calls == [303]
+    assert api.poll_calls == 0
+    assert seen == ["PREPARING", "WAITING_FOR_WECHAT_START"]
+
+
+def test_lifecycle_helper_hooks_only_selected_new_pid(tmp_path):
+    service, api, seen = _lifecycle_service(tmp_path, [[101], [], [], [303]])
+    helper = tmp_path / "wx_key_helper.cjs"
+    helper.write_text("", encoding="utf-8")
+    service._helper_path = helper
+    service._legacy_injected = False
+    service._node_finder = lambda _name: "node"
+
+    def launch(command, **_options):
+        assert command[command.index("--pid") + 1] == "303"
+        assert seen[-1] == "WAITING_FOR_WECHAT_START"
+        assert api.initialize_calls == []
+        return _FakePopen(stdout=api.key, stderr_lines=("hook_success=true",))
+
+    service._process_launcher = launch
+    assert service.acquire(progress=lambda event: seen.append(event.name)) == api.key
+    assert seen == [
+        "PREPARING", "WAITING_FOR_WECHAT_EXIT", "WAITING_FOR_WECHAT_START",
+        "READY_FOR_LOGIN", "CREDENTIAL_RECEIVED",
+    ]
+
+
+class _FakeClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+def _budget_service(tmp_path, snapshots, mode="native"):
+    service, api, seen = _lifecycle_service(tmp_path, snapshots, timeout=1.0)
+    clock = _FakeClock()
+    service._monotonic = clock
+    service._sleep = clock.sleep
+    if mode != "native":
+        helper = tmp_path / "wx_key_helper.cjs"
+        helper.write_text("", encoding="utf-8")
+        service._helper_path = helper
+        service._node_finder = lambda _name: "node"
+        service._legacy_injected = False
+    return service, api, seen, clock
+
+
+@pytest.mark.parametrize("mode", ["native", "buffered", "streaming"])
+def test_smallfix_reused_pid_after_observed_exit_is_new_candidate(tmp_path, mode):
+    service, api, seen, clock = _budget_service(tmp_path, [[101], [], [101]], mode)
+    calls = []
+
+    def run(command, **_options):
+        calls.append(int(command[command.index("--pid") + 1]))
+        return _Completed(stdout=api.key)
+
+    if mode == "buffered":
+        service._subprocess_runner = run
+    elif mode == "streaming":
+        def launch(command, **options):
+            run(command, **options)
+            return _FakePopen(stdout=api.key, stderr_lines=("hook_success=true",))
+        service._process_launcher = launch
+
+    assert service.acquire(progress=lambda event: seen.append(event.name)) == api.key
+    assert (api.initialize_calls if mode == "native" else calls) == [101]
+    assert seen[:3] == [
+        "PREPARING", "WAITING_FOR_WECHAT_EXIT", "WAITING_FOR_WECHAT_START",
+    ]
+
+
+def test_smallfix_same_pid_without_observed_exit_times_out(tmp_path):
+    service, api, seen, clock = _budget_service(tmp_path, [[101], [101]])
+    with pytest.raises(_module().WeChatKeyUnavailable) as caught:
+        service.acquire(progress=lambda event: seen.append(event.name))
+    assert caught.value.code == "wechat_key_timeout"
+    assert api.initialize_calls == []
+    assert seen == ["PREPARING", "WAITING_FOR_WECHAT_EXIT"]
+    assert clock.now == pytest.approx(1.0)
+
+
+def test_smallfix_native_polling_consumes_remaining_acquire_budget(tmp_path):
+    service, api, seen, clock = _budget_service(tmp_path, [[101], [101], [], [], [303]])
+    api.key = None
+    with pytest.raises(_module().WeChatKeyUnavailable):
+        service.acquire()
+    assert api.initialize_calls == [303]
+    assert clock.now == pytest.approx(1.0)
+    assert api.cleanup_calls == 1
+
+
+@pytest.mark.parametrize("mode", ["buffered", "streaming"])
+def test_smallfix_helper_tries_second_pid_with_remaining_budget(tmp_path, mode):
+    service, api, seen, clock = _budget_service(tmp_path, [[], [], [101, 202]], mode)
+    calls = []
+
+    def run(command, **options):
+        pid = int(command[command.index("--pid") + 1])
+        budget = int(command[command.index("--timeout-ms") + 1]) / 1000
+        calls.append((pid, clock.now, budget, options.get("timeout")))
+        if pid == 101:
+            clock.sleep(0.1)
+            return _Completed(1, stderr="InitializeHook(101) -> false\nkey unavailable")
+        return _Completed(stdout=api.key)
+
+    if mode == "buffered":
+        service._subprocess_runner = run
+    else:
+        def launch(command, **options):
+            result = run(command, **options)
+            return _FakePopen(
+                stdout=result.stdout, stderr_lines=tuple(result.stderr.splitlines()),
+                returncode=result.returncode,
+            )
+        service._process_launcher = launch
+
+    assert service.acquire() == api.key
+    assert [call[0] for call in calls] == [101, 202]
+    assert calls[0][2] == pytest.approx(0.4)
+    assert calls[1][2] == pytest.approx(0.7)
+    if mode == "buffered":
+        assert calls[0][3] <= 0.4
+        assert calls[1][3] <= 0.7
+
+
+def test_smallfix_streaming_wait_deducts_launch_time(tmp_path):
+    service, api, seen, clock = _budget_service(tmp_path, [[], [], [303]], "streaming")
+    waits = []
+
+    class Process(_FakePopen):
+        def wait(self, timeout=None):
+            waits.append(timeout)
+            return super().wait(timeout)
+
+    def launch(*_args, **_options):
+        clock.sleep(0.3)
+        return Process(stdout=api.key)
+
+    service._process_launcher = launch
+    assert service.acquire() == api.key
+    assert waits == [pytest.approx(0.5)]
+
+
+def test_smallfix_candidate_seen_after_deadline_is_not_hooked(tmp_path):
+    service, api, seen, clock = _budget_service(tmp_path, [[]])
+    snapshots = iter([[], [303]])
+
+    def find():
+        pids = next(snapshots)
+        if pids:
+            clock.sleep(1.1)
+        return pids
+
+    service._process_finder = find
+    with pytest.raises(_module().WeChatKeyUnavailable) as caught:
+        service.acquire()
+    assert caught.value.code == "wechat_key_timeout"
+    assert api.initialize_calls == []
+
+
+def test_smallfix_hook_consumes_budget_and_cleans_up_without_ready(tmp_path):
+    service, api, seen, clock = _budget_service(tmp_path, [[], [101, 202]])
+
+    class Listener(_FakeHookApi):
+        def initialize(self, pid):
+            clock.sleep(1.1)
+            return super().initialize(pid)
+
+    listener = Listener(key=api.key)
+    service._dll_loader = lambda _path: listener
+    with pytest.raises(_module().WeChatKeyUnavailable) as caught:
+        service.acquire(progress=lambda event: seen.append(event.name))
+    assert caught.value.code == "wechat_key_timeout"
+    assert listener.initialize_calls == [101]
+    assert listener.cleanup_calls == 1
+    assert listener.poll_calls == 0
+    assert seen == ["PREPARING", "WAITING_FOR_WECHAT_START"]
+
+
+@pytest.mark.parametrize("mode", ["buffered", "streaming"])
+def test_smallfix_candidate_timeout_reserves_budget_for_second_pid(tmp_path, mode):
+    service, api, seen, clock = _budget_service(tmp_path, [[], [101, 202]], mode)
+    calls = []
+
+    if mode == "buffered":
+        def run(command, **options):
+            pid = int(command[command.index("--pid") + 1])
+            calls.append(pid)
+            if pid == 101:
+                clock.sleep(options["timeout"])
+                raise subprocess.TimeoutExpired(command, options["timeout"])
+            return _Completed(stdout=api.key)
+        service._subprocess_runner = run
+    else:
+        class Process(_FakePopen):
+            def wait(self, timeout=None):
+                if not self.killed:
+                    clock.sleep(timeout)
+                    raise subprocess.TimeoutExpired("node", timeout)
+                return 1
+
+        def launch(command, **_options):
+            pid = int(command[command.index("--pid") + 1])
+            calls.append(pid)
+            return Process() if pid == 101 else _FakePopen(stdout=api.key)
+        service._process_launcher = launch
+
+    assert service.acquire() == api.key
+    assert calls == [101, 202]
+    assert clock.now == pytest.approx(0.5)
+
+
+def test_smallfix_helper_does_not_retry_environment_failure(tmp_path):
+    service, api, seen, clock = _budget_service(tmp_path, [[], [101, 202]], "buffered")
+    calls = []
+
+    def run(command, **_options):
+        calls.append(command)
+        return _Completed(1, stderr="Cannot find module 'koffi'")
+
+    service._subprocess_runner = run
+    with pytest.raises(_module().WeChatKeyUnavailable) as caught:
+        service.acquire()
+    assert caught.value.code == "wechat_environment_missing"
+    assert len(calls) == 1
 
 
 def test_acquire_returns_valid_key(tmp_path: Path) -> None:
@@ -119,18 +442,13 @@ def test_acquire_missing_dll_is_user_safe(tmp_path: Path) -> None:
 
 def test_acquire_without_weixin_process_is_user_safe(tmp_path: Path) -> None:
     module = _module()
-    dll_path = tmp_path / "wx_key.dll"
-    dll_path.write_bytes(b"fake")
-    service = module.WeChatKeyService(
-        dll_path=dll_path,
-        process_finder=lambda: [],
-    )
+    service = _service(tmp_path, api=_FakeHookApi(), pids=[], timeout=0.5)
 
     with pytest.raises(module.WeChatKeyUnavailable) as caught:
         service.acquire()
 
-    assert caught.value.code == "wechat_not_running"
-    assert "\u672a\u68c0\u6d4b\u5230\u5fae\u4fe1" in caught.value.public_message
+    assert caught.value.code == "wechat_key_timeout"
+    assert "超时" in caught.value.public_message
 
 
 def test_hook_failure_is_normalized(tmp_path: Path) -> None:
@@ -148,7 +466,7 @@ def test_hook_failure_is_normalized(tmp_path: Path) -> None:
     assert "Traceback" not in caught.value.public_message
 
 
-def test_hook_success_without_key_is_not_captured(tmp_path: Path) -> None:
+def test_zero_acquire_budget_times_out_without_hook(tmp_path: Path) -> None:
     module = _module()
     api = _FakeHookApi(key=None)
     service = _service(tmp_path, api=api, pids=[789], timeout=0.0)
@@ -156,21 +474,19 @@ def test_hook_success_without_key_is_not_captured(tmp_path: Path) -> None:
     with pytest.raises(module.WeChatKeyUnavailable) as caught:
         service.acquire()
 
-    assert caught.value.code == "wechat_key_not_captured"
-    assert "无法获取微信登录密钥" in caught.value.public_message
-    assert api.cleanup_calls == 1
+    assert caught.value.code == "wechat_key_timeout"
+    assert api.initialize_calls == []
+    assert api.cleanup_calls == 0
 
 
 def test_poll_exception_does_not_leak(tmp_path: Path) -> None:
     module = _module()
     api = _FakeHookApi(key=None, poll_raises=True)
-    clock = iter([0.0, 1.0])
     service = _service(
         tmp_path,
         api=api,
         pids=[111],
         timeout=1.0,
-        monotonic=lambda: next(clock),
     )
 
     with pytest.raises(module.WeChatKeyUnavailable) as caught:
@@ -216,12 +532,16 @@ def _helper_service(
     dll.write_bytes(b"fake")
     helper.write_text("", encoding="utf-8")
     module = _module()
-    return module.WeChatKeyService(
+    service = module.WeChatKeyService(
         dll_path=dll,
         helper_path=helper,
         subprocess_runner=runner or (lambda *_args, **_kwargs: result),
         node_finder=node_finder,
     )
+    snapshots = iter([[], [4242]])
+    service._process_finder = lambda: next(snapshots, [4242])
+    service._monotonic = lambda: 0.0
+    return service
 
 
 def test_helper_success_returns_key(tmp_path: Path):
@@ -378,7 +698,7 @@ def test_helper_default_timeout_is_600_seconds(tmp_path: Path):
     service.acquire()
     command, options = calls[0]
     assert command[command.index("--timeout-ms") + 1] == "600000"
-    assert options["timeout"] == 605.0
+    assert options["timeout"] == 600.0
 
 
 def test_helper_hides_node_console_on_windows(
@@ -407,7 +727,7 @@ def test_helper_hides_node_console_on_windows(
     assert options["creationflags"] == 0x08000000
     assert options["cwd"] == str(tmp_path)
     assert options["env"]["NODE_PATH"] == str(tmp_path / "node_modules")
-    assert options["timeout"] == 605.0
+    assert options["timeout"] == 600.0
 
 
 @pytest.mark.parametrize(
@@ -642,22 +962,21 @@ def test_helper_omits_windows_creation_flags_on_non_windows(
     assert "creationflags" not in options
 
 
-def test_legacy_multiple_pids_each_get_independent_timeout(tmp_path: Path):
-    module = _module()
-    api = _FakeHookApi(key=None)
-    clock = iter([10.0, 11.0, 20.0, 21.0])
-    service = _service(
-        tmp_path,
-        api=api,
-        pids=[101, 202],
-        timeout=1.0,
-        monotonic=lambda: next(clock),
-    )
-    with pytest.raises(module.WeChatKeyUnavailable) as caught:
-        service.acquire()
-    assert caught.value.code == "wechat_key_not_captured"
-    assert api.initialize_calls == [101, 202]
-    assert api.cleanup_calls == 2
+def test_smallfix_native_hook_failure_allows_second_candidate(tmp_path):
+    service, api, seen, clock = _budget_service(tmp_path, [[], [101, 202]])
+
+    class Listener(_FakeHookApi):
+        def initialize(self, pid):
+            clock.sleep(0.25)
+            super().initialize(pid)
+            return pid == 202
+
+    listener = Listener(key=api.key)
+    service._dll_loader = lambda _path: listener
+    assert service.acquire() == api.key
+    assert listener.initialize_calls == [101, 202]
+    assert listener.cleanup_calls == 1
+    assert clock.now == pytest.approx(0.5)
 
 
 def test_helper_accepts_non_hex_payload_of_verified_length(tmp_path: Path):
@@ -859,20 +1178,25 @@ def _streaming_service(tmp_path: Path, popen, progress=None):
     dll.write_bytes(b"fake")
     helper.write_text("", encoding="utf-8")
     module = _module()
-    return module.WeChatKeyService(
+    service = module.WeChatKeyService(
         dll_path=dll,
         helper_path=helper,
         process_launcher=popen,
         progress_callback=progress,
         node_finder=lambda _name: "node",
     )
+    snapshots = iter([[], [4242]])
+    service._process_finder = lambda: next(snapshots, [4242])
+    service._monotonic = lambda: 0.0
+    return service
 
 
 def test_streaming_reports_progress_per_stderr_line(tmp_path: Path):
-    seen: list[str] = []
+    seen = []
     proc = _FakePopen(
         stdout="cd34" * 16 + "\n",
         stderr_lines=(
+            "2026-08-09T00:00:00.000Z hook_success=true",
             "2026-08-09T00:00:00.000Z elapsed=5s, waiting for key...",
             "2026-08-09T00:00:05.000Z elapsed=10s, waiting for key...",
         ),
@@ -881,18 +1205,21 @@ def test_streaming_reports_progress_per_stderr_line(tmp_path: Path):
         tmp_path, lambda *_a, **_k: proc, progress=seen.append
     )
     assert service.acquire() == "cd34" * 16
-    assert len(seen) == 2
-    assert "5" in seen[0] and "10" in seen[1]
+    assert [getattr(event, "name", None) for event in seen] == [
+        "PREPARING", "WAITING_FOR_WECHAT_START", "READY_FOR_LOGIN",
+        "CREDENTIAL_RECEIVED",
+    ]
 
 
 def test_streaming_reader_keeps_receiving_lines_until_exit(tmp_path: Path):
     """The stderr reader must keep draining while stdout is still open."""
-    seen: list[str] = []
+    seen = []
     proc = _FakePopen(
         stdout="ab12" * 16 + "\n",
         stderr_lines=(
             "2026-08-09T00:00:00.000Z elapsed=1s, waiting for key...",
             "2026-08-09T00:00:01.000Z elapsed=2s, waiting for key...",
+            "2026-08-09T00:00:02.000Z hook_success=true",
             "2026-08-09T00:00:02.000Z elapsed=3s, waiting for key...",
         ),
     )
@@ -901,16 +1228,19 @@ def test_streaming_reader_keeps_receiving_lines_until_exit(tmp_path: Path):
     )
 
     assert service.acquire() == "ab12" * 16
-    assert len(seen) == 3
-    assert "1" in seen[0] and "2" in seen[1] and "3" in seen[2]
+    assert [getattr(event, "name", None) for event in seen] == [
+        "PREPARING", "WAITING_FOR_WECHAT_START", "READY_FOR_LOGIN",
+        "CREDENTIAL_RECEIVED",
+    ]
 
 
 def test_streaming_communicate_does_not_steal_stderr(tmp_path: Path):
     """communicate() must not consume stderr lines meant for the reader."""
-    seen: list[str] = []
+    seen = []
     proc = _DelayedStdoutPopen(
         key="ef56" * 16,
         stderr_lines=(
+            "2026-08-09T00:00:00.000Z hook_success=true",
             "2026-08-09T00:00:00.000Z elapsed=5s, waiting for key...",
             "2026-08-09T00:00:05.000Z elapsed=10s, waiting for key...",
         ),
@@ -920,8 +1250,10 @@ def test_streaming_communicate_does_not_steal_stderr(tmp_path: Path):
     )
 
     assert service.acquire() == "ef56" * 16
-    assert len(seen) == 2
-    assert "5" in seen[0] and "10" in seen[1]
+    assert [getattr(event, "name", None) for event in seen] == [
+        "PREPARING", "WAITING_FOR_WECHAT_START", "READY_FOR_LOGIN",
+        "CREDENTIAL_RECEIVED",
+    ]
     assert proc.killed is False
 
 
@@ -939,9 +1271,74 @@ def test_streaming_progress_never_leaks_internal_terms(tmp_path: Path):
         tmp_path, lambda *_a, **_k: proc, progress=seen.append
     )
     service.acquire()
-    joined = " ".join(seen).lower()
+    joined = " ".join(str(event) for event in seen).lower()
     for leaked in ("dll", "initializehook", "koffi", "secret", "pollkeydata"):
         assert leaked not in joined
+
+
+@pytest.mark.parametrize("diagnostic", [
+    "exports loaded: InitializeHook, PollKeyData, CleanupHook",
+    "process_found=true, process_count=1",
+    "elapsed=5s, waiting for key...",
+    "hook_success=false",
+    "diagnostic hook_success=true",
+    'GetStatusMessage -> true, level=0, status="hook_success=true"',
+])
+def test_streaming_cannot_allow_login_without_listener_ready(tmp_path, diagnostic):
+    seen = []
+    proc = _FakePopen(stderr_lines=(diagnostic,), returncode=1)
+    service = _streaming_service(tmp_path, lambda *_a, **_k: proc)
+
+    with pytest.raises(_module().WeChatKeyUnavailable):
+        service.acquire(progress=seen.append)
+
+    assert [getattr(event, "name", None) for event in seen] == [
+        "PREPARING", "WAITING_FOR_WECHAT_START",
+    ]
+
+
+def test_injected_listener_reports_ready_only_after_initialize_succeeds(tmp_path):
+    seen = []
+
+    class Listener(_FakeHookApi):
+        def initialize(self, pid):
+            assert [getattr(event, "name", None) for event in seen] == [
+                "PREPARING", "WAITING_FOR_WECHAT_START",
+            ]
+            return super().initialize(pid)
+
+        def poll_key(self, buffer, size):
+            assert getattr(seen[-1], "name", None) == "READY_FOR_LOGIN"
+            return super().poll_key(buffer, size)
+
+    service = _service(tmp_path, api=Listener(key="ab12" * 16), pids=[4242])
+    service.acquire(progress=seen.append)
+
+    assert [getattr(event, "name", None) for event in seen] == [
+        "PREPARING", "WAITING_FOR_WECHAT_START", "READY_FOR_LOGIN",
+        "CREDENTIAL_RECEIVED",
+    ]
+
+
+@pytest.mark.parametrize("use_helper", [True, False])
+def test_missing_wechat_does_not_instruct_login_before_retry(tmp_path, use_helper):
+    if use_helper:
+        process = _FakePopen(stderr_lines=("no Weixin process",), returncode=1)
+        service = _streaming_service(tmp_path, lambda *_a, **_k: process)
+    else:
+        service = _service(tmp_path, api=_FakeHookApi(), pids=[])
+
+    with pytest.raises(_module().WeChatKeyUnavailable) as caught:
+        service.acquire()
+
+    if use_helper:
+        # A selected process can still exit before the helper initializes it.
+        assert caught.value.code == "wechat_not_running"
+        assert "登录界面" in caught.value.public_message
+    else:
+        assert caught.value.code == "wechat_key_timeout"
+        assert "等待 Echo 提示可以登录" in caught.value.public_message
+    assert "打开并登录" not in caught.value.public_message
 
 
 def test_streaming_timeout_is_distinct_from_node_failure(tmp_path: Path):
@@ -953,6 +1350,7 @@ def test_streaming_timeout_is_distinct_from_node_failure(tmp_path: Path):
     assert caught.value.code == "wechat_key_timeout"
     message = caught.value.public_message
     assert "Node.js" not in message
+    assert "提示可以登录后" in message
     assert "\u8d85\u65f6" in message or "\u65f6\u9650" in message
     assert proc.killed
 

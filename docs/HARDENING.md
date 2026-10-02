@@ -91,19 +91,6 @@ Release Blocker：TBD。
 
 Release Blocker：Yes。
 
-### BUG-04（候选）成员「代表词 / 像 TA」结果缺乏代表性
-
-已知事实：
-
-- 真实报告中出现用户本人认为完全不像自己的代表词。
-- 目前不能直接认定算法 Bug。
-- 需要检查 raw counts、ranking formula、时间覆盖、事件集中度、最少活跃天数 / 稳定性，
-  以及文案是否过度承诺。
-
-状态：候选 Bug / 未审计
-
-Release Blocker：TBD。
-
 ### BUG-05 WeChat 英文官方表情别名污染普通语言画像
 
 状态：CLOSED。
@@ -157,6 +144,12 @@ Release Blocker：No / CLOSED
 - 原 Provider 在第一个 matching shard 即返回，因此只读取旧 shard。
 - 修复后 Provider 读取全部 matching shards，以相同范围查询、merge 并全局排序；
   真实 GUI 重新分析一个仅在新 shard 中存在的日期范围成功。
+
+历史归类说明：原 BUG-04「成员代表词 / 像 TA 缺乏代表性」的真实证据来自 WeChat
+分析结果。目标 session 因原 Provider 只读取第一个 matching shard，近期大量消息未进入
+分析；当时的上游输入明显不完整，原证据已无法支持“存在独立代表词算法 Bug”的判断。
+BUG-04 不再作为 Active Bug 单独追踪；这不表示代表词算法已被实验证明修复。
+相关语言画像优化见 REL-09。
 
 同一次 acquisition 审计还发现并独立修复另一个 correctness defect：Provider / native
 helper 将 no-limit / `limit=0` 静默回退到 100000 行。修复后，synthetic 100001-row
@@ -357,6 +350,17 @@ share button 当前产品行为隐藏，
 状态：未审计
 
 Release Blocker：Yes。
+
+### REL-09 语言画像语义 / 代表词算法分工
+
+后续审计“常说”与“更像 TA”的文案和算法是否对应：
+
+- `top_words` 是成员自身纯词频排序，更接近“常说什么”，不宜承担过强的“代表性”语义。
+- 现有 `DistinctiveWordAnalyzer` 的成员 vs 其他成员 distinctive-word / log-odds 排序
+  更接近“哪些词更像 TA”；后续优化优先复用该能力。
+- 数据不足时允许不展示特色词，避免强行生成低置信度结果。
+
+状态：后续产品 / 算法优化，未审计。
 
 ---
 
