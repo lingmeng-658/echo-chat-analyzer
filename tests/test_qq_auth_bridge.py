@@ -43,8 +43,8 @@ def _config_module():
 def _status(
     *,
     available=False,
-    qce_running=False,
-    authenticated=False,
+    runtime_running=False,
+    qq_online=False,
     version=None,
     message="",
     action_hint="",
@@ -54,8 +54,8 @@ def _status(
     )
     return module.QQConnectionStatus(
         available=available,
-        qce_running=qce_running,
-        authenticated=authenticated,
+        runtime_running=runtime_running,
+        qq_online=qq_online,
         version=version,
         message=message,
         action_hint=action_hint,
@@ -142,7 +142,6 @@ def _bridge(
     manager=None,
     window_launcher=None,
     process_registry=None,
-    config_preparer=None,
     qrcode_path=None,
     runtime_cleaner=None,
 ):
@@ -157,7 +156,6 @@ def _bridge(
         manager=manager,
         window_launcher=window_launcher,
         process_registry=process_registry,
-        config_preparer=config_preparer or (lambda: True),
         qrcode_path=qrcode_path,
         runtime_cleaner=runtime_cleaner,
     )
@@ -182,8 +180,8 @@ def test_start_auth_flow_returns_connected_without_starting_anything() -> None:
     service = _StubConnectionService(
         _status(
             available=True,
-            qce_running=True,
-            authenticated=True,
+            runtime_running=True,
+            qq_online=True,
             message="QQ \u5df2\u8fde\u63a5\u3002",
         )
     )
@@ -207,13 +205,13 @@ def test_start_auth_flow_returns_connected_without_starting_anything() -> None:
 def test_start_auth_flow_opens_login_window_without_pre_starting_runtime() -> None:
     module = _connection_module()
     service = _StubConnectionService(
-        _status(available=False, qce_running=False, authenticated=False)
+        _status(available=False, runtime_running=False, qq_online=False)
     )
     setup = _StubSetupService(
         connect_status=_status(
             available=False,
-            qce_running=True,
-            authenticated=False,
+            runtime_running=True,
+            qq_online=False,
         ),
         runtime_status=_runtime_status(),
     )
@@ -230,16 +228,16 @@ def test_start_auth_flow_opens_login_window_without_pre_starting_runtime() -> No
     assert snapshot.state is module.ConnectionState.WAITING_AUTH
 
 
-def test_start_auth_flow_does_not_pre_start_qce_server_before_launcher() -> None:
+def test_start_auth_flow_does_not_pre_start_runtime_before_launcher() -> None:
     module = _connection_module()
     service = _StubConnectionService(
-        _status(available=False, qce_running=False, authenticated=False)
+        _status(available=False, runtime_running=False, qq_online=False)
     )
     setup = _StubSetupService(
         connect_status=_status(
             available=False,
-            qce_running=True,
-            authenticated=False,
+            runtime_running=True,
+            qq_online=False,
         ),
         runtime_status=_runtime_status(),
     )
@@ -256,29 +254,6 @@ def test_start_auth_flow_does_not_pre_start_qce_server_before_launcher() -> None
     assert snapshot.state is module.ConnectionState.WAITING_AUTH
 
 
-def test_start_auth_flow_prepares_webui_config_before_launch() -> None:
-    module = _connection_module()
-    service = _StubConnectionService(
-        _status(available=False, qce_running=False, authenticated=False)
-    )
-    setup = _StubSetupService(runtime_status=_runtime_status())
-    launcher = _RecordingLauncher()
-    calls: list[str] = []
-
-    def _preparer() -> bool:
-        calls.append("prepared")
-        return True
-
-    snapshot = _bridge(
-        setup_service=setup,
-        connection_service=service,
-        window_launcher=launcher,
-        config_preparer=_preparer,
-    ).start_auth_flow()
-
-    assert calls == ["prepared"]
-    assert launcher.calls == 1
-    assert snapshot.state is module.ConnectionState.WAITING_AUTH
 
 
 def test_start_auth_flow_rejects_pre_existing_qrcode_until_session_update(
@@ -291,14 +266,14 @@ def test_start_auth_flow_rejects_pre_existing_qrcode_until_session_update(
     setup = _StubSetupService(
         connect_status=_status(
             available=False,
-            qce_running=True,
-            authenticated=False,
+            runtime_running=True,
+            qq_online=False,
         ),
         runtime_status=_runtime_status(),
         config=_runtime_config(tmp_path),
     )
     service = _StubConnectionService(
-        _status(available=False, qce_running=True, authenticated=False)
+        _status(available=False, runtime_running=True, qq_online=False)
     )
     bridge = _bridge(
         setup_service=setup,
@@ -335,14 +310,14 @@ def test_is_qrcode_ready_accepts_qrcode_after_auth_session_starts(
     setup = _StubSetupService(
         connect_status=_status(
             available=False,
-            qce_running=True,
-            authenticated=False,
+            runtime_running=True,
+            qq_online=False,
         ),
         runtime_status=_runtime_status(),
         config=_runtime_config(tmp_path),
     )
     service = _StubConnectionService(
-        _status(available=False, qce_running=True, authenticated=False)
+        _status(available=False, runtime_running=True, qq_online=False)
     )
     bridge = _bridge(
         setup_service=setup,
@@ -367,14 +342,14 @@ def test_is_qrcode_ready_accepts_refreshed_qrcode_after_expiry(
     setup = _StubSetupService(
         connect_status=_status(
             available=False,
-            qce_running=True,
-            authenticated=False,
+            runtime_running=True,
+            qq_online=False,
         ),
         runtime_status=_runtime_status(),
         config=_runtime_config(tmp_path),
     )
     service = _StubConnectionService(
-        _status(available=False, qce_running=True, authenticated=False)
+        _status(available=False, runtime_running=True, qq_online=False)
     )
     bridge = _bridge(
         setup_service=setup,
@@ -401,14 +376,14 @@ def test_start_auth_flow_logs_qr_baseline_and_acceptance_fingerprints(
     setup = _StubSetupService(
         connect_status=_status(
             available=False,
-            qce_running=True,
-            authenticated=False,
+            runtime_running=True,
+            qq_online=False,
         ),
         runtime_status=_runtime_status(),
         config=_runtime_config(tmp_path),
     )
     service = _StubConnectionService(
-        _status(available=False, qce_running=True, authenticated=False)
+        _status(available=False, runtime_running=True, qq_online=False)
     )
     bridge = _bridge(
         setup_service=setup,
@@ -430,13 +405,13 @@ def test_start_auth_flow_logs_qr_baseline_and_acceptance_fingerprints(
 
 def test_start_auth_flow_reports_existing_backend_stages() -> None:
     service = _StubConnectionService(
-        _status(available=False, qce_running=False, authenticated=False)
+        _status(available=False, runtime_running=False, qq_online=False)
     )
     setup = _StubSetupService(
         connect_status=_status(
             available=False,
-            qce_running=True,
-            authenticated=False,
+            runtime_running=True,
+            qq_online=False,
         ),
         runtime_status=_runtime_status(),
     )
@@ -459,7 +434,7 @@ def test_start_auth_flow_reports_existing_backend_stages() -> None:
 def test_start_auth_flow_reopens_window_when_already_waiting() -> None:
     module = _connection_module()
     service = _StubConnectionService(
-        _status(available=False, qce_running=True, authenticated=True)
+        _status(available=False, runtime_running=True, qq_online=True)
     )
     setup = _StubSetupService(runtime_status=_runtime_status())
     launcher = _RecordingLauncher()
@@ -478,7 +453,7 @@ def test_start_auth_flow_reopens_window_when_already_waiting() -> None:
 def test_start_auth_flow_does_not_launch_twice_while_waiting() -> None:
     module = _connection_module()
     service = _StubConnectionService(
-        _status(available=False, qce_running=True, authenticated=True)
+        _status(available=False, runtime_running=True, qq_online=True)
     )
     setup = _StubSetupService(runtime_status=_runtime_status())
     launcher = _RecordingLauncher()
@@ -500,12 +475,12 @@ def test_start_auth_flow_picks_up_login_completed_during_launch() -> None:
     module = _connection_module()
     service = _StubConnectionService(
         queue=[
-            _status(available=False, qce_running=False),
-            _status(available=False, qce_running=False),
+            _status(available=False, runtime_running=False),
+            _status(available=False, runtime_running=False),
             _status(
                 available=True,
-                qce_running=True,
-                authenticated=True,
+                runtime_running=True,
+                qq_online=True,
                 message="QQ \u5df2\u8fde\u63a5\u3002",
             ),
         ]
@@ -513,8 +488,8 @@ def test_start_auth_flow_picks_up_login_completed_during_launch() -> None:
     setup = _StubSetupService(
         connect_status=_status(
             available=False,
-            qce_running=True,
-            authenticated=False,
+            runtime_running=True,
+            qq_online=False,
         ),
         runtime_status=_runtime_status(),
     )
@@ -538,18 +513,18 @@ def test_start_auth_flow_picks_up_login_completed_during_launch() -> None:
     )
 
 
-def test_polling_after_auth_launch_keeps_waiting_until_qce_ready() -> None:
+def test_polling_after_auth_launch_keeps_waiting_until_bridge_ready() -> None:
     module = _connection_module()
     service = _StubConnectionService(
         queue=[
-            _status(available=False, qce_running=False),
-            _status(available=False, qce_running=False),
-            _status(available=False, qce_running=False),
-            _status(available=False, qce_running=False),
+            _status(available=False, runtime_running=False),
+            _status(available=False, runtime_running=False),
+            _status(available=False, runtime_running=False),
+            _status(available=False, runtime_running=False),
             _status(
                 available=True,
-                qce_running=True,
-                authenticated=True,
+                runtime_running=True,
+                qq_online=True,
                 message="QQ \u5df2\u8fde\u63a5\u3002",
             ),
         ]
@@ -585,14 +560,14 @@ def test_start_auth_flow_stops_previous_runtime_before_relaunch(
     setup = _StubSetupService(
         connect_status=_status(
             available=False,
-            qce_running=True,
-            authenticated=False,
+            runtime_running=True,
+            qq_online=False,
         ),
         runtime_status=_runtime_status(),
         config=_runtime_config(tmp_path),
     )
     service = _StubConnectionService(
-        _status(available=False, qce_running=True, authenticated=False)
+        _status(available=False, runtime_running=True, qq_online=False)
     )
     bridge = _bridge(
         setup_service=setup,
@@ -630,7 +605,7 @@ def test_disconnect_stops_runtime_and_returns_disconnected(
         runtime_status=_runtime_status("running"),
     )
     service = _StubConnectionService(
-        _status(available=False, qce_running=True, authenticated=True)
+        _status(available=False, runtime_running=True, qq_online=True)
     )
     bridge = _bridge(
         setup_service=setup,
@@ -658,14 +633,14 @@ def test_start_auth_flow_does_not_clean_runtime_when_reusing_launcher(
     setup = _StubSetupService(
         connect_status=_status(
             available=False,
-            qce_running=True,
-            authenticated=False,
+            runtime_running=True,
+            qq_online=False,
         ),
         runtime_status=_runtime_status(),
         config=_runtime_config(tmp_path),
     )
     service = _StubConnectionService(
-        _status(available=False, qce_running=True, authenticated=False)
+        _status(available=False, runtime_running=True, qq_online=False)
     )
     launcher = _RecordingLauncher()
     bridge = _bridge(
@@ -687,7 +662,7 @@ def test_start_auth_flow_does_not_clean_runtime_when_reusing_launcher(
 def test_get_snapshot_delegates_to_the_connection_manager() -> None:
     module = _connection_module()
     service = _StubConnectionService(
-        _status(available=False, qce_running=True, authenticated=False)
+        _status(available=False, runtime_running=True, qq_online=False)
     )
 
     snapshot = _bridge(connection_service=service).get_snapshot()
@@ -701,7 +676,7 @@ def test_get_snapshot_delegates_to_the_connection_manager() -> None:
 def test_window_launch_failure_returns_a_safe_error_snapshot() -> None:
     module = _connection_module()
     service = _StubConnectionService(
-        _status(available=False, qce_running=True, authenticated=False)
+        _status(available=False, runtime_running=True, qq_online=False)
     )
     setup = _StubSetupService(runtime_status=_runtime_status())
     launcher = _RecordingLauncher(error=RuntimeError("login window exploded"))
@@ -721,7 +696,7 @@ def test_missing_qq_window_launch_reports_install_path_code() -> None:
     module = _connection_module()
     bridge = _bridge_module()
     service = _StubConnectionService(
-        _status(available=False, qce_running=True, authenticated=False)
+        _status(available=False, runtime_running=True, qq_online=False)
     )
     setup = _StubSetupService(runtime_status=_runtime_status())
     launcher = _RecordingLauncher(
@@ -755,7 +730,7 @@ def test_start_auth_flow_logs_the_auth_flow(
 ) -> None:
     module = _connection_module()
     service = _StubConnectionService(
-        _status(available=False, qce_running=True, authenticated=False)
+        _status(available=False, runtime_running=True, qq_online=False)
     )
     setup = _StubSetupService(runtime_status=_runtime_status())
     launcher = _RecordingLauncher()
@@ -793,6 +768,9 @@ def _runtime_config(tmp_path: Path, *, with_qq_path: bool = True):
     if with_qq_path:
         qq_path = tmp_path / "QQ.exe"
         qq_path.write_text("fake", encoding="utf-8")
+        package = tmp_path / "resources/app/package.json"
+        package.parent.mkdir(parents=True, exist_ok=True)
+        package.write_text('{"name":"QQ","main":"index.js"}', encoding="utf-8")
         (config_dir / "qq_path.txt").write_text(
             str(qq_path),
             encoding="utf-8",
@@ -823,11 +801,9 @@ def test_default_launcher_opens_the_runtime_login_window(
     bridge.default_auth_window_launcher(config)()
 
     assert spawned["args"] == [
-        "cmd.exe",
-        "/d",
-        "/s",
-        "/c",
-        "launcher-user.bat",
+        str(tmp_path / "NapCatWinBootMain.exe"),
+        str(tmp_path / "QQ.exe"),
+        str(tmp_path / "NapCatWinBootHook.dll"),
     ]
     assert spawned["kwargs"]["cwd"] == str(tmp_path)
     assert "creationflags" not in spawned["kwargs"]
@@ -871,55 +847,10 @@ def test_default_launcher_strips_napcat_quick_login_credentials(
     )
 
 
-def _start_launcher_exit_fixture(tmp_path: Path, *, echo_mode: bool):
-    runtime = tmp_path / "runtime" / "qq"
-    runtime.mkdir(parents=True)
-    launcher = runtime / "launcher-user.bat"
-    shutil.copy2(PROJECT_ROOT / "runtime" / "qq" / "launcher-user.bat", launcher)
-    qq_path = tmp_path / "Bin" / "QQ.exe"
-    qq_path.parent.mkdir()
-    qq_path.write_text("fictional", encoding="utf-8")
-    environment = os.environ.copy()
-    environment["NAPCAT_QQ_PATH"] = str(qq_path)
-    if echo_mode:
-        environment["ECHO_MODE"] = "1"
-    else:
-        environment.pop("ECHO_MODE", None)
-    return subprocess.Popen(
-        ["cmd.exe", "/d", "/s", "/c", "call", str(launcher)],
-        cwd=runtime,
-        env=environment,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        creationflags=subprocess.CREATE_NO_WINDOW,
-        text=True,
-    )
 
 
-def test_launcher_user_exits_without_pause_in_echo_mode(tmp_path: Path) -> None:
-    process = _start_launcher_exit_fixture(tmp_path, echo_mode=True)
-    try:
-        assert process.wait(timeout=2) == 0
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait(timeout=2)
 
 
-def test_launcher_user_keeps_pause_for_interactive_mode(tmp_path: Path) -> None:
-    process = _start_launcher_exit_fixture(tmp_path, echo_mode=False)
-    try:
-        with pytest.raises(subprocess.TimeoutExpired):
-            process.wait(timeout=0.2)
-        assert process.stdin is not None
-        process.stdin.write("\n")
-        process.stdin.flush()
-        assert process.wait(timeout=2) == 0
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait(timeout=2)
 
 
 def test_default_launcher_hides_napcat_console_on_windows(
@@ -947,11 +878,9 @@ def test_default_launcher_hides_napcat_console_on_windows(
     bridge.default_auth_window_launcher(config)()
 
     assert spawned["args"] == [
-        "cmd.exe",
-        "/d",
-        "/s",
-        "/c",
-        "launcher-user.bat",
+        str(tmp_path / "NapCatWinBootMain.exe"),
+        str(tmp_path / "QQ.exe"),
+        str(tmp_path / "NapCatWinBootHook.dll"),
     ]
     assert spawned["kwargs"]["cwd"] == str(tmp_path)
     assert spawned["kwargs"]["creationflags"] == 0x08000000
@@ -981,32 +910,6 @@ def test_default_launcher_rejects_immediate_batch_failure(
         bridge.default_auth_window_launcher(config)()
 
 
-@pytest.mark.parametrize("portable_name", ["Echo Portable", "Echo(2)", "余音安装包"])
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows cmd.exe only")
-def test_launcher_command_runs_batch_from_portable_directory_with_special_path(
-    tmp_path: Path,
-    portable_name: str,
-) -> None:
-    bridge = _bridge_module()
-    runtime = tmp_path / portable_name / "Echo" / "runtime" / "qq"
-    runtime.mkdir(parents=True)
-    launcher = runtime / "launcher-user.bat"
-    qq_path = tmp_path / "QQ Install" / "QQ.exe"
-    qq_path.parent.mkdir()
-    qq_path.write_text("fictional", encoding="utf-8")
-    launcher.write_text(
-        "@echo off\n"
-        '> "%~dp0result.txt" echo STARTED\n'
-        "exit /b 0\n",
-        encoding="utf-8",
-    )
-
-    process = bridge._launch_auth_window(runtime, launcher, qq_path)
-
-    assert process.wait(timeout=5) == 0
-    assert (runtime / "result.txt").read_text(encoding="ascii").strip() == (
-        "STARTED"
-    )
 
 
 def test_default_launcher_logs_completed_stdout_and_stderr(
@@ -1034,8 +937,8 @@ def test_default_launcher_logs_completed_stdout_and_stderr(
         bridge.default_auth_window_launcher(config)()
 
     assert "returncode=0" in caplog.text
-    assert "stdout=launcher output" in caplog.text
-    assert "stderr=launcher warning" in caplog.text
+    assert "stdout=bytes=15" in caplog.text
+    assert "stderr=bytes=16" in caplog.text
 
 
 def test_default_launcher_logs_the_actual_command(
@@ -1059,8 +962,8 @@ def test_default_launcher_logs_the_actual_command(
     assert "launch command=" in caplog.text
     assert "qq_path=" in caplog.text
     assert "launch result pid=4243 returncode=None" in caplog.text
-    assert "launcher-user.bat" in caplog.text
-    assert "NapCatWinBootMain.exe" not in caplog.text
+    assert "launcher-user.bat" not in caplog.text
+    assert "NapCatWinBootMain.exe" in caplog.text
 
 
 def test_auth_flow_records_the_launched_window_pid(
@@ -1075,14 +978,14 @@ def test_auth_flow_records_the_launched_window_pid(
     setup = _StubSetupService(
         connect_status=_status(
             available=False,
-            qce_running=True,
-            authenticated=False,
+            runtime_running=True,
+            qq_online=False,
         ),
         runtime_status=_runtime_status(),
         config=config,
     )
     service = _StubConnectionService(
-        _status(available=False, qce_running=True, authenticated=False)
+        _status(available=False, runtime_running=True, qq_online=False)
     )
     registry = registry_module.QQProcessRegistry()
 
@@ -1115,6 +1018,9 @@ def test_default_launcher_prefers_the_configured_qq_path(
     (tmp_path / "launcher-user.bat").write_text("@echo off\n", encoding="utf-8")
     configured = tmp_path / "configured-qq.exe"
     configured.write_text("fake", encoding="utf-8")
+    package = tmp_path / "resources/app/package.json"
+    package.parent.mkdir(parents=True)
+    package.write_text('{"name":"QQ","main":"index.js"}', encoding="utf-8")
     saved = tmp_path / "saved-qq.exe"
     saved.write_text("fake", encoding="utf-8")
     config_dir = tmp_path / "config"
@@ -1135,8 +1041,9 @@ def test_default_launcher_prefers_the_configured_qq_path(
 
     bridge.default_auth_window_launcher(config)()
 
-    assert spawned["args"][-1] == "launcher-user.bat"
-    assert str(configured) not in spawned["args"]
+    assert spawned["args"][1] == str(configured)
+    assert spawned["args"][-1] == str(tmp_path / "NapCatWinBootHook.dll")
+    assert str(saved) not in spawned["args"]
     assert spawned["kwargs"]["env"]["NAPCAT_QQ_PATH"] == str(
         configured.resolve()
     )
@@ -1207,7 +1114,7 @@ def test_runtime_cleaner_targets_bundled_napcat_launcher(
     assert "NapCatWinBootMain.exe" in command[-1]
     assert "taskkill" in command[-1]
     assert "Wait-Process" in command[-1]
-    assert options["env"]["QCE_RUNTIME_DIR"] == str(
+    assert options["env"]["ECHO_NAPCAT_BOOT_PATH"] == str(
         (tmp_path / "NapCatWinBootMain.exe").resolve()
     )
     assert options["creationflags"] == 0x08000000
@@ -1393,7 +1300,7 @@ def test_start_auth_flow_missing_config_recovery_failure_returns_friendly_error(
     config_error = _config_module().QQConfigNotFound()
     setup = _StubSetupService(error=config_error, config_missing=True)
     service = _StubConnectionService(
-        _status(available=False, qce_running=False, authenticated=False)
+        _status(available=False, runtime_running=False, qq_online=False)
     )
     launcher = _RecordingLauncher()
 
@@ -1494,13 +1401,13 @@ def test_handle_qq_auth_timeout_calls_facade_disconnect_via_facade(
 
     bridge_mod = _bridge_module()
     service = _StubConnectionService(
-        _status(available=False, qce_running=True, authenticated=False)
+        _status(available=False, runtime_running=True, qq_online=False)
     )
     setup = _StubSetupService(
         connect_status=_status(
             available=False,
-            qce_running=True,
-            authenticated=False,
+            runtime_running=True,
+            qq_online=False,
         ),
         runtime_status=_runtime_status(),
         config=_runtime_config(tmp_path),
@@ -1559,13 +1466,13 @@ def test_reconnect_after_timeout_does_not_reuse_old_session(
 
     bridge_mod = _bridge_module()
     service = _StubConnectionService(
-        _status(available=False, qce_running=True, authenticated=False)
+        _status(available=False, runtime_running=True, qq_online=False)
     )
     setup = _StubSetupService(
         connect_status=_status(
             available=False,
-            qce_running=True,
-            authenticated=False,
+            runtime_running=True,
+            qq_online=False,
         ),
         runtime_status=_runtime_status(),
         config=_runtime_config(tmp_path),

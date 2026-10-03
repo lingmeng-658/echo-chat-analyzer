@@ -1,0 +1,63 @@
+{
+  "target": "runtime/qq-napcat-candidate",
+  "requiredFiles": [
+    "NapCatWinBootHook.dll",
+    "NapCatWinBootMain.exe",
+    "config/plugins.json",
+    "conout-wiJ7YKRd.js",
+    "launcher-user.bat",
+    "napcat.mjs",
+    "native/dpapi/win32-arm64/@primno+dpapi.node",
+    "native/dpapi/win32-x64/@primno+dpapi.node",
+    "native/ffmpeg/ffmpegAddon.darwin.arm64.node",
+    "native/ffmpeg/ffmpegAddon.linux.arm64.node",
+    "native/ffmpeg/ffmpegAddon.linux.x64.node",
+    "native/ffmpeg/ffmpegAddon.win32.x64.node",
+    "native/napi2native/ffmpeg.dll",
+    "native/napi2native/napi2native.darwin.arm64.node",
+    "native/napi2native/napi2native.linux.arm64.node",
+    "native/napi2native/napi2native.linux.x64.node",
+    "native/napi2native/napi2native.win32.x64.node",
+    "native/packet/MoeHoo.darwin.arm64.node",
+    "native/packet/MoeHoo.linux.arm64.node",
+    "native/packet/MoeHoo.linux.x64.node",
+    "native/packet/MoeHoo.win32.x64.node",
+    "native/pty/linux.arm64/pty.node",
+    "native/pty/linux.x64/pty.node",
+    "native/pty/win32.x64/conpty.node",
+    "native/pty/win32.x64/conpty_console_list.node",
+    "native/pty/win32.x64/pty.node",
+    "native/pty/win32.x64/winpty-agent.exe",
+    "native/pty/win32.x64/winpty.dll",
+    "node_modules/express/package.json",
+    "node_modules/ws/package.json",
+    "package.json",
+    "plugins/napcat-plugin-echo/bridge.mjs",
+    "plugins/napcat-plugin-echo/index.mjs",
+    "plugins/napcat-plugin-echo/package.json",
+    "plugins/napcat-plugin-echo/snapshot/main_wal.mjs",
+    "plugins/napcat-plugin-echo/snapshot/snapshot.mjs",
+    "plugins/napcat-plugin-echo/snapshot/workspace.mjs",
+    "qqnt.json",
+    "worker/conoutSocketWorker.mjs"
+  ],
+  "requiredDirectories": [
+    "native",
+    "node_modules",
+    "worker",
+    "static"
+  ],
+  "forbiddenPaths": [
+    "qce-server.exe",
+    "plugins/napcat-plugin-qce",
+    "static/qce"
+  ],
+  "privatePaths": [
+    "cache",
+    "logs",
+    "config/napcat.json",
+    "config/plugins",
+    "config/onebot11.json",
+    "loadNapCat.js"
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "name": "napcat-plugin-echo",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "index.mjs",
+  "description": "Echo local Direct DB snapshot lifecycle"
+}

@@ -1,6 +1,6 @@
 """Behavior tests for the bundled QQ runtime process integration.
 
-No real QCE executable is ever started. ``subprocess.Popen`` is mocked and the
+No real NapCat executable is ever started. ``subprocess.Popen`` is mocked and the
 health endpoint is simulated with an injected checker, so the tests cover the
 runtime lifecycle without touching external processes or real chat data.
 """
@@ -25,7 +25,7 @@ def _runtime_module():
 
 
 class _FakePopen:
-    """Stand in for a spawned QCE subprocess."""
+    """Stand in for a spawned NapCat subprocess."""
 
     def __init__(
         self,
@@ -67,44 +67,25 @@ def _config(
     *,
     executable: Path,
     working_directory: Path,
-    base_url: str = "http://127.0.0.1:40653",
-    config_directory: Path | None = None,
-    static_directory: Path | None = None,
-    bridge_url: str | None = None,
+    base_url: str = "http://127.0.0.1:40655",
 ) -> object:
     module = _runtime_module()
     return module.QQRuntimeConfig(
         executable_path=executable,
         working_directory=working_directory,
         base_url=base_url,
-        config_directory=config_directory or working_directory / "config",
-        static_directory=static_directory,
-        bridge_url=bridge_url,
         version="9.9.9",
     )
 
 
-def test_config_accepts_static_directory_and_bridge_url(tmp_path: Path) -> None:
-    module = _runtime_module()
-    static = tmp_path / "static" / "qce"
-
-    config = _config(
-        executable=tmp_path / "qce-server.exe",
-        working_directory=tmp_path,
-        static_directory=static,
-        bridge_url="http://127.0.0.1:40654",
-    )
-
-    assert config.static_directory == static
-    assert config.bridge_url == "http://127.0.0.1:40654"
 
 
-def test_qce_server_hides_console_on_windows(
+def test_runtime_launcher_hides_console_on_windows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = _runtime_module()
-    executable = tmp_path / "qce-server.exe"
+    executable = tmp_path / "NapCatWinBootMain.exe"
     executable.write_text("fake", encoding="utf-8")
     runtime = _make_runtime(
         executable=executable,
@@ -134,12 +115,12 @@ def test_qce_server_hides_console_on_windows(
     assert info.owned_process is True
 
 
-def test_qce_server_omits_windows_creation_flags_on_non_windows(
+def test_runtime_launcher_omits_windows_creation_flags_on_non_windows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = _runtime_module()
-    executable = tmp_path / "qce-server.exe"
+    executable = tmp_path / "NapCatWinBootMain.exe"
     executable.write_text("fake", encoding="utf-8")
     runtime = _make_runtime(
         executable=executable,
@@ -180,7 +161,7 @@ def _make_runtime(
         _config(
             executable=executable,
             working_directory=working_directory,
-            base_url="http://127.0.0.1:40653",
+            base_url="http://127.0.0.1:40655",
         ),
         health_checker=_checker,
         ready_timeout=ready_timeout,
@@ -191,7 +172,7 @@ def _make_runtime(
 
 def _popen_patch(runtime_module, **popen_kwargs):
     fake = _FakePopen(
-        ["fake-qce"],
+        ["fake-napcat"],
         running=popen_kwargs.get("running", True),
         exit_code=popen_kwargs.get("exit_code", 0),
     )
@@ -217,7 +198,7 @@ def _popen_patch(runtime_module, **popen_kwargs):
 def test_runtime_missing_executable_is_not_installed(tmp_path: Path) -> None:
     module = _runtime_module()
     runtime = _make_runtime(
-        executable=tmp_path / "missing" / "qce.exe",
+        executable=tmp_path / "missing" / "NapCatWinBootMain.exe",
         working_directory=tmp_path,
     )
 
@@ -230,7 +211,7 @@ def test_runtime_missing_executable_is_not_installed(tmp_path: Path) -> None:
 
 def _started_runtime(tmp_path: Path, **runtime_kwargs):
     module = _runtime_module()
-    executable = tmp_path / "qce.exe"
+    executable = tmp_path / "NapCatWinBootMain.exe"
     executable.write_text("fake", encoding="utf-8")
     runtime = _make_runtime(
         executable=executable,
@@ -250,7 +231,7 @@ def _started_runtime(tmp_path: Path, **runtime_kwargs):
 
 def test_start_spawns_the_process_and_returns_info(tmp_path: Path) -> None:
     module = _runtime_module()
-    executable = tmp_path / "qce.exe"
+    executable = tmp_path / "NapCatWinBootMain.exe"
     executable.write_text("fake", encoding="utf-8")
     runtime = _make_runtime(
         executable=executable,
@@ -270,11 +251,11 @@ def test_start_spawns_the_process_and_returns_info(tmp_path: Path) -> None:
     assert runtime.running() is True
 
 
-def test_start_reuses_healthy_external_qce_without_spawning(
+def test_start_reuses_healthy_external_runtime_without_spawning(
     tmp_path: Path,
 ) -> None:
     module = _runtime_module()
-    executable = tmp_path / "qce.exe"
+    executable = tmp_path / "NapCatWinBootMain.exe"
     executable.write_text("fake", encoding="utf-8")
     runtime = _make_runtime(
         executable=executable,
@@ -294,7 +275,7 @@ def test_start_reuses_healthy_external_qce_without_spawning(
 
 def test_start_failure_raises_user_safe_error(tmp_path: Path) -> None:
     module = _runtime_module()
-    executable = tmp_path / "qce.exe"
+    executable = tmp_path / "NapCatWinBootMain.exe"
     executable.write_text("fake", encoding="utf-8")
     runtime = _make_runtime(
         executable=executable,
@@ -321,7 +302,7 @@ def test_start_failure_raises_user_safe_error(tmp_path: Path) -> None:
 
 def test_stop_terminates_and_clears_state(tmp_path: Path) -> None:
     module = _runtime_module()
-    executable = tmp_path / "qce.exe"
+    executable = tmp_path / "NapCatWinBootMain.exe"
     executable.write_text("fake", encoding="utf-8")
     runtime = _make_runtime(
         executable=executable,
@@ -342,7 +323,7 @@ def test_stop_terminates_and_clears_state(tmp_path: Path) -> None:
 def test_stop_without_process_is_a_noop(tmp_path: Path) -> None:
     module = _runtime_module()
     runtime = _make_runtime(
-        executable=tmp_path / "qce.exe",
+        executable=tmp_path / "NapCatWinBootMain.exe",
         working_directory=tmp_path,
     )
 
@@ -351,9 +332,9 @@ def test_stop_without_process_is_a_noop(tmp_path: Path) -> None:
     assert runtime.running() is False
 
 
-def test_stop_does_not_terminate_healthy_external_qce(tmp_path: Path) -> None:
+def test_stop_does_not_terminate_healthy_external_runtime(tmp_path: Path) -> None:
     module = _runtime_module()
-    executable = tmp_path / "qce.exe"
+    executable = tmp_path / "NapCatWinBootMain.exe"
     executable.write_text("fake", encoding="utf-8")
     runtime = _make_runtime(
         executable=executable,
@@ -374,7 +355,7 @@ def test_stop_does_not_terminate_healthy_external_qce(tmp_path: Path) -> None:
 
 def test_running_reflects_process_exit(tmp_path: Path) -> None:
     module = _runtime_module()
-    executable = tmp_path / "qce.exe"
+    executable = tmp_path / "NapCatWinBootMain.exe"
     executable.write_text("fake", encoding="utf-8")
     runtime = _make_runtime(
         executable=executable,
@@ -445,26 +426,3 @@ def test_health_checker_exception_is_not_leaked(tmp_path: Path) -> None:
 
     assert "health probe exploded with secret" not in excinfo.value.public_message
     assert "Traceback" not in excinfo.value.public_message
-
-
-def test_default_health_checker_uses_qce_v6_health_path(monkeypatch) -> None:
-    module = _runtime_module()
-    calls: list[str] = []
-
-    class _Response:
-        status = 200
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args) -> None:
-            return None
-
-    def _urlopen(url, timeout=1):
-        calls.append(url)
-        return _Response()
-
-    monkeypatch.setattr(module.urllib.request, "urlopen", _urlopen)
-
-    assert module.default_health_checker("http://127.0.0.1:40653") is True
-    assert calls == ["http://127.0.0.1:40653/health"]

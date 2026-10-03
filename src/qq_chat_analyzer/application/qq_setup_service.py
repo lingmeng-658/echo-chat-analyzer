@@ -22,6 +22,7 @@ from .qq_environment_config import (
     QQEnvironmentConfigWriter,
 )
 from .runtime import QQRuntimeManager, QQRuntimeState, QQRuntimeStatus
+from .qq_connection_service import runtime_running
 
 
 MESSAGE_CONFIG_MISSING = "QQ 尚未连接。"
@@ -176,8 +177,8 @@ class QQSetupService:
             self._persist_recovered_runtime_config(config)
             if self._connection_service is not None:
                 status = self._connection_service.check_status()
-                if status.available or status.qce_running:
-                    _LOGGER.info("[qq setup] connect reused running QCE service")
+                if status.available or runtime_running(status):
+                    _LOGGER.info("[qq setup] connect reused running QQ runtime")
                     return status
             runtime_status = self._runtime_manager_for(config).get_status()
             if runtime_status.state is not QQRuntimeState.RUNNING:
@@ -187,7 +188,7 @@ class QQSetupService:
                 )
                 runtime_status = self._runtime_manager_for(config).start()
             if runtime_status.state is QQRuntimeState.RUNNING:
-                return self._waiting_auth_status(runtime_status)
+                return self._waiting_auth_status(runtime_status, config)
             return self._connection_status_from_runtime(runtime_status)
 
         if self._connection_service is None:
@@ -196,15 +197,15 @@ class QQSetupService:
             return self._connection_unavailable_status(self.check_setup())
 
         status = self._connection_service.check_status()
-        if status.available or status.qce_running:
+        if status.available or runtime_running(status):
             return status
 
         from .qq_connection_service import QQConnectionStatus
 
         return QQConnectionStatus(
             available=False,
-            qce_running=False,
-            authenticated=False,
+            runtime_running=False,
+            qq_online=False,
             version=getattr(status, "version", None),
             message="\u65e0\u6cd5\u8fde\u63a5 QQ\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
             action_hint=(
@@ -213,20 +214,20 @@ class QQSetupService:
             ),
         )
 
-    def _waiting_auth_status(self, runtime_status: Any) -> Any:
+    def _waiting_auth_status(self, runtime_status: Any, config: QQEnvironmentConfig) -> Any:
         """Report a launched runtime that still needs QQ login authorization."""
         from .qq_connection_service import (
             ACTION_HINT_AUTHORIZE,
-            MESSAGE_TOKEN_MISSING,
+            MESSAGE_LOGIN_REQUIRED,
             QQConnectionStatus,
         )
 
         return QQConnectionStatus(
             available=False,
-            qce_running=True,
-            authenticated=False,
+            runtime_running=True,
+            qq_online=False,
             version=getattr(runtime_status, "version", None),
-            message=MESSAGE_TOKEN_MISSING,
+            message=MESSAGE_LOGIN_REQUIRED,
             action_hint=ACTION_HINT_AUTHORIZE,
         )
 
@@ -262,13 +263,8 @@ class QQSetupService:
 
     @staticmethod
     def _runtime_complete(config: QQEnvironmentConfig) -> bool:
-        required = (
-            config.runtime_directory,
-            config.qce_path,
-        )
-        return all(
-            path is not None and path.exists() for path in required
-        )
+        from .qq_environment_config import _runtime_paths_available
+        return _runtime_paths_available(config)
 
     def _config_path(self) -> Path | None:
         getter = getattr(self._config_loader, "config_path", None)
@@ -342,8 +338,8 @@ class QQSetupService:
 
         return QQConnectionStatus(
             available=False,
-            qce_running=False,
-            authenticated=False,
+            runtime_running=False,
+            qq_online=False,
             version=None,
             message=setup_status.message or MESSAGE_RUNTIME_MANAGER_MISSING,
             action_hint=(
@@ -361,8 +357,8 @@ class QQSetupService:
         running = runtime_status.state is QQRuntimeState.RUNNING
         return QQConnectionStatus(
             available=False,
-            qce_running=running,
-            authenticated=False,
+            runtime_running=running,
+            qq_online=False,
             version=runtime_status.version,
             message=runtime_status.message,
             action_hint=runtime_status.action_hint,
@@ -373,21 +369,14 @@ def default_runtime_factory(config: QQEnvironmentConfig) -> Any:
     """Build a QQRuntimeManager from one QQ environment config."""
     from ..runtime import BundledQQRuntime, QQRuntimeConfig
 
-    static_directory = None
-    if config.runtime_directory is not None:
-        static_directory = config.runtime_directory / "static" / "qce"
-
+    from ..providers.napcat_qq_provider import NapCatQQProvider
+    from .connection.qq_auth_bridge import default_auth_window_launcher
     runtime = BundledQQRuntime(
-        QQRuntimeConfig(
-            executable_path=config.qce_path,
-            working_directory=config.runtime_directory or Path("."),
-            base_url=config.base_url,
-            config_directory=config.qce_config_directory,
-            security_path=config.security_path,
-            static_directory=static_directory,
-            bridge_url=config.napcat_bridge_url,
-            version=config.version,
-        )
+        QQRuntimeConfig(executable_path=config.runtime_directory / "NapCatWinBootMain.exe",
+                        working_directory=config.runtime_directory, base_url=config.napcat_bridge_url,
+                        version=config.version),
+        health_checker=lambda url: NapCatQQProvider(url, timeout=1).status().bridge_ready,
+        launcher=lambda: default_auth_window_launcher(config)(),
     )
     return QQRuntimeManager(runtime)
 

@@ -1,197 +1,44 @@
-"""Behavior tests for the QQ connection layer.
+"""Desktop readiness probes use only Echo NapCat status; no QCE API."""
+from dataclasses import FrozenInstanceError
+import pytest
+from qq_chat_analyzer.application.qq_connection_service import QQConnectionService, QQConnectionStatus
+from qq_chat_analyzer.application.qq_environment_config import QQConfigCorrupted, QQConfigNotFound
+from qq_chat_analyzer.providers.napcat_qq_provider import NapCatQQProvider, NapCatStatus
 
-The service under test never talks to a real QCE instance. Provider behaviour
-is simulated with stubs so the tests cover running, stopped, unauthenticated
-and failing states without touching real chat data or tokens.
-"""
+@pytest.mark.parametrize("bridge,online,uin,passphrase,available,direct", [
+    (True,True,"12345678",True,True,True),
+    (True,True,"12345678",False,True,False),
+    (True,False,"12345678",True,False,False),
+    (False,True,"12345678",True,False,False),
+    (True,True,"u_uid",True,False,False),
+])
+def test_single_status_probe_separates_login_and_database(monkeypatch,bridge,online,uin,passphrase,available,direct):
+    provider=NapCatQQProvider();calls=[]
+    def probe():
+        calls.append(1)
+        return NapCatStatus(bridge,online,{"uin":uin},True,passphrase,True)
+    monkeypatch.setattr(provider,"status",probe)
+    result=QQConnectionService(provider).check_status()
+    assert result.available is available and result.qq_online is available
+    assert result.runtime_running is bridge and result.direct_db_ready is direct
+    assert result.message and result.action_hint and calls==[1]
 
-from __future__ import annotations
+def test_provider_error_is_safe(monkeypatch):
+    provider=NapCatQQProvider()
+    def failed(): raise RuntimeError("fictional-secret")
+    monkeypatch.setattr(provider,"status",failed)
+    result=QQConnectionService(provider).check_status()
+    assert not result.available and not result.runtime_running
+    assert "fictional-secret" not in result.message
 
-import importlib
-import sys
-from pathlib import Path
+@pytest.mark.parametrize("error",[QQConfigNotFound(),QQConfigCorrupted(),RuntimeError("fictional-secret")])
+def test_factory_errors_remain_user_safe(error):
+    class Factory:
+        def create(self): raise error
+    result=QQConnectionService(provider_factory=Factory()).check_status()
+    assert not result.available and result.message and result.action_hint
+    assert "fictional-secret" not in result.message
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SRC_ROOT = PROJECT_ROOT / "src"
-sys.path.insert(0, str(SRC_ROOT))
-
-
-def _module():
-    return importlib.import_module(
-        "qq_chat_analyzer.application.qq_connection_service"
-    )
-
-
-class _FakeProvider:
-    """Stand in for QQChatExporterProvider with a configurable health/token."""
-
-    def __init__(
-        self,
-        *,
-        running: bool = True,
-        version: str | None = "4.1.0",
-        token: str | None = "fictional-token",
-        qq_data_available: bool = True,
-        unexpected_error: Exception | None = None,
-    ) -> None:
-        self._running = running
-        self._version = version
-        self._token = token
-        self._qq_data_available = qq_data_available
-        self._unexpected_error = unexpected_error
-        self.health_calls = 0
-        self.token_calls = 0
-        self.groups_calls = 0
-
-    def health_check(self):
-        self.health_calls += 1
-        if self._unexpected_error is not None:
-            raise self._unexpected_error
-        provider = importlib.import_module(
-            "qq_chat_analyzer.providers.qq_chat_exporter_provider"
-        )
-        if not self._running:
-            return provider.ServiceHealth(available=False)
-        return provider.ServiceHealth(
-            available=True,
-            status="healthy",
-            version=self._version or "",
-        )
-
-    def resolve_token(self) -> str:
-        self.token_calls += 1
-        if self._token is None:
-            provider = importlib.import_module(
-                "qq_chat_analyzer.providers.qq_chat_exporter_provider"
-            )
-            raise provider.TokenUnavailable()
-        return self._token
-
-    def list_groups(self, limit: int = 1):
-        self.groups_calls += 1
-        provider = importlib.import_module(
-            "qq_chat_analyzer.providers.qq_chat_exporter_provider"
-        )
-        if self._token is None or not self._qq_data_available:
-            raise provider.TokenUnavailable()
-        return []
-
-
-def _status(**provider_kwargs):
-    service = _module().QQConnectionService(_FakeProvider(**provider_kwargs))
-    return service.check_status()
-
-
-# ------------------------------------------------------------ running service
-
-
-def test_qce_running_and_authenticated_marks_source_available() -> None:
-    status = _status(running=True, token="fictional-token", version="4.2.0")
-
-    assert status.available is True
-    assert status.qce_running is True
-    assert status.authenticated is True
-    assert status.version == "4.2.0"
-    assert status.message != ""
-    assert status.action_hint != ""
-
-
-# -------------------------------------------------------------- stopped service
-
-
-def test_qce_not_running_returns_user_facing_message() -> None:
-    status = _status(running=False, token="fictional-token")
-
-    assert status.available is False
-    assert status.qce_running is False
-    assert status.authenticated is False
-    assert status.version is None
-    assert "QQChatExporter" not in status.message
-    assert status.message != ""
-    assert status.action_hint != ""
-
-
-def test_qce_api_token_without_qq_login_stays_waiting_auth() -> None:
-    status = _status(
-        running=True,
-        token="fictional-token",
-        qq_data_available=False,
-    )
-
-    assert status.available is False
-    assert status.qce_running is True
-    assert status.authenticated is True
-    assert "QQChatExporter" not in status.message
-    assert status.message != ""
-    assert status.action_hint != ""
-
-
-# ------------------------------------------------------------ missing token
-
-
-def test_missing_token_requests_initialization() -> None:
-    status = _status(running=True, token=None)
-
-    assert status.available is False
-    assert status.qce_running is True
-    assert status.authenticated is False
-    assert "QQChatExporter" not in status.message
-    assert status.message != ""
-    assert status.action_hint != ""
-
-
-def test_missing_token_works_even_when_service_is_stopped() -> None:
-    status = _status(running=False, token=None)
-
-    assert status.available is False
-    assert status.qce_running is False
-    assert status.authenticated is False
-    assert status.message != ""
-
-
-# ------------------------------------------------------------ error isolation
-
-
-def test_unexpected_provider_exception_never_leaks() -> None:
-    status = _status(
-        unexpected_error=RuntimeError("internal token endpoint exploded")
-    )
-
-    assert status.available is False
-    assert status.qce_running is False
-    assert status.authenticated is False
-    assert "internal token endpoint exploded" not in status.message
-    assert "Traceback" not in status.message
-    assert "Exception" not in status.message
-    assert status.action_hint != ""
-
-
-def test_status_is_a_frozen_dataclass() -> None:
-    module = _module()
-    status = module.QQConnectionStatus(
-        available=True,
-        qce_running=True,
-        authenticated=True,
-        version="4.1.0",
-        message="\u53ef\u7528",
-        action_hint="\u5f00\u59cb\u5206\u6790",
-    )
-
-    try:
-        status.message = "changed"
-    except Exception as error:
-        assert type(error).__name__ == "FrozenInstanceError"
-    else:  # pragma: no cover - guards the immutability contract
-        raise AssertionError("QQConnectionStatus should be immutable")
-
-
-def test_service_calls_health_check_token_and_qq_probe() -> None:
-    provider = _FakeProvider(running=True, token="fictional-token")
-    service = _module().QQConnectionService(provider)
-
-    service.check_status()
-
-    assert provider.health_calls == 1
-    assert provider.token_calls == 1
-    assert provider.groups_calls == 1
+def test_status_is_immutable():
+    result=QQConnectionStatus(True,True,True,None,"ready","analyze")
+    with pytest.raises(FrozenInstanceError): result.message="changed"

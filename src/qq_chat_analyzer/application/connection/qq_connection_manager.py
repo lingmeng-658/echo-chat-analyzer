@@ -25,6 +25,7 @@ from typing import Any
 
 from .models import ConnectionSnapshot, ConnectionState
 from ..runtime import QQRuntimeState
+from ..qq_connection_service import runtime_running
 
 
 SOURCE_QQ = "qq"
@@ -183,7 +184,7 @@ class QQConnectionManager:
         self._auth_waiting = True
 
     def end_auth_waiting(self) -> None:
-        """Stop treating QCE unavailability as an in-progress login."""
+        """Stop treating bridge unavailability as an in-progress login."""
         self._auth_waiting = False
 
     # ------------------------------------------------------------- internals
@@ -240,7 +241,7 @@ class QQConnectionManager:
         plain disconnected state the user can act on.
         """
         available = bool(getattr(status, "available", False))
-        running = bool(getattr(status, "qce_running", False))
+        running = runtime_running(status)
         version = getattr(status, "version", None) or None
         message = _clean(getattr(status, "message", ""))
         action_hint = _clean(getattr(status, "action_hint", ""))

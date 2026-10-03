@@ -9,7 +9,7 @@
 目标： - 支持多个聊天来源； - 将不同来源转换为统一消息模型； -
 提供高质量聊天分析； - 最终让普通用户无需命令行即可使用。
 
-当前来源： - QQ Direct DB（桌面正式入口） - 微信聊天记录 - QQChatExporter（保留的 CLI 路径及连接/运行时能力）
+当前来源： - QQ Direct DB（桌面正式入口） - 微信聊天记录 - QQChatExporter（保留的 CLI 与既有 JSON 文件兼容路径）
 
 ------------------------------------------------------------------------
 
@@ -50,7 +50,7 @@ Analysis Core → Exporter / GUI
 
 桌面 QQ 会话列表与分析使用正式 QQ Direct DB 链路，已完成真人 E2E 和最终 smoke。
 具体数据流、获取与清理边界以 ARCHITECTURE.md 为准，不在本文件复制架构图。
-QQChatExporter 的 CLI、连接与运行时能力仍保留；桌面分析不自动回退到 QCE。
+QQChatExporter 的 CLI 与既有 JSON 文件兼容仍保留；Desktop QCE runtime 与 rollback 已退休。
 
 架构约束：
 

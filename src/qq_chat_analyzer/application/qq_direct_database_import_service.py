@@ -463,7 +463,7 @@ class QQDirectDatabaseImportService:
             except Exception:
                 return group_names, friend_names
             try:
-                groups = _qq_metadata_pages(provider.list_groups)
+                groups = provider.list_groups()
                 group_names = {
                     group.group_code: group.group_name
                     for group in groups
@@ -472,13 +472,13 @@ class QQDirectDatabaseImportService:
             except Exception:
                 pass
             try:
-                friends = _qq_metadata_pages(provider.list_friends)
+                friends = provider.list_friends()
                 friend_names = {
-                    friend.peer_uin: friend.display_name
+                    friend.uin: friend.display_name
                     for friend in friends
-                    if friend.peer_uin
+                    if friend.uin
                     and first_identity_name(friend.display_name)
-                    and friend.display_name != friend.peer_uin
+                    and friend.display_name != friend.uin
                 }
             except Exception:
                 # Names are optional metadata; the local message acquisition
@@ -565,7 +565,7 @@ class QQDirectDatabaseImportService:
         runtime_directory = config.runtime_directory
         if runtime_directory is None:
             raise QQDirectDatabaseUnavailable()
-        base_url = config.napcat_bridge_url or "http://127.0.0.1:40654"
+        base_url = config.napcat_bridge_url or "http://127.0.0.1:40655"
         return QQDirectSnapshotRuntimeClient(
             base_url=base_url,
             snapshot_root=Path(runtime_directory).parent / _SNAPSHOT_ROOT_RELATIVE_PATH,
@@ -661,17 +661,6 @@ def _attach_sender_names(
 
 def _elapsed_ms(started_at: float, ended_at: float) -> int:
     return max(0, round((ended_at - started_at) * 1000))
-
-
-def _qq_metadata_pages(fetch: Any) -> list[Any]:
-    """Read the existing paged QQ metadata API with a finite upper bound."""
-    items: list[Any] = []
-    for page in range(1, 51):
-        batch = fetch(page=page, limit=200)
-        items.extend(batch)
-        if len(batch) < 200:
-            break
-    return items
 
 
 def _log_group_member_shape(result: Any) -> None:

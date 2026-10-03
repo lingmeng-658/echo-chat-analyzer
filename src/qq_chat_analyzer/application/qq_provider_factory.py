@@ -1,4 +1,4 @@
-"""Build the QCE provider from one QQ environment configuration.
+"""Build the selected QQ provider from one environment configuration.
 
 The QQ connection status, session listing, export flow, and setup service all
 share this factory so they observe the same provider instance and the same
@@ -18,24 +18,20 @@ from .qq_environment_config import (
 
 
 class QQProviderUnavailable(ApplicationServiceError):
-    """Raised when a QCE provider cannot be built from the current config."""
+    """Raised when a NapCat provider cannot be built from the current config."""
 
     code = "qq_provider_unavailable"
     public_message = "无法连接 QQ 数据源，请稍后重试。"
 
 
 def default_provider_builder(config: QQEnvironmentConfig) -> Any:
-    """Construct the real QCE provider from one environment config."""
-    from ..providers.qq_chat_exporter_provider import QQChatExporterProvider
-
-    return QQChatExporterProvider(
-        base_url=config.base_url,
-        security_path=config.security_path,
-    )
+    """Construct the Desktop Echo NapCat provider."""
+    from ..providers.napcat_qq_provider import NapCatQQProvider
+    return NapCatQQProvider(config.napcat_bridge_url)
 
 
 class QQProviderFactory:
-    """Create and cache one QCE provider built from stored configuration."""
+    """Create and cache one QQ provider built from stored configuration."""
 
     def __init__(
         self,
@@ -56,6 +52,10 @@ class QQProviderFactory:
     def invalidate(self) -> None:
         """Drop the cached provider so the next call reloads the config."""
         self._provider = None
+
+    @property
+    def config_loader(self) -> QQEnvironmentConfigLoader:
+        return self._config_loader
 
     # ---------------------------------------------------------------- internals
 

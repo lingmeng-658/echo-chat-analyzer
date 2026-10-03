@@ -1,7 +1,7 @@
 """Application-layer QQ environment configuration.
 
 This module owns the durable settings that tell the QQ connection layer where
-the local QQ client, NapCat-QCE runtime, and QCE service live. It does not
+the local QQ client and Echo NapCat bridge live. It does not
 start processes, read chat data, or make runtime decisions.
 """
 
@@ -13,17 +13,14 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..resources import (
-    default_qq_qce_path,
     default_qq_runtime_directory,
-    default_qq_static_directory,
     user_data_dir,
 )
 
 
 CONFIG_DIRECTORY = "config"
 CONFIG_FILENAME = "qq.json"
-DEFAULT_QCE_BASE_URL = "http://127.0.0.1:40653"
-DEFAULT_NAPCAT_BRIDGE_URL = "http://127.0.0.1:40654"
+DEFAULT_NAPCAT_BRIDGE_URL = "http://127.0.0.1:40655"
 
 
 class QQEnvironmentConfigError(Exception):
@@ -70,12 +67,8 @@ class QQEnvironmentConfig:
 
     qq_install_path: Path | None = None
     runtime_directory: Path | None = None
-    qce_path: Path | None = None
-    qce_config_directory: Path | None = None
-    base_url: str = DEFAULT_QCE_BASE_URL
-    security_path: Path | None = None
     napcat_bridge_url: str = DEFAULT_NAPCAT_BRIDGE_URL
-    version: str | None = None
+    version: str | None = "4.18.18"
 
 
 class QQEnvironmentConfigWriter:
@@ -102,10 +95,6 @@ class QQEnvironmentConfigWriter:
         payload = {
             "qq_install_path": _stringify(config.qq_install_path),
             "runtime_directory": _stringify(config.runtime_directory),
-            "qce_path": _stringify(config.qce_path),
-            "qce_config_directory": _stringify(config.qce_config_directory),
-            "base_url": config.base_url or DEFAULT_QCE_BASE_URL,
-            "security_path": _stringify(config.security_path),
             "napcat_bridge_url": (
                 config.napcat_bridge_url or DEFAULT_NAPCAT_BRIDGE_URL
             ),
@@ -151,82 +140,53 @@ class QQEnvironmentConfigLoader:
         if not isinstance(payload, dict):
             raise QQConfigCorrupted()
 
+        # Old Desktop settings may only contribute the installed QQ path.
+        # Never reuse an old runtime directory, API endpoint or credential file.
+        legacy = payload.get("runtime_backend") == "qce" or any(
+            key in payload for key in ("qce_path", "security_path")
+        ) and payload.get("runtime_backend") != "napcat"
         return QQEnvironmentConfig(
             qq_install_path=_path_value(payload.get("qq_install_path")),
-            runtime_directory=_path_value(payload.get("runtime_directory")),
-            qce_path=_path_value(payload.get("qce_path")),
-            qce_config_directory=_path_value(
-                payload.get("qce_config_directory")
+            runtime_directory=None if legacy else _path_value(payload.get("runtime_directory")),
+            napcat_bridge_url=DEFAULT_NAPCAT_BRIDGE_URL if legacy else (
+                _string_value(payload.get("napcat_bridge_url")) or DEFAULT_NAPCAT_BRIDGE_URL
             ),
-            base_url=(
-                _string_value(payload.get("base_url"))
-                or DEFAULT_QCE_BASE_URL
-            ),
-            security_path=_path_value(payload.get("security_path")),
-            napcat_bridge_url=(
-                _string_value(payload.get("napcat_bridge_url"))
-                or DEFAULT_NAPCAT_BRIDGE_URL
-            ),
-            version=_string_value(payload.get("version")),
+            version="4.18.18" if legacy else _string_value(payload.get("version")) or "4.18.18",
         )
 
     def load_or_default(self) -> QQEnvironmentConfig:
-        """Load user config, falling back to bundled runtime defaults."""
+        """Load valid saved paths or use the bundled Echo NapCat runtime."""
         try:
             config = self.load()
         except QQConfigNotFound:
             config = None
         if config is not None and _runtime_paths_available(config):
             return config
-        if bundled_qq_runtime_available():
-            return default_qq_environment_config()
-        if config is not None:
-            return config
-        raise QQConfigNotFound()
+        default = default_qq_environment_config()
+        return QQEnvironmentConfig(
+            qq_install_path=config.qq_install_path if config else None,
+            runtime_directory=default.runtime_directory,
+            napcat_bridge_url=default.napcat_bridge_url,
+            version=default.version,
+        )
 
 
 def bundled_qq_runtime_available() -> bool:
-    """Return whether bundled QQ runtime components are present."""
-    return (
-        default_qq_qce_path().is_file()
-        and default_qq_static_directory().is_dir()
-        and (default_qq_runtime_directory() / "napcat.mjs").is_file()
-    )
+    """Return whether the bundled Echo NapCat entry files are present."""
+    return _runtime_paths_available(default_qq_environment_config())
 
 
 def default_qq_environment_config() -> QQEnvironmentConfig:
-    """Return a config pointing at bundled QQ runtime components."""
-    qce_config_directory = (
-        user_data_dir() / "runtime" / "qq" / ".qce-config"
-    )
-    runtime_directory = (
-        default_qq_runtime_directory()
-        if default_qq_runtime_directory().is_dir()
-        else None
-    )
-    return QQEnvironmentConfig(
-        qq_install_path=None,
-        runtime_directory=runtime_directory,
-        qce_path=(
-            default_qq_qce_path()
-            if default_qq_qce_path().is_file()
-            else None
-        ),
-        qce_config_directory=qce_config_directory,
-        base_url=DEFAULT_QCE_BASE_URL,
-        security_path=qce_config_directory / "security.json",
-        napcat_bridge_url=DEFAULT_NAPCAT_BRIDGE_URL,
-        version=None,
-    )
+    return QQEnvironmentConfig(runtime_directory=default_qq_runtime_directory())
 
 
 def _runtime_paths_available(config: QQEnvironmentConfig) -> bool:
-    return bool(
-        config.runtime_directory is not None
-        and config.runtime_directory.is_dir()
-        and config.qce_path is not None
-        and config.qce_path.is_file()
-    )
+    return bool(config.runtime_directory and all(
+        (config.runtime_directory / name).is_file() for name in (
+            "napcat.mjs", "NapCatWinBootMain.exe", "NapCatWinBootHook.dll",
+            "plugins/napcat-plugin-echo/index.mjs", "plugins/napcat-plugin-echo/bridge.mjs",
+        )
+    ))
 
 
 def _string_value(value: Any) -> str | None:
@@ -253,7 +213,6 @@ def _path_value(value: Any) -> Path | None:
 
 __all__ = [
     "DEFAULT_NAPCAT_BRIDGE_URL",
-    "DEFAULT_QCE_BASE_URL",
     "QQConfigCorrupted",
     "QQConfigNotFound",
     "QQConfigWriteFailed",

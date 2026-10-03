@@ -2,7 +2,7 @@
 
 The runtime layer describes what an external tool must offer so the
 application can detect, start, stop and inspect it. Concrete runtime
-implementations (for example a bundled QQChatExporter executable) live here or
+implementations (for example the bundled Echo NapCat launcher) live here or
 are injected by the desktop composition root; the application layer never
 touches the external process directly.
 """
@@ -12,8 +12,6 @@ from __future__ import annotations
 import os
 import subprocess
 import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -78,64 +76,30 @@ class QQRuntimeConfig:
 
     executable_path: Path
     working_directory: Path
-    base_url: str = "http://127.0.0.1:40653"
-    config_directory: Path | None = None
-    security_path: Path | None = None
-    static_directory: Path | None = None
-    bridge_url: str | None = None
+    base_url: str = "http://127.0.0.1:40655"
     version: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "executable_path", Path(self.executable_path))
         object.__setattr__(self, "working_directory", Path(self.working_directory))
-        if self.config_directory is not None:
-            object.__setattr__(
-                self,
-                "config_directory",
-                Path(self.config_directory),
-            )
-        if self.security_path is None and self.config_directory is not None:
-            object.__setattr__(
-                self,
-                "security_path",
-                self.config_directory / "security.json",
-            )
-        if self.security_path is not None:
-            object.__setattr__(self, "security_path", Path(self.security_path))
-        if self.static_directory is not None:
-            object.__setattr__(
-                self,
-                "static_directory",
-                Path(self.static_directory),
-            )
-
-
-def default_health_checker(base_url: str) -> bool:
-    """Probe the QCE v6.x public ``/health`` endpoint."""
-    try:
-        with urllib.request.urlopen(  # noqa: S310 - local runtime only
-            f"{base_url.rstrip('/')}/health",
-            timeout=1,
-        ) as response:
-            return response.status == 200
-    except (urllib.error.URLError, OSError, TimeoutError):
-        return False
 
 
 class BundledQQRuntime:
-    """Launch and manage one locally bundled QQChatExporter executable."""
+    """Launch and manage one locally bundled Echo NapCat runtime."""
 
     def __init__(
         self,
         config: QQRuntimeConfig,
         *,
-        health_checker: object | None = None,
+        health_checker: object,
         ready_timeout: float = DEFAULT_READY_TIMEOUT_SECONDS,
         poll_interval: float = DEFAULT_POLL_INTERVAL_SECONDS,
         monotonic: object | None = None,
+        launcher: object | None = None,
     ) -> None:
         self._config = config
-        self._health_checker = health_checker or default_health_checker
+        self._launcher = launcher
+        self._health_checker = health_checker
         self._ready_timeout = ready_timeout
         self._poll_interval = poll_interval
         self._monotonic = monotonic or time.monotonic
@@ -177,7 +141,7 @@ class BundledQQRuntime:
         if os.name == "nt":
             launch_options["creationflags"] = subprocess.CREATE_NO_WINDOW
         try:
-            process = subprocess.Popen(
+            process = self._launcher() if self._launcher is not None else subprocess.Popen(
                 [str(self._config.executable_path)],
                 **launch_options,
             )
@@ -252,5 +216,4 @@ __all__ = [
     "QQChatRuntimeError",
     "QQRuntimeConfig",
     "RuntimeInfo",
-    "default_health_checker",
 ]

@@ -36,7 +36,7 @@ GUI 带来第二个问题：界面若直接调用各个 Service，就会把来�
 flowchart TD
     subgraph EXT["外部数据源（进程外）"]
         QQDB["QQ 本地数据库<br/>NapCat 解密快照"]
-        QCE["QQChatExporter<br/>CLI / 连接与运行时"]
+        QCE["QQChatExporter<br/>CLI compatibility"]
         WXAPP["微信本地数据库"]
         FILE["已导出文件<br/>JSON / JSONL"]
     end
@@ -255,8 +255,8 @@ payload 属于本次分析的临时目录，在导入、分析消费结束或抛
 长期 cache。启动 `recover` 和关闭时的 `recover` 处理遗留的 runtime plaintext；
 cleanup 失败会作为错误上报，不能假装分析已安全完成。
 
-QCE JSON → `qq_chat_exporter_adapter` 路径仍存在于 QCE CLI；QCE Provider 也用于
-当前 QQ 连接与运行时相关能力。桌面 QQ 分析不自动回退到 QCE。DB 原生字段与
+QCE JSON → `qq_chat_exporter_adapter` 保留既有文件导入与 CLI compatibility；
+QCE Provider 仅由 CLI 导出路径消费。Desktop 不含 QCE runtime 或 rollback。DB 原生字段与
 protobuf 解释留在 Provider / Adapter 边界内，不能进入分析核心。已有真人验收确认
 正式 hardened main+WAL acquisition、解密、会话列表、分析、JSON / HTML 报告
 和正常 shutdown 清理可用。2026-10-02 最终验收已关闭 Stage 3.5、A4、A5、A6，
@@ -290,8 +290,8 @@ Provider 发现全部匹配 shard，对每个 shard 使用同一时间范围查�
 `wcdb_cli` 的 no-limit/`limit=0` 表示持续 step 至 statement done，而不是默认
 100000 条上限。
 
-**来源连接服务** —— `QQConnectionService`。把 Provider 的健康检查与凭据状态
-翻译成用户可理解的 `QQConnectionStatus`（是否可用、QCE 是否运行、是否已授权、
+**来源连接服务** —— `QQConnectionService`。把 Echo bridge 的 Core.status
+翻译成 `QQConnectionStatus`（runtime ready、有效 QQ 登录、独立的 Direct DB ready、
 下一步操作提示）。它是应用层内 Provider 的合法调用者之一；GUI 通过 Facade
 获取状态，不直接接触 Provider。
 
@@ -303,13 +303,24 @@ Facade 在后续阶段接入。
 **运行时管理** —— `QQRuntimeManager`。负责检测、启动、停止外部 QQ 采集
 运行环境，并把底层异常转换成用户层 `QQRuntimeStatus`。它只依赖
 `runtime/` 的 `ChatRuntime` 协议，不解析外部工具输出，也不接触 Provider
-的 HTTP 通信。启动流程包含就绪等待：进程拉起后由 Runtime 探测健康端点，
-确认可用后才进入 `RUNNING`。
+的 HTTP 通信。启动立即返回进程状态；QQ 登录由连接服务后续探测，
+`wait_ready()` 通过注入的 NapCat bridge readiness 探测等待就绪。
 
 **运行时实现** —— `BundledQQRuntime` 与 `QQRuntimeConfig`。配置承载
-`executable_path`、`working_directory`、`base_url`、`config_directory` 与
-`security_path`；实现负责进程启动、停止、状态与 `wait_ready()` 健康探测，
+`executable_path`、`working_directory`、bridge `base_url` 与版本；
+实现负责进程启动、停止、状态与 `wait_ready()` 探测，
 不复制 Provider 的业务解析。
+
+**Windows 发布合同（De-QCE）** —— Desktop 默认 QQ runtime 位于
+`runtime/qq-napcat-candidate`：官方 NapCat v4.18.18、native-read telemetry / late-passphrase
+补丁、Echo plugin 白名单与 `napcat-plugin-echo`。连接和 metadata 使用
+`NapCatQQProvider`；snapshot correctness 三模块保留原实现。
+`windows_runtime_manifest.json` 限定发布程序资产，build 在复制前后校验
+`qq_napcat_runtime_pins.json` 的关键产物 hash。正式 portable 不携带旧 `runtime/qq`、
+qce-server、QCE plugin 或 static/qce；不自动回退 QCE。
+QCE Python Provider / CLI 导出与既有 JSON 文件兼容仍保留；Desktop rollback、
+旧 QCE bootstrap / pins / manifest 和 token / security / health 配置已退休。
+旧 Desktop 配置只迁移 QQ 安装路径，不能恢复旧 runtime 或 API endpoint。
 
 **AnalysisApplicationService** —— 业务流程编排：
 调用 ImportService 取得消息，按本次请求应用 Analysis Scope Filter，

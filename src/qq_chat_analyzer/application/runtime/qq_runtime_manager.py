@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable
+from typing import Any
 
 from qq_chat_analyzer.runtime import ChatRuntime, RuntimeInfo
 
@@ -22,7 +22,6 @@ from ..qq_process_registry import (
     QQProcessRegistry,
     default_qq_process_registry,
 )
-from ..qq_webui_config import disable_qce_auto_open_browser
 
 
 MESSAGE_UNAVAILABLE = "未检测到 QQ 数据源，暂时无法连接。"
@@ -69,12 +68,10 @@ class QQRuntimeManager:
         self,
         runtime: ChatRuntime,
         ready_timeout: float = 30.0,
-        config_preparer: Callable[[], bool] | None = None,
         process_registry: QQProcessRegistry | None = None,
     ) -> None:
         self._runtime = runtime
         self._ready_timeout = ready_timeout
-        self._config_preparer = config_preparer or disable_qce_auto_open_browser
         self._process_registry = (
             process_registry or default_qq_process_registry()
         )
@@ -101,11 +98,6 @@ class QQRuntimeManager:
                 QQRuntimeState.UNAVAILABLE,
                 message=MESSAGE_UNAVAILABLE,
                 action_hint=ACTION_HINT_INSTALL,
-            )
-
-        if not self._config_preparer():
-            _LOGGER.warning(
-                "[qq runtime] QCE auto-open config could not be prepared"
             )
 
         self._state = QQRuntimeState.STARTING

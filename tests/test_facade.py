@@ -823,7 +823,7 @@ def test_set_qq_install_path_persists_the_selected_qq_exe(tmp_path: Path) -> Non
     qq_path.write_text("fictional", encoding="utf-8")
     config = module.QQEnvironmentConfig(
         runtime_directory=Path("D:/fake_runtime"),
-        qce_path=Path("D:/fake_qce_server.exe"),
+        napcat_bridge_url="http://127.0.0.1:40655",
     )
     setup = _StubQQSetupService(config=config)
     facade = _facade(qq_setup_service=setup)
@@ -833,7 +833,7 @@ def test_set_qq_install_path_persists_the_selected_qq_exe(tmp_path: Path) -> Non
     assert setup.save_calls == 1
     assert setup.saved_configs[0].qq_install_path == qq_path
     assert setup.saved_configs[0].runtime_directory == Path("D:/fake_runtime")
-    assert setup.saved_configs[0].qce_path == Path("D:/fake_qce_server.exe")
+    assert setup.saved_configs[0].napcat_bridge_url == "http://127.0.0.1:40655"
 
 
 def test_facade_wires_stale_runtime_cleaner_into_qq_auth_bridge() -> None:
@@ -1084,8 +1084,8 @@ def test_get_connection_status_delegates_to_the_connection_service() -> None:
     module = _facade_module()
     qq_status = module.QQConnectionStatus(
         available=True,
-        qce_running=True,
-        authenticated=True,
+        runtime_running=True,
+        qq_online=True,
         version="4.1.0",
         message="\u53ef\u7528",
         action_hint="\u5f00\u59cb\u5206\u6790",
@@ -1104,8 +1104,8 @@ def test_get_connection_status_accepts_a_plain_source_string() -> None:
     connection_service = _StubQQConnectionService(
         status=module.QQConnectionStatus(
             available=False,
-            qce_running=False,
-            authenticated=False,
+            runtime_running=False,
+            qq_online=False,
             version=None,
             message="\u4e0d\u53ef\u7528",
             action_hint="\u542f\u52a8 QQChatExporter",
@@ -1175,8 +1175,8 @@ def test_qq_source_usable_when_wechat_builder_raises() -> None:
     module = _facade_module()
     qq_status = module.QQConnectionStatus(
         available=True,
-        qce_running=True,
-        authenticated=True,
+        runtime_running=True,
+        qq_online=True,
         version="4.1.0",
         message="QQ \u5df2\u8fde\u63a5",
         action_hint="",

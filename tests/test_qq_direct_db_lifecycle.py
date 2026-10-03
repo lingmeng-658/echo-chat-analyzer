@@ -273,7 +273,7 @@ def test_shutdown_cleanup_runs_after_inflight_finishes(tmp_path: Path) -> None:
     assert runtime.recover_calls == 1
 
 
-def test_connected_qce_waits_for_delayed_snapshot_api_before_listing(tmp_path: Path) -> None:
+def test_connected_napcat_waits_for_delayed_snapshot_api_before_listing(tmp_path: Path) -> None:
     snapshot = tmp_path / "source.db"
     _create_snapshot(snapshot)
 
@@ -284,21 +284,16 @@ def test_connected_qce_waits_for_delayed_snapshot_api_before_listing(tmp_path: P
                 raise QQSnapshotRuntimeNotReady()
             super().recover(deadline=deadline)
 
-    class ConnectedQce:
-        def health_check(self):
-            return type("Health", (), {"available": True, "version": "fictional"})()
-
-        def resolve_token(self):
-            return "fictional-token"
-
-        def list_groups(self, limit=1):
-            return []
+    class ConnectedNapCat:
+        def status(self):
+            from qq_chat_analyzer.providers.napcat_qq_provider import NapCatStatus
+            return NapCatStatus(True, True, {"uin": "12345678"}, True, True, True)
 
     runtime = DelayedRuntime(tmp_path, snapshot_path=snapshot)
     service = _service(runtime)
     facade = ChatAnalyzerFacade(
         qq_service=service,
-        qq_connection_service=QQConnectionService(provider=ConnectedQce()),
+        qq_connection_service=QQConnectionService(provider=ConnectedNapCat()),
     )
 
     assert facade.get_qq_connection_snapshot().state is ConnectionState.CONNECTED

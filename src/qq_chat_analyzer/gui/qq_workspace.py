@@ -745,7 +745,7 @@ def _qq_error_title(code: str) -> str:
         return "QQ连接环境启动失败"
     if code in {"qq_login_timeout", "qq_auth_failed", "authentication_failed"}:
         return "QQ登录失败"
-    if code in {"qce_unavailable", "qce_start_failed", "service_unavailable"}:
+    if code == "service_unavailable":
         return "QQ连接服务启动失败"
     return _QQ_CONNECT_FAILED
 

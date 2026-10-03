@@ -78,7 +78,7 @@ def _write(path: Path, content: str = "fictional") -> None:
 
 def _fictional_native_tree(runtime: Path) -> None:
     """Mirror the upstream NapCat native addon layout for every platform."""
-    native = runtime / "qq" / "native"
+    native = runtime / "qq-napcat-candidate" / "native"
     for relative in WINDOWS_X64_NATIVE_ASSETS + FOREIGN_NATIVE_ASSETS:
         _write(native / relative)
 
@@ -122,16 +122,12 @@ def _fictional_runtime(
         "nested dependency",
     )
     _write(
-        runtime / "qq/config/plugins.json",
-        '{"napcat-plugin-qce": true}\n',
+        runtime / "qq-napcat-candidate/config/plugins.json",
+        '{"napcat-plugin-echo":true}\n',
     )
     _write(
-        runtime / "qq/config/napcat_fictional-account.json",
+        runtime / "qq-napcat-candidate/config/napcat_fictional-account.json",
         '{"account": "fictional"}\n',
-    )
-    _write(
-        runtime / "qq/static/qce/index.html",
-        "<!doctype html><title>fictional</title>\n",
     )
     # The build script also ships the WeChat WCDB diagnostic runner next to
     # the frozen app; mirror it in the fictional project so RuntimeOnly builds
@@ -141,6 +137,21 @@ def _fictional_runtime(
         "# fictional diagnostic runner\n",
     )
     _fictional_native_tree(runtime)
+    # Run a temporary build-script copy with fictional, pinned artifacts.
+    scripts = project_root / "scripts"
+    shutil.copy2(BUILD_SCRIPT, scripts / BUILD_SCRIPT.name)
+    (scripts / "windows_runtime_manifest.json").write_text(json.dumps(RUNTIME_CONTRACT))
+    pins = json.loads((PROJECT_ROOT / "scripts/qq_napcat_runtime_pins.json").read_text())
+    import hashlib
+    def digest(relative):
+        path = runtime / "qq-napcat-candidate" / relative
+        return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else "0" * 64
+    pins["requiredFiles"] = {name: digest(name) for name in pins["requiredFiles"]}
+    pins["napcatPatch"]["patchedSha256"] = digest("napcat.mjs")
+    pins["pluginConfigSha256"] = digest("config/plugins.json")
+    for item in pins["templates"]:
+        item["sha256"] = digest(item["target"])
+    (scripts / "qq_napcat_runtime_pins.json").write_text(json.dumps(pins))
     return runtime
 
 
@@ -155,7 +166,7 @@ def _copy_runtime(
             "-ExecutionPolicy",
             "Bypass",
             "-File",
-            str(BUILD_SCRIPT),
+            str(project_root / "scripts" / BUILD_SCRIPT.name),
             "-ProjectRootOverride",
             str(project_root),
             "-RuntimeOnly",
@@ -203,7 +214,7 @@ def test_runtime_build_ships_wx_key_msvc_runtime_dependencies(
     completed = _copy_runtime(tmp_path)
 
     assert completed.returncode == 0, completed.stderr
-    for runtime_name in ("wechat", "qq"):
+    for runtime_name in ("wechat", "qq-napcat-candidate"):
         portable_runtime = tmp_path / "dist/Echo/runtime" / runtime_name
         for filename in (
             "msvcp140.dll",
@@ -256,9 +267,8 @@ def test_key_portable_native_binaries_are_x64() -> None:
     portable = PROJECT_ROOT / "dist" / "Echo"
     required = (
         portable / "Echo.exe",
-        portable / "runtime/qq/qce-server.exe",
-        portable / "runtime/qq/NapCatWinBootMain.exe",
-        portable / "runtime/qq/NapCatWinBootHook.dll",
+        portable / "runtime/qq-napcat-candidate/NapCatWinBootMain.exe",
+        portable / "runtime/qq-napcat-candidate/NapCatWinBootHook.dll",
         portable / "runtime/wechat/node.exe",
         portable / "runtime/wechat/wcdb_cli.exe",
         portable / "runtime/wechat/WCDB.dll",
@@ -310,7 +320,7 @@ def test_runtime_build_rejects_missing_qq_native_launcher(
     filename: str,
 ) -> None:
     runtime = _fictional_runtime(tmp_path)
-    (runtime / "qq" / filename).unlink()
+    (runtime / "qq-napcat-candidate" / filename).unlink()
 
     completed = _copy_runtime(tmp_path)
 
@@ -329,7 +339,7 @@ def test_runtime_build_rejects_missing_bundled_node(tmp_path: Path) -> None:
     )
 
 
-def test_runtime_build_keeps_qce_plugin_enablement_without_account_state(
+def test_runtime_build_keeps_echo_plugin_enablement_without_account_state(
     tmp_path: Path,
 ) -> None:
     _fictional_runtime(tmp_path)
@@ -337,9 +347,9 @@ def test_runtime_build_keeps_qce_plugin_enablement_without_account_state(
     completed = _copy_runtime(tmp_path)
 
     assert completed.returncode == 0, completed.stderr
-    portable_config = tmp_path / "dist/Echo/runtime/qq/config"
+    portable_config = tmp_path / "dist/Echo/runtime/qq-napcat-candidate/config"
     assert (portable_config / "plugins.json").read_text(encoding="utf-8") == (
-        '{"napcat-plugin-qce": true}\n'
+        '{"napcat-plugin-echo":true}\n'
     )
     assert not (portable_config / "napcat_fictional-account.json").exists()
 
@@ -384,16 +394,16 @@ def _foreign_native_entries(native: Path) -> list[str]:
     return sorted(foreign)
 
 
-def test_runtime_build_prunes_non_windows_native_addons(tmp_path: Path) -> None:
-    """The packaged runtime must only ship the Windows x64 native addons."""
+def test_runtime_build_preserves_official_native_addons(tmp_path: Path) -> None:
+    """De-QCE migration preserves the verified upstream dependency layout."""
     _fictional_runtime(tmp_path)
 
     completed = _copy_runtime(tmp_path)
 
     assert completed.returncode == 0, completed.stderr
-    native = tmp_path / "dist/Echo/runtime/qq/native"
+    native = tmp_path / "dist/Echo/runtime/qq-napcat-candidate/native"
     assert native.is_dir()
-    assert _foreign_native_entries(native) == []
+    assert all((native / relative).is_file() for relative in FOREIGN_NATIVE_ASSETS)
 
 
 def test_runtime_build_ships_windows_x64_native_addons(tmp_path: Path) -> None:
@@ -403,7 +413,7 @@ def test_runtime_build_ships_windows_x64_native_addons(tmp_path: Path) -> None:
     completed = _copy_runtime(tmp_path)
 
     assert completed.returncode == 0, completed.stderr
-    native = tmp_path / "dist/Echo/runtime/qq/native"
+    native = tmp_path / "dist/Echo/runtime/qq-napcat-candidate/native"
     missing = [
         relative
         for relative in WINDOWS_X64_NATIVE_ASSETS
@@ -424,7 +434,7 @@ def test_runtime_build_keeps_repository_native_assets_intact(
     missing = [
         relative
         for relative in FOREIGN_NATIVE_ASSETS
-        if not (runtime / "qq/native" / relative).is_file()
+        if not (runtime / "qq-napcat-candidate/native" / relative).is_file()
     ]
     assert missing == []
 
@@ -434,7 +444,7 @@ def test_runtime_build_rejects_missing_windows_native_addon(
 ) -> None:
     """A Windows x64 build must not silently ship an incomplete native set."""
     runtime = _fictional_runtime(tmp_path)
-    (runtime / "qq/native/packet/MoeHoo.win32.x64.node").unlink()
+    (runtime / "qq-napcat-candidate/native/packet/MoeHoo.win32.x64.node").unlink()
 
     completed = _copy_runtime(tmp_path)
 
@@ -447,7 +457,7 @@ def test_runtime_build_rejects_missing_qq_launcher_user_batch(
 ) -> None:
     """Echo starts launcher-user.bat itself; a package without it is broken."""
     runtime = _fictional_runtime(tmp_path)
-    (runtime / "qq/launcher-user.bat").unlink(missing_ok=True)
+    (runtime / "qq-napcat-candidate/launcher-user.bat").unlink(missing_ok=True)
 
     completed = _copy_runtime(tmp_path)
 
@@ -455,12 +465,12 @@ def test_runtime_build_rejects_missing_qq_launcher_user_batch(
     assert "launcher-user.bat" in (completed.stderr + completed.stdout)
 
 
-def test_runtime_build_rejects_empty_qce_static_directory(
+def test_runtime_build_rejects_empty_official_static_directory(
     tmp_path: Path,
 ) -> None:
-    """A present-but-empty static/qce cannot serve the QCE web frontend."""
+    """The official NapCat UI payload remains required."""
     runtime = _fictional_runtime(tmp_path)
-    static_qce = runtime / "qq/static/qce"
+    static_qce = runtime / "qq-napcat-candidate/static"
     for child in static_qce.rglob("*"):
         if child.is_file():
             child.unlink()
@@ -469,35 +479,35 @@ def test_runtime_build_rejects_empty_qce_static_directory(
     completed = _copy_runtime(tmp_path)
 
     assert completed.returncode != 0
-    assert "qq/static/qce" in (completed.stderr + completed.stdout).replace(
+    assert "qq-napcat-candidate/static" in (completed.stderr + completed.stdout).replace(
         "\\", "/"
     )
 
 
 def test_runtime_copy_ships_program_assets_without_mutable_state(tmp_path: Path) -> None:
     runtime = _fictional_runtime(tmp_path)
-    private_paths = ["unlisted-program.exe", "qq/unlisted-plugin/state.json"]
+    private_paths = ["unlisted-program.exe", "qq-napcat-candidate/unlisted-plugin/state.json"]
     for directory in (
         "output", "logs", "cache", "temp", "tmp", "staging", "generations",
         "decrypted", "scratch", "data", "reports", "session", "sessions", "auth",
     ):
-        for parent in ("", "qq/", "wechat/", "qq/plugins/napcat-plugin-qce/"):
+        for parent in ("", "qq-napcat-candidate/", "wechat/", "qq-napcat-candidate/plugins/napcat-plugin-echo/"):
             private_paths.append(f"{parent}{directory}/fictional.plaintext.db")
     private_paths.extend([
-        "qq/plugins/napcat-plugin-qce/direct_db_research/generations/fictional/snapshot.db",
-        "qq/plugins/napcat-plugin-qce/direct_db_research/credentials.json",
+        "qq-napcat-candidate/plugins/napcat-plugin-echo/snapshot/generations/fictional/snapshot.db",
+        "qq-napcat-candidate/plugins/napcat-plugin-echo/snapshot/credentials.json",
         "wechat/node_modules/koffi/scratch/fictional.plaintext.db",
-        "qq/node_modules/fictional-package/output/report.json",
-        "qq/node_modules/fictional-package/records.jsonl",
-        "qq/node_modules/fictional-package/session.json",
-        "qq/node_modules/fictional-package/token.txt",
+        "qq-napcat-candidate/node_modules/fictional-package/output/report.json",
+        "qq-napcat-candidate/node_modules/fictional-package/records.jsonl",
+        "qq-napcat-candidate/node_modules/fictional-package/session.json",
+        "qq-napcat-candidate/node_modules/fictional-package/token.txt",
         ".codex/local.txt", "docs/research/local.md", "build/rc-environment-backup/local.txt",
     ])
     for relative in private_paths:
         _write(runtime / relative, "fictional private state")
     # These are immutable frontend routes, not local authentication/session state.
-    for route in ("auth", "sessions"):
-        _write(runtime / f"qq/static/qce/{route}/index.html", "fictional frontend route")
+    for route in ("assets",):
+        _write(runtime / f"qq-napcat-candidate/static/{route}/index.html", "fictional frontend route")
     source_before = {p.relative_to(runtime): p.read_bytes() for p in runtime.rglob("*") if p.is_file()}
 
     completed = _copy_runtime(tmp_path)
@@ -511,12 +521,12 @@ def test_runtime_copy_ships_program_assets_without_mutable_state(tmp_path: Path)
         if requirement["type"] == "file":
             assert (portable / requirement["path"]).is_file()
     for filename in ("snapshot.mjs", "main_wal.mjs", "workspace.mjs"):
-        assert (portable / "qq/plugins/napcat-plugin-qce/direct_db_research" / filename).is_file()
-    for source in ("qq", "wechat"):
+        assert (portable / "qq-napcat-candidate/plugins/napcat-plugin-echo/snapshot" / filename).is_file()
+    for source in ("qq-napcat-candidate", "wechat"):
         for filename in ("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"):
             assert (portable / source / filename).is_file()
-    for route in ("auth", "sessions"):
-        assert (portable / f"qq/static/qce/{route}/index.html").is_file()
+    for route in ("assets",):
+        assert (portable / f"qq-napcat-candidate/static/{route}/index.html").is_file()
     assert {p.relative_to(runtime): p.read_bytes() for p in runtime.rglob("*") if p.is_file()} == source_before
 
 
@@ -526,11 +536,35 @@ def test_runtime_copy_rejects_junctions_inside_program_assets(tmp_path: Path) ->
     runtime = _fictional_runtime(tmp_path)
     private = tmp_path / "fictional-private"
     _write(private / "private.json", "fictional user state")
-    _winapi.CreateJunction(str(private), str(runtime / "qq/node_modules/linked-package"))
+    _winapi.CreateJunction(str(private), str(runtime / "qq-napcat-candidate/node_modules/linked-package"))
 
     completed = _copy_runtime(tmp_path)
 
     assert completed.returncode != 0
     assert "reparse point" in completed.stderr + completed.stdout
-    assert not (tmp_path / "dist/Echo/runtime/qq/node_modules/linked-package/private.json").exists()
+    assert not (tmp_path / "dist/Echo/runtime/qq-napcat-candidate/node_modules/linked-package/private.json").exists()
     assert (private / "private.json").read_text(encoding="utf-8") == "fictional user state"
+
+
+def test_clean_runtime_copy_ignores_old_qce_and_ships_only_echo(tmp_path):
+    runtime = _fictional_runtime(tmp_path)
+    for name in ('qce-server.exe', 'plugins/napcat-plugin-qce/index.mjs', 'static/qce/index.html'):
+        _write(runtime / 'qq' / name, 'fictional compatibility runtime')
+    result = _copy_runtime(tmp_path)
+    assert result.returncode == 0, result.stderr
+    portable = tmp_path / 'dist/Echo/runtime'
+    assert not (portable / 'qq').exists()
+    assert not list(portable.rglob('qce-server.exe'))
+    assert not list(portable.rglob('napcat-plugin-qce'))
+    assert not (portable / 'qq-napcat-candidate/static/qce').exists()
+    assert (runtime / 'qq/qce-server.exe').is_file()
+
+
+@pytest.mark.parametrize('artifact', ['napcat.mjs', 'plugins/napcat-plugin-echo/index.mjs', 'plugins/napcat-plugin-echo/snapshot/snapshot.mjs', 'plugins/napcat-plugin-echo/snapshot/main_wal.mjs', 'plugins/napcat-plugin-echo/snapshot/workspace.mjs', 'config/plugins.json'])
+def test_modified_echo_artifact_cannot_ship(tmp_path, artifact):
+    runtime = _fictional_runtime(tmp_path)
+    _write(runtime / 'qq-napcat-candidate' / artifact, 'modified fictional artifact')
+    result = _copy_runtime(tmp_path)
+    assert result.returncode != 0
+    assert 'pin mismatch' in result.stderr + result.stdout
+    assert not (tmp_path / 'dist/Echo/runtime').exists()

@@ -1,0 +1,98 @@
+import {createServer} from 'node:http';
+
+const MAX_REQUEST_BYTES = 4096;
+const text = value => typeof value === 'string' ? value : '';
+const identifier = value => typeof value === 'string' ? value : Number.isSafeInteger(value) ? String(value) : '';
+const uin = value => /^[1-9][0-9]{4,19}$/.test(identifier(value)) ? identifier(value) : '';
+const object = value => value !== null && typeof value === 'object';
+const generation = value => typeof value === 'string' && value.length > 0 && value.length <= 128 &&
+  value === value.trim() && value !== '.' && value !== '..' && !/[\\/\x00]/.test(value);
+
+export async function startBridge(core, snapshot, {port = 40655, host = '127.0.0.1'} = {}) {
+  if (host !== '127.0.0.1' || !Number.isInteger(port) || port < 0 || port > 65535) throw new Error('invalid_bridge_address');
+  if (!core?.apis) throw new Error('echo_core_unavailable');
+  const status = () => ({
+    bridge_ready: true,
+    qq_online: core.selfInfo?.online === true,
+    self_info: {uin: uin(core.selfInfo?.uin), uid: text(core.selfInfo?.uid), nickname: text(core.selfInfo?.nick)},
+    database_api_ready: typeof core.apis.DatabaseApi?.decryptDatabase === 'function',
+    passphrase_ready: core.apis.DatabaseApi?.hasPassphrase?.() === true,
+    snapshot_api_ready: ['acquire', 'cleanup', 'recover'].every(name => typeof snapshot?.[name] === 'function')
+  });
+  const friends = async () => {
+    const categories = await core.apis.FriendApi.getBuddyV2ExWithCate();
+    if (!Array.isArray(categories)) throw new Error('invalid_metadata');
+    return categories.flatMap(category => Array.isArray(category?.buddyList) ? category.buddyList : [])
+      .filter(object).map(row => ({uin: uin(row.coreInfo?.uin) || uin(row.uin), uid: text(row.coreInfo?.uid) || text(row.uid),
+        nickname: text(row.coreInfo?.nick) || text(row.nick), remark: text(row.coreInfo?.remark) || text(row.remark)}))
+      .filter(row => row.uin || row.uid);
+  };
+  const groups = async () => {
+    const rows = await core.apis.GroupApi.getGroups();
+    if (!Array.isArray(rows)) throw new Error('invalid_metadata');
+    return rows.filter(object).map(row => ({group_code: uin(row.groupCode), group_name: text(row.groupName),
+      member_count: Number.isSafeInteger(row.memberCount) && row.memberCount >= 0 ? row.memberCount : null}))
+      .filter(row => row.group_code);
+  };
+  const members = async group => {
+    const result = await core.apis.GroupApi.getGroupMemberAll(group);
+    const source = result?.result?.infos;
+    if (!object(source)) throw new Error('invalid_metadata');
+    const entries = source instanceof Map ? [...source.entries()] : Object.entries(source);
+    // Preserve Map keys (UID) separately from UIN; only name-enrichment fields leave NapCat.
+    const infos = Object.fromEntries(entries.filter(([, row]) => object(row)).map(([key, row]) => [text(key), {
+      uid: text(row.uid) || text(key), uin: uin(row.uin), nick: text(row.nick), cardName: text(row.cardName)
+    }]));
+    return {result: {infos}};
+  };
+  const methods = new Map([
+    ['Core.status', {count: 0, call: status}],
+    ['EchoMetadata.listFriends', {count: 0, call: friends}],
+    ['EchoMetadata.listGroups', {count: 0, call: groups}],
+    ['GroupApi.getGroupMemberAll', {count: 1, valid: value => !!uin(value) && typeof value === 'string', call: members}],
+    ['EchoSnapshotApi.acquire', {count: 0, call: () => snapshot.acquire()}],
+    ['EchoSnapshotApi.cleanup', {count: 1, valid: generation, call: id => snapshot.cleanup(id)}],
+    ['EchoSnapshotApi.recover', {count: 0, call: () => snapshot.recover()}]
+  ]);
+  const server = createServer((req, res) => {
+    const send = (code, value) => {
+      if (!res.writableEnded && !res.destroyed) res.writeHead(code, {'content-type': 'application/json', 'cache-control': 'no-store'}).end(JSON.stringify(value));
+    };
+    const failure = (code, error) => { req.resume(); send(code, {ok: false, error}); };
+    const boundPort = server.address().port;
+    if (req.headers.origin || ![`127.0.0.1:${boundPort}`, `localhost:${boundPort}`].includes(req.headers.host)) return failure(403, 'invalid_origin');
+    if (req.method !== 'POST' || req.url !== '/rpc') return failure(404, 'invalid_route');
+    if (req.headers['content-type']?.split(';')[0].trim() !== 'application/json') return failure(415, 'invalid_content_type');
+    if (Number(req.headers['content-length']) > MAX_REQUEST_BYTES) return failure(413, 'request_too_large');
+    let size = 0;
+    const chunks = [];
+    req.on('data', chunk => {
+      size += chunk.length;
+      if (size > MAX_REQUEST_BYTES) { chunks.length = 0; send(413, {ok: false, error: 'request_too_large'}); }
+      else chunks.push(chunk);
+    });
+    req.on('error', () => send(400, {ok: false, error: 'invalid_request'}));
+    req.on('end', async () => {
+      if (res.writableEnded) return;
+      let body;
+      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+      catch { return send(400, {ok: false, error: 'invalid_request'}); }
+      if (!object(body) || Array.isArray(body) || typeof body.method !== 'string') return send(400, {ok: false, error: 'invalid_request'});
+      const method = methods.get(body.method);
+      if (!method) return send(400, {ok: false, error: 'invalid_method'});
+      const params = Object.hasOwn(body, 'params') ? body.params : [];
+      if (!Array.isArray(params) || params.length !== method.count || (method.valid && !method.valid(params[0]))) return send(400, {ok: false, error: 'invalid_params'});
+      try { send(200, {ok: true, result: await method.call(...params)}); }
+      catch { send(200, {ok: false, error: 'qq_runtime_operation_failed'}); }
+    });
+  });
+  server.requestTimeout = 10000;
+  server.headersTimeout = 10000;
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, resolve); });
+  return {port: server.address().port, async stop() {
+    await new Promise((resolve, reject) => {
+      server.close(error => error ? reject(error) : resolve());
+      server.closeAllConnections();
+    });
+  }};
+}

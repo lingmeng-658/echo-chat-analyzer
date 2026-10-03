@@ -8,6 +8,8 @@ skip when no frozen artifact exists instead of starting a build here.
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
+import json
 
 import pytest
 
@@ -36,6 +38,28 @@ def _frozen_modules() -> dict:
 
     reader = CArchiveReader(str(EXECUTABLE))
     return reader.open_embedded_archive("PYZ.pyz").toc
+
+
+def test_frozen_package_uses_pinned_echo_napcat_without_qce() -> None:
+    _require_frozen_build()
+    runtime = DIST_APP / 'runtime'
+    manifest = json.loads((PROJECT_ROOT / 'scripts/windows_runtime_manifest.json').read_text())
+    for entry in manifest['requirements']:
+        assert (runtime / entry['path']).exists(), entry['path']
+    assert not (runtime / 'qq').exists()
+    assert not list(DIST_APP.rglob('qce-server.exe'))
+    assert not list(DIST_APP.rglob('napcat-plugin-qce'))
+    assert not (runtime / 'qq-napcat-candidate/static/qce').exists()
+    pins = json.loads((PROJECT_ROOT / 'scripts/qq_napcat_runtime_pins.json').read_text())
+    candidate = runtime / 'qq-napcat-candidate'
+    assert hashlib.sha256((candidate / 'napcat.mjs').read_bytes()).hexdigest() == pins['napcatPatch']['patchedSha256']
+    for template in pins['templates']:
+        assert hashlib.sha256((candidate / template['target']).read_bytes()).hexdigest() == template['sha256']
+    assert json.loads((candidate / 'config/plugins.json').read_text()) == {'napcat-plugin-echo': True}
+
+
+def test_frozen_import_graph_contains_napcat_provider() -> None:
+    assert 'qq_chat_analyzer.providers.napcat_qq_provider' in _frozen_modules()
 
 
 def test_frozen_package_does_not_contain_numpy() -> None:

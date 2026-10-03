@@ -208,11 +208,11 @@ def test_private_peer_is_the_only_non_self_sender(tmp_path) -> None:
 
 def test_session_names_join_existing_qq_group_and_friend_metadata() -> None:
     class FakeProvider:
-        def list_groups(self, *, page=1, limit=200):
+        def list_groups(self):
             return [SimpleNamespace(group_code="group-1", group_name="Fictional Group")]
 
-        def list_friends(self, *, page=1, limit=200):
-            return [SimpleNamespace(peer_uin="peer-1", display_name="Fictional Friend")]
+        def list_friends(self):
+            return [SimpleNamespace(uin="peer-1", display_name="Fictional Friend")]
 
     factory = SimpleNamespace(create=lambda: FakeProvider())
     service = QQDirectDatabaseImportService(provider_factory=factory)

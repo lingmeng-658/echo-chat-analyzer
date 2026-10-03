@@ -33,7 +33,8 @@ Echo 的设计前提是：真实聊天数据属于用户自己。
 
 桌面 QQ 会话列表和分析已由正式 QQ Direct DB 链路承担：在本机读取 QQ 数据库，
 统一为内部 ChatMessage 模型后生成报告。该链路已完成真人 E2E 和最终 smoke 验收。
-QQChatExporter 的 CLI、连接及运行时能力仍保留。当前验收状态和开放事项见
+QQChatExporter 的 CLI 与既有 JSON 文件导入仍保留；Desktop 使用独立 NapCat/Echo runtime。
+当前验收状态和开放事项见
 [Hardening 工作地图](docs/HARDENING.md#qq-direct-db-最终验收-checkpoint2026-10-02)，
 架构以 [ARCHITECTURE.md](ARCHITECTURE.md) 为准。
 

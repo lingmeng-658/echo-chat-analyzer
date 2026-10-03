@@ -475,9 +475,8 @@ class ChatAnalyzerFacade:
     def connect_qq(self) -> ConnectionSnapshot:
         """Connect QQ through the single authorization runtime path.
 
-        Redirected to :meth:`start_qq_auth_flow` so the launcher/NapCat owns
-        the qce-server lifecycle; the connection manager must not pre-start a
-        standalone qce-server that would collide with the NapCat plugin.
+        Redirected to :meth:`start_qq_auth_flow` so the Echo NapCat launcher
+        owns login and its process tree.
         """
         return self.start_qq_auth_flow()
 
@@ -500,8 +499,8 @@ class ChatAnalyzerFacade:
     def shutdown_qq_runtime(self) -> None:
         """Stop only QQ processes LCA started.
 
-        This is the application exit hook: the registry records the QCE and
-        NapCat PIDs LCA created, so a user's own QQ client is never touched.
+        This is the application exit hook: the registry records the
+        NapCat launcher PIDs LCA created, so a user's own QQ client is never touched.
         Cleanup is best-effort and never raises.
         """
         registry = self._require_qq_process_registry()

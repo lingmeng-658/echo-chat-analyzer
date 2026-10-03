@@ -14,10 +14,7 @@ from pathlib import Path
 
 APP_DATA_DIR_NAME = "LocalChatAnalyzer"
 RUNTIME_DIR_NAME = "runtime"
-QQ_RUNTIME_DIR_NAME = "qq"
-QQ_QCE_FILE_NAME = "qce-server.exe"
-QQ_STATIC_RELATIVE_PATH = "static/qce"
-QQ_NAPCAT_DIR_NAME = "napcat"
+QQ_RUNTIME_DIR_NAME = "qq-napcat-candidate"
 WECHAT_RUNTIME_DIR_NAME = "wechat"
 WECHAT_WCDB_CLI_FILE_NAME = "wcdb_cli.exe"
 WECHAT_WCDB_DLL_FILE_NAME = "WCDB.dll"
@@ -75,21 +72,6 @@ def require_bundled_runtime_dir() -> Path:
 def default_qq_runtime_directory() -> Path:
     """Return the expected bundled QQ runtime directory."""
     return bundled_runtime_dir() / QQ_RUNTIME_DIR_NAME
-
-
-def default_qq_qce_path() -> Path:
-    """Return the expected bundled ``qce-server.exe`` path."""
-    return default_qq_runtime_directory() / QQ_QCE_FILE_NAME
-
-
-def default_qq_static_directory() -> Path:
-    """Return the expected bundled QCE static frontend directory."""
-    return default_qq_runtime_directory() / QQ_STATIC_RELATIVE_PATH
-
-
-def default_qq_napcat_directory() -> Path:
-    """Return the expected bundled NapCat directory."""
-    return default_qq_runtime_directory() / QQ_NAPCAT_DIR_NAME
 
 
 def default_wechat_runtime_directory() -> Path:
@@ -152,10 +134,7 @@ __all__ = [
     "RuntimeResourceError",
     "bundled_data_files",
     "bundled_runtime_dir",
-    "default_qq_napcat_directory",
-    "default_qq_qce_path",
     "default_qq_runtime_directory",
-    "default_qq_static_directory",
     "default_wechat_runtime_directory",
     "default_echo_icon_path",
     "default_wechat_login_guide_path",

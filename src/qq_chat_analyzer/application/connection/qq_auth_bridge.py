@@ -1,10 +1,6 @@
 """Application-layer bridge that starts and tracks QQ authorization.
 
-QCE itself exposes no public login endpoint on its HTTP API. The bundled
-runtime owns the login window: the launcher opens the QQ login UI and the
-plugin starts the QCE API server after QQ is ready. This bridge keeps that
-detail behind one application-layer action so the GUI never has to know
-whether the runtime asks for a QR code, a quick login, or a password.
+The bundled Echo NapCat launcher owns the QQ login window.
 
 ``start_auth_flow()`` reuses the existing setup/connection services to start
 the runtime, opens the runtime's own login window, and returns a lifecycle
@@ -42,7 +38,6 @@ from ..qq_process_registry import (
     QQProcessRegistry,
     default_qq_process_registry,
 )
-from ..qq_webui_config import disable_qce_auto_open_browser
 
 
 _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.qq_auth_bridge")
@@ -112,7 +107,6 @@ class QQAuthBridge:
         manager: Any = None,
         window_launcher: Callable[[], None] | None = None,
         process_registry: QQProcessRegistry | None = None,
-        config_preparer: Callable[[], bool] | None = None,
         qrcode_path: Path | None = None,
         runtime_cleaner: Callable[[Path], None] | None = None,
     ) -> None:
@@ -120,7 +114,6 @@ class QQAuthBridge:
         self._connection_service = connection_service
         self._manager = manager
         self._window_launcher = window_launcher
-        self._config_preparer = config_preparer or disable_qce_auto_open_browser
         self._qrcode_path = qrcode_path
         self._runtime_cleaner = runtime_cleaner
         self._auth_launch_started = False
@@ -141,8 +134,7 @@ class QQAuthBridge:
 
         When QQ data is already usable this returns ``CONNECTED`` without
         touching the runtime. Otherwise the runtime's own login window is
-        opened; the launcher owns NapCat and the QCE server, so no qce-server
-        is pre-started here. Later probes detect the authorization result.
+        opened by the Echo NapCat launcher. Later bridge probes detect login.
         """
         _report_progress(progress, PROGRESS_CHECKING)
         manager = self._manager_instance()
@@ -168,7 +160,6 @@ class QQAuthBridge:
 
         try:
             _report_progress(progress, PROGRESS_STARTING)
-            self._config_preparer()
             _report_progress(progress, PROGRESS_LOADING_NAPCAT)
             if not self._auth_launch_started:
                 self._clean_stale_runtime()
@@ -347,7 +338,7 @@ class QQAuthBridge:
         """Persist the effective default config, then return it for launch.
 
         The launcher still owns the runtime lifecycle, so recovery only
-        writes qq.json; no qce-server is started here.
+        writes qq.json without starting a process.
         """
         _LOGGER.info("[qq auth] environment config missing; auto-initializing")
         try:
@@ -452,35 +443,12 @@ def default_auth_window_launcher(config: Any) -> Callable[[], None]:
     account number is assumed or passed.
     """
     runtime_directory = _runtime_directory(config)
-    launcher = runtime_directory / "launcher-user.bat"
     qq_path = resolve_qq_install_path(config, runtime_directory)
-    _LOGGER.info(
-        "[qq auth] runtime environment runtime_directory=%s exists=%s "
-        "launcher=%s launcher_found=%s",
-        runtime_directory,
-        runtime_directory.is_dir(),
-        launcher,
-        launcher.is_file(),
-    )
-    _LOGGER.info(
-        "[qq auth] qq install path=%s found=%s",
-        qq_path,
-        qq_path is not None and qq_path.is_file(),
-    )
-
-    if not launcher.is_file():
-        raise QQAuthWindowUnavailable(MESSAGE_WINDOW_MISSING)
     if qq_path is None or not qq_path.is_file():
-        raise QQAuthWindowUnavailable(
-            MESSAGE_QQ_MISSING,
-            code=QQ_INSTALL_PATH_MISSING_CODE,
-        )
-
-    return lambda: _launch_auth_window(
-        runtime_directory,
-        launcher,
-        qq_path,
-    )
+        raise QQAuthWindowUnavailable(MESSAGE_QQ_MISSING, code=QQ_INSTALL_PATH_MISSING_CODE)
+    if not (runtime_directory / "NapCatWinBootMain.exe").is_file() or not (runtime_directory / "NapCatWinBootHook.dll").is_file():
+        raise QQAuthWindowUnavailable(MESSAGE_WINDOW_MISSING)
+    return lambda: _launch_auth_window(runtime_directory, runtime_directory / "NapCatWinBootMain.exe", qq_path)
 
 
 def resolve_qq_install_path(
@@ -737,7 +705,7 @@ def terminate_bundled_runtime_sessions(runtime_directory: Path) -> None:
     target = (runtime_directory / "NapCatWinBootMain.exe").resolve()
     script = r"""
 $ErrorActionPreference = "SilentlyContinue"
-$target = $env:QCE_RUNTIME_DIR
+$target = $env:ECHO_NAPCAT_BOOT_PATH
 Get-CimInstance Win32_Process -Filter "Name='NapCatWinBootMain.exe'" | ForEach-Object {
     $exe = $_.ExecutablePath
     if ($exe -and [IO.Path]::GetFullPath($exe) -eq [IO.Path]::GetFullPath($target)) {
@@ -754,7 +722,7 @@ Get-CimInstance Win32_Process -Filter "Name='NapCatWinBootMain.exe'" | ForEach-O
         "text": True,
         "timeout": 10,
         "check": False,
-        "env": {**os.environ, "QCE_RUNTIME_DIR": str(target)},
+        "env": {**os.environ, "ECHO_NAPCAT_BOOT_PATH": str(target)},
     }
     if os.name == "nt":
         options["creationflags"] = subprocess.CREATE_NO_WINDOW
@@ -783,23 +751,6 @@ def _launch_auth_window(
     qq_path: Path,
 ) -> Any:
     """Open the runtime login window once, without waiting for login."""
-    # The launcher directory is already the child process cwd. Invoking the
-    # fixed basename avoids passing any user-controlled path through cmd's
-    # parsing rules, so spaces, parentheses, and Unicode parent directories
-    # cannot split or group the command.
-    command = [
-        "cmd.exe",
-        "/d",
-        "/s",
-        "/c",
-        launcher.name,
-    ]
-    _LOGGER.info(
-        "[qq auth] launch command=%s cwd=%s qq_path=%s",
-        command,
-        runtime_directory,
-        qq_path,
-    )
     environment = os.environ.copy()
     environment.pop("ECHO_MODE", None)
     # Quick-login credentials may belong to other NapCat setups on the host;
@@ -808,6 +759,30 @@ def _launch_auth_window(
     environment.pop("NAPCAT_QUICK_PASSWORD", None)
     environment.pop("NAPCAT_QUICK_PASSWORD_MD5", None)
     environment["NAPCAT_QQ_PATH"] = str(qq_path.resolve())
+    import json
+    _ensure_load_script(runtime_directory)
+    packages = [qq_path.parent / "resources/app/package.json"]
+    packages.extend(qq_path.parent.glob("versions/*/resources/app/package.json"))
+    packages = [path for path in packages if path.is_file()]
+    if not packages:
+        raise QQAuthWindowUnavailable(MESSAGE_QQ_MISSING)
+    package_path = max(packages, key=lambda path: path.stat().st_mtime_ns)
+    package = json.loads(package_path.read_text(encoding="utf-8-sig"))
+    package["main"] = "./loadNapCat.js"
+    patch_package = runtime_directory / "qqnt.echo.json"
+    patch_package.write_text(json.dumps(package), encoding="utf-8")
+    environment.update({
+        "NAPCAT_PATCH_PACKAGE": str(patch_package),
+        "NAPCAT_LOAD_PATH": str(runtime_directory / "loadNapCat.js"),
+        "NAPCAT_INJECT_PATH": str(runtime_directory / "NapCatWinBootHook.dll"),
+        "NAPCAT_MAIN_PATH": str(runtime_directory / "napcat.mjs"),
+        "ECHO_BRIDGE_PORT": "40655",
+    })
+    command = [str(launcher), str(qq_path), environment["NAPCAT_INJECT_PATH"]]
+    _LOGGER.info(
+        "[qq auth] launch command=%s cwd=%s qq_path=%s",
+        command, runtime_directory, qq_path,
+    )
     launch_options = {
         "cwd": str(runtime_directory),
         "env": environment,
@@ -866,15 +841,9 @@ def _log_launcher_completion(process: Any) -> None:
     _LOGGER.info(
         "[qq auth] launcher completed returncode=%s stdout=%s stderr=%s",
         getattr(process, "returncode", process.poll()),
-        _safe_launcher_output(stdout),
-        _safe_launcher_output(stderr),
+        f"bytes={len(stdout or '')}",
+        f"bytes={len(stderr or '')}",
     )
-
-
-def _safe_launcher_output(value: Any, limit: int = 2000) -> str:
-    """Normalize and bound launcher diagnostics before writing them to logs."""
-    text = str(value or "").strip().replace("\r", " ").replace("\n", " | ")
-    return text[:limit]
 
 
 def _ensure_load_script(runtime_directory: Path) -> None:

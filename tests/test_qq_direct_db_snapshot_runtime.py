@@ -24,7 +24,7 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SNAPSHOT_TEMPLATE = PROJECT_ROOT / "scripts" / "qq_direct_db_snapshot" / "snapshot.mjs"
-PINS_PATH = PROJECT_ROOT / "scripts" / "qq_runtime_pins.json"
+PINS_PATH = PROJECT_ROOT / "scripts" / "qq_napcat_runtime_pins.json"
 
 NODE = shutil.which("node")
 
@@ -896,19 +896,6 @@ def test_status_objects_never_leak_identity_or_paths(tmp_path: Path) -> None:
 # -------------------------------------------------- registration seam (static)
 
 
-def test_index_patch_no_longer_auto_decrypts_at_startup() -> None:
-    pins = json.loads(PINS_PATH.read_text(encoding="utf-8"))
-    patch = pins["indexPatch"]
-
-    replacement = patch["replacement"]
-    assert "registerEchoSnapshotApi(runtimeCore)" in replacement
-    assert "createSnapshotFromNapCatCore" not in replacement
-    assert "await createSnapshotFromNapCatCore(core)" not in replacement
-    assert (
-        "const { registerEchoSnapshotApi } = "
-        "await import('./direct_db_research/snapshot.mjs');"
-    ) == patch["addedLine"]
-    assert replacement.count(patch["addedLine"]) == 1
 
 
 def test_snapshot_template_registers_echo_snapshot_api_on_runtimecore_apis() -> None:
@@ -933,3 +920,12 @@ def test_registration_exposes_acquire_cleanup_recover(tmp_path: Path) -> None:
         "sameAsReturned": True,
     }
     assert output["metrics"]["decryptCalls"] == 0
+
+
+def test_echo_plugin_registers_snapshot_without_auto_decrypt():
+    pins = json.loads(PINS_PATH.read_text(encoding="utf-8"))
+    item = next(item for item in pins["templates"] if item["source"] == "qq_napcat_plugin/index.mjs")
+    text = (PROJECT_ROOT / "scripts" / item["source"]).read_text(encoding="utf-8")
+    assert "registerEchoSnapshotApi" in text
+    assert "createSnapshotFromNapCatCore" not in text
+    assert ".acquire(" not in text

@@ -84,36 +84,19 @@ class _FakeRuntime:
 def _manager(runtime: _FakeRuntime):
     return _manager_module().QQRuntimeManager(
         runtime,
-        config_preparer=_RecordingConfigPreparer(),
         process_registry=_FreshProcessRegistry(),
     )
 
 
-def _manager_with_preparer(runtime: _FakeRuntime, preparer):
-    return _manager_module().QQRuntimeManager(
-        runtime,
-        config_preparer=preparer,
-        process_registry=_FreshProcessRegistry(),
-    )
 
 
 def _manager_with_registry(runtime: _FakeRuntime, registry):
     return _manager_module().QQRuntimeManager(
         runtime,
-        config_preparer=_RecordingConfigPreparer(),
         process_registry=registry,
     )
 
 
-class _RecordingConfigPreparer:
-    """Record QCE config preparation without touching real files."""
-
-    def __init__(self):
-        self.calls = 0
-
-    def __call__(self) -> bool:
-        self.calls += 1
-        return True
 
 
 def _FreshProcessRegistry():
@@ -216,28 +199,8 @@ def test_start_requires_an_installed_runtime() -> None:
     assert status.action_hint != ""
 
 
-def test_start_prepares_qce_webui_config_before_launch() -> None:
-    module = _manager_module()
-    runtime = _FakeRuntime(installed=True, running=False)
-    preparer = _RecordingConfigPreparer()
-    manager = _manager_with_preparer(runtime, preparer)
-
-    status = manager.start()
-
-    assert preparer.calls == 1
-    assert runtime.start_calls == 1
-    assert status.state == module.QQRuntimeState.RUNNING
 
 
-def test_start_skips_qce_config_when_runtime_unavailable() -> None:
-    runtime = _FakeRuntime(installed=False)
-    preparer = _RecordingConfigPreparer()
-    manager = _manager_with_preparer(runtime, preparer)
-
-    manager.start()
-
-    assert preparer.calls == 0
-    assert runtime.start_calls == 0
 
 
 def test_start_records_the_launched_pid() -> None:

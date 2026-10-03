@@ -26,7 +26,7 @@ GITIGNORE = PROJECT_ROOT / ".gitignore"
 ALLOWED_ENTRY_KEYS = {"path", "source", "type", "description"}
 ALLOWED_TYPES = {"file", "directory", "non-empty-directory"}
 REQUIRED_TYPES = {"file", "non-empty-directory"}
-ALLOWED_SOURCES = {"qq", "wechat"}
+ALLOWED_SOURCES = {"qq-napcat-candidate", "wechat"}
 
 # Values that must never appear in a tracked contract file: absolute paths,
 # endpoints, and credential vocabulary. Legitimate asset names such as
@@ -47,60 +47,10 @@ FORBIDDEN_VALUE_FRAGMENTS = (
 
 # --------------------------------------------------------------------- QQ
 # Every path below is reachable from the shipped product boot chain.
-QQ_REQUIRED_FILES = {
-    # launcher-user.bat:6-10,186 — the file Echo itself starts.
-    "qq/launcher-user.bat",
-    # The QCE launcher's Priority-4 QQ detector; qq_auth_bridge.py:506-511 also
-    # calls it before falling back to the registry/common-directory probe.
-    "qq/find-qq.ps1",
-    "qq/NapCatWinBootMain.exe",
-    "qq/NapCatWinBootHook.dll",
-    "qq/napcat.mjs",
-    # launcher-user.bat:6,189-233 — patch-package seed handed to the hook.
-    "qq/qqnt.json",
-    # napcat.mjs:52 static import of a `.js` chunk; the chunk uses ESM syntax,
-    # so the package.json `type: module` declaration is load bearing.
-    "qq/package.json",
-    "qq/conout-wiJ7YKRd.js",
-    # napcat.mjs:61647 spawns this worker through worker_threads.
-    "qq/worker/conoutSocketWorker.mjs",
-    # napcat.mjs:65416 reads the plugin enablement file from config/.
-    "qq/config/plugins.json",
-    # napcat.mjs:64962,65138 read the plugin manifest; index.mjs:248 and
-    # ApiLauncher.mjs:4 chain into the QCE runtime modules.
-    "qq/plugins/napcat-plugin-qce/package.json",
-    "qq/plugins/napcat-plugin-qce/index.mjs",
-    # Echo-injected Direct DB helper; the patched index.mjs imports it.
-    "qq/plugins/napcat-plugin-qce/direct_db_research/snapshot.mjs",
-    "qq/plugins/napcat-plugin-qce/runtime/ApiLauncher.mjs",
-    "qq/plugins/napcat-plugin-qce/runtime/rustBridge.mjs",
-    # ApiLauncher.mjs:11-21 accepts static/qce only when index.html exists.
-    "qq/static/qce/index.html",
-    # napcat.mjs:46 imports "express" and :49 imports "ws" as bare specifiers.
-    "qq/node_modules/express/package.json",
-    "qq/node_modules/ws/package.json",
-    # rustBridge.mjs:268-293 looks for qce-server.exe next to the plugin root.
-    "qq/qce-server.exe",
-}
-
-QQ_REQUIRED_NATIVE_ADDONS = {
-    "qq/native/dpapi/win32-x64/@primno+dpapi.node",
-    "qq/native/ffmpeg/ffmpegAddon.win32.x64.node",
-    "qq/native/napi2native/ffmpeg.dll",
-    "qq/native/napi2native/napi2native.win32.x64.node",
-    "qq/native/packet/MoeHoo.win32.x64.node",
-    "qq/native/pty/win32.x64/conpty.node",
-    "qq/native/pty/win32.x64/conpty_console_list.node",
-    "qq/native/pty/win32.x64/pty.node",
-    "qq/native/pty/win32.x64/winpty-agent.exe",
-    "qq/native/pty/win32.x64/winpty.dll",
-}
-
-QQ_REQUIRED_DIRECTORIES = {
-    "qq/node_modules",
-    "qq/plugins",
-    "qq/static/qce",
-}
+CANDIDATE_CONTRACT = json.loads((PROJECT_ROOT / "scripts/qq_napcat_runtime_manifest.json").read_text())
+QQ_REQUIRED_FILES = {"qq-napcat-candidate/" + name for name in CANDIDATE_CONTRACT["requiredFiles"]}
+QQ_REQUIRED_NATIVE_ADDONS = set()
+QQ_REQUIRED_DIRECTORIES = {"qq-napcat-candidate/" + name for name in CANDIDATE_CONTRACT["requiredDirectories"]}
 
 # ------------------------------------------------------------------ WeChat
 WECHAT_REQUIRED_FILES = {
@@ -122,12 +72,12 @@ REQUIRED_DIRECTORIES = QQ_REQUIRED_DIRECTORIES | WECHAT_REQUIRED_DIRECTORIES
 
 # Machine-local state that must never become a shipped requirement.
 PRIVATE_PATHS = {
-    "qq/cache",
-    "qq/logs",
-    "qq/config/qq_path.txt",
-    "qq/config/webui.json",
-    "qq/config/plugins",
-    "qq/loadNapCat.js",
+    "qq-napcat-candidate/cache",
+    "qq-napcat-candidate/logs",
+    "qq-napcat-candidate/config/qq_path.txt",
+    "qq-napcat-candidate/config/webui.json",
+    "qq-napcat-candidate/config/plugins",
+    "qq-napcat-candidate/loadNapCat.js",
 }
 
 # Filename prefixes NapCat/QCE use for per-install configuration. They carry a
@@ -163,7 +113,7 @@ def _build_script_text() -> str:
 def test_manifest_uses_the_minimal_agreed_schema() -> None:
     manifest = _load_manifest()
 
-    assert set(manifest) == {"requirements", "privatePaths", "packageDirectories"}
+    assert set(manifest) == {"requirements", "privatePaths", "packageDirectories", "qqPins", "forbiddenPaths"}
 
     for key in ("requirements", "privatePaths", "packageDirectories"):
         for entry in _entries(manifest, key):
@@ -249,7 +199,7 @@ def test_manifest_describes_qq_and_wechat_runtime_separately() -> None:
     manifest = _load_manifest()
     sources = {entry["source"] for entry in _entries(manifest, "requirements")}
 
-    assert sources == {"qq", "wechat"}
+    assert sources == {"qq-napcat-candidate", "wechat"}
 
 
 # --------------------------------------------------------- privacy contract
@@ -281,10 +231,10 @@ def test_private_contract_covers_cache_logs_and_local_paths() -> None:
     manifest = _load_manifest()
     private = _paths(manifest, "privatePaths")
 
-    for directory in ("qq/cache", "qq/logs"):
+    for directory in ("qq-napcat-candidate/cache", "qq-napcat-candidate/logs"):
         assert directory in private
-    assert "qq/config/qq_path.txt" in private
-    assert "qq/config/webui.json" in private
+    assert "qq-napcat-candidate/config/qq_path.txt" in private
+    assert "qq-napcat-candidate/config/webui.json" in private
 
 
 # ------------------------------------------- build and tests share one source
@@ -362,5 +312,5 @@ def test_build_script_loads_the_contract_before_packaging() -> None:
 
 def test_manifest_limits_recursive_copy_to_program_payloads() -> None:
     assert _paths(_load_manifest(), "packageDirectories") == {
-        "qq/node_modules", "qq/static/qce", "wechat/node_modules/koffi",
+        "qq-napcat-candidate/node_modules", "qq-napcat-candidate/static", "qq-napcat-candidate/native", "qq-napcat-candidate/worker", "wechat/node_modules/koffi",
     }

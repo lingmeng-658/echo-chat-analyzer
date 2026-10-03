@@ -18,8 +18,8 @@ def _connection_module():
 def _status(
     *,
     available=False,
-    qce_running=False,
-    authenticated=False,
+    runtime_running=False,
+    qq_online=False,
     version=None,
     message="",
     action_hint="",
@@ -29,8 +29,8 @@ def _status(
     )
     return module.QQConnectionStatus(
         available=available,
-        qce_running=qce_running,
-        authenticated=authenticated,
+        runtime_running=runtime_running,
+        qq_online=qq_online,
         version=version,
         message=message,
         action_hint=action_hint,
@@ -86,8 +86,8 @@ def test_available_service_maps_to_connected() -> None:
     service = _StubConnectionService(
         _status(
             available=True,
-            qce_running=True,
-            authenticated=True,
+            runtime_running=True,
+            qq_online=True,
             version="9.9.9",
             message="QQ \u5df2\u8fde\u63a5\u3002",
         )
@@ -104,7 +104,7 @@ def test_available_service_maps_to_connected() -> None:
 def test_running_without_qq_data_maps_to_waiting_auth() -> None:
     module = _connection_module()
     service = _StubConnectionService(
-        _status(available=False, qce_running=True, authenticated=True)
+        _status(available=False, runtime_running=True, qq_online=True)
     )
 
     snapshot = _manager(connection_service=service).get_snapshot()
@@ -118,7 +118,7 @@ def test_running_without_qq_data_maps_to_waiting_auth() -> None:
 def test_stopped_service_maps_to_disconnected() -> None:
     module = _connection_module()
     service = _StubConnectionService(
-        _status(available=False, qce_running=False, authenticated=False)
+        _status(available=False, runtime_running=False, qq_online=False)
     )
 
     snapshot = _manager(connection_service=service).get_snapshot()
@@ -159,7 +159,7 @@ def test_runtime_started_without_qq_login_maps_to_waiting_auth() -> None:
         )
     )
     service = _StubConnectionService(
-        _status(available=False, qce_running=False, authenticated=False)
+        _status(available=False, runtime_running=False, qq_online=False)
     )
 
     snapshot = _manager(
@@ -183,7 +183,7 @@ def test_auth_waiting_keeps_waiting_when_qce_not_ready() -> None:
         )
     )
     service = _StubConnectionService(
-        _status(available=False, qce_running=False, authenticated=False)
+        _status(available=False, runtime_running=False, qq_online=False)
     )
     manager = _manager(
         setup_service=setup,
@@ -226,8 +226,8 @@ def test_auth_waiting_clears_once_qce_becomes_ready() -> None:
     service = _StubConnectionService(
         _status(
             available=True,
-            qce_running=True,
-            authenticated=True,
+            runtime_running=True,
+            qq_online=True,
             message="QQ \u5df2\u8fde\u63a5\u3002",
         )
     )
@@ -238,8 +238,8 @@ def test_auth_waiting_clears_once_qce_becomes_ready() -> None:
 
     service._status = _status(
         available=False,
-        qce_running=False,
-        authenticated=False,
+        runtime_running=False,
+        qq_online=False,
     )
     assert manager.get_snapshot().state is module.ConnectionState.DISCONNECTED
 
@@ -256,7 +256,7 @@ def test_auth_waiting_does_not_hide_runtime_fatal_failure() -> None:
         )
     )
     service = _StubConnectionService(
-        _status(available=False, qce_running=False, authenticated=False)
+        _status(available=False, runtime_running=False, qq_online=False)
     )
     manager = _manager(
         setup_service=setup,
@@ -284,8 +284,8 @@ def test_connect_delegates_to_the_setup_service_once() -> None:
     setup = _StubSetupService(
         connect_status=_status(
             available=True,
-            qce_running=True,
-            authenticated=True,
+            runtime_running=True,
+            qq_online=True,
         )
     )
 
@@ -300,15 +300,15 @@ def test_connect_returns_waiting_auth_without_waiting_for_login() -> None:
     setup = _StubSetupService(
         connect_status=_status(
             available=True,
-            qce_running=True,
-            authenticated=True,
+            runtime_running=True,
+            qq_online=True,
         )
     )
     service = _StubConnectionService(
         _status(
             available=False,
-            qce_running=True,
-            authenticated=False,
+            runtime_running=True,
+            qq_online=False,
         )
     )
 
@@ -326,15 +326,15 @@ def test_connect_starts_an_idle_runtime_and_reports_its_state() -> None:
     setup = _StubSetupService(
         connect_status=_status(
             available=False,
-            qce_running=True,
-            authenticated=False,
+            runtime_running=True,
+            qq_online=False,
         )
     )
     service = _StubConnectionService(
         _status(
             available=False,
-            qce_running=False,
-            authenticated=False,
+            runtime_running=False,
+            qq_online=False,
         )
     )
 
@@ -415,7 +415,7 @@ def test_disconnect_ends_auth_waiting_and_reports_disconnected() -> None:
         )
     )
     service = _StubConnectionService(
-        _status(available=False, qce_running=False, authenticated=False)
+        _status(available=False, runtime_running=False, qq_online=False)
     )
     manager = _manager(
         setup_service=setup,

@@ -1,7 +1,6 @@
 """Track the QQ processes LCA itself launched.
 
-The bundled QQ runtime is a process tree: LCA starts the QCE API server and
-the NapCat boot launcher, and the launcher starts the injected QQ client.
+The bundled QQ runtime is a process tree: Echo starts the NapCat boot launcher, and the launcher starts the injected QQ client.
 Only those PIDs belong to LCA; a QQ client the user opened on their own must
 never be touched. This registry records exactly the PIDs LCA created so the
 application can stop them on exit without scanning or killing unrelated QQ

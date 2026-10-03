@@ -22,7 +22,7 @@ $MsvcRuntimeNames = @(
     "vcruntime140.dll",
     "vcruntime140_1.dll"
 )
-$MsvcRuntimeTargets = @("qq", "wechat")
+$MsvcRuntimeTargets = @("qq-napcat-candidate", "wechat")
 $MsvcRuntimeMinimumVersion = [Version]"14.43"
 
 # The portable runtime contract lives in one tracked manifest so the build and
@@ -54,11 +54,41 @@ function Get-RuntimeContract {
 function Get-QQConfigSeedRequirement {
     return @(
         (Get-RuntimeContract).requirements | Where-Object {
-            [string]$_.source -eq "qq" -and
-            ([string]$_.path) -like "qq/config/*" -and
+            [string]$_.source -eq "qq-napcat-candidate" -and
+            ([string]$_.path) -like "qq-napcat-candidate/config/*" -and
             [string]$_.type -eq "file"
         }
     )
+}
+
+function Assert-NapCatArtifactPins([string]$Root) {
+    $PinsName = [string](Get-RuntimeContract).qqPins
+    if ($PinsName -ne 'qq_napcat_runtime_pins.json') {
+        throw 'Release must use the official Echo NapCat pins.'
+    }
+    $Pins = Get-Content -LiteralPath (Join-Path $PSScriptRoot $PinsName) -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($Pins.upstream.version -ne '4.18.18' -or $Pins.upstream.project -ne 'NapNeko/NapCatQQ') {
+        throw 'Unsupported release NapCat source.'
+    }
+    $Hashes = @{}
+    foreach ($Property in $Pins.requiredFiles.PSObject.Properties) {
+        $Hashes[$Property.Name] = [string]$Property.Value
+    }
+    $Hashes[[string]$Pins.napcatPatch.path] = [string]$Pins.napcatPatch.patchedSha256
+    $Hashes['config/plugins.json'] = [string]$Pins.pluginConfigSha256
+    foreach ($Template in $Pins.templates) {
+        $Hashes[[string]$Template.target] = [string]$Template.sha256
+    }
+    foreach ($Name in $Hashes.Keys) {
+        if ($Name -match '(^/|\\|:|(^|/)\.\.(/|$))' -or $Hashes[$Name] -notmatch '^[0-9a-f]{64}$') {
+            throw 'Invalid NapCat artifact pin.'
+        }
+        $Target = Join-Path $Root ("qq-napcat-candidate/" + $Name)
+        Assert-ProgramPathNotLinked $Target
+        if ((Get-FileHash -LiteralPath $Target -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Hashes[$Name]) {
+            throw ('NapCat artifact pin mismatch: ' + $Name)
+        }
+    }
 }
 
 function Assert-RuntimeContract {
@@ -108,6 +138,14 @@ function Assert-RuntimeContract {
             }
         }
     }
+    Assert-NapCatArtifactPins $Root
+    if ($Phase -eq 'portable') {
+        foreach ($Relative in (Get-RuntimeContract).forbiddenPaths) {
+            if (Test-Path -LiteralPath (Join-Path $Root $Relative)) {
+                throw ('Forbidden release runtime asset: ' + $Relative)
+            }
+        }
+    }
 }
 
 function Assert-PrivateRuntimeStateAbsent {
@@ -136,8 +174,6 @@ function Test-MutableRuntimePath([string]$RelativePath) {
         'session', 'sessions', 'auth')
     for ($Index = 0; $Index -lt $Parts.Count - 1; $Index++) {
         if ($Parts[$Index] -in $Directories) {
-            if ($RelativePath -like 'qq/static/qce/*' -and
-                $Index -eq 3 -and $Parts[$Index] -in @('auth', 'sessions')) { continue }
             return $true
         }
     }
@@ -167,6 +203,9 @@ function Copy-RuntimeProgramAssets([string]$SourceRoot, [string]$DestinationRoot
     foreach ($Entry in @($Contract.requirements | Where-Object { $_.type -eq 'file' }) +
         @($Contract.packageDirectories)) {
         $Relative = [string]$Entry.path
+        if ($Relative -match '(^|/)(qce-server\.exe|napcat-plugin-qce)(/|$)|(^|/)static/qce(/|$)') {
+            throw 'QCE is not a release program asset.'
+        }
         if ($Relative -match '(^/|\\|:|(^|/)\.\.(/|$))' -or
             -not $Relative.StartsWith(([string]$Entry.source + '/'))) {
             throw 'Invalid runtime program asset path in manifest.'
@@ -203,60 +242,6 @@ function Copy-RuntimeProgramAssets([string]$SourceRoot, [string]$DestinationRoot
     }
 }
 
-# NapCat bundles native addons for every Node.js platform/arch pair it supports
-# and selects exactly one variant at runtime via
-# `process.platform + "." + process.arch` (native\ffmpeg, native\napi2native,
-# native\packet, native\pty, native\dpapi). This distribution targets Windows
-# x64, so only the win32.x64 addons can ever be loaded and the packaged copy
-# drops the foreign platform/arch variants. The repository runtime directory
-# stays complete as the upstream source of truth.
-#
-# The pattern matches a single path segment carrying a foreign platform
-# designator (native\pty\linux.x64, native\dpapi\win32-arm64) or a foreign
-# architecture designator for an x64-only distribution
-# (MoeHoo.linux.arm64.node). Segments carrying neither designator, such as
-# native\napi2native\ffmpeg.dll, are kept.
-$ForeignNativeSegmentPattern = '(^|[.\-_])(linux|darwin|freebsd|openbsd|netbsd|sunos|aix|android|arm64)([.\-_]|$)'
-
-function Remove-ForeignQQNativeAssets {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$NativeRoot,
-        [Parameter(Mandatory = $true)]
-        [string]$ForeignSegmentPattern
-    )
-
-    if (-not (Test-Path -LiteralPath $NativeRoot -PathType Container)) {
-        return
-    }
-
-    $ForeignFiles = @(
-        Get-ChildItem -LiteralPath $NativeRoot -Recurse -File -Force |
-            Where-Object {
-                $Segments = $_.FullName.Substring($NativeRoot.Length) -split '[\\/]'
-                @($Segments | Where-Object {
-                        $_ -match $ForeignSegmentPattern
-                    }).Count -gt 0
-            }
-    )
-    foreach ($ForeignFile in $ForeignFiles) {
-        Remove-Item -LiteralPath $ForeignFile.FullName -Force
-    }
-
-    # Foreign-only directories (native\pty\linux.x64, native\dpapi\win32-arm64)
-    # are left behind as empty shells once their payload is gone.
-    $ForeignDirectories = @(
-        Get-ChildItem -LiteralPath $NativeRoot -Recurse -Directory -Force |
-            Sort-Object { $_.FullName.Length } -Descending |
-            Where-Object { $_.Name -match $ForeignSegmentPattern }
-    )
-    foreach ($ForeignDirectory in $ForeignDirectories) {
-        if (@(Get-ChildItem -LiteralPath $ForeignDirectory.FullName -Force).Count -eq 0) {
-            Remove-Item -LiteralPath $ForeignDirectory.FullName -Force
-        }
-    }
-}
-
 if (-not (Test-Path -LiteralPath $RuntimeSource -PathType Container)) {
     throw "Runtime source directory is missing. Restore the repository runtime directory before building."
 }
@@ -270,7 +255,7 @@ Push-Location $ProjectRoot
 try {
     if (-not $RuntimeOnly) {
         if (-not (Test-Path -LiteralPath $PyInstaller)) {
-            & $VenvPython -m pip install pyinstaller
+            throw "Project .venv PyInstaller is missing; restore the approved build environment first."
         }
         & $PyInstaller --clean --noconfirm LocalChatAnalyzer.spec
         if ($LASTEXITCODE -ne 0) {
@@ -284,11 +269,7 @@ try {
     }
     Copy-RuntimeProgramAssets -SourceRoot $RuntimeSource -DestinationRoot $PortableRuntime
 
-    # Ship only the native addons this Windows x64 distribution loads; see the
-    # pruning policy above.
-    Remove-ForeignQQNativeAssets -NativeRoot (
-        Join-Path $PortableRuntime "qq\native"
-    ) -ForeignSegmentPattern $ForeignNativeSegmentPattern
+    # Preserve the complete verified official NapCat dependency layout.
 
     # The QQ launchers and WeChat native libraries use the MSVC dynamic
     # runtime. Ship it app-local so both child-process trees also start on
@@ -323,7 +304,7 @@ try {
 
     # Never publish machine-specific NapCat state, account config, or logs.
     foreach ($GeneratedName in @("cache", "config", "logs")) {
-        $GeneratedPath = Join-Path $PortableRuntime "qq\$GeneratedName"
+        $GeneratedPath = Join-Path $PortableRuntime "qq-napcat-candidate\$GeneratedName"
         if (Test-Path -LiteralPath $GeneratedPath) {
             Remove-Item -LiteralPath $GeneratedPath -Recurse -Force
         }
@@ -331,7 +312,7 @@ try {
 
     # loadNapCat.js is rewritten by the launcher on every start and embeds the
     # absolute runtime folder of whichever machine generated it.
-    $GeneratedLoader = Join-Path $PortableRuntime "qq\loadNapCat.js"
+    $GeneratedLoader = Join-Path $PortableRuntime "qq-napcat-candidate\loadNapCat.js"
     if (Test-Path -LiteralPath $GeneratedLoader) {
         Remove-Item -LiteralPath $GeneratedLoader -Force
     }

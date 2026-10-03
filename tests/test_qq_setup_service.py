@@ -108,23 +108,20 @@ class _FakeProviderFactory:
 def _config(tmp_path: Path, *, complete: bool = True):
     module = _module()
     runtime = tmp_path / "runtime"
-    qce = runtime / "qce-server.exe"
     if complete:
-        runtime.mkdir(exist_ok=True)
-        qce.write_text("fake", encoding="utf-8")
-    return module.QQEnvironmentConfig(
-        runtime_directory=runtime,
-        qce_path=qce,
-        base_url="http://127.0.0.1:40653",
-    )
+        for name in ("napcat.mjs", "NapCatWinBootMain.exe", "NapCatWinBootHook.dll", "plugins/napcat-plugin-echo/index.mjs", "plugins/napcat-plugin-echo/bridge.mjs"):
+            path = runtime / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("fictional", encoding="utf-8")
+    return module.QQEnvironmentConfig(runtime_directory=runtime)
 
 
 def _connection_status(*, available: bool = True):
     module = _connection_module()
     return module.QQConnectionStatus(
         available=available,
-        qce_running=available,
-        authenticated=available,
+        runtime_running=available,
+        qq_online=available,
         version="4.1.0",
         message=(
             "QQ \u5df2\u8fde\u63a5\u3002"
@@ -218,10 +215,10 @@ def test_connect_persists_detected_default_when_no_config_exists(
     assert manager.start_calls == 1
     assert factory.invalidate_calls == 1
     assert result.available is False
-    assert result.qce_running is True
-    assert result.authenticated is False
+    assert result.runtime_running is True
+    assert result.qq_online is False
     stored = _stored_config(tmp_path)
-    assert stored.qce_path == config.qce_path
+    assert stored.runtime_directory == config.runtime_directory
 
 
 def test_connect_repairs_stale_portable_paths_with_bundled_runtime(
@@ -231,13 +228,7 @@ def test_connect_repairs_stale_portable_paths_with_bundled_runtime(
     module = _module()
     stale = module.QQEnvironmentConfig(
         runtime_directory=tmp_path / "old-echo" / "runtime" / "qq",
-        qce_path=(
-            tmp_path
-            / "old-echo"
-            / "runtime"
-            / "qq"
-            / "qce-server.exe"
-        ),
+
     )
     _store_config(tmp_path, stale)
     bundled = _config(tmp_path)
@@ -263,8 +254,8 @@ def test_connect_repairs_stale_portable_paths_with_bundled_runtime(
     result = service.connect()
 
     assert manager.start_calls == 1
-    assert result.qce_running is True
-    assert _stored_config(tmp_path).qce_path == bundled.qce_path
+    assert result.runtime_running is True
+    assert _stored_config(tmp_path).runtime_directory == bundled.runtime_directory
     assert factory.invalidate_calls == 1
 
 
@@ -287,8 +278,8 @@ def test_connect_starts_a_stopped_runtime_and_returns_connection_status(
 
     assert manager.start_calls == 1
     assert result.available is False
-    assert result.qce_running is True
-    assert result.authenticated is False
+    assert result.runtime_running is True
+    assert result.qq_online is False
 
 
 def test_connect_keeps_an_existing_user_config(tmp_path: Path) -> None:
@@ -296,15 +287,8 @@ def test_connect_keeps_an_existing_user_config(tmp_path: Path) -> None:
     writer = module.QQEnvironmentConfigWriter(
         config_path=tmp_path / "qq.json"
     )
-    runtime = tmp_path / "runtime"
-    runtime.mkdir(exist_ok=True)
-    custom_qce = runtime / "custom.exe"
-    custom_qce.write_text("fake", encoding="utf-8")
-    custom = module.QQEnvironmentConfig(
-        runtime_directory=runtime,
-        qce_path=custom_qce,
-        base_url="http://127.0.0.1:40999",
-    )
+    from dataclasses import replace
+    custom = replace(_config(tmp_path), napcat_bridge_url="http://127.0.0.1:40999")
     writer.save(custom)
 
     manager = _FakeRuntimeManager()
@@ -321,7 +305,7 @@ def test_connect_keeps_an_existing_user_config(tmp_path: Path) -> None:
 
     assert factory.invalidate_calls == 0
     stored = _stored_config(tmp_path)
-    assert stored.base_url == "http://127.0.0.1:40999"
+    assert stored.napcat_bridge_url == "http://127.0.0.1:40999"
 
 
 def test_connect_does_not_start_an_already_running_runtime(
@@ -356,6 +340,7 @@ def test_connect_without_runtime_returns_unavailable_status(
         "bundled_qq_runtime_available",
         lambda: False,
     )
+    monkeypatch.setattr(env_module, "default_qq_environment_config", lambda: config)
     manager = _FakeRuntimeManager(available=False)
     unavailable = _connection_status(available=False)
     service = _service(
@@ -436,8 +421,8 @@ def test_connect_without_connection_service_uses_runtime_status(
 
     assert manager.start_calls == 1
     assert result.available is False
-    assert result.qce_running is True
-    assert result.authenticated is False
+    assert result.runtime_running is True
+    assert result.qq_online is False
 
 
 def test_connect_returns_waiting_auth_without_waiting_for_login(
@@ -480,8 +465,8 @@ def test_connect_returns_waiting_auth_without_waiting_for_login(
     assert manager.start_calls == 1
     assert connection.check_calls == 1
     assert result.available is False
-    assert result.qce_running is True
-    assert result.authenticated is False
+    assert result.runtime_running is True
+    assert result.qq_online is False
 
 
 def test_connect_start_failure_returns_runtime_error_status(
@@ -506,30 +491,6 @@ def test_connect_start_failure_returns_runtime_error_status(
     assert result.action_hint != ""
 
 
-def test_default_runtime_factory_builds_bundled_manager(
-    tmp_path: Path,
-) -> None:
-    module = _module()
-    runtime_dir = tmp_path / "runtime"
-    (runtime_dir / "static" / "qce").mkdir(parents=True)
-    (runtime_dir / "napcat").mkdir(parents=True)
-    qce = runtime_dir / "qce-server.exe"
-    qce.write_text("fake", encoding="utf-8")
-    config = module.QQEnvironmentConfig(
-        runtime_directory=runtime_dir,
-        qce_path=qce,
-        qce_config_directory=tmp_path / "config",
-        base_url="http://127.0.0.1:40653",
-        security_path=tmp_path / "config" / "security.json",
-        napcat_bridge_url="http://127.0.0.1:40654",
-    )
-
-    manager = module.default_runtime_factory(config)
-
-    assert manager.is_available() is True
-    runtime = manager._runtime
-    assert runtime._config.static_directory == runtime_dir / "static" / "qce"
-    assert runtime._config.bridge_url == "http://127.0.0.1:40654"
 
 
 def test_connect_failure_never_leaks_runtime_config_type_error(
@@ -564,25 +525,3 @@ def test_connect_failure_never_leaks_runtime_config_type_error(
     assert "TypeError" not in result.message
     assert "QQRuntimeConfig" not in result.message
     assert "Traceback" not in result.message
-
-
-def test_bundled_runtime_available_accepts_flat_napcat_layout(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    module = importlib.import_module(
-        "qq_chat_analyzer.application.qq_environment_config"
-    )
-    runtime = tmp_path / "runtime"
-    qce = runtime / "qce-server.exe"
-    static = runtime / "static" / "qce"
-    marker = runtime / "napcat.mjs"
-    qce.parent.mkdir(parents=True)
-    static.mkdir(parents=True)
-    qce.write_text("fake", encoding="utf-8")
-    marker.write_text("fake", encoding="utf-8")
-    monkeypatch.setattr(module, "default_qq_qce_path", lambda: qce)
-    monkeypatch.setattr(module, "default_qq_static_directory", lambda: static)
-    monkeypatch.setattr(module, "default_qq_runtime_directory", lambda: runtime)
-
-    assert module.bundled_qq_runtime_available() is True

@@ -284,6 +284,16 @@ Portable build 已存在。
 
 #### REL-06 附：Windows portable package hardening 记录
 
+当前 De-QCE 发布合同：先使用项目 `.venv` 的 Python 运行
+`scripts/bootstrap_qq_napcat_runtime.py`（可用 `--archive` 复用官方 archive，仍校验 hash），
+再运行 `scripts/build_windows_exe.ps1`。QQ 发布源为 `runtime/qq-napcat-candidate`，
+不要求旧 QCE runtime 存在；Stage 4B 已移除旧 Desktop bootstrap 与 rollback。
+CLI QCE 导出与既有 JSON 导入仍保留，CLI 使用自行部署的外部 QCE 服务。
+正式发布不携带 qce-server、napcat-plugin-qce、static/qce 或账户配置、日志、snapshot
+plaintext。程序白名单和关键 hash 在复制前后检查，MSVC DLL 复制至 candidate 与 WeChat。
+本轮保留官方 NapCat 完整依赖布局，不应用下述历史 PACK-SIZE-01 native pruning。
+发布验收必须使用新生成的 Echo.exe，不能以源码 GUI E2E 替代。
+
 包体变化：
 
 | 阶段 | unpacked | ZIP |
@@ -366,7 +376,7 @@ Release Blocker：Yes。
 
 ## QQ Direct DB 最终验收 checkpoint（2026-10-02）
 
-桌面 QQ 会话查询与分析当前使用 Direct DB 主链；QCE CLI 与连接/运行时能力仍保留，
+桌面 QQ 会话查询与分析当前使用 Direct DB 主链；QCE CLI 与既有 JSON 文件兼容仍保留，
 桌面分析没有自动 QCE fallback。架构与生命周期以 `ARCHITECTURE.md` 为准。
 
 最终状态：Stage 3.5 CLOSED、A4 CLOSED、A5 CLOSED、A6 CLOSED、

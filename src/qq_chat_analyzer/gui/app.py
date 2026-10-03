@@ -96,8 +96,9 @@ def _wechat_bundle_factory() -> Any:
 def _qq_provider_factory() -> Any:
     """Build the one factory all QQ services share."""
     from ..application.qq_provider_factory import QQProviderFactory
+    from ..application.qq_environment_config import QQEnvironmentConfigLoader
 
-    return QQProviderFactory()
+    return QQProviderFactory(config_loader=QQEnvironmentConfigLoader())
 
 
 def _optional_qq_service(provider_factory: Any) -> Any:
@@ -105,7 +106,7 @@ def _optional_qq_service(provider_factory: Any) -> Any:
         QQDirectDatabaseImportService,
     )
 
-    return QQDirectDatabaseImportService(provider_factory=provider_factory)
+    return QQDirectDatabaseImportService(provider_factory=provider_factory, config_loader=getattr(provider_factory, "config_loader", None))
 
 
 def _optional_qq_connection_service(provider_factory: Any) -> Any:
@@ -121,6 +122,7 @@ def _optional_qq_setup_service(
     from ..application.qq_setup_service import QQSetupService
 
     return QQSetupService(
+        config_loader=getattr(provider_factory, "config_loader", None),
         provider_factory=provider_factory,
         connection_service=connection_service,
     )

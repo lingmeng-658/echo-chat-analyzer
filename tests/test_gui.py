@@ -383,8 +383,8 @@ class StubFacade:
         module = _facade_module()
         self._connection_status = module.QQConnectionStatus(
             available=False,
-            qce_running=False,
-            authenticated=False,
+            runtime_running=False,
+            qq_online=False,
             version="",
             message="QQ 尚未连接。",
             action_hint="",
@@ -484,8 +484,8 @@ class StubFacade:
             )
         return module.QQConnectionStatus(
             available=True,
-            qce_running=True,
-            authenticated=True,
+            runtime_running=True,
+            qq_online=True,
             version="4.1.0",
             message="\u5df2\u8fde\u63a5",
             action_hint="",
@@ -1424,8 +1424,8 @@ def test_main_window_size_stable_across_page_switches(qt_app, sources) -> None:
 def _connection_status(
     *,
     available: bool,
-    qce_running: bool,
-    authenticated: bool,
+    runtime_running: bool,
+    qq_online: bool,
     version: str | None = None,
     message: str,
     action_hint: str,
@@ -1433,8 +1433,8 @@ def _connection_status(
     module = _facade_module()
     return module.QQConnectionStatus(
         available=available,
-        qce_running=qce_running,
-        authenticated=authenticated,
+        runtime_running=runtime_running,
+        qq_online=qq_online,
         version=version,
         message=message,
         action_hint=action_hint,
@@ -1495,22 +1495,6 @@ def _wechat_available_sources():
     )
 
 
-def test_qq_setup_dialog_prefills_effective_config(qt_app) -> None:
-    module = _facade_module()
-    dialog_module = importlib.import_module(
-        "qq_chat_analyzer.gui.qq_setup_dialog"
-    )
-    config = module.QQEnvironmentConfig(
-        runtime_directory=Path("D:/fake_runtime"),
-        qce_path=Path("D:/fake_qce_server.exe"),
-        base_url="http://127.0.0.1:40653",
-    )
-
-    dialog = dialog_module.QQSetupDialog(config=config)
-
-    assert dialog._runtime_dir_edit.text() == str(Path("D:/fake_runtime"))
-    assert dialog._qce_path_edit.text() == str(Path("D:/fake_qce_server.exe"))
-    assert dialog._base_url_edit.text() == "http://127.0.0.1:40653"
 
 
 def test_dashboard_page_starts_empty(qt_app) -> None:
@@ -2656,7 +2640,7 @@ def test_qq_workspace_shows_connect_button_when_disconnected(
     from qq_chat_analyzer.gui.main_window import QQ_WORKSPACE_INDEX
     module = _facade_module()
     status = module.QQConnectionStatus(
-        available=False, qce_running=False, authenticated=False,
+        available=False, runtime_running=False, qq_online=False,
         version="", message="QQ 服务未运行。", action_hint="",
     )
     facade = StubFacade(
@@ -2841,8 +2825,8 @@ def test_qq_workspace_disconnect_returns_to_disconnected(
     module = _facade_module()
     connected = module.QQConnectionStatus(
         available=True,
-        qce_running=True,
-        authenticated=True,
+        runtime_running=True,
+        qq_online=True,
         version="4.1.0",
         message="QQ 已连接。",
         action_hint="",
@@ -2901,7 +2885,7 @@ def test_qq_connection_does_not_crash_without_explicit_executor(
     """QQ connect works when MainWindow was created without an executor."""
     module = _facade_module()
     status = module.QQConnectionStatus(
-        available=False, qce_running=False, authenticated=False,
+        available=False, runtime_running=False, qq_online=False,
         version="", message="QQ 尚未连接。", action_hint="",
     )
     facade = StubFacade(sources=sources, connection_status=status)
@@ -3242,11 +3226,11 @@ def test_qq_workspace_full_chain_connect_sessions_analyze(
     qq_module = importlib.import_module("qq_chat_analyzer.gui.qq_workspace")
     monkeypatch.setattr(qq_module, "_QQ_CONNECT_MIN_DISPLAY_MS", 0)
     disconnected = module.QQConnectionStatus(
-        available=False, qce_running=False, authenticated=False,
+        available=False, runtime_running=False, qq_online=False,
         version="", message="QQ 尚未连接。", action_hint="",
     )
     connected = module.QQConnectionStatus(
-        available=True, qce_running=True, authenticated=True,
+        available=True, runtime_running=True, qq_online=True,
         version="4.1.0", message="已连接", action_hint="",
     )
     report_path = tmp_path / "echo-qq.html"
