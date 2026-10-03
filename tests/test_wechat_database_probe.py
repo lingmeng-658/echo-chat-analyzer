@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from qq_chat_analyzer.application.wechat_setup_service import WeChatSetupService
-from qq_chat_analyzer.application.wechat_environment_config import (
+from qq_chat_analyzer.application.wechat.wechat_setup_service import WeChatSetupService
+from qq_chat_analyzer.application.wechat.wechat_environment_config import (
     WeChatEnvironmentConfig,
 )
 from qq_chat_analyzer.providers.wechat_database_provider import (

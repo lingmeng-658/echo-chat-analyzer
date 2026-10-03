@@ -11,15 +11,15 @@ from typing import Any
 
 import pytest
 
-from qq_chat_analyzer.application.wechat_environment_config import (
+from qq_chat_analyzer.application.wechat.wechat_environment_config import (
     WeChatEnvironmentConfig,
     WeChatEnvironmentConfigLoader,
     WeChatEnvironmentConfigWriter,
 )
-from qq_chat_analyzer.application.wechat_provider_factory import (
+from qq_chat_analyzer.application.wechat.wechat_provider_factory import (
     WeChatProviderFactory,
 )
-from qq_chat_analyzer.application.wechat_setup_service import WeChatSetupService
+from qq_chat_analyzer.application.wechat.wechat_setup_service import WeChatSetupService
 from qq_chat_analyzer.providers.wechat_database_provider import (
     DatabaseUnreadable,
     WeChatDatabaseProvider,

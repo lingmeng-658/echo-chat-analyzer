@@ -77,18 +77,18 @@ from .runtime import (
     QQRuntimeState,
     QQRuntimeStatus,
 )
-from .wechat_export_import_service import (
+from .wechat.wechat_export_import_service import (
     WeChatExportFileMissing,
     WeChatExportImportRequest,
     WeChatExportImportService,
     WeChatExportProvider,
     WeChatExportUnavailable,
 )
-from .wechat_connection_service import (
+from .wechat.wechat_connection_service import (
     WeChatConnectionService,
     WeChatConnectionStatus,
 )
-from .wechat_environment_config import (
+from .wechat.wechat_environment_config import (
     WeChatConfigCorrupted,
     WeChatConfigNotFound,
     WeChatConfigWriteFailed,
@@ -97,11 +97,11 @@ from .wechat_environment_config import (
     WeChatEnvironmentConfigLoader,
     WeChatEnvironmentConfigWriter,
 )
-from .wechat_provider_factory import (
+from .wechat.wechat_provider_factory import (
     WeChatProviderFactory,
     WeChatProviderUnavailable,
 )
-from .wechat_setup_service import (
+from .wechat.wechat_setup_service import (
     WeChatSetupService,
     WeChatSetupState,
     WeChatSetupStatus,

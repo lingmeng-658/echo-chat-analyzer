@@ -11,7 +11,7 @@ sys.modules[spec.name] = module
 assert spec.loader is not None
 spec.loader.exec_module(module)
 
-from qq_chat_analyzer.application.wechat_environment_config import WeChatEnvironmentConfig
+from qq_chat_analyzer.application.wechat.wechat_environment_config import WeChatEnvironmentConfig
 
 
 class Loader:
@@ -58,7 +58,7 @@ def test_fake_key_failure_is_safe():
     assert "secret" not in (report.error or "")
 class MissingLoaderForTest:
     def load(self):
-        from qq_chat_analyzer.application.wechat_environment_config import WeChatConfigNotFound
+        from qq_chat_analyzer.application.wechat.wechat_environment_config import WeChatConfigNotFound
         raise WeChatConfigNotFound()
 
 

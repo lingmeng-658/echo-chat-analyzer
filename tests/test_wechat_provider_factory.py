@@ -22,25 +22,25 @@ sys.path.insert(0, str(SRC_ROOT))
 
 def _factory_module():
     return importlib.import_module(
-        "qq_chat_analyzer.application.wechat_provider_factory"
+        "qq_chat_analyzer.application.wechat.wechat_provider_factory"
     )
 
 
 def _config_module():
     return importlib.import_module(
-        "qq_chat_analyzer.application.wechat_environment_config"
+        "qq_chat_analyzer.application.wechat.wechat_environment_config"
     )
 
 
 def _connection_module():
     return importlib.import_module(
-        "qq_chat_analyzer.application.wechat_connection_service"
+        "qq_chat_analyzer.application.wechat.wechat_connection_service"
     )
 
 
 def _export_module():
     return importlib.import_module(
-        "qq_chat_analyzer.application.wechat_export_import_service"
+        "qq_chat_analyzer.application.wechat.wechat_export_import_service"
     )
 
 
@@ -268,7 +268,23 @@ def test_export_import_service_does_not_import_provider_module():
         SRC_ROOT
         / "qq_chat_analyzer"
         / "application"
+        / "wechat"
         / "wechat_export_import_service.py"
     ).read_text(encoding="utf-8")
 
-    assert "from ..providers" not in source
+    import ast
+    from importlib.util import resolve_name
+
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            targets = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            target = "." * node.level + (node.module or "")
+            targets = [resolve_name(target, "qq_chat_analyzer.application.wechat")]
+        else:
+            continue
+        assert not any(
+            target == "qq_chat_analyzer.providers"
+            or target.startswith("qq_chat_analyzer.providers.")
+            for target in targets
+        )

@@ -27,7 +27,7 @@ sys.path.insert(0, str(SRC_ROOT))
 
 def _module():
     return importlib.import_module(
-        "qq_chat_analyzer.application.wechat_key_service"
+        "qq_chat_analyzer.application.wechat.wechat_key_service"
     )
 
 

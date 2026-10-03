@@ -26,10 +26,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from .errors import ApplicationServiceError
-from .import_outcome import ImportOutcome
-from .import_request import ImportRequest
-from .import_service import ImportService
+from ..errors import ApplicationServiceError
+from ..import_outcome import ImportOutcome
+from ..import_request import ImportRequest
+from ..import_service import ImportService
 
 
 _LOGGER = logging.getLogger(

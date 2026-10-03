@@ -577,7 +577,15 @@ GUI 只装配控件、转发事件、展示状态。
 | `application/qq_export_import_service.py` | 来源编排（QQ） |
 | `application/qq_connection_service.py` | 来源连接状态（QQ） |
 | `application/runtime/qq_runtime_manager.py` | 外部运行时管理（QQ） |
-| `application/wechat_export_import_service.py` | 来源编排（微信） |
+| `application/wechat/wechat_export_import_service.py` | 来源编排（微信） |
+| `application/wechat/wechat_connection_service.py` | 微信连接状态 |
+| `application/wechat/wechat_connection_progress.py` | 微信连接进度 |
+| `application/wechat/wechat_setup_service.py` | 微信连接设置 |
+| `application/wechat/wechat_environment_config.py` | 微信环境配置 |
+| `application/wechat/wechat_provider_factory.py` | 微信 Provider 装配与缓存 |
+| `application/wechat/wechat_data_detector.py` | 微信数据位置检测 |
+| `application/wechat/wechat_key_service.py` | 微信读取授权 |
+| `application/wechat_connection_service.py` / `application/wechat_environment_config.py` | 保留的公共旧模块路径，仅重导出微信实现对象 |
 | `application/analysis_service.py` | 应用服务 |
 | `application/scope_filter.py` | 单次分析时间范围过滤 |
 | `application/report_history.py` | 分析历史元数据 JSONL 存储 |

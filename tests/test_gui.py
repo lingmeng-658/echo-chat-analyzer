@@ -430,7 +430,7 @@ class StubFacade:
         if self._setup_status is not None:
             return self._setup_status
         module = importlib.import_module(
-            "qq_chat_analyzer.application.wechat_setup_service"
+            "qq_chat_analyzer.application.wechat.wechat_setup_service"
         )
         return module.WeChatSetupStatus(
             state=module.WeChatSetupState.CONFIG_MISSING,
@@ -4724,9 +4724,9 @@ def test_wechat_structured_progress_crosses_real_facade_and_worker(
 ):
     import io
     from types import SimpleNamespace
-    from qq_chat_analyzer.application import wechat_key_service
-    from qq_chat_analyzer.application.wechat_setup_service import WeChatSetupService
-    from qq_chat_analyzer.application.wechat_environment_config import (
+    from qq_chat_analyzer.application.wechat import wechat_key_service
+    from qq_chat_analyzer.application.wechat.wechat_setup_service import WeChatSetupService
+    from qq_chat_analyzer.application.wechat.wechat_environment_config import (
         WeChatEnvironmentConfigLoader, WeChatEnvironmentConfigWriter,
     )
     from qq_chat_analyzer.gui import workers

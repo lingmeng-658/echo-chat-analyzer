@@ -14,15 +14,15 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from qq_chat_analyzer.application.wechat_environment_config import (  # noqa: E402
+from qq_chat_analyzer.application.wechat.wechat_environment_config import (  # noqa: E402
     WeChatEnvironmentConfig,
     WeChatEnvironmentConfigLoader,
 )
-from qq_chat_analyzer.application.wechat_key_service import (  # noqa: E402
+from qq_chat_analyzer.application.wechat.wechat_key_service import (  # noqa: E402
     WeChatKeyService,
     WeChatKeyUnavailable,
 )
-from qq_chat_analyzer.application.wechat_provider_factory import (  # noqa: E402
+from qq_chat_analyzer.application.wechat.wechat_provider_factory import (  # noqa: E402
     WeChatProviderFactory,
     default_provider_builder,
 )

@@ -25,7 +25,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
 
-from .errors import ApplicationServiceError
+from ..errors import ApplicationServiceError
 from .wechat_connection_progress import WeChatConnectionProgress
 from .wechat_data_detector import (
     detect_wechat_data_roots,

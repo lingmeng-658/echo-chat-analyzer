@@ -21,13 +21,13 @@ sys.path.insert(0, str(SRC_ROOT))
 
 def _module():
     return importlib.import_module(
-        "qq_chat_analyzer.application.wechat_connection_service"
+        "qq_chat_analyzer.application.wechat.wechat_connection_service"
     )
 
 
 def _config_module():
     return importlib.import_module(
-        "qq_chat_analyzer.application.wechat_environment_config"
+        "qq_chat_analyzer.application.wechat.wechat_environment_config"
     )
 
 

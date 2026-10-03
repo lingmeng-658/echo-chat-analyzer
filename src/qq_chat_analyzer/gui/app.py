@@ -134,13 +134,13 @@ def _wechat_provider_factory() -> Any:
     Status checks and session reads must agree, so they are given the same
     factory rather than each constructing a provider of their own.
     """
-    from ..application.wechat_provider_factory import WeChatProviderFactory
+    from ..application.wechat.wechat_provider_factory import WeChatProviderFactory
 
     return WeChatProviderFactory()
 
 
 def _optional_wechat_service(provider_factory: Any) -> Any:
-    from ..application.wechat_export_import_service import (
+    from ..application.wechat.wechat_export_import_service import (
         WeChatExportImportService,
     )
 
@@ -148,7 +148,7 @@ def _optional_wechat_service(provider_factory: Any) -> Any:
 
 
 def _optional_wechat_connection_service(provider_factory: Any) -> Any:
-    from ..application.wechat_connection_service import (
+    from ..application.wechat.wechat_connection_service import (
         WeChatConnectionService,
     )
 
@@ -159,8 +159,8 @@ def _optional_wechat_setup_service(
     provider_factory: Any,
     connection_service: Any,
 ) -> Any:
-    from ..application.wechat_key_service import WeChatKeyService
-    from ..application.wechat_setup_service import WeChatSetupService
+    from ..application.wechat.wechat_key_service import WeChatKeyService
+    from ..application.wechat.wechat_setup_service import WeChatSetupService
 
     return WeChatSetupService(
         provider_factory=provider_factory,

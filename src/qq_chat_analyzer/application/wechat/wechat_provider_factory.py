@@ -1,7 +1,7 @@
 """Build the WeChat database provider from one configuration source.
 
 This factory is the single place in the application layer that turns a
-:class:`~qq_chat_analyzer.application.wechat_environment_config
+:class:`~qq_chat_analyzer.application.wechat.wechat_environment_config
 .WeChatEnvironmentConfig` into a live WeChat provider.
 
 Before this existed, the connection status check and the session/message read
@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from .errors import ApplicationServiceError
+from ..errors import ApplicationServiceError
 from .wechat_environment_config import (
     WeChatEnvironmentConfig,
     WeChatEnvironmentConfigError,
@@ -44,7 +44,7 @@ class WeChatProviderUnavailable(ApplicationServiceError):
 
 def default_provider_builder(config: WeChatEnvironmentConfig) -> Any:
     """Construct the real provider from one environment config."""
-    from ..providers.wechat_database_provider import WeChatDatabaseProvider
+    from ...providers.wechat_database_provider import WeChatDatabaseProvider
 
     return WeChatDatabaseProvider(
         data_root=config.data_root,

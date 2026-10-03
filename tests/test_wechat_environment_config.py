@@ -19,7 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_ROOT))
 
-from qq_chat_analyzer.application.wechat_environment_config import (  # noqa: E402
+from qq_chat_analyzer.application.wechat.wechat_environment_config import (  # noqa: E402
     WeChatConfigCorrupted,
     WeChatConfigNotFound,
     WeChatEnvironmentConfig,
@@ -115,7 +115,7 @@ def test_load_or_default_uses_bundled_runtime(
     (wechat / "wcdb_cli.exe").write_text("fake", encoding="utf-8")
     (wechat / "WCDB.dll").write_text("fake", encoding="utf-8")
     module = importlib.import_module(
-        "qq_chat_analyzer.application.wechat_environment_config"
+        "qq_chat_analyzer.application.wechat.wechat_environment_config"
     )
     _patch_bundled_defaults(monkeypatch, module, bundle)
 
@@ -134,7 +134,7 @@ def test_load_or_default_raises_without_bundled_runtime(
     bundle = tmp_path / "empty-bundle"
     bundle.mkdir(parents=True)
     module = importlib.import_module(
-        "qq_chat_analyzer.application.wechat_environment_config"
+        "qq_chat_analyzer.application.wechat.wechat_environment_config"
     )
     _patch_bundled_defaults(monkeypatch, module, bundle)
 
@@ -175,7 +175,7 @@ def test_load_or_default_repairs_stale_runtime_paths(
     (wechat / "wcdb_cli.exe").write_text("fake", encoding="utf-8")
     (wechat / "WCDB.dll").write_text("fake", encoding="utf-8")
     module = importlib.import_module(
-        "qq_chat_analyzer.application.wechat_environment_config"
+        "qq_chat_analyzer.application.wechat.wechat_environment_config"
     )
     _patch_bundled_defaults(monkeypatch, module, bundle)
     loader = _loader(

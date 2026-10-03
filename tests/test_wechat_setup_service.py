@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from qq_chat_analyzer.application.wechat_environment_config import (
+from qq_chat_analyzer.application.wechat.wechat_environment_config import (
     WeChatConfigCorrupted,
     WeChatConfigNotFound,
     WeChatConfigWriteFailed,
@@ -18,13 +18,13 @@ from qq_chat_analyzer.application.wechat_environment_config import (
     WeChatEnvironmentConfigLoader,
     WeChatEnvironmentConfigWriter,
 )
-from qq_chat_analyzer.application.wechat_key_service import (
+from qq_chat_analyzer.application.wechat.wechat_key_service import (
     WeChatKeyUnavailable,
 )
-from qq_chat_analyzer.application.wechat_provider_factory import (
+from qq_chat_analyzer.application.wechat.wechat_provider_factory import (
     WeChatProviderFactory,
 )
-from qq_chat_analyzer.application.wechat_setup_service import (
+from qq_chat_analyzer.application.wechat.wechat_setup_service import (
     WeChatSetupService,
     WeChatSetupState,
     WeChatSetupStatus,
@@ -321,7 +321,7 @@ def test_detect_wechat_data_root_uses_provider_default(
     monkeypatch,
 ) -> None:
     detector_module = __import__(
-        "qq_chat_analyzer.application.wechat_data_detector",
+        "qq_chat_analyzer.application.wechat.wechat_data_detector",
         fromlist=["registered_wechat_data_dirs"],
     )
     monkeypatch.setattr(
@@ -650,7 +650,7 @@ def test_save_environment_does_not_invalidate_on_failure(
 
 
 def test_setup_service_does_not_touch_database_modules() -> None:
-    from qq_chat_analyzer.application import wechat_setup_service as module
+    from qq_chat_analyzer.application.wechat import wechat_setup_service as module
 
     source = Path(module.__file__).read_text(encoding="utf-8")
 

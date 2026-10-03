@@ -22,8 +22,8 @@ from ctypes import wintypes
 from pathlib import Path
 from typing import Any, Callable
 
-from ..resources import default_wechat_wx_key_dll_path
-from .errors import ApplicationServiceError
+from ...resources import default_wechat_wx_key_dll_path
+from ..errors import ApplicationServiceError
 from .wechat_connection_progress import WeChatConnectionProgress
 
 

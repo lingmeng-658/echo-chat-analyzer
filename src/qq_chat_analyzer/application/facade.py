@@ -66,11 +66,11 @@ from .qq_export_import_service import (
 from .qq_setup_service import QQSetupStatus
 from .echo_report_export import ECHO_REPORT_HTML_NAME, package_echo_report
 from .report_history import InputIdentitySummary
-from .wechat_connection_service import WeChatConnectionStatus
-from .wechat_connection_progress import WeChatConnectionProgress
-from .wechat_environment_config import WeChatEnvironmentConfig
-from .wechat_export_import_service import WeChatExportImportRequest
-from .wechat_setup_service import WeChatSetupStatus
+from .wechat.wechat_connection_service import WeChatConnectionStatus
+from .wechat.wechat_connection_progress import WeChatConnectionProgress
+from .wechat.wechat_environment_config import WeChatEnvironmentConfig
+from .wechat.wechat_export_import_service import WeChatExportImportRequest
+from .wechat.wechat_setup_service import WeChatSetupStatus
 from .scope_filter import AnalysisScope, AnalysisScopeMode, resolve_scope
 
 

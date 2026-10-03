@@ -15,7 +15,7 @@ from qq_chat_analyzer.application.facade import (
     FacadeError,
     SourceUnavailable,
 )
-from qq_chat_analyzer.application.wechat_environment_config import (
+from qq_chat_analyzer.application.wechat.wechat_environment_config import (
     WeChatConfigWriteFailed,
     WeChatEnvironmentConfig,
 )
@@ -88,7 +88,7 @@ def _config(tmp_path: Path) -> WeChatEnvironmentConfig:
 
 def _isolate_wechat_config(monkeypatch, tmp_path: Path) -> None:
     """Keep composition-root setup config under the test temp directory."""
-    from qq_chat_analyzer.application import wechat_environment_config
+    from qq_chat_analyzer.application.wechat import wechat_environment_config
 
     monkeypatch.setattr(
         wechat_environment_config,

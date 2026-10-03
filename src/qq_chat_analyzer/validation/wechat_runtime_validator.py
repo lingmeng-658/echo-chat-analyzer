@@ -20,8 +20,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..application.dto import AnalysisRequestDTO
-from ..application.wechat_connection_service import WeChatConnectionService
-from ..application.wechat_export_import_service import (
+from ..application.wechat.wechat_connection_service import WeChatConnectionService
+from ..application.wechat.wechat_export_import_service import (
     WeChatExportImportRequest,
     WeChatExportImportService,
 )
