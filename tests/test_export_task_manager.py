@@ -19,7 +19,7 @@ sys.path.insert(0, str(SRC_ROOT))
 
 def _module():
     return importlib.import_module(
-        "qq_chat_analyzer.application.export_task_manager"
+        "qq_chat_analyzer.application.qq.qce_compat.export_task_manager"
     )
 
 

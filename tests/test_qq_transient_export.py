@@ -30,7 +30,7 @@ from qq_chat_analyzer.application import (
 
 def _transient_module():
     return importlib.import_module(
-        "qq_chat_analyzer.application.qq_transient_export"
+        "qq_chat_analyzer.application.qq.qce_compat.qq_transient_export"
     )
 
 

@@ -53,17 +53,18 @@ from ..presentation.share.renderer import (
 from ..presentation.share.template import build_share_card_html
 from .dto import AnalysisRequestDTO, AnalysisResultDTO
 from .errors import ApplicationServiceError
-from .connection import ConnectionSnapshot, QQConnectionManager
-from .qq_connection_service import (
+from .connection_models import ConnectionSnapshot
+from .qq.qq_connection_manager import QQConnectionManager
+from .qq.qq_connection_service import (
     QQConnectionService,
     QQConnectionStatus,
 )
-from .qq_environment_config import QQEnvironmentConfig
-from .qq_export_import_service import (
+from .qq.qq_environment_config import QQEnvironmentConfig
+from .qq.qce_compat.qq_export_import_service import (
     QQExportImportRequest,
     QQExportProgress,
 )
-from .qq_setup_service import QQSetupStatus
+from .qq.qq_setup_service import QQSetupStatus
 from .echo_report_export import ECHO_REPORT_HTML_NAME, package_echo_report
 from .report_history import InputIdentitySummary
 from .wechat.wechat_connection_service import WeChatConnectionStatus
@@ -1402,8 +1403,8 @@ class ChatAnalyzerFacade:
     def _require_qq_auth_bridge(self) -> Any:
         """Return the QQ auth bridge, composing it from injected services."""
         if self._qq_auth_bridge is None:
-            from .connection import QQAuthBridge
-            from .connection.qq_auth_bridge import (
+            from .qq.qq_auth_bridge import QQAuthBridge
+            from .qq.qq_auth_bridge import (
                 terminate_bundled_runtime_sessions,
             )
 
@@ -1421,7 +1422,7 @@ class ChatAnalyzerFacade:
     def _require_qq_process_registry(self) -> Any:
         """Return the shared QQ process registry for this application."""
         if self._qq_process_registry is None:
-            from .qq_process_registry import (
+            from .qq.qq_process_registry import (
                 default_qq_process_registry,
             )
 

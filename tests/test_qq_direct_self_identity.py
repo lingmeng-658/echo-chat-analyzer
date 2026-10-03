@@ -12,7 +12,7 @@ from pathlib import Path
 
 from qq_chat_analyzer.application.import_request import ImportRequest
 from qq_chat_analyzer.application.import_service import ImportService
-from qq_chat_analyzer.application.qq_direct_database_import_service import (
+from qq_chat_analyzer.application.qq.qq_direct_database_import_service import (
     QQDirectDatabaseImportService,
 )
 

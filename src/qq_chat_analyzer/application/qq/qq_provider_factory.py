@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from .errors import ApplicationServiceError
+from ..errors import ApplicationServiceError
 from .qq_environment_config import (
     QQEnvironmentConfig,
     QQEnvironmentConfigError,
@@ -26,7 +26,7 @@ class QQProviderUnavailable(ApplicationServiceError):
 
 def default_provider_builder(config: QQEnvironmentConfig) -> Any:
     """Construct the Desktop Echo NapCat provider."""
-    from ..providers.napcat_qq_provider import NapCatQQProvider
+    from ...providers.napcat_qq_provider import NapCatQQProvider
     return NapCatQQProvider(config.napcat_bridge_url)
 
 

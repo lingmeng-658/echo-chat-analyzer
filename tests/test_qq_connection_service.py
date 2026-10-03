@@ -1,8 +1,8 @@
 """Desktop readiness probes use only Echo NapCat status; no QCE API."""
 from dataclasses import FrozenInstanceError
 import pytest
-from qq_chat_analyzer.application.qq_connection_service import QQConnectionService, QQConnectionStatus
-from qq_chat_analyzer.application.qq_environment_config import QQConfigCorrupted, QQConfigNotFound
+from qq_chat_analyzer.application.qq.qq_connection_service import QQConnectionService, QQConnectionStatus
+from qq_chat_analyzer.application.qq.qq_environment_config import QQConfigCorrupted, QQConfigNotFound
 from qq_chat_analyzer.providers.napcat_qq_provider import NapCatQQProvider, NapCatStatus
 
 @pytest.mark.parametrize("bridge,online,uin,passphrase,available,direct", [

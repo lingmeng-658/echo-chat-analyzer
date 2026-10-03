@@ -20,7 +20,7 @@ sys.path.insert(0, str(SRC_ROOT))
 
 def _manager_module():
     return importlib.import_module(
-        "qq_chat_analyzer.application.runtime.qq_runtime_manager"
+        "qq_chat_analyzer.application.qq.qq_runtime_manager"
     )
 
 
@@ -101,7 +101,7 @@ def _manager_with_registry(runtime: _FakeRuntime, registry):
 
 def _FreshProcessRegistry():
     module = importlib.import_module(
-        "qq_chat_analyzer.application.qq_process_registry"
+        "qq_chat_analyzer.application.qq.qq_process_registry"
     )
     return module.QQProcessRegistry()
 
@@ -205,7 +205,7 @@ def test_start_requires_an_installed_runtime() -> None:
 
 def test_start_records_the_launched_pid() -> None:
     module = importlib.import_module(
-        "qq_chat_analyzer.application.qq_process_registry"
+        "qq_chat_analyzer.application.qq.qq_process_registry"
     )
     runtime = _FakeRuntime(installed=True, running=False, pid=4242)
     registry = module.QQProcessRegistry()
@@ -218,7 +218,7 @@ def test_start_records_the_launched_pid() -> None:
 
 def test_stop_discards_the_recorded_pid() -> None:
     module = importlib.import_module(
-        "qq_chat_analyzer.application.qq_process_registry"
+        "qq_chat_analyzer.application.qq.qq_process_registry"
     )
     runtime = _FakeRuntime(installed=True, running=False, pid=4242)
     registry = module.QQProcessRegistry()

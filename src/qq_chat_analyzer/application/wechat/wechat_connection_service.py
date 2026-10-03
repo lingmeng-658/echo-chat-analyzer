@@ -1,7 +1,7 @@
 """Translate WeChat database readiness into a user-facing connection status.
 
 This module is the WeChat counterpart of
-:mod:`~qq_chat_analyzer.application.qq_connection_service`. It probes the
+:mod:`~qq_chat_analyzer.application.qq.qq_connection_service`. It probes the
 provider's existing resolver surface and returns a stable status instead of
 leaking provider exceptions to a caller such as the GUI.
 

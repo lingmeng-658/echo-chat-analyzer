@@ -21,7 +21,7 @@ import shutil
 from pathlib import Path
 from uuid import uuid4
 
-from .errors import ApplicationServiceError
+from ...errors import ApplicationServiceError
 
 
 _ECHO_NAMESPACE = "Echo"

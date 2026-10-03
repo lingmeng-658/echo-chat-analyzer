@@ -12,7 +12,7 @@ import pytest
 
 
 def _connection_module():
-    return importlib.import_module("qq_chat_analyzer.application.connection")
+    return importlib.import_module("qq_chat_analyzer.application.qq.qq_connection_manager")
 
 
 def _status(
@@ -25,7 +25,7 @@ def _status(
     action_hint="",
 ):
     module = importlib.import_module(
-        "qq_chat_analyzer.application.qq_connection_service"
+        "qq_chat_analyzer.application.qq.qq_connection_service"
     )
     return module.QQConnectionStatus(
         available=available,
@@ -150,7 +150,7 @@ def test_get_snapshot_never_starts_the_runtime() -> None:
 def test_runtime_started_without_qq_login_maps_to_waiting_auth() -> None:
     module = _connection_module()
     runtime = importlib.import_module(
-        "qq_chat_analyzer.application.runtime"
+        "qq_chat_analyzer.application.qq.qq_runtime_manager"
     )
     setup = _StubSetupService(
         runtime_status=runtime.QQRuntimeStatus(
@@ -174,7 +174,7 @@ def test_runtime_started_without_qq_login_maps_to_waiting_auth() -> None:
 def test_auth_waiting_keeps_waiting_when_qce_not_ready() -> None:
     module = _connection_module()
     runtime = importlib.import_module(
-        "qq_chat_analyzer.application.runtime"
+        "qq_chat_analyzer.application.qq.qq_runtime_manager"
     )
     setup = _StubSetupService(
         runtime_status=runtime.QQRuntimeStatus(
@@ -201,7 +201,7 @@ def test_auth_waiting_keeps_waiting_when_qce_not_ready() -> None:
 def test_auth_waiting_survives_status_probe_failure() -> None:
     module = _connection_module()
     runtime = importlib.import_module(
-        "qq_chat_analyzer.application.runtime"
+        "qq_chat_analyzer.application.qq.qq_runtime_manager"
     )
     setup = _StubSetupService(
         runtime_status=runtime.QQRuntimeStatus(
@@ -247,7 +247,7 @@ def test_auth_waiting_clears_once_qce_becomes_ready() -> None:
 def test_auth_waiting_does_not_hide_runtime_fatal_failure() -> None:
     module = _connection_module()
     runtime = importlib.import_module(
-        "qq_chat_analyzer.application.runtime"
+        "qq_chat_analyzer.application.qq.qq_runtime_manager"
     )
     setup = _StubSetupService(
         runtime_status=runtime.QQRuntimeStatus(
@@ -406,7 +406,7 @@ def test_in_progress_covers_startup_states() -> None:
 def test_disconnect_ends_auth_waiting_and_reports_disconnected() -> None:
     module = _connection_module()
     runtime = importlib.import_module(
-        "qq_chat_analyzer.application.runtime"
+        "qq_chat_analyzer.application.qq.qq_runtime_manager"
     )
     setup = _StubSetupService(
         runtime_status=runtime.QQRuntimeStatus(

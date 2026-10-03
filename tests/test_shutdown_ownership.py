@@ -27,7 +27,7 @@ def _facade_module():
 
 def _registry_module():
     return importlib.import_module(
-        "qq_chat_analyzer.application.qq_process_registry"
+        "qq_chat_analyzer.application.qq.qq_process_registry"
     )
 
 
@@ -144,7 +144,7 @@ def test_shutdown_step_window_has_a_finite_default() -> None:
 def test_facade_shutdown_closes_the_direct_db_gate_before_terminating() -> None:
     """Order matters: plaintext recover, then the owned runtime tree."""
     direct_db = importlib.import_module(
-        "qq_chat_analyzer.application.qq_direct_database_import_service"
+        "qq_chat_analyzer.application.qq.qq_direct_database_import_service"
     )
     events: list[str] = []
 

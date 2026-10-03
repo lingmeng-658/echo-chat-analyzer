@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from qq_chat_analyzer.application import qq_environment_config as env
-from qq_chat_analyzer.application.qq_connection_service import QQConnectionStatus
+from qq_chat_analyzer.application.qq import qq_environment_config as env
+from qq_chat_analyzer.application.qq.qq_connection_service import QQConnectionStatus
 from qq_chat_analyzer.gui import app
 from qq_chat_analyzer.providers.napcat_qq_provider import NapCatQQProvider
 from qq_chat_analyzer.runtime import QQRuntimeConfig
@@ -57,7 +57,7 @@ def test_unconsumed_desktop_qce_surface_is_retired(relative):
 
 
 def test_desktop_metadata_requires_no_qce_pagination_or_provider_type_branch():
-    from qq_chat_analyzer.application.qq_direct_database_import_service import QQDirectDatabaseImportService
+    from qq_chat_analyzer.application.qq.qq_direct_database_import_service import QQDirectDatabaseImportService
     calls = []
     class Provider:
         def list_groups(self):

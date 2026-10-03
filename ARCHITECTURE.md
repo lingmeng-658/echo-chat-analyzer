@@ -573,10 +573,18 @@ GUI 只装配控件、转发事件、展示状态。
 | `message.py` | 领域模型 ChatMessage |
 | `application/import_service.py` | 导入编排 |
 | `application/import_request.py` / `import_outcome.py` / `import_result.py` | 导入契约 |
-| `application/export_task_manager.py` | 导出任务管理（QQ） |
-| `application/qq_export_import_service.py` | 来源编排（QQ） |
-| `application/qq_connection_service.py` | 来源连接状态（QQ） |
-| `application/runtime/qq_runtime_manager.py` | 外部运行时管理（QQ） |
+| `application/qq/qq_direct_database_import_service.py` | 桌面 QQ Direct DB 获取与生命周期编排 |
+| `application/qq/qq_connection_service.py` | QQ 连接状态 |
+| `application/qq/qq_connection_manager.py` / `application/qq/qq_auth_bridge.py` | QQ 连接流程与登录授权 |
+| `application/qq/qq_setup_service.py` / `application/qq/qq_environment_config.py` | QQ 连接设置与配置 |
+| `application/qq/qq_provider_factory.py` | QQ Provider 装配与缓存 |
+| `application/qq/qq_runtime_manager.py` / `application/qq/qq_process_registry.py` | QQ runtime 管理与自有进程记录 |
+| `application/qq/qce_compat/qq_export_import_service.py` | 保留的 QCE CLI 导出与导入编排 |
+| `application/qq/qce_compat/export_task_manager.py` | QCE 导出任务管理 |
+| `application/qq/qce_compat/qq_transient_export.py` | QCE 临时导出目录所有权与清理 |
+| `application/connection_models.py` | 来源无关的连接状态契约 |
+| `application/qq_connection_service.py` / `application/qq_export_import_service.py` / `application/export_task_manager.py` | 保留的公共旧模块路径，仅重导出实现对象 |
+| `application/connection/__init__.py` / `application/runtime/__init__.py` / `application/runtime/qq_runtime_manager.py` | 保留的连接与 runtime 公共兼容出口，无业务实现 |
 | `application/wechat/wechat_export_import_service.py` | 来源编排（微信） |
 | `application/wechat/wechat_connection_service.py` | 微信连接状态 |
 | `application/wechat/wechat_connection_progress.py` | 微信连接进度 |
@@ -706,9 +714,10 @@ GUI 只装配控件、转发事件、展示状态。
   GUI 仍然只认识 `ChatAnalyzerFacade` 一个入口，
   通过 `get_qq_connection_snapshot()` 和 `connect_qq()` 获取结果。
 - **Connection Manager 管理连接流程。**
-  位于 `application/connection/`，负责编排准备、启动与授权检查，
+  位于 `application/qq/qq_connection_manager.py`，负责编排准备、启动与授权检查，
   并把底层结果解释成用户可理解的状态。
 - **ConnectionSnapshot 是只读状态模型。**
+  定义位于 `application/connection_models.py`。
   不可变，跨层传递，GUI 只读取不重新推导。
   状态取值：`DISCONNECTED`、`INITIALIZING`、`STARTING`、
   `WAITING_AUTH`、`CONNECTED`、`ERROR`。

@@ -9,12 +9,9 @@ from ..analysis.models import (
 )
 from ..analysis.conversation_sessions import ConversationSessionReport
 from .analysis_service import AnalysisApplicationService
-from .connection import (
-    ConnectionSnapshot,
-    ConnectionState,
-    QQAuthBridge,
-    QQConnectionManager,
-)
+from .connection_models import ConnectionSnapshot, ConnectionState
+from .qq.qq_auth_bridge import QQAuthBridge
+from .qq.qq_connection_manager import QQConnectionManager
 
 from .dto import (
     AnalysisDiagnosticCounts,
@@ -24,7 +21,7 @@ from .dto import (
     ArtifactDTO,
     WordFrequencyDTO,
 )
-from .export_task_manager import (
+from .qq.qce_compat.export_task_manager import (
     ExportTaskManager,
     ExportTaskState,
     ExportTaskStatus,
@@ -59,11 +56,11 @@ from .report_history import (
     ReportHistoryManager,
     ReportHistoryWriteError,
 )
-from .qq_connection_service import (
+from .qq.qq_connection_service import (
     QQConnectionService,
     QQConnectionStatus,
 )
-from .qq_export_import_service import (
+from .qq.qce_compat.qq_export_import_service import (
     QQExportAcquisition,
     QQExportFileMissing,
     QQExportImportRequest,
@@ -72,7 +69,7 @@ from .qq_export_import_service import (
     QQExportProvider,
     QQExportUnavailable,
 )
-from .runtime import (
+from .qq.qq_runtime_manager import (
     QQRuntimeManager,
     QQRuntimeState,
     QQRuntimeStatus,

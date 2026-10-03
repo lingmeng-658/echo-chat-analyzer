@@ -11,7 +11,7 @@ from qq_chat_analyzer.application.facade import (
     ChatAnalyzerFacade,
     ChatSource,
 )
-from qq_chat_analyzer.application.qq_direct_database_import_service import (
+from qq_chat_analyzer.application.qq.qq_direct_database_import_service import (
     QQDirectDatabaseImportService,
 )
 

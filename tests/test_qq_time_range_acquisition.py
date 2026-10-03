@@ -33,7 +33,7 @@ sys.path.insert(0, str(SRC_ROOT))
 from qq_chat_analyzer.application import (
     QQExportImportService,
 )
-from qq_chat_analyzer.application.qq_transient_export import (
+from qq_chat_analyzer.application.qq.qce_compat.qq_transient_export import (
     QQTransientExportWorkspace,
 )
 from qq_chat_analyzer.application.dto import (

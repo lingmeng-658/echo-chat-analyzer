@@ -24,19 +24,19 @@ sys.path.insert(0, str(SRC_ROOT))
 
 def _bridge_module():
     return importlib.import_module(
-        "qq_chat_analyzer.application.connection.qq_auth_bridge"
+        "qq_chat_analyzer.application.qq.qq_auth_bridge"
     )
 
 
 def _connection_module():
     return importlib.import_module(
-        "qq_chat_analyzer.application.connection"
+        "qq_chat_analyzer.application.qq.qq_connection_manager"
     )
 
 
 def _config_module():
     return importlib.import_module(
-        "qq_chat_analyzer.application.qq_environment_config"
+        "qq_chat_analyzer.application.qq.qq_environment_config"
     )
 
 
@@ -50,7 +50,7 @@ def _status(
     action_hint="",
 ):
     module = importlib.import_module(
-        "qq_chat_analyzer.application.qq_connection_service"
+        "qq_chat_analyzer.application.qq.qq_connection_service"
     )
     return module.QQConnectionStatus(
         available=available,
@@ -126,7 +126,7 @@ class _StubSetupService:
 
 def _runtime_status(state: str = "running"):
     runtime = importlib.import_module(
-        "qq_chat_analyzer.application.runtime"
+        "qq_chat_analyzer.application.qq.qq_runtime_manager"
     )
     return runtime.QQRuntimeStatus(
         state=runtime.QQRuntimeState(state),
@@ -147,7 +147,7 @@ def _bridge(
 ):
     if process_registry is None:
         registry_module = importlib.import_module(
-            "qq_chat_analyzer.application.qq_process_registry"
+            "qq_chat_analyzer.application.qq.qq_process_registry"
         )
         process_registry = registry_module.QQProcessRegistry()
     return _bridge_module().QQAuthBridge(
@@ -752,7 +752,7 @@ def test_start_auth_flow_logs_the_auth_flow(
 
 def _runtime_config(tmp_path: Path, *, with_qq_path: bool = True):
     module = importlib.import_module(
-        "qq_chat_analyzer.application.qq_environment_config"
+        "qq_chat_analyzer.application.qq.qq_environment_config"
     )
     (tmp_path / "NapCatWinBootMain.exe").write_text("fake", encoding="utf-8")
     (tmp_path / "NapCatWinBootHook.dll").write_text("fake", encoding="utf-8")
@@ -972,7 +972,7 @@ def test_auth_flow_records_the_launched_window_pid(
 ) -> None:
     bridge = _bridge_module()
     registry_module = importlib.import_module(
-        "qq_chat_analyzer.application.qq_process_registry"
+        "qq_chat_analyzer.application.qq.qq_process_registry"
     )
     config = _runtime_config(tmp_path)
     setup = _StubSetupService(
@@ -1010,7 +1010,7 @@ def test_default_launcher_prefers_the_configured_qq_path(
 ) -> None:
     bridge = _bridge_module()
     module = importlib.import_module(
-        "qq_chat_analyzer.application.qq_environment_config"
+        "qq_chat_analyzer.application.qq.qq_environment_config"
     )
     (tmp_path / "NapCatWinBootMain.exe").write_text("fake", encoding="utf-8")
     (tmp_path / "NapCatWinBootHook.dll").write_text("fake", encoding="utf-8")
@@ -1182,7 +1182,7 @@ def test_resolve_qq_install_path_prefers_a_custom_configured_path(
 ) -> None:
     bridge = _bridge_module()
     config_module = importlib.import_module(
-        "qq_chat_analyzer.application.qq_environment_config"
+        "qq_chat_analyzer.application.qq.qq_environment_config"
     )
     custom = tmp_path / "Custom Install" / "QQ.exe"
     custom.parent.mkdir()

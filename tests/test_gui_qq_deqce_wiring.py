@@ -5,10 +5,10 @@ import json
 
 import pytest
 
-from qq_chat_analyzer.application import qq_environment_config as env
-from qq_chat_analyzer.application.qq_connection_service import QQConnectionService
-from qq_chat_analyzer.application.qq_direct_database_import_service import QQDirectDatabaseImportService, _group_member_data
-from qq_chat_analyzer.application.qq_provider_factory import default_provider_builder
+from qq_chat_analyzer.application.qq import qq_environment_config as env
+from qq_chat_analyzer.application.qq.qq_connection_service import QQConnectionService
+from qq_chat_analyzer.application.qq.qq_direct_database_import_service import QQDirectDatabaseImportService, _group_member_data
+from qq_chat_analyzer.application.qq.qq_provider_factory import default_provider_builder
 from qq_chat_analyzer.providers.napcat_qq_provider import NapCatQQProvider, NapCatStatus, NapCatFriend, NapCatGroup
 from qq_chat_analyzer.gui import app
 
@@ -86,10 +86,10 @@ def test_metadata_no_qce_pagination_and_members_preserve_identity(monkeypatch):
 
 
 def test_connection_state_machine_reuses_retries_and_relogin(candidate,monkeypatch):
-    from qq_chat_analyzer.application.connection.qq_auth_bridge import QQAuthBridge
-    from qq_chat_analyzer.application.qq_setup_service import QQSetupService
-    from qq_chat_analyzer.application.runtime import QQRuntimeStatus,QQRuntimeState
-    from qq_chat_analyzer.application.connection.models import ConnectionState
+    from qq_chat_analyzer.application.qq.qq_auth_bridge import QQAuthBridge
+    from qq_chat_analyzer.application.qq.qq_setup_service import QQSetupService
+    from qq_chat_analyzer.application.qq.qq_runtime_manager import QQRuntimeStatus,QQRuntimeState
+    from qq_chat_analyzer.application.connection_models import ConnectionState
     provider=NapCatQQProvider();current=[status(online=False)]
     monkeypatch.setattr(provider,'status',lambda:current[0])
     config=env.QQEnvironmentConfig(runtime_directory=candidate)
@@ -117,7 +117,7 @@ def test_connection_state_machine_reuses_retries_and_relogin(candidate,monkeypat
 
 
 def test_native_launcher_uses_detected_qq_and_never_qce(candidate,tmp_path,monkeypatch):
-    from qq_chat_analyzer.application.connection import qq_auth_bridge as auth
+    from qq_chat_analyzer.application.qq import qq_auth_bridge as auth
     qq=tmp_path/'QQ.exe';qq.write_bytes(b'fictional')
     package=tmp_path/'resources/app/package.json';package.parent.mkdir(parents=True);package.write_text('{"name":"QQ","main":"index.js"}')
     seen=[]
@@ -133,8 +133,8 @@ def test_native_launcher_uses_detected_qq_and_never_qce(candidate,tmp_path,monke
 
 
 def test_napcat_setup_waiting_status_does_not_claim_qce(candidate):
-    from qq_chat_analyzer.application.qq_setup_service import QQSetupService
-    from qq_chat_analyzer.application.runtime import QQRuntimeStatus, QQRuntimeState
+    from qq_chat_analyzer.application.qq.qq_setup_service import QQSetupService
+    from qq_chat_analyzer.application.qq.qq_runtime_manager import QQRuntimeStatus, QQRuntimeState
     config = env.QQEnvironmentConfig(runtime_directory=candidate)
     running = QQRuntimeStatus(QQRuntimeState.RUNNING, True)
     runtime = SimpleNamespace(get_status=lambda: running)

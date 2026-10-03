@@ -40,7 +40,7 @@ def _facade_module():
 
 def _direct_db_module():
     return importlib.import_module(
-        "qq_chat_analyzer.application.qq_direct_database_import_service"
+        "qq_chat_analyzer.application.qq.qq_direct_database_import_service"
     )
 
 

@@ -26,7 +26,7 @@ from qq_chat_analyzer.application.facade import (
 )
 from qq_chat_analyzer.application.import_request import ImportRequest
 from qq_chat_analyzer.application.import_service import ImportService
-from qq_chat_analyzer.application.qq_direct_database_import_service import (
+from qq_chat_analyzer.application.qq.qq_direct_database_import_service import (
     QQDirectDatabaseImportService,
     QQDirectSessionNotFound,
     QQDirectSnapshotAcquireFailed,
@@ -603,7 +603,7 @@ def test_production_service_builds_runtime_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The GUI composition's default service really gets a runtime client."""
-    from qq_chat_analyzer.application.qq_environment_config import (
+    from qq_chat_analyzer.application.qq.qq_environment_config import (
         QQEnvironmentConfig,
         QQEnvironmentConfigLoader,
     )

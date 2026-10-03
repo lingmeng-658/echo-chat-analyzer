@@ -23,18 +23,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from .models import ConnectionSnapshot, ConnectionState
+from ..connection_models import ConnectionSnapshot, ConnectionState
 from .qq_connection_manager import (
     HINT_WAITING_AUTH,
     MESSAGE_WAITING_AUTH,
     QQConnectionManager,
     SOURCE_QQ,
 )
-from ..qq_environment_config import (
+from .qq_environment_config import (
     QQConfigNotFound,
     QQEnvironmentConfigLoader,
 )
-from ..qq_process_registry import (
+from .qq_process_registry import (
     QQProcessRegistry,
     default_qq_process_registry,
 )

@@ -13,7 +13,7 @@ from qq_chat_analyzer.application import (
     QQExportImportRequest,
     QQExportImportService,
 )
-from qq_chat_analyzer.application.qq_transient_export import QQTransientExportWorkspace
+from qq_chat_analyzer.application.qq.qce_compat.qq_transient_export import QQTransientExportWorkspace
 
 
 @pytest.fixture(autouse=True)

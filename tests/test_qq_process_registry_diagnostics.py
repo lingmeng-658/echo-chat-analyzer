@@ -26,7 +26,7 @@ REGISTRY_LOGGER = "qq_chat_analyzer.desktop.qq_process_registry"
 
 def _module():
     return importlib.import_module(
-        "qq_chat_analyzer.application.qq_process_registry"
+        "qq_chat_analyzer.application.qq.qq_process_registry"
     )
 
 

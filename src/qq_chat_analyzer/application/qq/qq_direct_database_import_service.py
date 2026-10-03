@@ -21,17 +21,17 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Iterator
 
-from ..identity_names import first_identity_name
+from ...identity_names import first_identity_name
 
-from ..providers.qq_database_provider import QQDatabaseProvider, QQSession
-from ..providers.qq_direct_snapshot_runtime import (
+from ...providers.qq_database_provider import QQDatabaseProvider, QQSession
+from ...providers.qq_direct_snapshot_runtime import (
     QQDirectSnapshotRuntimeClient,
     QQSnapshotRuntimeError,
     QQSnapshotRuntimeNotReady,
     QQSnapshotRuntimeUnavailable,
 )
-from ..qq_db_identity import QQ_DB_SELF_NAMESPACE, canonical_qq_uin
-from .errors import ApplicationServiceError
+from ...qq_db_identity import QQ_DB_SELF_NAMESPACE, canonical_qq_uin
+from ..errors import ApplicationServiceError
 from .qq_environment_config import QQEnvironmentConfigLoader
 
 

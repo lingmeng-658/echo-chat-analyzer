@@ -14,14 +14,14 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
 
-from .errors import ApplicationServiceError
+from ..errors import ApplicationServiceError
 from .qq_environment_config import (
     QQConfigNotFound,
     QQEnvironmentConfig,
     QQEnvironmentConfigLoader,
     QQEnvironmentConfigWriter,
 )
-from .runtime import QQRuntimeManager, QQRuntimeState, QQRuntimeStatus
+from .qq_runtime_manager import QQRuntimeManager, QQRuntimeState, QQRuntimeStatus
 from .qq_connection_service import runtime_running
 
 
@@ -367,10 +367,10 @@ class QQSetupService:
 
 def default_runtime_factory(config: QQEnvironmentConfig) -> Any:
     """Build a QQRuntimeManager from one QQ environment config."""
-    from ..runtime import BundledQQRuntime, QQRuntimeConfig
+    from ...runtime import BundledQQRuntime, QQRuntimeConfig
 
-    from ..providers.napcat_qq_provider import NapCatQQProvider
-    from .connection.qq_auth_bridge import default_auth_window_launcher
+    from ...providers.napcat_qq_provider import NapCatQQProvider
+    from .qq_auth_bridge import default_auth_window_launcher
     runtime = BundledQQRuntime(
         QQRuntimeConfig(executable_path=config.runtime_directory / "NapCatWinBootMain.exe",
                         working_directory=config.runtime_directory, base_url=config.napcat_bridge_url,

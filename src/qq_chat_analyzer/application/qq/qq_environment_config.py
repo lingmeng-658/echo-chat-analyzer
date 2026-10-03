@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from ..resources import (
+from ...resources import (
     default_qq_runtime_directory,
     user_data_dir,
 )

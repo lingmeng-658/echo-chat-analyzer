@@ -11,7 +11,7 @@ import pytest
 
 from qq_chat_analyzer.providers.qq_database_provider import QQDatabaseProvider
 from qq_chat_analyzer.qq_db_adapter import parse_qq_db_rich_messages
-from qq_chat_analyzer.application.qq_direct_database_import_service import (
+from qq_chat_analyzer.application.qq.qq_direct_database_import_service import (
     QQDirectDatabaseImportService,
     _group_member_data,
     _identity_coverage_counts,

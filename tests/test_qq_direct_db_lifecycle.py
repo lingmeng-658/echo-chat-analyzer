@@ -16,9 +16,9 @@ from pathlib import Path
 import pytest
 
 from qq_chat_analyzer.application.facade import ChatAnalyzerFacade, ChatSource
-from qq_chat_analyzer.application.connection.models import ConnectionState
-from qq_chat_analyzer.application.qq_connection_service import QQConnectionService
-from qq_chat_analyzer.application.qq_direct_database_import_service import (
+from qq_chat_analyzer.application.connection_models import ConnectionState
+from qq_chat_analyzer.application.qq.qq_connection_service import QQConnectionService
+from qq_chat_analyzer.application.qq.qq_direct_database_import_service import (
     DEFAULT_SHUTDOWN_RECOVER_SECONDS,
     QQDirectDatabaseImportService,
     QQDirectDatabaseRecoveryFailed,
@@ -305,7 +305,7 @@ def test_connected_napcat_waits_for_delayed_snapshot_api_before_listing(tmp_path
 def test_bridge_unavailable_after_first_window_can_recover_on_later_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import qq_chat_analyzer.application.qq_direct_database_import_service as direct_module
+    import qq_chat_analyzer.application.qq.qq_direct_database_import_service as direct_module
 
     snapshot = tmp_path / "source.db"
     _create_snapshot(snapshot)

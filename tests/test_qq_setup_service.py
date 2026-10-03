@@ -18,19 +18,19 @@ sys.path.insert(0, str(SRC_ROOT))
 
 def _module():
     return importlib.import_module(
-        "qq_chat_analyzer.application.qq_setup_service"
+        "qq_chat_analyzer.application.qq.qq_setup_service"
     )
 
 
 def _connection_module():
     return importlib.import_module(
-        "qq_chat_analyzer.application.qq_connection_service"
+        "qq_chat_analyzer.application.qq.qq_connection_service"
     )
 
 
 def _runtime_module():
     return importlib.import_module(
-        "qq_chat_analyzer.application.runtime.qq_runtime_manager"
+        "qq_chat_analyzer.application.qq.qq_runtime_manager"
     )
 
 
@@ -186,7 +186,7 @@ def test_connect_persists_detected_default_when_no_config_exists(
 ) -> None:
     config = _config(tmp_path)
     env_module = importlib.import_module(
-        "qq_chat_analyzer.application.qq_environment_config"
+        "qq_chat_analyzer.application.qq.qq_environment_config"
     )
     monkeypatch.setattr(
         env_module,
@@ -233,7 +233,7 @@ def test_connect_repairs_stale_portable_paths_with_bundled_runtime(
     _store_config(tmp_path, stale)
     bundled = _config(tmp_path)
     env_module = importlib.import_module(
-        "qq_chat_analyzer.application.qq_environment_config"
+        "qq_chat_analyzer.application.qq.qq_environment_config"
     )
     monkeypatch.setattr(
         env_module, "bundled_qq_runtime_available", lambda: True
@@ -333,7 +333,7 @@ def test_connect_without_runtime_returns_unavailable_status(
 ) -> None:
     config = _config(tmp_path, complete=False)
     env_module = importlib.import_module(
-        "qq_chat_analyzer.application.qq_environment_config"
+        "qq_chat_analyzer.application.qq.qq_environment_config"
     )
     monkeypatch.setattr(
         env_module,
@@ -364,7 +364,7 @@ def test_connect_detects_running_service_without_bundled_runtime(
 ) -> None:
     config = _config(tmp_path, complete=False)
     env_module = importlib.import_module(
-        "qq_chat_analyzer.application.qq_environment_config"
+        "qq_chat_analyzer.application.qq.qq_environment_config"
     )
     monkeypatch.setattr(
         env_module,

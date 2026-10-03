@@ -16,6 +16,8 @@ from .application import (
     InputPathNotFound,
     InvalidAnalysisRequest,
     NoSupportedInput,
+)
+from .application.qq.qce_compat.qq_export_import_service import (
     QQExportImportRequest,
     QQExportImportService,
 )

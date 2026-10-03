@@ -19,7 +19,7 @@ sys.path.insert(0, str(SRC_ROOT))
 
 def _module():
     return importlib.import_module(
-        "qq_chat_analyzer.application.qq_process_registry"
+        "qq_chat_analyzer.application.qq.qq_process_registry"
     )
 
 

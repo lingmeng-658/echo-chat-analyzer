@@ -23,9 +23,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .models import ConnectionSnapshot, ConnectionState
-from ..runtime import QQRuntimeState
-from ..qq_connection_service import runtime_running
+from ..connection_models import ConnectionSnapshot, ConnectionState
+from .qq_runtime_manager import QQRuntimeState
+from .qq_connection_service import runtime_running
 
 
 SOURCE_QQ = "qq"

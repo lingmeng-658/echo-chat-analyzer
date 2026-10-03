@@ -289,7 +289,7 @@ class StubFacade:
         if self._qq_setup_status is not None:
             return self._qq_setup_status
         module = importlib.import_module(
-            "qq_chat_analyzer.application.qq_setup_service"
+            "qq_chat_analyzer.application.qq.qq_setup_service"
         )
         return module.QQSetupStatus(
             state=module.QQSetupState.CONFIG_MISSING,
@@ -303,7 +303,7 @@ class StubFacade:
         self.get_qq_runtime_status_calls.append(1)
         if self._qq_runtime_status is not None:
             return self._qq_runtime_status
-        module = importlib.import_module("qq_chat_analyzer.application.runtime")
+        module = importlib.import_module("qq_chat_analyzer.application.qq.qq_runtime_manager")
         return module.QQRuntimeStatus(
             state=module.QQRuntimeState.STOPPED,
             available=False,
@@ -331,7 +331,7 @@ class StubFacade:
         self.start_qq_runtime_calls.append(1)
         if self._qq_runtime_status is not None:
             return self._qq_runtime_status
-        module = importlib.import_module("qq_chat_analyzer.application.runtime")
+        module = importlib.import_module("qq_chat_analyzer.application.qq.qq_runtime_manager")
         return module.QQRuntimeStatus(
             state=module.QQRuntimeState.RUNNING,
             available=True,
@@ -413,7 +413,7 @@ class StubFacade:
         if status is None:
             status = self._default_connection_status(module.ChatSource.QQ)
         manager = importlib.import_module(
-            "qq_chat_analyzer.application.connection.qq_connection_manager"
+            "qq_chat_analyzer.application.qq.qq_connection_manager"
         )
         return manager.QQConnectionManager(
             connection_service=_StaticConnectionService(status),
@@ -1449,7 +1449,7 @@ def _qq_setup_status(
     action_hint: str = "",
 ):
     module = importlib.import_module(
-        "qq_chat_analyzer.application.qq_setup_service"
+        "qq_chat_analyzer.application.qq.qq_setup_service"
     )
     return module.QQSetupStatus(
         state=(
@@ -1470,7 +1470,7 @@ def _qq_runtime_status(
     message: str = "",
     action_hint: str = "",
 ):
-    module = importlib.import_module("qq_chat_analyzer.application.runtime")
+    module = importlib.import_module("qq_chat_analyzer.application.qq.qq_runtime_manager")
     return module.QQRuntimeStatus(
         state=module.QQRuntimeState(state),
         available=state == "running",
@@ -2161,7 +2161,7 @@ def test_report_widgets_still_allow_selection(qt_app) -> None:
 def _qq_snapshot(state, message="", action_hint="", version=None):
     """Build one QQ ConnectionSnapshot in a given lifecycle state."""
     connection = importlib.import_module(
-        "qq_chat_analyzer.application.connection"
+        "qq_chat_analyzer.application.connection_models"
     )
     return connection.ConnectionSnapshot(
         state=connection.ConnectionState(state),
@@ -2773,10 +2773,10 @@ def test_qq_workspace_offers_qq_exe_selection_when_install_path_missing(
         staticmethod(_fake_file_dialog),
     )
     snapshot = importlib.import_module(
-        "qq_chat_analyzer.application.connection.models"
+        "qq_chat_analyzer.application.connection_models"
     ).ConnectionSnapshot(
         state=importlib.import_module(
-            "qq_chat_analyzer.application.connection.models"
+            "qq_chat_analyzer.application.connection_models"
         ).ConnectionState.ERROR,
         source="qq",
         message="未检测到 QQ 客户端。",
@@ -4129,7 +4129,7 @@ def test_qq_connect_error_snapshot_keeps_workspace_usable(
     from qq_chat_analyzer.gui.main_window import QQ_WORKSPACE_INDEX
 
     models = importlib.import_module(
-        "qq_chat_analyzer.application.connection.models"
+        "qq_chat_analyzer.application.connection_models"
     )
     error_snapshot = models.ConnectionSnapshot(
         state=models.ConnectionState.ERROR,

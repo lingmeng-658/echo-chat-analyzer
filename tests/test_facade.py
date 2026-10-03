@@ -321,7 +321,7 @@ class _StubQQAuthBridge:
         if self._snapshot is not None:
             return self._snapshot
         connection = importlib.import_module(
-            "qq_chat_analyzer.application.connection"
+            "qq_chat_analyzer.application.connection_models"
         )
         return connection.ConnectionSnapshot(
             state=connection.ConnectionState.WAITING_AUTH,
@@ -338,7 +338,7 @@ class _StubQQAuthBridge:
         if self._snapshot is not None:
             return self._snapshot
         connection = importlib.import_module(
-            "qq_chat_analyzer.application.connection"
+            "qq_chat_analyzer.application.connection_models"
         )
         return connection.ConnectionSnapshot(
             state=connection.ConnectionState.DISCONNECTED,
@@ -858,7 +858,7 @@ def test_connect_qq_redirects_to_auth_flow() -> None:
     assert bridge.calls == [1]
     assert setup.connect_calls == 0
     connection = importlib.import_module(
-        "qq_chat_analyzer.application.connection"
+        "qq_chat_analyzer.application.connection_models"
     )
     assert isinstance(result, connection.ConnectionSnapshot)
     assert result.state is connection.ConnectionState.WAITING_AUTH
@@ -873,7 +873,7 @@ def test_start_qq_auth_flow_delegates_to_the_auth_bridge() -> None:
 
     assert bridge.calls == [1]
     connection = importlib.import_module(
-        "qq_chat_analyzer.application.connection"
+        "qq_chat_analyzer.application.connection_models"
     )
     assert isinstance(result, connection.ConnectionSnapshot)
     assert result.state is connection.ConnectionState.WAITING_AUTH
@@ -914,7 +914,7 @@ def test_disconnect_qq_delegates_to_the_auth_bridge() -> None:
 
     assert bridge.calls == [2]
     connection = importlib.import_module(
-        "qq_chat_analyzer.application.connection"
+        "qq_chat_analyzer.application.connection_models"
     )
     assert result.state is connection.ConnectionState.DISCONNECTED
 

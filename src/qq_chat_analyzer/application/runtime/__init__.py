@@ -1,8 +1,8 @@
-"""Application-layer runtime management for external chat tools."""
+"""Compatibility exports; runtime management implementation lives in application.qq."""
 
 from __future__ import annotations
 
-from .qq_runtime_manager import (
+from ..qq.qq_runtime_manager import (
     QQRuntimeManager,
     QQRuntimeState,
     QQRuntimeStatus,
