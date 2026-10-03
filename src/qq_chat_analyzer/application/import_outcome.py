@@ -17,3 +17,5 @@ class ImportOutcome:
     processed_message_count: int
     messages: tuple[ChatMessage, ...]
     rich_messages: tuple[RichMessage, ...] = ()
+    # Retain the actual projection instances; source IDs need not be unique.
+    rich_message_pairs: tuple[tuple[ChatMessage, RichMessage], ...] = ()

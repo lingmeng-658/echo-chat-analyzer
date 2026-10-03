@@ -5,7 +5,7 @@ from __future__ import annotations
 import itertools
 import unicodedata
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import jieba
 
@@ -124,12 +124,26 @@ class ExpressionAnalyzer:
         self,
         messages: Sequence[ChatMessage],
         rich_messages: Sequence[RichMessage] = (),
+        *,
+        rich_by_instance: Mapping[int, RichMessage] | None = None,
     ) -> ExpressionReport:
-        rich_by_id = {
-            message.message_id: message
-            for message in rich_messages
-            if message.message_id is not None
-        }
+        if rich_by_instance is None:
+            # Compatibility for direct callers without projection pairs:
+            # accept only unambiguous IDs, never choose among duplicates.
+            legacy_ids = Counter(message.message_id for message in messages)
+            rich_ids = Counter(message.message_id for message in rich_messages)
+            rich_by_id = {
+                message.message_id: message
+                for message in rich_messages
+                if message.message_id is not None
+                and legacy_ids[message.message_id] == 1
+                and rich_ids[message.message_id] == 1
+            }
+            rich_by_instance = {
+                id(message): rich_by_id[message.message_id]
+                for message in messages
+                if message.message_id in rich_by_id
+            }
         occurrences: Counter[str] = Counter()
         display_by_key: dict[str, str] = {}
         kind_by_key: dict[str, str] = {}
@@ -149,11 +163,7 @@ class ExpressionAnalyzer:
         total_message_count = len(messages)
 
         for message in messages:
-            rich_message = (
-                rich_by_id.get(message.message_id)
-                if message.message_id is not None
-                else None
-            )
+            rich_message = rich_by_instance.get(id(message))
             text, face_expressions = self._message_expression_sources(
                 message,
                 rich_message,

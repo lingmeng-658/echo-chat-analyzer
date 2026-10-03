@@ -723,8 +723,11 @@ def test_completed_analysis_reuses_expression_report(
     original_analyze = service_module.ExpressionAnalyzer.analyze
     expression_reports = []
 
-    def counting_analyze(self, messages, *, rich_messages=()):
-        report = original_analyze(self, messages, rich_messages=rich_messages)
+    def counting_analyze(self, messages, *, rich_messages=(), rich_by_instance=None):
+        report = original_analyze(
+            self, messages, rich_messages=rich_messages,
+            rich_by_instance=rich_by_instance,
+        )
         expression_reports.append(report)
         return report
 

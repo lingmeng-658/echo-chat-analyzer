@@ -138,6 +138,14 @@ class AnalysisApplicationService:
                 filtering_result.kept_messages
             )
         kept_messages = quality_result.kept_messages
+        # Filters retain projection instances. The outcome keeps them alive,
+        # so object identity cannot be reused during this analysis run.
+        kept_instances = {id(message) for message in kept_messages}
+        rich_by_instance = {
+            id(legacy): rich
+            for legacy, rich in outcome.rich_message_pairs
+            if id(legacy) in kept_instances
+        }
         diagnostic_counts = AnalysisDiagnosticCounts(
             raw_message_count=outcome.processed_message_count,
             imported_message_count=len(parsed_messages),
@@ -149,24 +157,18 @@ class AnalysisApplicationService:
             analyzed = _analyze_kept_messages(
                 kept_messages,
                 request.stopwords_path,
-                outcome.rich_messages,
+                rich_by_instance,
             )
         with timed_stage("ExpressionAnalyzer.preflight"):
             expression_report = ExpressionAnalyzer().analyze(
                 kept_messages,
-                rich_messages=outcome.rich_messages,
+                rich_by_instance=rich_by_instance,
             )
         has_expression_report = expression_report.expression_message_count > 0
 
-        kept_keys = {
-            (message.message_id, message.conversation_id, message.sender_id, message.timestamp)
-            for message in kept_messages
-        }
         has_nontext = any(
-            (message.message_id, message.conversation_id, message.sender.identity_id, message.timestamp)
-            in kept_keys
-            and any(isinstance(part, NonTextContent) for part in message.contents)
-            for message in outcome.rich_messages
+            any(isinstance(part, NonTextContent) for part in message.contents)
+            for message in rich_by_instance.values()
         )
         if not analyzed.tokens and has_nontext:
             return _expression_only_result(
@@ -175,7 +177,7 @@ class AnalysisApplicationService:
                 analyzed=analyzed,
                 diagnostic_counts=diagnostic_counts,
                 processed_message_count=processed_message_count,
-                rich_messages=outcome.rich_messages,
+                rich_by_instance=rich_by_instance,
                 conversation_type=_resolve_conversation_type(kept_messages, request.conversation_kind),
                 expression_source=outcome.result.platform,
                 success_status=(AnalysisStatus.EXPRESSION_ONLY if has_expression_report else AnalysisStatus.COMPLETED),
@@ -206,7 +208,7 @@ class AnalysisApplicationService:
                 analyzed=analyzed,
                 diagnostic_counts=diagnostic_counts,
                 processed_message_count=processed_message_count,
-                rich_messages=outcome.rich_messages,
+                rich_by_instance=rich_by_instance,
                 conversation_type=conversation_type,
                 expression_source=outcome.result.platform,
             )
@@ -220,7 +222,7 @@ class AnalysisApplicationService:
                 analyzed=analyzed,
                 diagnostic_counts=diagnostic_counts,
                 processed_message_count=processed_message_count,
-                rich_messages=outcome.rich_messages,
+                rich_by_instance=rich_by_instance,
                 conversation_type=conversation_type,
                 expression_source=outcome.result.platform,
             )
@@ -239,7 +241,7 @@ class AnalysisApplicationService:
                 speaker_names=request.speaker_names,
                 conversation_names=request.conversation_names,
                 conversation_type=conversation_type,
-                rich_messages=outcome.rich_messages,
+                rich_by_instance=rich_by_instance,
                 expression_report=expression_report,
             )
         with timed_stage("word_speaker_analysis"):
@@ -331,7 +333,7 @@ def _build_reports(
     speaker_names: Mapping[str, str] | None = None,
     conversation_names: Mapping[str, str] | None = None,
     conversation_type: str = "unknown",
-    rich_messages: tuple[RichMessage, ...] = (),
+    rich_by_instance: Mapping[int, RichMessage] | None = None,
     expression_report: ExpressionReport | None = None,
 ) -> AnalysisReports:
     """Run every extended analyzer over the messages kept for analysis.
@@ -374,7 +376,7 @@ def _build_reports(
         if expression is None:
             expression = ExpressionAnalyzer().analyze(
                 messages,
-                rich_messages=rich_messages,
+                rich_by_instance=rich_by_instance,
             )
     return AnalysisReports(
         activity=activity,
@@ -396,7 +398,7 @@ def _expression_only_result(
     analyzed: _AnalyzedMessages,
     diagnostic_counts: AnalysisDiagnosticCounts,
     processed_message_count: int,
-    rich_messages: tuple[RichMessage, ...],
+    rich_by_instance: Mapping[int, RichMessage],
     conversation_type: str,
     expression_source: str | None,
     success_status: AnalysisStatus = AnalysisStatus.EXPRESSION_ONLY,
@@ -410,7 +412,7 @@ def _expression_only_result(
                 speaker_names=request.speaker_names,
                 conversation_names=request.conversation_names,
                 conversation_type=conversation_type,
-                rich_messages=rich_messages,
+                rich_by_instance=rich_by_instance,
             )
         with timed_stage("artifact_export"):
             echo_report_view = _export_echo_artifacts(
@@ -482,16 +484,11 @@ def _resolve_conversation_type(
 def _analyze_kept_messages(
     messages: list[ChatMessage],
     stopwords_path: Path,
-    rich_messages: tuple[RichMessage, ...] = (),
+    rich_by_instance: Mapping[int, RichMessage] | None = None,
 ) -> _AnalyzedMessages:
     valid_text_count = 0
     tokens: list[str] = []
     sender_tokens: list[tuple[str, list[str]]] = []
-    rich_by_id = {
-        message.message_id: message
-        for message in rich_messages
-        if message.message_id is not None
-    }
     stopwords: set[str] | None = None
 
     for message in messages:
@@ -506,7 +503,7 @@ def _analyze_kept_messages(
         tokens.extend(message_tokens)
         expression_tokens = _expression_tokens(
             message,
-            rich_by_id,
+            rich_by_instance or {},
         )
         combined_tokens = [*message_tokens, *expression_tokens]
         if combined_tokens:
@@ -523,7 +520,7 @@ def _analyze_kept_messages(
 
 def _expression_tokens(
     message: ChatMessage,
-    rich_by_id: Mapping[str, RichMessage],
+    rich_by_instance: Mapping[int, RichMessage],
 ) -> list[str]:
     """Return source-neutral expression tokens for the Voices pipeline."""
     tokens = [
@@ -534,11 +531,7 @@ def _expression_tokens(
         f"expression:{placeholder}"
         for placeholder in iter_expression_placeholders(message.text)
     )
-    rich_message = (
-        rich_by_id.get(message.message_id)
-        if message.message_id is not None
-        else None
-    )
+    rich_message = rich_by_instance.get(id(message))
     if rich_message is not None:
         tokens.extend(
             f"expression:{content.expression_key}"

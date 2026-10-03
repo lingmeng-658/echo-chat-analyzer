@@ -86,6 +86,7 @@ class ImportService:
 
         messages: list[ChatMessage] = []
         rich_messages: list[RichMessage] = []
+        rich_message_pairs: list[tuple[ChatMessage, RichMessage]] = []
         warnings: list[str] = []
         formats: set[str] = set()
         detected_platforms: list[str] = []
@@ -109,6 +110,10 @@ class ImportService:
             detected_platforms.append(platform)
             messages.extend(file_messages)
             rich_messages.extend(file_rich_messages)
+            if file_rich_messages:
+                rich_message_pairs.extend(
+                    zip(file_messages, file_rich_messages, strict=True)
+                )
             if file_format is not None:
                 formats.add(file_format)
             processed_message_count += file_raw_count
@@ -126,6 +131,7 @@ class ImportService:
             processed_message_count=processed_message_count,
             messages=tuple(messages),
             rich_messages=tuple(rich_messages),
+            rich_message_pairs=tuple(rich_message_pairs),
         )
 
 
