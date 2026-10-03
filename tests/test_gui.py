@@ -3445,6 +3445,82 @@ def test_workspace_cancel_analysis_returns_to_workspace(
 # GUI-5: WeChat data path auto-detection on workspace entry
 # ----------------------------------------------------------------
 
+def _window_with_running_fictional_analysis(qt_app, source):
+    """Keep a loaded workspace and hold its analysis until cancellation."""
+    module = _facade_module()
+    facade = StubFacade(
+        sessions=[_session(source, "fiction-A", "Fiction A", 2),
+                  _session(source, "fiction-B", "Fiction B", 3)],
+        connection_status=SimpleNamespace(
+            available=True, runtime_running=True, qq_online=True,
+            message="Fiction ready", action_hint="", version=None,
+        ),
+    )
+    executor = _IndependentDeferredExecutor()
+    window = _main_window(qt_app, facade, executor=executor)
+    workspace = window.qq_workspace if source is module.ChatSource.QQ else window.wechat_workspace
+    workspace.select_source(module.SourceInfo(source=source, display_name="Fiction", available=True))
+    workspace._handle_sessions_loaded(facade._sessions)
+    window._active_source = source.value
+    panel = workspace.session_panel
+    panel._session_list.setCurrentRow(1)
+    panel._scope_custom.setChecked(True)
+    panel._start_date.setDate(QDate(2020, 1, 2))
+    panel._end_date.setDate(QDate(2021, 3, 4))
+    panel.start_analysis()
+    _drain(panel)
+    return window, facade, executor, panel
+
+
+@pytest.mark.parametrize("source_name", ["qq", "wechat"])
+def test_cancel_analysis_does_not_refresh_data_source(qt_app, source_name):
+    source = _facade_module().ChatSource(source_name)
+    window, facade, executor, panel = _window_with_running_fictional_analysis(qt_app, source)
+    analysis = executor.tasks[-1]
+    submissions = len(executor.tasks)
+    window._cancel_analysis_button.click()
+    assert analysis.cancelled
+    assert not panel._analysis_running
+
+    # Run any new refresh jobs, including a refresh's session-load callback.
+    index = submissions
+    while index < len(executor.tasks):
+        task = executor.tasks[index]
+        task.succeed(task.operation())
+        task.finish()
+        index += 1
+    assert {
+        "qq_status": facade.get_qq_connection_snapshot_calls,
+        "wechat_status": facade.get_connection_status_calls,
+        "verify": facade.verify_wechat_database_calls,
+        "sessions": facade.list_sessions_calls,
+    } == {"qq_status": [], "wechat_status": [], "verify": [], "sessions": []}
+    assert len(executor.tasks) == submissions
+
+
+@pytest.mark.parametrize("source_name", ["qq", "wechat"])
+def test_cancel_analysis_preserves_workspace_selection_and_dates(qt_app, source_name):
+    from qq_chat_analyzer.gui.main_window import QQ_WORKSPACE_INDEX, WECHAT_WORKSPACE_INDEX
+
+    source = _facade_module().ChatSource(source_name)
+    window, _, executor, panel = _window_with_running_fictional_analysis(qt_app, source)
+    config = panel.build_config()
+    rows = [panel._session_list.item(i).text() for i in range(panel._session_list.count())]
+    window._cancel_analysis_button.click()
+    _drain(window)
+
+    assert panel.selected_session_id() == "fiction-B"
+    assert [panel._session_list.item(i).text() for i in range(panel._session_list.count())] == rows
+    assert panel.build_config() == config
+    assert panel.isEnabled()
+    assert panel._analyze_button.isEnabled()
+    expected_page = QQ_WORKSPACE_INDEX if source_name == "qq" else WECHAT_WORKSPACE_INDEX
+    assert window.stack.currentIndex() == expected_page
+    assert window._home_button.isVisibleTo(window)
+    assert not window._back_button.isVisibleTo(window)
+    assert window._status_label.text() == "分析已取消。"
+
+
 def test_wechat_workspace_auto_detects_single_root_when_not_configured(
     qt_app, sources
 ) -> None:

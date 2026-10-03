@@ -79,6 +79,8 @@ class SessionAnalysisPanel(QWidget):
         self._executor: Any = submit
         self._analysis_running = False
         self._analysis_task: Any = None
+        self._analysis_operation: object | None = None
+        self._range_request: object | None = None
         self._sessions_ready = False
         self._selected_source: ChatSource | None = None
         self._sessions_data: list[Any] = []
@@ -178,6 +180,7 @@ class SessionAnalysisPanel(QWidget):
         """Set the facade, source, and optional executor for this panel."""
         self._facade = facade
         self._selected_source = ChatSource(source)
+        self._reset_time_range()
         if executor is not None:
             self._executor = executor
 
@@ -191,6 +194,7 @@ class SessionAnalysisPanel(QWidget):
         """Clear all session data and restore the unconnected placeholder."""
         self._sessions_data = []
         self._sessions_ready = False
+        self._reset_time_range()
         self._show_unconnected_session_placeholder()
 
     def set_session_count(self, count: int) -> None:
@@ -248,15 +252,20 @@ class SessionAnalysisPanel(QWidget):
             config,
             progress=report,
         )
+        identity = object()
+        self._analysis_operation = identity
         self._set_busy(True)
         self.analysis_started.emit()
         self.status_changed.emit(_ANALYZING)
-        QTimer.singleShot(0, lambda: self._submit_analysis(operation))
+        QTimer.singleShot(0, lambda: self._submit_analysis(operation, identity))
 
     def cancel_analysis(self) -> None:
         """Cancel the active analysis and restore selection controls."""
         if not self._analysis_running:
             return
+        # Invalidate before cancellation: already queued Qt signals and the
+        # deferred submission can still arrive after this operation ends.
+        self._analysis_operation = None
         cancel = getattr(self._analysis_task, "cancel", None)
         if callable(cancel):
             cancel()
@@ -286,27 +295,41 @@ class SessionAnalysisPanel(QWidget):
 
     # ---------------------------------------------------------------- internal
 
-    def _submit_analysis(self, operation: Any) -> None:
-        self._analysis_task = self._executor(
+    def _submit_analysis(self, operation: Any, identity: object) -> None:
+        if self._analysis_operation is not identity:
+            return
+        task = self._executor(
             operation,
-            on_success=self._handle_success,
-            on_error=self._handle_error,
-            on_finished=self._finish_analysis,
-            on_progress=self._handle_analysis_progress,
+            on_success=lambda outcome: self._handle_success(identity, outcome),
+            on_error=lambda code, message: self._handle_error(identity, code, message),
+            on_finished=lambda: self._finish_analysis(identity),
+            on_progress=lambda message: self._handle_analysis_progress(identity, message),
         )
+        # An inline executor may finish before returning its task handle.
+        if self._analysis_operation is identity:
+            self._analysis_task = task
 
-    def _handle_analysis_progress(self, message: str) -> None:
+    def _handle_analysis_progress(self, identity: object, message: str) -> None:
+        if self._analysis_operation is not identity:
+            return
         if message:
             self.status_changed.emit(message)
 
-    def _finish_analysis(self) -> None:
+    def _finish_analysis(self, identity: object) -> None:
+        if self._analysis_operation is not identity:
+            return
+        self._analysis_operation = None
         self._analysis_task = None
         self._set_busy(False)
 
-    def _handle_success(self, outcome: Any) -> None:
+    def _handle_success(self, identity: object, outcome: Any) -> None:
+        if self._analysis_operation is not identity:
+            return
         self.analysis_succeeded.emit(outcome)
 
-    def _handle_error(self, code: str, message: str) -> None:
+    def _handle_error(self, identity: object, code: str, message: str) -> None:
+        if self._analysis_operation is not identity:
+            return
         self.analysis_failed.emit(code, message)
 
     def _set_busy(self, busy: bool) -> None:
@@ -342,6 +365,7 @@ class SessionAnalysisPanel(QWidget):
                 self._request_session_time_range(session_id)
 
     def _reset_time_range(self) -> None:
+        self._range_request = None
         self._message_range = None
         self._start_date.setDate(QDate.currentDate())
         self._end_date.setDate(QDate.currentDate())
@@ -357,9 +381,22 @@ class SessionAnalysisPanel(QWidget):
         source = self._selected_source
         if source not in (ChatSource.QQ, ChatSource.WECHAT):
             return
+        request = object()
+        self._range_request = request
+
+        def apply_range(message_range: Any) -> None:
+            if (
+                self._range_request is not request
+                or self._selected_source is not source
+                or self.selected_session_id() != session_id
+            ):
+                return
+            self._range_request = None
+            self._set_message_range(message_range)
+
         self._executor(
             lambda: facade_method(source, session_id),
-            on_success=self._set_message_range,
+            on_success=apply_range,
             on_error=lambda *_: None,
         )
 

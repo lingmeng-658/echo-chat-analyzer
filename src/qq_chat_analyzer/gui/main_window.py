@@ -265,7 +265,16 @@ class MainWindow(QMainWindow):
         """Cancel the active analysis."""
         self.qq_workspace.cancel_analysis()
         self.wechat_workspace.cancel_analysis()
-        self._show_active_workspace_or_home()
+        # Cancellation returns to the existing selection; entering the source
+        # through show_*_workspace would probe readiness and reload sessions.
+        if self._active_source == "qq":
+            self.stack.setCurrentIndex(QQ_WORKSPACE_INDEX)
+        elif self._active_source == "wechat":
+            self.stack.setCurrentIndex(WECHAT_WORKSPACE_INDEX)
+        else:
+            self.show_home_page()
+        self._home_button.setVisible(self._active_source in ("qq", "wechat"))
+        self._back_button.setVisible(False)
         self._status_label.setText("分析已取消。")
 
 
