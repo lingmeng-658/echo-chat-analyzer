@@ -1,4 +1,4 @@
-"""Local data management page: analysis history and chat data snapshots."""
+"""Local data management page: Echo analysis history."""
 
 from __future__ import annotations
 
@@ -35,17 +35,12 @@ _SCOPE_DISPLAY = {
     "last_six_months": "最近六个月",
     "last_year": "最近一年",
 }
-_SNAPSHOT_STATE_DISPLAY = {
-    "available": "可用",
-    "removed": "已删除",
-}
 _UNKNOWN_SESSION_NAME = "未知会话"
 _LOADING_STATUS = "正在读取本地数据..."
-_UPDATED_STATUS = "本地数据已更新。"
 
 
 class LocalDataPage(QWidget):
-    """Show analysis history and manage chat data snapshots.
+    """Show and clear Echo analysis history.
 
     This page owns no storage logic: it only reads view models through the
     facade and renders state, errors, and empty states.
@@ -56,16 +51,12 @@ class LocalDataPage(QWidget):
         facade: Any,
         parent: QWidget | None = None,
         executor: Any = None,
-        confirm_delete: Callable[[], bool] | None = None,
         confirm_clear_history: Callable[[], bool] | None = None,
-        confirm_clear_snapshots: Callable[[], bool] | None = None,
     ) -> None:
         super().__init__(parent)
         self._facade = facade
         self._executor = executor or submit
-        self._confirm_delete = confirm_delete
         self._confirm_clear_history = confirm_clear_history
-        self._confirm_clear_snapshots = confirm_clear_snapshots
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -117,47 +108,6 @@ class LocalDataPage(QWidget):
         history_layout.addLayout(history_actions)
         layout.addWidget(history_box, stretch=1)
 
-        snapshot_box = QGroupBox("数据快照")
-        snapshot_layout = QVBoxLayout(snapshot_box)
-        self._snapshot_empty_label = QLabel("暂无快照")
-        self._snapshot_empty_label.setStyleSheet(EMPTY_TEXT_STYLE)
-        snapshot_layout.addWidget(self._snapshot_empty_label)
-        self._snapshot_table = QTableWidget(0, 5)
-        self._snapshot_table.setHorizontalHeaderLabels(
-            ["时间", "会话", "消息数", "大小", "状态"]
-        )
-        self._snapshot_table.setEditTriggers(
-            QAbstractItemView.EditTrigger.NoEditTriggers
-        )
-        self._snapshot_table.setSelectionBehavior(
-            QAbstractItemView.SelectionBehavior.SelectRows
-        )
-        self._snapshot_table.setSelectionMode(
-            QAbstractItemView.SelectionMode.ExtendedSelection
-        )
-        self._snapshot_table.setTextElideMode(Qt.TextElideMode.ElideNone)
-        self._snapshot_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Fixed
-        )
-        for column, width in enumerate((160, 240, 80, 100, 90)):
-            self._snapshot_table.setColumnWidth(column, width)
-        snapshot_layout.addWidget(self._snapshot_table)
-
-        snapshot_actions = QHBoxLayout()
-        self._usage_label = QLabel("快照占用空间：0 B")
-        snapshot_actions.addWidget(self._usage_label)
-        snapshot_actions.addStretch(1)
-        self._delete_snapshot_button = QPushButton("删除所选快照")
-        self._delete_snapshot_button.setMinimumHeight(34)
-        self._delete_snapshot_button.clicked.connect(self._delete_selected_snapshot)
-        snapshot_actions.addWidget(self._delete_snapshot_button)
-        self._delete_all_snapshot_button = QPushButton("删除全部快照")
-        self._delete_all_snapshot_button.setMinimumHeight(34)
-        self._delete_all_snapshot_button.clicked.connect(self._delete_all_snapshots)
-        snapshot_actions.addWidget(self._delete_all_snapshot_button)
-        snapshot_layout.addLayout(snapshot_actions)
-        layout.addWidget(snapshot_box, stretch=1)
-
         self._back_button = QPushButton("返回首页")
         self._back_button.setMinimumWidth(160)
         self._back_button.setMinimumHeight(34)
@@ -174,24 +124,6 @@ class LocalDataPage(QWidget):
             on_success=self._render_data,
             on_error=self._show_error,
         )
-
-    def selected_snapshot_ids(self) -> list[str]:
-        """Return snapshot ids behind the selected rows, in row order."""
-        snapshot_ids: list[str] = []
-        seen: set[str] = set()
-        for item in self._snapshot_table.selectedItems():
-            if item.column() != 0:
-                continue
-            snapshot_id = item.data(Qt.ItemDataRole.UserRole)
-            if snapshot_id is not None and snapshot_id not in seen:
-                seen.add(snapshot_id)
-                snapshot_ids.append(snapshot_id)
-        return snapshot_ids
-
-    def selected_snapshot_id(self) -> str | None:
-        """Return the first selected snapshot id, if any."""
-        snapshot_ids = self.selected_snapshot_ids()
-        return snapshot_ids[0] if snapshot_ids else None
 
     # ---------------------------------------------------------------- internals
 
@@ -223,90 +155,6 @@ class LocalDataPage(QWidget):
                 )
         self._history_empty_label.setVisible(len(records) == 0)
         self._history_table.setVisible(len(records) > 0)
-
-    def _render_snapshots(self, snapshots: Any) -> None:
-        items = [
-            snapshot
-            for snapshot in snapshots
-            if not _snapshot_is_removed(snapshot)
-        ]
-        self._snapshot_table.setRowCount(len(items))
-        for row, snapshot in enumerate(items):
-            values = (
-                _format_datetime(getattr(snapshot, "acquired_at", None)),
-                getattr(snapshot, "session_name", "") or _UNKNOWN_SESSION_NAME,
-                str(getattr(snapshot, "message_count", 0)),
-                _format_bytes(getattr(snapshot, "data_size_bytes", 0)),
-                _snapshot_state_display(
-                    getattr(snapshot, "payload_state", None)
-                ),
-            )
-            for column, value in enumerate(values):
-                item = _readonly_item(value)
-                if column == 0:
-                    item.setData(
-                        Qt.ItemDataRole.UserRole,
-                        getattr(snapshot, "id", None),
-                    )
-                self._snapshot_table.setItem(row, column, item)
-        self._snapshot_empty_label.setVisible(len(items) == 0)
-        self._snapshot_table.setVisible(len(items) > 0)
-
-    def _delete_selected_snapshot(self) -> None:
-        snapshot_ids = self.selected_snapshot_ids()
-        if not snapshot_ids:
-            self._status_label.setText("请先选择要删除的快照。")
-            return
-        if not self._ask_delete_confirmation():
-            return
-        self._status_label.setText("正在删除所选快照...")
-        self._executor(
-            lambda: self._remove_snapshot_ids(snapshot_ids),
-            on_success=lambda _removed: self.refresh(),
-            on_error=self._show_error,
-        )
-
-    def _remove_snapshot_ids(self, snapshot_ids: list[str]) -> list[Any]:
-        """Remove selected snapshots one at a time through the facade."""
-        removed = []
-        for snapshot_id in snapshot_ids:
-            removed.append(self._facade.remove_snapshot(snapshot_id))
-        return removed
-
-    def _delete_all_snapshots(self) -> None:
-        """Remove every snapshot payload after user confirmation."""
-        if not self._ask_clear_snapshots_confirmation():
-            return
-        self._status_label.setText("正在删除全部快照...")
-        self._executor(
-            self._facade.remove_all_snapshots,
-            on_success=lambda _count: self.refresh(),
-            on_error=self._show_error,
-        )
-
-    def _ask_clear_snapshots_confirmation(self) -> bool:
-        """Return whether the user confirmed deleting every snapshot."""
-        if self._confirm_clear_snapshots is not None:
-            return bool(self._confirm_clear_snapshots())
-        box = _clear_snapshots_confirmation_dialog(self)
-        box.exec()
-        delete_button = next(
-            (button for button in box.buttons() if button.text() == "删除"),
-            None,
-        )
-        return box.clickedButton() is delete_button
-
-    def _ask_delete_confirmation(self) -> bool:
-        """Return whether the user confirmed the selected snapshot deletion."""
-        if self._confirm_delete is not None:
-            return bool(self._confirm_delete())
-        box = _delete_confirmation_dialog(self)
-        box.exec()
-        delete_button = next(
-            (button for button in box.buttons() if button.text() == "删除"),
-            None,
-        )
-        return box.clickedButton() is delete_button
 
     def _delete_all_history(self) -> None:
         """Clear every Echo history record after user confirmation."""
@@ -340,19 +188,6 @@ class LocalDataPage(QWidget):
             main_window.show_home_page()
 
 
-def _delete_confirmation_dialog(
-    parent: QWidget | None = None,
-) -> QMessageBox:
-    """Build the snapshot deletion confirmation dialog."""
-    box = QMessageBox(parent)
-    box.setWindowTitle("确认删除")
-    box.setText("确定要删除所选快照吗？\n删除后将无法恢复。")
-    delete_button = box.addButton("删除", QMessageBox.ButtonRole.DestructiveRole)
-    box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
-    box.setDefaultButton(delete_button)
-    return box
-
-
 def _clear_history_confirmation_dialog(
     parent: QWidget | None = None,
 ) -> QMessageBox:
@@ -360,19 +195,6 @@ def _clear_history_confirmation_dialog(
     box = QMessageBox(parent)
     box.setWindowTitle("确认删除")
     box.setText("确定删除全部 Echo 历史记录吗？\n删除后无法恢复。")
-    delete_button = box.addButton("删除", QMessageBox.ButtonRole.DestructiveRole)
-    box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
-    box.setDefaultButton(delete_button)
-    return box
-
-
-def _clear_snapshots_confirmation_dialog(
-    parent: QWidget | None = None,
-) -> QMessageBox:
-    """Build the delete-all-snapshots confirmation dialog."""
-    box = QMessageBox(parent)
-    box.setWindowTitle("确认删除")
-    box.setText("确定删除全部数据快照吗？删除后将无法恢复。")
     delete_button = box.addButton("删除", QMessageBox.ButtonRole.DestructiveRole)
     box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
     box.setDefaultButton(delete_button)
@@ -411,30 +233,9 @@ def _format_date(value: Any) -> str:
     return text[:10] if text else ""
 
 
-def _snapshot_state_display(value: Any) -> str:
-    if value is None:
-        return "可用"
-    text = getattr(value, "value", value)
-    return _SNAPSHOT_STATE_DISPLAY.get(str(text), str(text))
-
-
-def _snapshot_is_removed(snapshot: Any) -> bool:
-    state = getattr(snapshot, "payload_state", None)
-    text = getattr(state, "value", state)
-    return str(text) == "removed"
-
-
 def _format_datetime(value: Any) -> str:
     if isinstance(value, datetime):
         return value.astimezone().strftime("%Y-%m-%d %H:%M")
     if value is None:
         return "-"
     return str(value)
-
-
-def _format_bytes(value: int) -> str:
-    if value < 1024:
-        return f"{value} B"
-    if value < 1024 * 1024:
-        return f"{value / 1024:.1f} KB"
-    return f"{value / (1024 * 1024):.1f} MB"

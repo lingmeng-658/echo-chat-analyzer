@@ -4020,6 +4020,26 @@ def test_local_data_clear_history_button_is_visible(qt_app, sources) -> None:
     assert window.local_data_page._clear_history_button.isVisibleTo(window) is True
 
 
+def test_local_data_page_exposes_history_without_retired_snapshot_controls(
+    qt_app, sources,
+) -> None:
+    from PySide6.QtWidgets import QGroupBox, QLabel, QPushButton, QTableWidget
+
+    facade = StubFacade(sources=sources, history=[_gui_history_record("h1")])
+    window = _main_window(qt_app, facade)
+    window.show_local_data_page()
+    _drain(window)
+    page = window.local_data_page
+
+    assert [box.title() for box in page.findChildren(QGroupBox)] == ["Echo 历史"]
+    assert {button.text() for button in page.findChildren(QPushButton)} == {
+        "刷新", "删除全部历史", "返回首页",
+    }
+    assert all("快照" not in label.text() for label in page.findChildren(QLabel))
+    assert len(page.findChildren(QTableWidget)) == 1
+    assert page._history_table.rowCount() == 1
+
+
 def test_clear_history_confirmation_dialog_has_expected_copy(qt_app) -> None:
     from PySide6.QtWidgets import QMessageBox
 
