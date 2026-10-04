@@ -275,25 +275,22 @@ class QQDirectDatabaseImportService:
             client = self._require_runtime_client()
             generation_id: str | None = None
             try:
-                try:
-                    generation_id = client.acquire()
-                    database_path, self_uin = _validated_generation(
-                        client.generation_directory(generation_id),
-                        generation_id,
-                    )
-                    provider = QQDatabaseProvider(database_path)
-                    sessions = provider.list_sessions(self_uin=self_uin)
-                except QQSnapshotRuntimeError as error:
-                    raise QQDirectSnapshotAcquireFailed() from error
-                finally:
-                    if generation_id is not None:
-                        try:
-                            client.cleanup(generation_id)
-                        except QQSnapshotRuntimeError as error:
-                            raise QQDirectSnapshotCleanupFailed() from error
-                return self._named_sessions(sessions)
+                generation_id = client.acquire()
+                database_path, self_uin = _validated_generation(
+                    client.generation_directory(generation_id),
+                    generation_id,
+                )
+                provider = QQDatabaseProvider(database_path)
+                sessions = provider.list_sessions(self_uin=self_uin)
+            except QQSnapshotRuntimeError as error:
+                raise QQDirectSnapshotAcquireFailed() from error
             finally:
-                pass
+                if generation_id is not None:
+                    try:
+                        client.cleanup(generation_id)
+                    except QQSnapshotRuntimeError as error:
+                        raise QQDirectSnapshotCleanupFailed() from error
+            return self._named_sessions(sessions)
         finally:
             self._end_acquisition()
 
@@ -367,40 +364,8 @@ class QQDirectDatabaseImportService:
                 group_names, friend_names = self._metadata_names()
                 metadata_at = time.perf_counter()
                 if session.session_type == "group":
-                    get_members = getattr(client, "get_group_member_all", None)
-                    sender_names: dict[str, str] = {}
-                    member_data = _group_member_data(None)
-                    rpc_status = "api_unavailable"
-                    if callable(get_members):
-                        try:
-                            member_result = get_members(session.session_object)
-                            _log_group_member_shape(member_result)
-                            member_data = _group_member_data(member_result)
-                            sender_names = member_data["names"]
-                            rpc_status = member_data["status"]
-                        except Exception:
-                            # Member metadata is optional; do not fail local DB analysis.
-                            rpc_status = "rpc_failed"
-                    participant_uins = _payload_sender_uins(payload_path)
-                    coverage = _identity_coverage_counts(participant_uins, member_data)
-                    _LOGGER.info(
-                        "[qq-direct-identity-coverage] status=%s "
-                        "distinct_sender_count=%d rpc_member_count=%d "
-                        "matched_sender_count=%d unmatched_sender_count=%d "
-                        "matched_with_card_count=%d "
-                        "matched_without_card_with_nick_count=%d "
-                        "matched_without_card_or_nick_count=%d "
-                        "rpc_member_with_card_count=%d rpc_member_with_nick_count=%d",
-                        rpc_status,
-                        coverage["distinct_sender_count"],
-                        coverage["rpc_member_count"],
-                        coverage["matched_sender_count"],
-                        coverage["unmatched_sender_count"],
-                        coverage["matched_with_card_count"],
-                        coverage["matched_without_card_with_nick_count"],
-                        coverage["matched_without_card_or_nick_count"],
-                        coverage["rpc_member_with_card_count"],
-                        coverage["rpc_member_with_nick_count"],
+                    sender_names = _group_sender_names_with_diagnostics(
+                        client, session, payload_path
                     )
                 else:
                     sender_names = friend_names
@@ -576,6 +541,50 @@ class QQDirectDatabaseImportService:
             return self._config_loader.load_or_default()
         except Exception:
             raise QQDirectDatabaseUnavailable() from None
+
+
+def _group_sender_names_with_diagnostics(
+    client: Any,
+    session: QQSession,
+    payload_path: Path,
+) -> dict[str, str]:
+    """Fetch optional member names and log anonymous identity coverage."""
+    get_members = getattr(client, "get_group_member_all", None)
+    sender_names: dict[str, str] = {}
+    member_data = _group_member_data(None)
+    rpc_status = "api_unavailable"
+    if callable(get_members):
+        try:
+            member_result = get_members(session.session_object)
+            _log_group_member_shape(member_result)
+            member_data = _group_member_data(member_result)
+            sender_names = member_data["names"]
+            rpc_status = member_data["status"]
+        except Exception:
+            # Member metadata is optional; do not fail local DB analysis.
+            rpc_status = "rpc_failed"
+    participant_uins = _payload_sender_uins(payload_path)
+    coverage = _identity_coverage_counts(participant_uins, member_data)
+    _LOGGER.info(
+        "[qq-direct-identity-coverage] status=%s "
+        "distinct_sender_count=%d rpc_member_count=%d "
+        "matched_sender_count=%d unmatched_sender_count=%d "
+        "matched_with_card_count=%d "
+        "matched_without_card_with_nick_count=%d "
+        "matched_without_card_or_nick_count=%d "
+        "rpc_member_with_card_count=%d rpc_member_with_nick_count=%d",
+        rpc_status,
+        coverage["distinct_sender_count"],
+        coverage["rpc_member_count"],
+        coverage["matched_sender_count"],
+        coverage["unmatched_sender_count"],
+        coverage["matched_with_card_count"],
+        coverage["matched_without_card_with_nick_count"],
+        coverage["matched_without_card_or_nick_count"],
+        coverage["rpc_member_with_card_count"],
+        coverage["rpc_member_with_nick_count"],
+    )
+    return sender_names
 
 
 def _validated_generation(

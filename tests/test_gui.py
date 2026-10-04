@@ -2749,6 +2749,57 @@ def test_qq_workspace_waiting_auth_enables_button_once_qr_displayed(
     assert workspace._qq_connect_button.isEnabled() is True
 
 
+@pytest.mark.parametrize(
+    "next_state", ["initializing", "starting", "connected", "disconnected", "error"]
+)
+def test_qq_status_leaves_auth_wait_and_preserves_session_load_timing(
+    qt_app, sources, tmp_path, next_state
+) -> None:
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+    from PySide6.QtGui import QPixmap
+
+    facade = _GatedQRFacade(
+        _qq_snapshot("waiting_auth"),
+        _qq_snapshot("waiting_auth"),
+        sources=sources,
+    )
+    facade.qr_ready = True
+    workspace = QQWorkspace(facade, executor=_inline_executor())
+    qr_path = tmp_path / "fictional-qr.png"
+    pixmap = QPixmap(8, 8)
+    pixmap.fill(Qt.GlobalColor.black)
+    assert pixmap.save(str(qr_path))
+    workspace._qq_qrcode_path = qr_path
+    workspace._show_qq_status(
+        _qq_snapshot("waiting_auth"), load_sessions_on_ready=False
+    )
+    assert workspace._qq_status_timer.isActive()
+    assert workspace._qq_qrcode_label.isVisibleTo(workspace)
+
+    state_at_session_load = []
+    list_sessions = facade.list_sessions
+
+    def observe_session_load(source):
+        state_at_session_load.append((
+            workspace._qq_status_timer.isActive(),
+            workspace._qq_qrcode_label.isVisibleTo(workspace),
+        ))
+        return list_sessions(source)
+
+    facade.list_sessions = observe_session_load
+    workspace._show_qq_status(
+        _qq_snapshot(next_state), load_sessions_on_ready=True
+    )
+
+    assert not workspace._qq_status_timer.isActive()
+    assert not workspace._qq_qrcode_label.isVisibleTo(workspace)
+    assert workspace._qq_waiting_auth_since is None
+    connected = next_state == "connected"
+    assert workspace._qq_connect_button.isVisibleTo(workspace) is not connected
+    assert workspace._qq_disconnect_button.isVisibleTo(workspace) is connected
+    assert state_at_session_load == ([(True, True)] if connected else [])
+
+
 def test_qq_workspace_offers_qq_exe_selection_when_install_path_missing(
     qt_app,
     tmp_path,

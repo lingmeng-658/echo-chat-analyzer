@@ -984,65 +984,14 @@ class ChatAnalyzerFacade:
             temporary_output = None
         self._replace_retained_output(temporary_output)
 
-        history_saved: bool | None = None
-        history_record_id: str | None = None
-        if self._report_history_manager is not None:
-            try:
-                diagnostic_counts = getattr(result, "diagnostic_counts", None)
-                history_record = self._report_history_manager.save_analysis(
-                    source=source.value,
-                    session_name=(
-                        session.display_name if session is not None else None
-                    ),
-                    session_id=(
-                        session.session_id if session is not None else None
-                    ),
-                    message_count=result.processed_message_count,
-                    analysis_scope=scope.mode.value,
-                    scope_start=scope.start_date,
-                    scope_end=scope.end_date,
-                    report_generated_at=report_generated_at,
-                    session_type=(
-                        session.session_type if session is not None else None
-                    ),
-                    input_identity_summary=_input_identity_summary(
-                        source,
-                        session,
-                    ),
-                    raw_message_count=getattr(
-                        diagnostic_counts,
-                        "raw_message_count",
-                        None,
-                    ),
-                    imported_message_count=getattr(
-                        diagnostic_counts,
-                        "imported_message_count",
-                        None,
-                    ),
-                    scope_message_count=getattr(
-                        diagnostic_counts,
-                        "scope_message_count",
-                        None,
-                    ),
-                    filtered_message_count=getattr(
-                        diagnostic_counts,
-                        "filtered_message_count",
-                        None,
-                    ),
-                    analyzed_message_count=getattr(
-                        diagnostic_counts,
-                        "analyzed_message_count",
-                        None,
-                    ),
-                )
-            except Exception:
-                _LOGGER.exception(
-                    "Analysis completed but history metadata could not be saved."
-                )
-                history_saved = False
-            else:
-                history_saved = True
-                history_record_id = history_record.analysis_id
+        history_saved, history_record_id = _save_analysis_history(
+            self._report_history_manager,
+            source=source,
+            session=session,
+            scope=scope,
+            result=result,
+            report_generated_at=report_generated_at,
+        )
 
         outcome = AnalysisOutcome(
             view=view,
@@ -1478,6 +1427,75 @@ class ChatAnalyzerFacade:
 
 
 # ------------------------------------------------------------------ helpers
+
+
+def _save_analysis_history(
+    manager: Any,
+    *,
+    source: ChatSource,
+    session: SessionInfo | None,
+    scope: AnalysisScope,
+    result: AnalysisResultDTO,
+    report_generated_at: datetime,
+) -> tuple[bool | None, str | None]:
+    """Save history metadata without failing an otherwise successful analysis."""
+    if manager is None:
+        return None, None
+
+    try:
+        diagnostic_counts = getattr(result, "diagnostic_counts", None)
+        history_record = manager.save_analysis(
+            source=source.value,
+            session_name=(
+                session.display_name if session is not None else None
+            ),
+            session_id=(
+                session.session_id if session is not None else None
+            ),
+            message_count=result.processed_message_count,
+            analysis_scope=scope.mode.value,
+            scope_start=scope.start_date,
+            scope_end=scope.end_date,
+            report_generated_at=report_generated_at,
+            session_type=(
+                session.session_type if session is not None else None
+            ),
+            input_identity_summary=_input_identity_summary(
+                source,
+                session,
+            ),
+            raw_message_count=getattr(
+                diagnostic_counts,
+                "raw_message_count",
+                None,
+            ),
+            imported_message_count=getattr(
+                diagnostic_counts,
+                "imported_message_count",
+                None,
+            ),
+            scope_message_count=getattr(
+                diagnostic_counts,
+                "scope_message_count",
+                None,
+            ),
+            filtered_message_count=getattr(
+                diagnostic_counts,
+                "filtered_message_count",
+                None,
+            ),
+            analyzed_message_count=getattr(
+                diagnostic_counts,
+                "analyzed_message_count",
+                None,
+            ),
+        )
+    except Exception:
+        _LOGGER.exception(
+            "Analysis completed but history metadata could not be saved."
+        )
+        return False, None
+    return True, history_record.analysis_id
 
 
 def _create_output_directory(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..legacy_projection import project_legacy_messages
@@ -67,6 +68,16 @@ WARNING_PLATFORM_HINT_FORMAT_MISMATCH = "platform_hint_format_mismatch"
 _UNKNOWN_PLATFORM = None
 
 
+@dataclass(frozen=True, slots=True)
+class _ImportedFile:
+    platform: str | None
+    messages: tuple[ChatMessage, ...]
+    rich_messages: tuple[RichMessage, ...]
+    format: str | None
+    warnings: tuple[str, ...]
+    raw_count: int
+
+
 class ImportService:
     """Import local chat files into ChatMessage without running analysis."""
 
@@ -93,30 +104,20 @@ class ImportService:
         processed_message_count = 0
 
         for input_file in input_files:
-            (
-                platform,
-                file_messages,
-                file_rich_messages,
-                file_format,
-                file_warnings,
-                file_raw_count,
-            ) = _import_file(
-                input_file,
-                request.platform,
-            )
-            warnings.extend(file_warnings)
-            if platform is _UNKNOWN_PLATFORM:
+            imported = _import_file(input_file, request.platform)
+            warnings.extend(imported.warnings)
+            if imported.platform is _UNKNOWN_PLATFORM:
                 continue
-            detected_platforms.append(platform)
-            messages.extend(file_messages)
-            rich_messages.extend(file_rich_messages)
-            if file_rich_messages:
+            detected_platforms.append(imported.platform)
+            messages.extend(imported.messages)
+            rich_messages.extend(imported.rich_messages)
+            if imported.rich_messages:
                 rich_message_pairs.extend(
-                    zip(file_messages, file_rich_messages, strict=True)
+                    zip(imported.messages, imported.rich_messages, strict=True)
                 )
-            if file_format is not None:
-                formats.add(file_format)
-            processed_message_count += file_raw_count
+            if imported.format is not None:
+                formats.add(imported.format)
+            processed_message_count += imported.raw_count
 
         valid_text_count = sum(1 for message in messages if message.text.strip())
         result = ImportResult(
@@ -187,14 +188,7 @@ def _is_sidecar(path: Path, root: Path) -> bool:
 def _import_file(
     input_file: Path,
     platform_hint: str | None,
-) -> tuple[
-    str | None,
-    tuple[ChatMessage, ...],
-    tuple[RichMessage, ...],
-    str | None,
-    tuple[str, ...],
-    int,
-]:
+) -> _ImportedFile:
     if platform_hint == "wechat":
         return _import_wechat_file(input_file)
     if platform_hint == "qq":
@@ -209,26 +203,19 @@ def _import_file(
         return _import_wechat_cli_file(input_file)
     if _looks_like_qq_export(input_file):
         return _import_qq_file(input_file)
-    return (
-        _UNKNOWN_PLATFORM,
-        (),
-        (),
-        None,
-        (WARNING_UNSUPPORTED_FORMAT,),
-        0,
+    return _ImportedFile(
+        platform=_UNKNOWN_PLATFORM,
+        messages=(),
+        rich_messages=(),
+        format=None,
+        warnings=(WARNING_UNSUPPORTED_FORMAT,),
+        raw_count=0,
     )
 
 
 def _import_qq_file(
     input_file: Path,
-) -> tuple[
-    str,
-    tuple[ChatMessage, ...],
-    tuple[RichMessage, ...],
-    str,
-    tuple[str, ...],
-    int,
-]:
+) -> _ImportedFile:
     if is_qq_db_export(input_file):
         return _import_qq_db_file(input_file)
     if is_qce_export(input_file):
@@ -238,26 +225,19 @@ def _import_qq_file(
     parsed_messages = tuple(parse_qq_messages(raw_messages))
     warnings = _import_warnings(input_file, "qq", raw_messages, parsed_messages)
     file_format = "jsonl" if input_file.suffix.lower() == ".jsonl" else "json"
-    return (
-        "qq",
-        parsed_messages,
-        (),
-        file_format,
-        warnings,
-        len(raw_messages),
+    return _ImportedFile(
+        platform="qq",
+        messages=parsed_messages,
+        rich_messages=(),
+        format=file_format,
+        warnings=warnings,
+        raw_count=len(raw_messages),
     )
 
 
 def _import_qq_db_file(
     input_file: Path,
-) -> tuple[
-    str,
-    tuple[ChatMessage, ...],
-    tuple[RichMessage, ...],
-    str,
-    tuple[str, ...],
-    int,
-]:
+) -> _ImportedFile:
     payload = load_qq_db_json(input_file)
     raw_records = payload.get("records", []) if payload is not None else []
     rich_messages, parse_warnings = parse_qq_db_rich_messages(payload)
@@ -266,26 +246,19 @@ def _import_qq_db_file(
         *parse_warnings,
         *_import_warnings(input_file, "qq", raw_records, parsed_messages),
     )
-    return (
-        "qq",
-        parsed_messages,
-        tuple(rich_messages),
-        QQ_DB_JSON_FORMAT,
-        warnings,
-        len(raw_records),
+    return _ImportedFile(
+        platform="qq",
+        messages=parsed_messages,
+        rich_messages=tuple(rich_messages),
+        format=QQ_DB_JSON_FORMAT,
+        warnings=warnings,
+        raw_count=len(raw_records),
     )
 
 
 def _import_qce_file(
     input_file: Path,
-) -> tuple[
-    str,
-    tuple[ChatMessage, ...],
-    tuple[RichMessage, ...],
-    str,
-    tuple[str, ...],
-    int,
-]:
+) -> _ImportedFile:
     payload = load_qce_json(input_file)
     raw_messages = payload.get("messages", []) if payload is not None else []
     rich_messages, parse_warnings = parse_qce_rich_messages(
@@ -299,26 +272,19 @@ def _import_qce_file(
         *parse_warnings,
         *_import_warnings(input_file, "qq", raw_messages, parsed_messages),
     )
-    return (
-        "qq",
-        parsed_messages,
-        tuple(rich_messages),
-        QQ_QCE_FORMAT,
-        warnings,
-        len(raw_messages),
+    return _ImportedFile(
+        platform="qq",
+        messages=parsed_messages,
+        rich_messages=tuple(rich_messages),
+        format=QQ_QCE_FORMAT,
+        warnings=warnings,
+        raw_count=len(raw_messages),
     )
 
 
 def _import_wechat_file(
     input_file: Path,
-) -> tuple[
-    str,
-    tuple[ChatMessage, ...],
-    tuple[RichMessage, ...],
-    str,
-    tuple[str, ...],
-    int,
-]:
+) -> _ImportedFile:
     if is_wechat_db_export(input_file):
         return _import_wechat_db_file(input_file)
 
@@ -348,64 +314,50 @@ def _import_wechat_file(
         if input_file.suffix.lower() == ".jsonl"
         else "detailed-json"
     )
-    return (
-        "wechat",
-        parsed_messages,
-        (),
-        file_format,
-        warnings,
-        len(raw_messages),
+    return _ImportedFile(
+        platform="wechat",
+        messages=parsed_messages,
+        rich_messages=(),
+        format=file_format,
+        warnings=warnings,
+        raw_count=len(raw_messages),
     )
 
 
 def _import_wechat_cli_file(
     input_file: Path,
-) -> tuple[
-    str,
-    tuple[ChatMessage, ...],
-    tuple[RichMessage, ...],
-    str,
-    tuple[str, ...],
-    int,
-]:
+) -> _ImportedFile:
     raw_messages = load_wechat_cli_messages(input_file)
     parsed_messages = tuple(parse_wechat_cli_messages(raw_messages))
     warnings: tuple[str, ...] = ()
     if not parsed_messages and not raw_messages:
         warnings = (WARNING_NO_MESSAGES_LOADED,)
-    return (
-        "wechat",
-        parsed_messages,
-        (),
-        WECHAT_CLI_FORMAT,
-        warnings,
-        len(raw_messages),
+    return _ImportedFile(
+        platform="wechat",
+        messages=parsed_messages,
+        rich_messages=(),
+        format=WECHAT_CLI_FORMAT,
+        warnings=warnings,
+        raw_count=len(raw_messages),
     )
 
 
 def _import_wechat_db_file(
     input_file: Path,
-) -> tuple[
-    str,
-    tuple[ChatMessage, ...],
-    tuple[RichMessage, ...],
-    str,
-    tuple[str, ...],
-    int,
-]:
+) -> _ImportedFile:
     raw_messages = load_wechat_db_messages(input_file)
     rich_messages = tuple(parse_wechat_db_rich_messages(raw_messages))
     parsed_messages = tuple(project_legacy_messages(rich_messages))
     warnings: tuple[str, ...] = ()
     if not raw_messages:
         warnings = (WARNING_NO_MESSAGES_LOADED,)
-    return (
-        "wechat",
-        parsed_messages,
-        rich_messages,
-        WECHAT_DB_FORMAT,
-        warnings,
-        len(raw_messages),
+    return _ImportedFile(
+        platform="wechat",
+        messages=parsed_messages,
+        rich_messages=rich_messages,
+        format=WECHAT_DB_FORMAT,
+        warnings=warnings,
+        raw_count=len(raw_messages),
     )
 
 

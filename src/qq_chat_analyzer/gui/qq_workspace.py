@@ -248,7 +248,9 @@ class QQWorkspace(QWidget):
         state = _snapshot_state(snapshot)
         message = _snapshot_message(snapshot)
         action_hint = _snapshot_hint(snapshot)
-        if state == _QQ_STATE_WAITING_AUTH:
+        waiting_auth = state == _QQ_STATE_WAITING_AUTH
+        connected = state == _QQ_STATE_CONNECTED
+        if waiting_auth:
             if self._qq_waiting_auth_since is None:
                 self._qq_waiting_auth_since = time.monotonic()
         else:
@@ -263,14 +265,14 @@ class QQWorkspace(QWidget):
         self._status_label.setText(f"{_snapshot_prefix(snapshot)}{message}")
         self._status_label.setToolTip(action_hint)
         self._status_label.setVisible(True)
-        self._qq_connect_button.setText(_QQ_CONNECT_LABEL)
-        self._qq_connect_button.setVisible(state != _QQ_STATE_CONNECTED)
-        if state == _QQ_STATE_ERROR:
-            self._qq_connect_button.setText(_RESTART_CONNECTION_LABEL)
+        self._qq_connect_button.setText(
+            _RESTART_CONNECTION_LABEL if state == _QQ_STATE_ERROR else _QQ_CONNECT_LABEL
+        )
+        self._qq_connect_button.setVisible(not connected)
         self._qq_connect_button.setEnabled(not _snapshot_in_progress(snapshot))
         self._qq_connect_button.setToolTip("")
-        self._qq_disconnect_button.setVisible(state == _QQ_STATE_CONNECTED)
-        self._qq_disconnect_button.setEnabled(state == _QQ_STATE_CONNECTED)
+        self._qq_disconnect_button.setVisible(connected)
+        self._qq_disconnect_button.setEnabled(connected)
         self._qq_disconnect_button.setToolTip("")
         self.session_panel.update_analyze_enabled()
 
@@ -283,31 +285,28 @@ class QQWorkspace(QWidget):
         if load_sessions_on_ready:
             self.status_changed.emit(message)
 
-        if state == _QQ_STATE_CONNECTED and load_sessions_on_ready:
-            if not self._sessions_loaded:
-                self._load_sessions()
-        elif state in _QQ_PROGRESS_STATES or state == _QQ_STATE_WAITING_AUTH:
+        if waiting_auth:
             self.session_panel.show_connecting_placeholder()
-        elif state != _QQ_STATE_CONNECTED:
-            self.session_panel.show_disconnected_placeholder()
-
-        if state == _QQ_STATE_WAITING_AUTH:
             self._show_qq_login_guide()
             self._start_qq_status_polling()
             self._refresh_qq_qrcode()
+            self._qq_connect_button.setEnabled(
+                self._qq_qrcode_label.isVisibleTo(self)
+            )
         elif state in _QQ_PROGRESS_STATES:
+            self.session_panel.show_connecting_placeholder()
             self._show_qq_starting_guide()
             self._stop_qq_status_polling()
             self._hide_qq_qrcode()
         else:
+            if connected:
+                if load_sessions_on_ready and not self._sessions_loaded:
+                    self._load_sessions()
+            else:
+                self.session_panel.show_disconnected_placeholder()
             self._hide_qq_login_guide()
             self._stop_qq_status_polling()
             self._hide_qq_qrcode()
-
-        if state == _QQ_STATE_WAITING_AUTH:
-            self._qq_connect_button.setEnabled(
-                self._qq_qrcode_label.isVisibleTo(self)
-            )
 
     def _poll_qq_status(self) -> None:
         """Refresh the QQ snapshot while the user is waiting to log in."""

@@ -170,68 +170,35 @@ class AnalysisApplicationService:
             any(isinstance(part, NonTextContent) for part in message.contents)
             for message in rich_by_instance.values()
         )
-        if not analyzed.tokens and has_nontext:
-            return _expression_only_result(
-                request=request,
-                kept_messages=kept_messages,
-                analyzed=analyzed,
-                diagnostic_counts=diagnostic_counts,
-                processed_message_count=processed_message_count,
-                rich_by_instance=rich_by_instance,
-                conversation_type=_resolve_conversation_type(kept_messages, request.conversation_kind),
-                expression_source=outcome.result.platform,
-                success_status=(AnalysisStatus.EXPRESSION_ONLY if has_expression_report else AnalysisStatus.COMPLETED),
-            )
-
-        if analyzed.valid_text_count == 0 and not has_expression_report:
+        ranked_words, status = _rank_words_and_select_status(
+            analyzed,
+            top=request.top,
+            has_nontext=has_nontext,
+            has_expression_report=has_expression_report,
+        )
+        if status in (AnalysisStatus.NO_VALID_TEXT, AnalysisStatus.NO_TOKENS):
             return AnalysisResultDTO(
-                status=AnalysisStatus.NO_VALID_TEXT,
-                processed_message_count=processed_message_count,
-                valid_text_count=0,
-                diagnostic_counts=diagnostic_counts,
-            )
-        if not analyzed.tokens and not has_expression_report:
-            return AnalysisResultDTO(
-                status=AnalysisStatus.NO_TOKENS,
+                status=status,
                 processed_message_count=processed_message_count,
                 valid_text_count=analyzed.valid_text_count,
                 diagnostic_counts=diagnostic_counts,
             )
+
         conversation_type = _resolve_conversation_type(
             kept_messages,
             request.conversation_kind,
         )
-        if not analyzed.tokens and has_expression_report:
-            return _expression_only_result(
-                request=request,
-                kept_messages=kept_messages,
-                analyzed=analyzed,
-                diagnostic_counts=diagnostic_counts,
-                processed_message_count=processed_message_count,
-                rich_by_instance=rich_by_instance,
-                conversation_type=conversation_type,
-                expression_source=outcome.result.platform,
-            )
-
-        with timed_stage("word_ranking"):
-            ranked_words = top_words(analyzed.tokens, request.top)
-        if not ranked_words and has_expression_report:
-            return _expression_only_result(
-                request=request,
-                kept_messages=kept_messages,
-                analyzed=analyzed,
-                diagnostic_counts=diagnostic_counts,
-                processed_message_count=processed_message_count,
-                rich_by_instance=rich_by_instance,
-                conversation_type=conversation_type,
-                expression_source=outcome.result.platform,
-            )
         if not ranked_words:
-            return AnalysisResultDTO(
-                status=AnalysisStatus.NO_TOKENS,
-                processed_message_count=processed_message_count,
-                valid_text_count=analyzed.valid_text_count,
+            return _generate_content_report_or_fallback(
+                request=request,
+                kept_messages=kept_messages,
+                analyzed=analyzed,
                 diagnostic_counts=diagnostic_counts,
+                processed_message_count=processed_message_count,
+                rich_by_instance=rich_by_instance,
+                conversation_type=conversation_type,
+                expression_source=outcome.result.platform,
+                success_status=status,
             )
 
         with timed_stage("report_build"):
@@ -327,6 +294,33 @@ class AnalysisApplicationService:
         )
 
 
+def _rank_words_and_select_status(
+    analyzed: _AnalyzedMessages,
+    *,
+    top: int,
+    has_nontext: bool,
+    has_expression_report: bool,
+) -> tuple[list[tuple[str, int]], AnalysisStatus]:
+    """Choose lexical, content-only, or empty output in priority order."""
+    if not analyzed.tokens and has_nontext:
+        status = (
+            AnalysisStatus.EXPRESSION_ONLY
+            if has_expression_report
+            else AnalysisStatus.COMPLETED
+        )
+        return [], status
+    if analyzed.valid_text_count == 0 and not has_expression_report:
+        return [], AnalysisStatus.NO_VALID_TEXT
+    if analyzed.tokens:
+        with timed_stage("word_ranking"):
+            ranked_words = top_words(analyzed.tokens, top)
+        if ranked_words:
+            return ranked_words, AnalysisStatus.COMPLETED
+    if has_expression_report:
+        return [], AnalysisStatus.EXPRESSION_ONLY
+    return [], AnalysisStatus.NO_TOKENS
+
+
 def _build_reports(
     messages: list[ChatMessage],
     sender_tokens: list[tuple[str, list[str]]],
@@ -391,7 +385,7 @@ def _build_reports(
     )
 
 
-def _expression_only_result(
+def _generate_content_report_or_fallback(
     *,
     request: AnalysisRequestDTO,
     kept_messages: list[ChatMessage],
@@ -403,7 +397,7 @@ def _expression_only_result(
     expression_source: str | None,
     success_status: AnalysisStatus = AnalysisStatus.EXPRESSION_ONLY,
 ) -> AnalysisResultDTO:
-    """Build reports without lexical tokens, preserving content facts."""
+    """Export a content report, or remove partial artifacts and return NO_TOKENS."""
     try:
         with timed_stage("report_build"):
             reports = _build_reports(

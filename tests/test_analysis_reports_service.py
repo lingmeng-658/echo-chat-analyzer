@@ -994,6 +994,72 @@ def test_expression_only_failure_falls_back_without_artifacts(
     assert (output_directory / "echo-report.html").exists() is False
 
 
+@pytest.mark.parametrize("with_expression", [False, True])
+def test_empty_word_ranking_preserves_result_and_report_behavior(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    with_expression: bool,
+) -> None:
+    application = _application_module()
+    service_module = importlib.import_module(
+        "qq_chat_analyzer.application.analysis_service"
+    )
+    input_path = tmp_path / "empty-ranking.json"
+    output_directory = tmp_path / "private-output"
+    output_directory.mkdir()
+    text = "Python 项目讨论" + (" 😀" if with_expression else "")
+    _write_fictional_chat(
+        input_path,
+        [_raw_message(1704099600, "Fictional-Alice", text)],
+    )
+    monkeypatch.setattr(service_module, "top_words", lambda tokens, top: [])
+
+    result = service_module.AnalysisApplicationService().execute(
+        _request(application, tmp_path, input_path)
+    )
+
+    expected_status = (
+        application.AnalysisStatus.EXPRESSION_ONLY
+        if with_expression
+        else application.AnalysisStatus.NO_TOKENS
+    )
+    assert result.status is expected_status
+    assert result.top_words == ()
+    assert result.valid_text_count == 1
+    assert bool(result.artifacts) is with_expression
+    assert (output_directory / "echo-report.json").exists() is with_expression
+    assert (output_directory / "echo-report.html").exists() is with_expression
+
+
+def test_content_report_failure_removes_partially_written_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = _application_module()
+    service_module = importlib.import_module(
+        "qq_chat_analyzer.application.analysis_service"
+    )
+    input_path = tmp_path / "partial-report.json"
+    output_directory = tmp_path / "private-output"
+    output_directory.mkdir()
+    _write_wechat_db_sticker_export(input_path)
+
+    def partially_export(request, *args, **kwargs):
+        (request.output_directory / "echo-report.json").write_text("{}")
+        (request.output_directory / "echo-report.html").write_text("partial")
+        raise OSError("fictional export failure")
+
+    monkeypatch.setattr(service_module, "_export_echo_artifacts", partially_export)
+    result = service_module.AnalysisApplicationService().execute(
+        _request(application, tmp_path, input_path)
+    )
+
+    assert result.status is application.AnalysisStatus.NO_TOKENS
+    assert result.artifacts == ()
+    assert not (output_directory / "echo-report.json").exists()
+    assert not (output_directory / "echo-report.html").exists()
+
+
 def test_execute_generates_echo_report_html_artifact(tmp_path: Path) -> None:
     application = _application_module()
     input_path = tmp_path / "fictional-chat.json"
