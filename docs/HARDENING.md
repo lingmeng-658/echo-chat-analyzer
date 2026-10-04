@@ -294,7 +294,38 @@ plaintext。程序白名单和关键 hash 在复制前后检查，MSVC DLL 复�
 本轮保留官方 NapCat 完整依赖布局，不应用下述历史 PACK-SIZE-01 native pruning。
 发布验收必须使用新生成的 Echo.exe，不能以源码 GUI E2E 替代。
 
-包体变化：
+2026-10-04 Fresh Packaging checkpoint：
+
+- 基线：`main`，HEAD `1ec22c1b636a8b24c359a55574bf6a6a114f46c2`。
+- 此前 Full 的两个 frozen/package failure 均来自 stale `dist/Echo` 被当前 contract tests 检查：
+  一个表现为整个新 `qq-napcat-candidate` runtime 缺失，首先断言缺 `NapCatWinBootHook.dll`；
+  另一个表现为 EXE 内仍是旧 QCE Desktop wiring / 旧 module layout，缺当前 NapCat provider。
+  当前源码 contract 未发现对应 packaging defect，未增加 hidden imports、未修改 runtime manifest。
+- 正式完整 fresh build 成功，替换旧 package：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build_windows_exe.ps1
+```
+
+- Fresh frozen package contract、portable runtime contract、实际 `PYZ.pyz` module table 均 PASS：
+  manifest requirements（含 NapCat DLL）完整，NapCat pinned hashes 正确，QQ / WeChat app-local
+  MSVC runtime 完整；PYZ 包含当前 NapCat provider、`application.qq` Direct DB modules、database
+  provider、snapshot runtime 和 adapter。无旧 `runtime/qq`、qce-server、napcat-plugin-qce、static/qce；
+  smoke 后清理生成状态，release tree 无账户配置、日志或 plaintext snapshot 等 private state。
+- 真实 frozen startup smoke PASS：fresh `Echo.exe` → 正常初始 GUI → QQ 页面 → NapCat launcher
+  实际启动 → `waiting_auth`；无 frozen import、DLL 或发布资产错误。未登录真实 QQ、未读取聊天数据；
+  正常退出后自有进程树清理完成，无 plaintext 残留。
+- 本次验收快照：Focused **146 passed**；Fast **2655 passed，231 deselected**；Full **2884 passed，
+  1 known unrelated failure，1 environment-dependent skip**，两个原 packaging failures 均已消失。
+  唯一 failure 为已有 `known_failure`
+  `tests/test_gui.py::test_generate_share_button_creates_and_opens_share_image`，与 packaging 无关；
+  唯一 skip 为
+  `tests/test_wcdb_cli_unlimited.py::test_native_cli_without_positive_limit_returns_more_than_100000_rows`，
+  因未设置 `ECHO_NATIVE_WCDB_CLI_PATH`。这些数字只记录本次 checkpoint，不是固定测试数量要求。
+- 两个 Release Packaging blocker：**CLOSED**；本轮无产品源码修改。
+  REL-06 整体仍开放：installer、普通用户首次运行和最终分发体验尚未完成。
+
+历史包体变化（不代表当前 fresh package 大小）：
 
 | 阶段 | unpacked | ZIP |
 | --- | --- | --- |
@@ -308,7 +339,7 @@ PACK-SIZE-01（Windows native pruning）：
 - source runtime 不删除；
 - Linux / Darwin / ARM native 不进入 Windows portable package。
 
-PACK-SIZE-02B（legacy desktop artifacts + dependency pruning）：
+PACK-SIZE-02B（legacy desktop artifacts + dependency pruning，以下为当时的历史 checkpoint）：
 
 - Desktop / Application 不再生成 5 个 legacy artifacts：
 
@@ -327,6 +358,12 @@ wordcloud.png
 - 保留（未误删）：`numpy` / `jieba` / `PySide6` / `zstandard`；
 - CLI console entrypoint 已额外验证：
   `test_console_script_and_module_help_are_consistent`（1 passed）。
+
+后续 jieba LAC / numpy pruning 进一步将 `jieba.lac_small` 和 `numpy` 从 Desktop frozen package
+排除；当前 `LocalChatAnalyzer.spec` 明确 excludes 两者，
+`tests/test_frozen_desktop_package_contract.py` 对 numpy 模块及 numpy native libraries absence
+有 frozen contract。2026-10-04 fresh package 验证通过，仍保留 plain jieba segmentation、
+`PySide6`、`shiboken6`、`zstandard` 等实际 Desktop 依赖；不改变上面 PACK-SIZE-02B 的历史语义。
 
 ### REL-07 GUI 上线前最终 polish
 
@@ -476,28 +513,33 @@ Hardening / Active Bug 唯一实时工作地图，`docs/BUG_JOURNAL.md` 只记�
 
 ### GOV-05 Windows build 可复现性
 
-当前 build script 在缺 PyInstaller 时可能动态安装未固定版本。
-先记录，不在本任务处理。
+当前 `scripts/build_windows_exe.ps1` 使用项目 `.venv\Scripts\pyinstaller.exe`，缺失时直接失败
+（fail closed），不会在构建时动态下载或安装 PyInstaller；原“可能动态安装”的记录已过期。
+但 `pyproject.toml` 尚未声明或 pin PyInstaller，PyInstaller / release build environment 的版本
+固定、版本来源与可重建性仍未形成完整的 tracked reproducibility contract，待进一步审计。
+本轮不实现 dependency pinning。
 
 状态：未审计。
 
 ### GOV-05.1 Build / runtime environment debt（本机 gitignored runtime 资产不完整）
 
-当前开发机 main worktree 的 gitignored：
+状态：CLOSED / RESOLVED（2026-10-04，仅关闭当前开发机这项 runtime 资产债）。
+
+历史 checkpoint：当时开发机 main worktree 的 gitignored：
 
 ```text
 runtime/qq
 runtime/wechat
 ```
 
-本地资产并不完整。因此 merge 后 Fast Suite 结果为：
+本地资产并不完整。当时 merge 后 Fast Suite 结果为：
 
 - 2121 passed
 - 3 failed（environment-dependent）
 - 1 skipped
 - 30 deselected
 
-失败节点与缺口：
+当时的失败节点与缺口：
 
 - `tests/test_qq_auth_bridge.py::test_launcher_user_exits_without_pause_in_echo_mode`
 - `tests/test_qq_auth_bridge.py::test_launcher_user_keeps_pause_for_interactive_mode`
@@ -507,12 +549,28 @@ runtime/wechat
   —— 缺完整 bundled runtime；
   同文件 1 skipped：缺 bundled Windows Node.js / koffi / wx_key.dll。
 
-明确结论：
+历史结论与当前边界：
 
-- 这不是本次 merge 的产品代码 regression；
+- 当时的缺口属于本机环境问题，不是产品代码 regression；
 - 不应靠旧 dist 恢复资产并将其当作正式 runtime source；
 - Final Build 前必须通过权威 bootstrap / source 恢复完整 runtime；
-- 该问题单独处理，不在本次 documentation checkpoint 修复。
+- 当前 QQ 正式 release source 已迁移到 `runtime/qq-napcat-candidate`。2026-10-04 当前开发机
+  已具备满足正式 runtime contract 的 source assets，正式完整 fresh build 成功；Focused / Fast /
+  Full 中此前这组 runtime-asset environment failures 不再存在（验收结果见 REL-06 checkpoint）。
+- 此关闭不表示新机器天然拥有完整 runtime，也不表示 fresh checkout 可跳过 bootstrap 构建；
+  Windows build reproducibility 仍属于开放的 GOV-05 / 后续发布治理范围。
+
+### GOV-05.2 Frozen artifact provenance
+
+`tests/test_frozen_desktop_package_contract.py` 检查磁盘上已有的 `dist/Echo`，测试本身不会构建
+fresh artifact。目前没有把已有 frozen artifact 与当前 Git HEAD 绑定的可验证 provenance；
+旧 EXE 可被新 contract tests 检查并产生误导性的 RED，本次两个 packaging failures 即属于此类。
+
+当前处理原则：Final Release / packaging acceptance 必须先执行正式完整 fresh build，
+不允许用历史 `dist/Echo` 代表当前源码。后续可考虑 build provenance / commit identity，
+本轮不实现。
+
+状态：已记录 / 未实施。Release Blocker：No（不是当前 Release Packaging blocker）。
 
 ---
 
