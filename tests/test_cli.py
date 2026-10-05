@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import ast
 import csv
+import importlib.metadata
 import json
 import os
 import shutil
 import subprocess
 import sys
+import sysconfig
 from pathlib import Path
 
 import pytest
@@ -58,12 +60,13 @@ def test_module_cli_help_guides_first_time_users() -> None:
     )
 
     assert result.returncode == 0
-    assert "QQ Chat Analyzer" in result.stdout
-    assert "本地 QQ 聊天记录分析工具" in result.stdout
+    assert "余音 Echo" in result.stdout
+    assert "本地 QQ / 微信聊天记录分析工具" in result.stdout
+    assert "qqchat" not in result.stdout
     assert "最简单使用" in result.stdout
-    assert 'qqchat "聊天记录路径"' in result.stdout
+    assert 'echo-chat "聊天记录路径"' in result.stdout
     assert (
-        r'qqchat "C:\Users\你的用户名\Documents'
+        r'echo-chat "C:\Users\你的用户名\Documents'
         r'\QQChatExporter\exports\group_xxx"'
     ) in result.stdout
     assert "默认行为" in result.stdout
@@ -72,14 +75,14 @@ def test_module_cli_help_guides_first_time_users() -> None:
     assert "输出到 output/<聊天记录名称>/" in result.stdout
     assert "自动生成词云、高频词统计、发送者分析等结果" in result.stdout
     assert "更多用法" in result.stdout
-    assert 'qqchat "聊天记录路径" 过滤模式 数量' in result.stdout
-    assert r'qqchat "C:\xxx\group_xxx" default 200' in result.stdout
+    assert 'echo-chat "聊天记录路径" 过滤模式 数量' in result.stdout
+    assert r'echo-chat "C:\xxx\group_xxx" default 200' in result.stdout
     assert "过滤模式" in result.stdout
     assert "default：默认模式" in result.stdout
     assert "topic：主题讨论模式" in result.stdout
     assert "culture：群聊文化模式" in result.stdout
     assert "多功能组合" in result.stdout
-    assert r'qqchat "C:\xxx\group_xxx" culture 200' in result.stdout
+    assert r'echo-chat "C:\xxx\group_xxx" culture 200' in result.stdout
     assert "使用 culture 模式" in result.stdout
     assert "生成前 200 个高频词" in result.stdout
     assert "输出完整分析结果" in result.stdout
@@ -105,8 +108,9 @@ def test_console_script_and_module_help_are_consistent() -> None:
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(SRC_ROOT)
     environment["PYTHONUTF8"] = "1"
-    console_script_name = "qqchat.exe" if os.name == "nt" else "qqchat"
+    console_script_name = "echo-chat.exe" if os.name == "nt" else "echo-chat"
     console_script = Path(sys.executable).with_name(console_script_name)
+    assert console_script.is_file(), "Install the project's current console entrypoints."
 
     console_result = subprocess.run(
         [str(console_script), "--help"],
@@ -130,6 +134,34 @@ def test_console_script_and_module_help_are_consistent() -> None:
     assert console_result.returncode == 0
     assert module_result.returncode == 0
     assert console_result.stdout == module_result.stdout
+
+
+def test_registered_console_entrypoints_use_echo_brand() -> None:
+    # Check the installed distribution, not stale source-tree egg-info that
+    # PYTHONPATH may place ahead of the virtual environment's metadata.
+    distribution = next(
+        distribution
+        for distribution in importlib.metadata.distributions(
+            path=[sysconfig.get_path("purelib")]
+        )
+        if distribution.metadata["Name"] == "qq-chat-analyzer"
+    )
+    scripts = {
+        entry.name: entry.value
+        for entry in distribution.entry_points
+        if entry.group == "console_scripts"
+    }
+    assert scripts == {
+        "echo-chat": "qq_chat_analyzer.cli:main",
+        "echo-gui": "qq_chat_analyzer.gui.app:main",
+    }
+
+
+def test_missing_arguments_suggest_echo_command(capsys) -> None:
+    assert main([]) == 2
+    captured = capsys.readouterr()
+    assert "echo-chat PATH" in captured.err
+    assert "qqchat" not in captured.err
 
 
 def test_simplified_arguments_use_default_profile_top_and_output() -> None:

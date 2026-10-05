@@ -54,6 +54,17 @@ Install the complete development environment from `pyproject.toml`:
 All project commands after creation should use the explicit `.venv` interpreter;
 shell activation is not required.
 
+Public terminal entrypoints are `echo-chat` (CLI) and `echo-gui` (Desktop).
+After installation, developers can launch them without activating the shell:
+
+``` powershell
+.\.venv\Scripts\echo-chat.exe --help
+.\.venv\Scripts\echo-gui.exe
+```
+
+The Python package remains `qq_chat_analyzer`; the distribution name used by
+`pip show` remains `qq-chat-analyzer`. No `qqchat` / `qqchat-gui` aliases are registered.
+
 ### 3.2 AI Existing Workspace
 
 An AI agent entering an existing working tree must first verify the environment:
@@ -280,7 +291,7 @@ Architecture rules for this integration:
 - CLI calls Application layer services; GUI uses ChatAnalyzerFacade.
 - parser.py, provider internals, and ImportService core routing were not modified.
 
-Real QCE desktop acceptance:
+Historical QCE desktop acceptance (commands below retain their names at the time):
 
 - QCE desktop app ran normally on the acceptance machine.
 - Provider read the real token from the desktop config directory

@@ -16,8 +16,8 @@ dependencies = [
 ]
 
 [project.scripts]
-qqchat = "qq_chat_analyzer.cli:main"
-qqchat-gui = "qq_chat_analyzer.gui.app:main"
+echo-chat = "qq_chat_analyzer.cli:main"
+echo-gui = "qq_chat_analyzer.gui.app:main"
 
 [project.optional-dependencies]
 dev = [

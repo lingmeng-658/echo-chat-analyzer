@@ -126,19 +126,19 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _build_argument_parser() -> argparse.ArgumentParser:
     parser = ChineseArgumentParser(
-        prog="qqchat",
+        prog="echo-chat",
         description="""\
-QQ Chat Analyzer
-本地 QQ 聊天记录分析工具。
+余音 Echo
+本地 QQ / 微信聊天记录分析工具。
 
-用于分析 QQChatExporter 导出的 JSON/JSONL 聊天记录。
+用于分析本地 JSON/JSONL 聊天记录。
 所有聊天记录只在本地处理，不会上传。
 
 最简单使用
-  qqchat "聊天记录路径"
+  echo-chat "聊天记录路径"
 
 例如：
-  qqchat "C:\\Users\\你的用户名\\Documents\\QQChatExporter\\exports\\group_xxx"
+  echo-chat "C:\\Users\\你的用户名\\Documents\\QQChatExporter\\exports\\group_xxx"
 
 默认行为
   直接运行上述命令时，默认：
@@ -151,10 +151,10 @@ QQ Chat Analyzer
   修改生成词数量：
 
   格式：
-    qqchat "聊天记录路径" 过滤模式 数量
+    echo-chat "聊天记录路径" 过滤模式 数量
 
   示例：
-    qqchat "C:\\xxx\\group_xxx" default 200
+    echo-chat "C:\\xxx\\group_xxx" default 200
 
 过滤模式
   default：默认模式
@@ -162,7 +162,7 @@ QQ Chat Analyzer
   culture：群聊文化模式
 
 多功能组合
-  qqchat "C:\\xxx\\group_xxx" culture 200
+  echo-chat "C:\\xxx\\group_xxx" culture 200
 
   同时：
   - 使用 culture 模式；
@@ -240,7 +240,7 @@ def _parse_cli_configuration(
     if simplified and arguments.input_option is not None:
         raise CliUsageError("不能同时使用位置输入路径和 --input。")
     if not simplified and arguments.input_option is None:
-        raise CliUsageError("请提供输入路径，例如：qqchat PATH。")
+        raise CliUsageError("请提供输入路径，例如：echo-chat PATH。")
 
     profile = arguments.profile or "default"
     if profile not in PROFILE_STOPWORD_FILES:
@@ -344,7 +344,7 @@ def _run_qce_command(arguments: list[str]) -> int:
 
 
 def _qce_usage_message() -> str:
-    return "\u7528\u6cd5\uff1aqqchat qce {list|analyze --group <group_code>}"
+    return "\u7528\u6cd5\uff1aecho-chat qce {list|analyze --group <group_code>}"
 
 
 def _run_qce_list(arguments: list[str]) -> int:
@@ -380,7 +380,7 @@ def _run_qce_list(arguments: list[str]) -> int:
 def _run_qce_analyze(arguments: list[str]) -> int:
     """Export one group through QCE and analyse the resulting JSON."""
     parser = argparse.ArgumentParser(
-        prog="qqchat qce analyze",
+        prog="echo-chat qce analyze",
         description="\u5bfc\u51fa\u5e76\u5206\u6790\u4e00\u4e2a QQ \u7fa4\u804a\u3002",
         add_help=False,
     )
@@ -399,7 +399,7 @@ def _run_qce_analyze(arguments: list[str]) -> int:
     if not group_code:
         print(
             "\u9519\u8bef\uff1a\u7f3a\u5c11 --group \u53c2\u6570\uff0c"
-            "\u8bf7\u5148\u8fd0\u884c qqchat qce list \u67e5\u770b\u7fa4\u53f7\u3002",
+            "\u8bf7\u5148\u8fd0\u884c echo-chat qce list \u67e5\u770b\u7fa4\u53f7\u3002",
             file=sys.stderr,
         )
         return 2

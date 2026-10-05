@@ -247,6 +247,8 @@ def test_qce_analyze_requires_group(capsys) -> None:
 
     assert exit_code == 2
     assert "--group" in captured.err
+    assert "echo-chat qce list" in captured.err
+    assert "qqchat" not in captured.err
 
 
 def test_qce_analyze_translates_provider_error(monkeypatch, capsys, tmp_path) -> None:

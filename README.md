@@ -12,44 +12,37 @@
   - 群聊成员特色词
   - 私聊双方常用表达
 - QQ / 微信统一分析
+- 表达习惯（Expression）：Emoji、已支持的 QQ / 微信表情的频率、组合与相邻用词
 - 自包含 Echo HTML 报告，可直接在浏览器打开
 
-> 仍在持续开发中：Emoji / 表情行为、互动关系、私聊专属洞察等。
+完整 Sticker / 表情包语义与 Reply / 引用回复分析计划在后续版本支持。
+
+## 当前状态
+
+Echo 0.1 正在发布前 Hardening，尚未正式发布稳定版。
+当前发布状态见 [Hardening 工作地图](docs/HARDENING.md)。
 
 ## 隐私优先
 
 Echo 的设计前提是：真实聊天数据属于用户自己。
 
 - QQ / 微信聊天数据在本机读取和分析
-- 不上传完整聊天记录
+- 不上传聊天记录
 - 不将聊天正文、身份信息、群号或本地路径写入 Git
 - 测试只使用虚构数据
 - Echo 报告可以在本地生成并查看
-- 需要 AI 扩展时优先使用本地模型；云端能力只允许发送最少量、匿名化信息
 
 ## 支持的数据来源
 
 ### QQ
 
-桌面 QQ 会话列表和分析已由正式 QQ Direct DB 链路承担：在本机读取 QQ 数据库，
-统一为内部 ChatMessage 模型后生成报告。该链路已完成真人 E2E 和最终 smoke 验收。
-QQChatExporter 的 CLI 与既有 JSON 文件导入仍保留；Desktop 使用独立 NapCat/Echo runtime。
-当前验收状态和开放事项见
-[Hardening 工作地图](docs/HARDENING.md#qq-direct-db-最终验收-checkpoint2026-10-02)，
-架构以 [ARCHITECTURE.md](ARCHITECTURE.md) 为准。
+桌面端通过 NapCat 启动 / 登录 QQ，再由 Direct DB 在本机读取聊天数据，交给 Echo 分析。
+桌面端不依赖 QQChatExporter（QCE），也没有 QCE fallback。
+QCE 仅保留 CLI 调用外部服务的能力和既有 JSON 文件导入兼容。
 
 ### 微信
 
-已打通 Windows 微信数据库读取链路，并统一进入同一套分析核心。
-
-QQ 与微信最终共享：
-
-数据源
-→ Import / Adapter
-→ ChatMessage
-→ Analysis Core
-→ Presentation
-→ Echo Report
+支持在 Windows 本机读取微信数据库，与 QQ 使用同一套分析能力。
 
 ## Echo Report
 
@@ -60,24 +53,18 @@ Echo 不希望成为另一张 Dashboard。
 - 用编辑式排版组织数据
 - 保留适量音乐意象
 - 重点展示“这段聊天留下了什么”
-- 前端不重新计算业务统计，所有核心语义来自 Analysis Core
 
 ## Desktop
 
-Windows 桌面端目前负责：
+Windows 桌面端当前支持：
 
-- QQ / 微信连接
-- 会话选择
-- 分析范围
-- 启动分析
-- 打开 Echo Report
+- QQ / 微信入口与连接
+- 会话选择与时间范围设置
+- 启动分析并打开 Echo Report
+- Local Data 本地报告管理：搜索、重新打开、删除单份或全部报告
+- 自动最多保留 50 份报告
 
-Desktop Shell 正在继续重构，最终会逐步加入：
-
-- QQ / 微信独立入口
-- 本地数据 / 历史报告管理
-- Echo 历史
-- 缓存和存储管理
+删除报告不会删除 QQ / 微信原始聊天数据或用户另存的文件。
 
 ## 开发运行
 
@@ -86,5 +73,6 @@ Desktop Shell 正在继续重构，最终会逐步加入：
 ```powershell
 cd D:\ChatAnalyzerWorkspace\local-chat-analyzer
 .\.venv\Scripts\Activate.ps1
-pip install -e .
-python -m qq_chat_analyzer.gui
+pip install -e ".[gui,dev]"
+echo-gui
+```
