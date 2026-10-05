@@ -9,6 +9,14 @@
 >
 > 正文保持原样，不再维护。
 
+> **0.1 发布前导航（2026-10-06）**：旧 BUG-01 已退休，BUG-02 后续归入 0.2 Sticker 支持，
+> BUG-03 / 05 / 06 / 07 保持 CLOSED；完整 Sticker / Reply 分析、Local Data 高级批量管理与
+> 快捷登录 / 统一 UX 优化是 0.2 backlog，均不阻塞 0.1。
+> Architecture & Complexity Audit v1 与测试治理当前阶段均已完成；不重复泛化全仓架构审计，
+> 发布前仅保留定点 release/privacy/build audit。
+> 以下旧 Stable / Next / Known debt 不代表当前版本范围；0.1 发布缺口见
+> [HARDENING](docs/HARDENING.md)，分享仍是 Release Blocker。
+
 ## Stable
 
 - QQ / WeChat 数据接入

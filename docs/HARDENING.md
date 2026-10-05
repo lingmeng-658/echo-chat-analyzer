@@ -21,59 +21,384 @@ Echo 已经过了「先证明有没有人愿意用」的阶段。
 默认不新增大型功能或新数据来源。
 新能力需要人工确认。
 
----
+2026-10-06 状态校准：以 main `4e99bc8`、近期 Git 历史、当前实现和已确认的
+0.1 / 0.2 产品范围为依据。下文旧 checkpoint 是当时验收记录，不代表当前发布已就绪。
 
-## 状态词
+## 0.1 当前待办总览
 
-统一使用：
+正式桌面 QQ 主链：NapCat 启动 / 登录 → Direct DB → snapshot / decrypt → adapter
+→ analysis / report。桌面不依赖 QCE，也没有 QCE fallback。QCE 仅保留 CLI 外部能力和
+既有 JSON 导入兼容，不属于 Desktop 0.1 主线；架构细节以 `ARCHITECTURE.md` 为准。
 
-- 未审计
-- 审计中
-- 已审计
-- Ready for RED
-- 实现中
-- 待真实验收
-- CLOSED
-- DEFERRED
+| 当前待办 | 状态 / 收口边界 |
+| --- | --- |
+| REL-04 用户错误提示 | 现状审计，按实际缺口做必要修正 |
+| REL-06 Windows 普通用户发布 / 分发体验 | 未完成；已有 portable build 不等于最终分发完成 |
+| REL-07 GUI 最终 polish | 未完成；只处理明显视觉 / 交互问题 |
+| REL-08 分享闭环 | **Release Blocker：Yes**；未完成，按钮隐藏只是临时雪藏 |
+| GOV-04 权威版本号 | 未完成；统一 package、GUI 与发布版本来源 |
+| QA-03 / QA-04 GitHub Release / 检查更新 | 未完成；核对 tag、发布说明和最终 fresh build；内置版本 → GitHub 最新正式 Release → 提示新版 → 打开下载页；不自动下载、替换或静默更新 |
+| QA-05 0.1 → 0.2 本地数据兼容审计 | 未完成；核对 Report Package、catalog 与持久配置的升级边界 |
+| GOV-05 发布构建可复现性 | 待按实际风险收口构建环境与重建验证 |
+| QA-02 定点 release / privacy / build audit | 未完成；针对最终发布资产、隐私与构建风险核验 |
+| QA-06 跨机器 Direct DB RC | 待真实验收；本机 checkpoint 不能替代 |
+| QA-01 最终真实验收 | 未完成；覆盖主链、大小数据、报告、Local Data、分享和最终发布包 |
 
-同时允许：
+Architecture & Complexity Audit v1 已 COMPLETE / CLOSED，0.1 不再重复开展泛化全仓架构审计；
+发布前仅保留 QA-02 定点 release / privacy / build audit。
+测试治理当前阶段已完成，非 Release Blocker。BUG-01 和旧 QCE Desktop 任务已退休；
+BUG-02 转入 0.2，BUG-03 / 05 / 06 / 07 保持 CLOSED。REL-05 大数据性能 / UX 与
+REL-09 语言画像优化均为非阻塞后续工作。完整历史证据保留在本文后半部。
 
-- 候选 Bug
-- Release Blocker：Yes / No / TBD
-
----
+已有分支验收、历史 build checkpoint 和测试治理完成不代表 0.1 已可发布。
 
 ## Active Bugs
 
-### BUG-01 巨大 QQ 数据源分析失败
+当前没有已确认的 Active Bug。BUG-01 已退休，BUG-02 转入 0.2，BUG-03 / 05 / 06 / 07
+保持 CLOSED。REL-08 是未完成的发布能力，仍为 Release Blocker；新的真实 regression 按当前链路另行记录。
+
+## 0.1 产品交付条目
+
+### REL-04 按阶段区分的用户安全错误提示
+
+先审计当前 NapCat / Direct DB 与微信主链的用户错误提示，再按实际缺口修正。例如：
+
+- 数据获取失败
+- 导出失败
+- 数据读取失败
+- 分析失败
+- 保存 / 分享失败
+
+GUI 不展示 traceback。
+真实诊断写 privacy-safe diagnostics。
+
+状态：未审计，0.1 发布前必做；仅做必要修正。
+
+### REL-06 Windows 普通用户发布 / 安装体验
+
+Portable build 已存在。
+安装器、分发方式、普通用户首次运行体验仍需收口。
+
+状态：未审计（installer / 最终普通用户分发体验仍未完成，不标 CLOSED）。
+
+### REL-07 GUI 上线前最终 polish
+
+只处理明显影响用户体验的视觉 / 交互问题。
+不重新设计整个 GUI。
+
+状态：未审计。
+
+0.1 发布前必做，尚未完成。
+
+### REL-08 分析结果导出 / 分享闭环
+
+不要只判断 Share renderer 是否存在。
+
+需要验收整条用户链：
+
+```text
+分析完成
+→ 用户发现分享入口
+→ 生成
+→ 明确生成状态
+→ 找到结果
+→ 可以发送
+→ 接收方无需安装 Echo 即可理解结果
+```
+
+0.1 必须交付分享能力，目前整条链路尚未做好。`gui/main_window.py` 在初始化和报告状态更新时
+显式隐藏 share button，这是临时雪藏措施，不是最终产品合同，也不代表本项完成。
+
+已有 renderer / Facade 和 GUI known_failure 不能替代用户链验收；
+`test_generate_share_button_creates_and_opens_share_image` 仍期望入口可见 / 可用。
+本项属于产品交付缺口，不属于测试治理遗留，不以隐藏按钮或修改测试预期关闭它。
+
+状态：未完成（待收口实现与真实验收）。
+
+Release Blocker：Yes。
+
+## 0.1 发布治理
+
+### GOV-04 版本号权威统一
+
+当前核对到：
+
+- `pyproject.toml` package version 为 `0.1.0`；
+- `gui/app.py` 的 `APP_VERSION` 为 `0.8.0`；
+- 历史 docs version 不作为当前版本依据。
+
+版本来源尚未统一，不能因 package 已写 0.1.0 就视为发布准备完成。
+
+状态：未实施。0.1 发布前必做；与 QA-03 版本号 / GitHub Release 一起收口。
+
+### GOV-05 Windows build 可复现性
+
+当前 `scripts/build_windows_exe.ps1` 使用项目 `.venv\Scripts\pyinstaller.exe`，缺失时直接失败
+（fail closed），不会在构建时动态下载或安装 PyInstaller；原“可能动态安装”的记录已过期。
+但 `pyproject.toml` 尚未声明或 pin PyInstaller，PyInstaller / release build environment 的版本
+固定、版本来源与可重建性仍未形成完整的 tracked reproducibility contract，待进一步审计。
+本轮不实现 dependency pinning。
+
+0.1 按实际发布风险收口构建环境、依赖版本与重建验证，不预设必须新增完整构建框架。
+旧 stale artifact 风险通过正式 fresh build 验收控制，见 GOV-05.2。
+
+状态：未审计。
+
+### GOV-05.2 Frozen artifact provenance
+
+`tests/test_frozen_desktop_package_contract.py` 检查磁盘上已有的 `dist/Echo`，测试本身不会构建
+fresh artifact。目前没有把已有 frozen artifact 与当前 Git HEAD 绑定的可验证 provenance；
+旧 EXE 可被新 contract tests 检查并产生误导性的 RED，本次两个 packaging failures 即属于此类。
+
+当前处理原则：Final Release / packaging acceptance 必须先执行正式完整 fresh build，
+不允许用历史 `dist/Echo` 代表当前源码。后续可考虑 build provenance / commit identity，
+本轮不实现。
+
+状态：已记录 / 未实施。Release Blocker：No（不是当前 Release Packaging blocker）。
+
+## Release Gate
+
+### QA-02 定点 release / privacy / build audit
+
+针对最终发布候选包，核验资产白名单 / hash、敏感配置 / 日志 / plaintext 排除、
+运行后清理边界与 fresh build 来源，并与 GOV-05 的实际构建风险收口对齐。
+Architecture & Complexity Audit v1 已完成（见 GOV-06），本项不重复泛化全仓架构审计，
+也不提前扩展新的结构调整。
+
+状态：未完成，0.1 发布前必做。
+
+### QA-03 版本号 / GitHub Release
+
+统一版本权威（见 GOV-04），核对最终版本、tag、发布说明与 fresh build 资产后完成 GitHub Release。
+历史 portable build 验收不等于正式 Release 已完成。
+
+状态：未完成，0.1 发布前必做。
+
+### QA-04 新版本检测与下载页
+
+0.1 内置权威版本号 → 检查 GitHub 最新正式 Release → 提示新版 → 打开下载页，
+由用户自行下载；不做自动下载、自动替换或静默更新。
+当前 GUI / Application 未发现该能力的实现。
+
+状态：未实现，0.1 发布前必做。
+
+### QA-05 0.1 → 0.2 本地数据兼容检查
+
+发布前检查现有 Report Package metadata / schema、Local Data catalog 与持久配置的升级兼容边界，
+明确 0.2 读取 0.1 本地数据的约束。现有 package 校验不等于跨版本兼容已经验收。
+
+状态：未完成，0.1 发布前必做。
+
+### QA-06 跨机器 Direct DB RC
+
+在其他 Windows 机器上验证 NapCat 启动 / 登录、Direct DB snapshot / decrypt、
+分析报告及退出清理；本机已通过的 checkpoint 不替代此项。
+
+状态：待真实验收，0.1 发布前必做，并纳入 QA-01 最终验收。
+
+### QA-01
+
+上线前必须完成一次独立 Final Acceptance：
+
+- QQ 主链
+- WeChat 主链
+- private / group
+- 小数据 / 普通数据 / 大数据
+- Echo Report
+- History / local data
+- export / share
+- portable build
+- 陌生 Windows 机器
+- 真人实际使用
+
+完成条件：
+
+- 不存在已知 P0 / P1 恶性问题；
+- 连续一轮真实验收不再出现新的 Release Blocker。
+
+然后：
+
+```text
+Feature Freeze
+→ Bugfix Only
+→ Final Build
+→ Release
+```
+
+## Deferred Capabilities
+
+明确不进入当前 Hardening 主线：
+
+### 0.2 Backlog（已确认范围）
+
+- Sticker / 表情包语义：完整身份、资源与语义支持，包含 BUG-02 后续；已有基础映射保留。
+- Reply / 引用回复分析：已有 ReplyRelation 与 authored text 隔离不等于完整回复分析已交付。
+- Local Data 高级批量管理：不重新打开已 CLOSED 的 BUG-03 基础生命周期能力。
+- 快捷登录 / 统一 UX 优化：现有授权闭环不等于快捷登录完成，不阻塞 0.1。
+
+以上均不阻塞 0.1。
+
+### CAP-01
+
+更完整的图片 / 语音 / 视频 / system message 分析。
+
+### CAP-02
+
+Rich Model 最终迁移、逐步减少 legacy projection。
+
+以及：
+
+- AI 内部梗
+- 语言趋同
+- 表达变化趋势
+- 更复杂关系推断
+- 新数据来源
+- 大型智能过滤框架升级
+
+这些可以进入后续版本，但不阻塞当前上线。
+
+非阻塞后续优化条目：
+
+### REL-05 大型数据容量和 UX
+
+旧 BUG-01 已退休，不再以其未知根因作为前置。
+当前 Direct DB 大数据容量与响应体验先按 QA-01 验收，有新证据再决定是否需要优化。
+
+状态：DEFERRED（普通后续性能 / UX 优化）。Release Blocker：No。
+0.1 大数据真实验收仍属于 QA-01，不要求提前进行专项优化。
+
+### REL-09 语言画像语义 / 代表词算法分工
+
+后续审计“常说”与“更像 TA”的文案和算法是否对应：
+
+- `top_words` 是成员自身纯词频排序，更接近“常说什么”，不宜承担过强的“代表性”语义。
+- 现有 `DistinctiveWordAnalyzer` 的成员 vs 其他成员 distinctive-word / log-odds 排序
+  更接近“哪些词更像 TA”；后续优化优先复用该能力。
+- 数据不足时允许不展示特色词，避免强行生成低置信度结果。
+
+状态：DEFERRED（后续产品 / 算法优化）。Release Blocker：No，不阻塞 0.1。
+
+## 已完成的生命周期与工程治理
+
+### GOV-06 Architecture & Complexity Audit v1
+
+状态：COMPLETE / CLOSED（已确认完成）。Release Blocker：No。
+
+已完成范围：
+
+- Desktop QCE → NapCat + Direct DB 主链收敛；
+- GUI ownership / lifecycle 审计；
+- RichMessage / message consistency；
+- QQ / WeChat source topology 与 application module grouping；
+- package cohesion；
+- readability cleanup；
+- 相关高杠杆结构调整。
+
+近期 main 中的主链收敛、GUI 生命周期、rich message 一致性、来源模块归组与可读性整理
+均属于本阶段已完成工作。0.1 不再重复开展泛化全仓架构审计；发布前定点核验归 QA-02 / GOV-05。
+历史 Direct DB / packaging checkpoint 保留，不将其验收范围扩大为最终发布已完成。
+
+### REL-02 History 可以直接 reopen 已保存的 Echo Report
+
+已随 BUG-03 完成：Local Data 选中或双击历史报告，通过 Facade / Catalog 安全定位
+package 内的 HTML，使用系统默认浏览器打开，无需重新分析。
+文件缺失或 opener 失败显示明确错误，不崩溃、不静默隐藏报告；不重建历史 Dashboard。
+
+状态：CLOSED。
+
+### REL-03 Cache / Snapshot / History 生命周期统一
+
+当前已完成：
+
+- 生产 `ChatDataSnapshot` 已删除；QQ raw acquisition 是一次性 transient lease。
+- 正常分析结束后会清理 transient payload；重新分析会重新 acquisition。
+- Report Package 是唯一持久分析对象，Local Data 从 package metadata 构建 catalog；
+  独立 JSONL history 已退休。报告 reopen、完整 package deletion、固定 max-50 retention
+  与默认 analysis scratch / stale recovery 已随 BUG-03 完成。
+- Local Data 的最终用户措辞为“删除全部报告”，不承诺删除 QQ / 微信原始数据或用户另存文件。
+- 桌面 QQ Direct DB generation 在会话查询或 payload 物化后清理；启动与 shutdown
+  的 `recover` 负责遗留 plaintext。真人验收确认正常 shutdown 后 `snapshot.db` 无残留。
+- 所选会话的 `qq-db-json` payload 位于本次分析临时目录，由 consumer 完成或异常退出时
+  清理；它与 runtime generation 的 `snapshot.db` 是两个不同的 transient 资源。
+
+状态：当前桌面生命周期 CLOSED。旧 QCE transient orphan cleanup 已退出 Desktop 0.1 backlog，
+历史限制见后文兼容边界，不重新打开 BUG-03。
+
+### DOC-01 文档事实源治理
+
+当前事实源已明确：`ARCHITECTURE.md` 为架构唯一事实源，`docs/HARDENING.md` 为
+Hardening / Active Bug 唯一实时工作地图，`docs/BUG_JOURNAL.md` 只记录已解决并验证的
+真实工程问题；`PROJECT_STATUS.md` 与 `DEVELOPMENT_STATE.md` 为历史快照，正文不再维护。
+
+状态：CLOSED。
+
+### DOC-02 AI Onboarding v1
+
+状态：CLOSED。
+
+### GOV-01 Active Bug Backlog
+
+由本 HARDENING.md 承担。
+
+状态：CLOSED（基础结构已建立）。
+
+### GOV-02 Bug Journal
+
+由 `docs/BUG_JOURNAL.md` 承担。
+
+状态：CLOSED（机制已建立，后续随已解决问题持续追加）。
+
+### GOV-03 Test Governance v1
+
+状态：CLOSED（当前阶段已完成）。Release Blocker：No。
+
+2026-10-05 / 06 当前阶段记录：
+
+- `7aebc6e`：41 个真实 subprocess cases 标记为 slow_integration，移出 Fast，Full 保留。
+- `c512d62`（T2A）：参数化重复结构、将等价断言合并到已有覆盖，不砍业务覆盖。
+- `4e99bc8`（T2B）：共享 fixture / 虚构样本构造与重复测试结构整理，不砍业务覆盖。
+- 已确认的性能快照：Fast 从约 70s 降到约 40s；这是本阶段测量，不是固定耗时合同，
+  也不是本次文档校准重新运行 Fast 的结果。
+- 分享 known_failure 仍归 REL-08，不重新打开测试治理。
+
+详细历史记录见：`docs/engineering/TEST_GOVERNANCE_V1.md`
+
+## Retired / Closed Bugs
+
+### BUG-01 巨大 QQ 数据源分析失败（旧 QCE 路径，已退休）
 
 已知事实：
 
-- GUI 最终显示「分析过程中出现未预期的错误，请稍后重试。」
-- 目前还不能确认失败位于 QCE 导出、文件生成、Import、Analysis、内存 / 性能或其他阶段。
-- 不能提前猜根因。
-- QQ 真实导出进度和 diagnostics 是定位它的重要前置。
-- 已完成的基础设施改善：有限分析范围会下推至 QCE，且一次 acquisition 使用
-  Echo-owned transient lease；这两项不能单独证明“大型 QQ 数据源分析失败”已解决。
-- 上述记录属于旧 QCE acquisition 路径；桌面 QQ 当前已改用 Direct DB，不能将旧现象
-  自动视为已修复或直接归因于新路径。
+- 当时 GUI 最终显示「分析过程中出现未预期的错误，请稍后重试。」
+- 原始观察来自旧 QCE acquisition 路径，未确认失败阶段或根因。
+- 已确认该旧问题早已不再存在；桌面 QQ 已切换为 Direct DB，且完成正式真人 E2E / 最终 smoke
+  （`684a4ff`），旧 Desktop QCE runtime / rollback 已移除（`0ccf383`）。
+- 退休依据是旧观察不再代表当前产品问题，不声称某个补丁修复了未经确认的根因。
+- 当前 Direct DB 大数据与跨机器验收仍纳入 QA-01；若出现新失败，按新证据追踪。
 
-状态：未审计
+状态：RETIRED（退出 Active Bugs）。
 
-Release Blocker：TBD，如果正常大型群可稳定复现则升级为 Yes。
+Release Blocker：No。
 
 ### BUG-02 QQ market_face / type_17 兼容问题
 
-已知事实：
+审计结论（2026-10-06）：
 
-- 真实数据中发现 `market_face`，且观察到 `type_17`。
-- 当前 QQ adapter 对这类消息的 rich pipeline 语义需要专项审计。
-- 不允许直接「把 `type_17` 加进允许列表」作为修复。
-- 必须先确认 QCE 字段语义、rich message 映射和分析影响。
+- 旧记录将 `market_face` 与 `type_17` 并列，但没有证据证明二者等价。
+  Git 历史中 `type_17` 仅进入过此 backlog；当前代码和测试未建立它的字段语义契约。
+- 保留的 QCE adapter 已将 `market_face` / elementType 37 映射为 sticker `ExpressionContent`，
+  有 adapter 与 analysis-report 测试；顶层消息类型仍只接受 text / reply，不宣称支持 `type_17`。
+- 当前桌面 Direct DB adapter 使用 protobuf `45002=11` 与 `45600` bytes 建立
+  `qq-marketface:sha256:` 不透明身份，保留标签或安全 fallback；这不是 QCE 数字 emoji ID，
+  也不能与旧 `type_17` 混同。已有虚构测试证明纯贴图、混合内容、重复次数与词频隔离。
+- 前一轮校准的 focused tests：48 passed（本轮不重跑）。MarketFace 真人覆盖仍不足，完整 sticker 身份、资源与语义
+  支持属于 0.2；现有证据未确认当前 0.1 correctness defect。
+- 不把未知 `type_17` 加进允许列表，也不将其标记为已修复；后续若有正文丢失、分析失败或统计污染
+  的新证据，应另按 correctness regression 审计。
 
-状态：未审计
+状态：DEFERRED（退出 Active Bugs，归入 0.2 Sticker 支持；旧类型语义未确认）。
 
-Release Blocker：TBD。
+Release Blocker：No。
 
 ### BUG-03 「删除全部本地数据 / 缓存」语义与实际生命周期不完整
 
@@ -183,23 +508,32 @@ Stage 3.5 已关闭，正式真人 E2E 与最终 smoke 均 PASS。长期 correct
 
 这是正常权限行为，UX 已经做过优化，不应重新进入 Active Bugs。
 
----
+## 历史 checkpoint 与兼容边界
 
-## Release Improvements
+以下记录保留工程证据，不作为当前 0.1 待办清单；当前归属以开头总览为准。
 
-### REL-01 QQ 真实导出进度
+### 已退休的 Desktop QCE 项
+
+REL-01 / REL-01.1 和 REL-03 中旧 QCE transient orphan cleanup 均已退出 Desktop 0.1 backlog。
+QCE CLI 与既有 JSON 兼容仍保留，不将旧 Desktop 任务转为当前发布前置。
+
+REL-03 旧 QCE transient orphan cleanup：RETIRED（仅退休旧 Desktop 待办，不声称已实现）。
+原记录关注 QCE transient run 异常终止后的遗留清理；当前 Direct DB generation 已有启动 / 关闭
+`recover`，二者不是同一资源。保留该历史限制，不将其写成当前 Direct DB 生命周期缺口。
+
+### REL-01 QCE 导出进度（Desktop 已退休）
 
 目标：GUI 显示真实 QCE progress / messageCount / status，绝不伪造 totalMessages。
 
-该功能同时是 BUG-01 的诊断前置。
+以下为旧 Desktop QCE 路径的历史设计与验收，不作为当前 Direct DB GUI 合同。
 
-当前已有审计结论：
+当时审计结论：
 QCE 提供 messageCount、progress、status、message，
 没有可靠标准 totalMessages / processedMessages。
 
-状态：已真实验收通过。
+状态：RETIRED（历史验收通过；退出当前 Desktop 0.1 backlog）。
 
-最终设计：
+当时设计：
 
 - QCE 的 `progress` 字段不足以为用户提供可靠的完成百分比；实际表现为类似
   0% → … → 97% 后长时间不变，因此不再作为面向用户的百分比展示。
@@ -217,13 +551,13 @@ QCE 提供 messageCount、progress、status、message，
 - 最终 Echo Report 分析消息为 234 条：4,379 是获取到的原始消息数，234 是过滤后
   进入分析的消息数，二者语义允许且符合预期（该验收群以机器人 / 模板噪声为主）。
 
-大数据 QCE 卡住 / 超时转入 BUG-01，本阶段不处理。
+旧 BUG-01 已退休；当前数据容量验收见 QA-01。
 
-### REL-01.1 QQ 导出停滞感提示（非阻塞 UX debt）
+### REL-01.1 QCE 停滞提示（Desktop 已退休）
 
 当 `message_count` 一段时间没有增长、但导出任务仍未结束时，用户容易误以为程序卡死。
 
-后续可考虑显示类似：
+当时考虑显示类似：
 `已获取 4,379 条 QQ 聊天记录 · 正在完成导出，请稍候…`
 
 约束：
@@ -233,69 +567,9 @@ QCE 提供 messageCount、progress、status、message，
 - 不显示虚假百分比；
 - 不预测剩余时间。
 
-状态：已记录，本次不实现。
+状态：RETIRED（旧 QCE UX debt；退出当前 Desktop 0.1 backlog）。
 
-### REL-02 History 可以直接 reopen 已保存的 Echo Report
-
-已随 BUG-03 完成：Local Data 选中或双击历史报告，通过 Facade / Catalog 安全定位
-package 内的 HTML，使用系统默认浏览器打开，无需重新分析。
-文件缺失或 opener 失败显示明确错误，不崩溃、不静默隐藏报告；不重建历史 Dashboard。
-
-状态：CLOSED。
-
-### REL-03 Cache / Snapshot / History 生命周期统一
-
-当前已完成：
-
-- 生产 `ChatDataSnapshot` 已删除；QQ raw acquisition 是一次性 transient lease。
-- 正常分析结束后会清理 transient payload；重新分析会重新 acquisition。
-- Report Package 是唯一持久分析对象，Local Data 从 package metadata 构建 catalog；
-  独立 JSONL history 已退休。报告 reopen、完整 package deletion、固定 max-50 retention
-  与默认 analysis scratch / stale recovery 已随 BUG-03 完成。
-- Local Data 的最终用户措辞为“删除全部报告”，不承诺删除 QQ / 微信原始数据或用户另存文件。
-- 桌面 QQ Direct DB generation 在会话查询或 payload 物化后清理；启动与 shutdown
-  的 `recover` 负责遗留 plaintext。真人验收确认正常 shutdown 后 `snapshot.db` 无残留。
-- 所选会话的 `qq-db-json` payload 位于本次分析临时目录，由 consumer 完成或异常退出时
-  清理；它与 runtime generation 的 `snapshot.db` 是两个不同的 transient 资源。
-
-仍待审计 / 完成：
-
-- 旧 QCE transient run 在异常终止后的 orphan cleanup；Direct DB runtime generation
-  已有启动/关闭 `recover`，不能混为同一项；
-
-状态：Report Package / 默认 analysis scratch 部分已随 BUG-03 关闭；旧 QCE orphan run
-cleanup 仍属单独待审计项，本条不扩大其完成范围。
-
-### REL-04 按阶段区分的用户安全错误提示
-
-例如：
-
-- 数据获取失败
-- 导出失败
-- 数据读取失败
-- 分析失败
-- 保存 / 分享失败
-
-GUI 不展示 traceback。
-真实诊断写 privacy-safe diagnostics。
-
-状态：未审计。
-
-### REL-05 大型数据容量和 UX
-
-只有 BUG-01 根因确认后才设计。
-不要提前把逻辑 Bug 当性能优化问题。
-
-状态：DEFERRED until BUG-01 root cause。
-
-### REL-06 Windows 普通用户发布 / 安装体验
-
-Portable build 已存在。
-安装器、分发方式、普通用户首次运行体验仍需收口。
-
-状态：未审计（installer / 最终普通用户分发体验仍未完成，不标 CLOSED）。
-
-#### REL-06 附：Windows portable package hardening 记录
+### Windows portable package hardening checkpoint（REL-06 历史记录）
 
 当前 De-QCE 发布合同：先使用项目 `.venv` 的 Python 运行
 `scripts/bootstrap_qq_napcat_runtime.py`（可用 `--archive` 复用官方 archive，仍校验 hash），
@@ -378,53 +652,7 @@ wordcloud.png
 有 frozen contract。2026-10-04 fresh package 验证通过，仍保留 plain jieba segmentation、
 `PySide6`、`shiboken6`、`zstandard` 等实际 Desktop 依赖；不改变上面 PACK-SIZE-02B 的历史语义。
 
-### REL-07 GUI 上线前最终 polish
-
-只处理明显影响用户体验的视觉 / 交互问题。
-不重新设计整个 GUI。
-
-状态：未审计。
-
-### REL-08 分析结果导出 / 分享闭环
-
-不要只判断 Share renderer 是否存在。
-
-需要验收整条用户链：
-
-```text
-分析完成
-→ 用户发现分享入口
-→ 生成
-→ 明确生成状态
-→ 找到结果
-→ 可以发送
-→ 接收方无需安装 Echo 即可理解结果
-```
-
-当前存在一个测试 / 产品契约冲突：
-share button 当前产品行为隐藏，
-但 existing test 期望其可见 / 可用。
-
-该冲突属于产品决策，不属于测试治理遗留。
-
-状态：未审计
-
-Release Blocker：Yes。
-
-### REL-09 语言画像语义 / 代表词算法分工
-
-后续审计“常说”与“更像 TA”的文案和算法是否对应：
-
-- `top_words` 是成员自身纯词频排序，更接近“常说什么”，不宜承担过强的“代表性”语义。
-- 现有 `DistinctiveWordAnalyzer` 的成员 vs 其他成员 distinctive-word / log-odds 排序
-  更接近“哪些词更像 TA”；后续优化优先复用该能力。
-- 数据不足时允许不展示特色词，避免强行生成低置信度结果。
-
-状态：后续产品 / 算法优化，未审计。
-
----
-
-## QQ Direct DB 最终验收 checkpoint（2026-10-02）
+### QQ Direct DB 最终验收 checkpoint（2026-10-02）
 
 桌面 QQ 会话查询与分析当前使用 Direct DB 主链；QCE CLI 与既有 JSON 文件兼容仍保留，
 桌面分析没有自动 QCE fallback。架构与生命周期以 `ARCHITECTURE.md` 为准。
@@ -469,7 +697,13 @@ Final Cleanup 后的回归记录（本次 checkpoint 快照，不作为固定测
   `tests/test_gui.py::test_generate_share_button_creates_and_opens_share_image`；无新增失败。
 - git diff --check 通过。本轮 documentation checkpoint 不重跑产品回归。
 
-仍开放、非本分支 blocker（未在本轮修复）：
+当时开放项与当前归属（历史记录，不是额外的 0.1 backlog）：
+
+以下是 2026-10-02 当时的开放项：其中独立 history / `snapshot_reused` 兼容债已随
+`ec766f2` 退休旧 history 并统一 Report Package 生命周期退出当前追踪，见 CLOSED 的 BUG-03。
+GUI 分享仍开放且阻塞 0.1（REL-08）；MarketFace 完整语义归 0.2。
+unknown session/member 展示按 REL-07 的实际 polish 范围收口；unknown 媒体语义不扩展 0.1。
+快捷登录归 0.2 统一 UX 优化；跨机器 Direct DB RC 是当前发布待办，见 QA-06。
 
 - history metadata `snapshot_reused` 兼容：旧记录与当前 identity summary 校验不兼容。
 - unknown session/member UX 折叠。
@@ -479,60 +713,6 @@ Final Cleanup 后的回归记录（本次 checkpoint 快照，不作为固定测
 - 快捷登录尚未实现；现有 QQ 授权/连接闭环验收不等同于该功能完成。
 - 跨机器 Direct DB RC 验证尚未完成；当前真人验收限定本机与已有场景，
   不构成跨 QQ 版本 schema 保证或全体发布环境准入。
-
-## Engineering Governance
-
-### DOC-01 文档事实源治理
-
-当前事实源已明确：`ARCHITECTURE.md` 为架构唯一事实源，`docs/HARDENING.md` 为
-Hardening / Active Bug 唯一实时工作地图，`docs/BUG_JOURNAL.md` 只记录已解决并验证的
-真实工程问题；`PROJECT_STATUS.md` 与 `DEVELOPMENT_STATE.md` 为历史快照，正文不再维护。
-
-状态：CLOSED。
-
-### DOC-02 AI Onboarding v1
-
-状态：CLOSED。
-
-### GOV-01 Active Bug Backlog
-
-由本 HARDENING.md 承担。
-
-状态：CLOSED（基础结构已建立）。
-
-### GOV-02 Bug Journal
-
-由 `docs/BUG_JOURNAL.md` 承担。
-
-状态：CLOSED（机制已建立，后续随已解决问题持续追加）。
-
-### GOV-03 Test Governance v1
-
-状态：CLOSED。
-
-详细历史记录见：`docs/engineering/TEST_GOVERNANCE_V1.md`
-
-### GOV-04 版本号权威统一
-
-当前曾审计到：
-
-- pyproject package version
-- GUI runtime version
-- 历史 docs version
-
-存在多个版本来源。
-
-状态：未审计 / 未实施。
-
-### GOV-05 Windows build 可复现性
-
-当前 `scripts/build_windows_exe.ps1` 使用项目 `.venv\Scripts\pyinstaller.exe`，缺失时直接失败
-（fail closed），不会在构建时动态下载或安装 PyInstaller；原“可能动态安装”的记录已过期。
-但 `pyproject.toml` 尚未声明或 pin PyInstaller，PyInstaller / release build environment 的版本
-固定、版本来源与可重建性仍未形成完整的 tracked reproducibility contract，待进一步审计。
-本轮不实现 dependency pinning。
-
-状态：未审计。
 
 ### GOV-05.1 Build / runtime environment debt（本机 gitignored runtime 资产不完整）
 
@@ -573,77 +753,24 @@ runtime/wechat
 - 此关闭不表示新机器天然拥有完整 runtime，也不表示 fresh checkout 可跳过 bootstrap 构建；
   Windows build reproducibility 仍属于开放的 GOV-05 / 后续发布治理范围。
 
-### GOV-05.2 Frozen artifact provenance
+## 状态词
 
-`tests/test_frozen_desktop_package_contract.py` 检查磁盘上已有的 `dist/Echo`，测试本身不会构建
-fresh artifact。目前没有把已有 frozen artifact 与当前 Git HEAD 绑定的可验证 provenance；
-旧 EXE 可被新 contract tests 检查并产生误导性的 RED，本次两个 packaging failures 即属于此类。
+统一使用：
 
-当前处理原则：Final Release / packaging acceptance 必须先执行正式完整 fresh build，
-不允许用历史 `dist/Echo` 代表当前源码。后续可考虑 build provenance / commit identity，
-本轮不实现。
+- 未审计
+- 审计中
+- 已审计
+- Ready for RED
+- 实现中
+- 待真实验收
+- CLOSED
+- DEFERRED
+- RETIRED（旧条目退出当前追踪，不声称根因已修复）
 
-状态：已记录 / 未实施。Release Blocker：No（不是当前 Release Packaging blocker）。
+同时允许：
 
----
-
-## Deferred Capabilities
-
-明确不进入当前 Hardening 主线：
-
-### CAP-01
-
-更完整的图片 / 语音 / 视频 / system message 分析。
-
-### CAP-02
-
-Rich Model 最终迁移、逐步减少 legacy projection。
-
-以及：
-
-- AI 内部梗
-- 语言趋同
-- 表达变化趋势
-- 更复杂关系推断
-- 新数据来源
-- 大型智能过滤框架升级
-
-这些可以进入后续版本，但不阻塞当前上线。
-
----
-
-## Release Gate
-
-### QA-01
-
-上线前必须完成一次独立 Final Acceptance：
-
-- QQ 主链
-- WeChat 主链
-- private / group
-- 小数据 / 普通数据 / 大数据
-- Echo Report
-- History / local data
-- export / share
-- portable build
-- 陌生 Windows 机器
-- 真人实际使用
-
-完成条件：
-
-- 不存在已知 P0 / P1 恶性问题；
-- 连续一轮真实验收不再出现新的 Release Blocker。
-
-然后：
-
-```text
-Feature Freeze
-→ Bugfix Only
-→ Final Build
-→ Release
-```
-
----
+- 候选 Bug
+- Release Blocker：Yes / No / TBD
 
 ## 工作规则
 

@@ -10,6 +10,12 @@
 > 正文中的旧测试数字、旧 HEAD、旧 roadmap 一律保持原样，不再维护，
 > 以免继续被误当作 live status source。
 
+> **0.1 发布前导航（2026-10-06）**：当前 main 使用 NapCat 启动 / 登录与 Direct DB 桌面主链，
+> 桌面无 QCE 依赖 / fallback；QCE 仅保留 CLI 外部能力及既有 JSON 兼容。BUG-03 已 CLOSED，
+> 测试治理当前阶段已完成；分享仍未完成且阻塞 0.1，入口隐藏只是临时措施。
+> Architecture & Complexity Audit v1 已 COMPLETE / CLOSED；发布前仅保留定点 release/privacy/build audit。
+> 当前发布待办与 0.2 backlog 统一见 [HARDENING](docs/HARDENING.md)，以下历史正文不表示当前状态。
+
 ## 项目定位
 
 余音 Echo 是一个隐私优先、本地运行的聊天记忆分析工具。

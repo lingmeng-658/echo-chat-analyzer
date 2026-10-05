@@ -102,13 +102,18 @@ tests/test_gui.py::test_generate_share_button_creates_and_opens_share_image
 原因：
 
 - 测试期望 share button 可见 / 可用；
-- 当前产品行为明确隐藏。
+- 当时及当前实现隐藏入口；这是分享尚未完成的临时措施，不是最终产品合同。
 
-这是 product contract conflict，
-不是 flaky、环境问题或 test-governance 问题。
+已确认 0.1 必须交付分享，REL-08 仍为 Release Blocker。
+这是产品交付缺口，不是 flaky、环境问题或 test-governance 问题。
 
-已经转入 Hardening 的 export / share 产品决策，
+已经转入 Hardening 的 export / share 交付项，
 测试治理不顺手修改。
+
+2026-10-05 / 06 后续治理阶段也已完成：`7aebc6e` 将 41 个真实 subprocess cases
+移出 Fast、保留 Full；`c512d62` / `4e99bc8`（T2A / T2B）整理重复测试结构而不砍业务覆盖。
+已确认 Fast 约 70s → 约 40s，属该阶段性能快照；当前状态见 `docs/HARDENING.md` GOV-03。
+测试治理不是 release blocker，分享缺口仍单独跟踪。
 
 ## 8. 最终工程经验
 

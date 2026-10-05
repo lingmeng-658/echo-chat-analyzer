@@ -204,7 +204,7 @@ Adapter 负责格式转换，分析核心不读取 QQ 原生字段。
 
 #### QQ Direct DB 当前主链
 
-桌面 QQ 会话列表和分析的获取路径为：
+桌面 QQ 先通过 NapCat 启动 / 登录；会话列表和分析的正式获取路径为：
 
 ```text
 QQ 本地 main+WAL+SHM → hardened committed boundary B capture
@@ -275,6 +275,11 @@ group reply 按可唯一匹配的序列建立 ReplyRelation，mention 保留结�
 其他未识别段只保留 `NonTextContent("unknown")`，不猜具体媒体类型；重复段不去重。
 legacy 正文只投影 TextContent，纯图片也可完成分析并生成消息统计与空词频报告。
 
+Direct DB MarketFace（`45002=11`）以 `45600` bytes 的 SHA-256 建立独立命名空间中的
+不透明 sticker 身份，不声称已解码 QQ emoji ID，也不等同于旧 QCE `type_17`。
+已有表达映射与 ReplyRelation 保留是当前结构能力；完整 Sticker / 表情包语义与
+Reply / 引用回复分析属于 0.2，不是 0.1 发布前置。产品状态见 `docs/HARDENING.md`。
+
 Final Cleanup 已移除 `analysis-ordering` 专用计数/日志与闲置 `pollCount`；
 保留 `analysis-timing`、DEBUG member-shape、identity coverage，以及
 failure_stage / guard_code、WAL/SHM/identity/checkpoint witness、native telemetry、
@@ -297,10 +302,10 @@ Provider 发现全部匹配 shard，对每个 shard 使用同一时间范围查�
 下一步操作提示）。它是应用层内 Provider 的合法调用者之一；GUI 通过 Facade
 获取状态，不直接接触 Provider。
 
-**导出任务管理** —— `ExportTaskManager`。把 QCE 底层 `ExportTask` 快照与
+**QCE 兼容导出任务管理** —— `ExportTaskManager`。把 QCE 底层 `ExportTask` 快照与
 Provider 异常翻译成用户层 `ExportTaskStatus`（创建 / 导出中 / 完成 / 失败 /
 已取消），不复制 Provider 的轮询逻辑。当前为轻量应用层封装，不引入异步框架；
-Facade 在后续阶段接入。
+仅属保留的 QCE CLI 兼容边界，不作为 Desktop 0.1 的 Facade 接入待办；桌面无 QCE fallback。
 
 **运行时管理** —— `QQRuntimeManager`。负责检测、启动、停止外部 QQ 采集
 运行环境，并把底层异常转换成用户层 `QQRuntimeStatus`。它只依赖
