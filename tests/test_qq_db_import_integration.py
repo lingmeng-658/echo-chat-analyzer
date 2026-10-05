@@ -5,36 +5,12 @@ from __future__ import annotations
 import json
 import sqlite3
 
+from qq_db_test_data import synthetic_text_message_blob as _synthetic_text_message_blob
+
 from qq_chat_analyzer.application.import_request import ImportRequest
 from qq_chat_analyzer.application.import_service import ImportService
 from qq_chat_analyzer.providers.qq_database_provider import QQDatabaseProvider
 from qq_chat_analyzer.providers.qq_database_provider import QQSession
-
-
-def _encode_varint(value: int) -> bytes:
-    encoded = bytearray()
-    while value > 0x7F:
-        encoded.append((value & 0x7F) | 0x80)
-        value >>= 7
-    encoded.append(value)
-    return bytes(encoded)
-
-
-def _length_delimited_field(field_number: int, value: bytes) -> bytes:
-    return (
-        _encode_varint((field_number << 3) | 2)
-        + _encode_varint(len(value))
-        + value
-    )
-
-
-def _synthetic_text_message_blob(text: str) -> bytes:
-    segment = (
-        _encode_varint((45002 << 3) | 0)
-        + _encode_varint(1)
-        + _length_delimited_field(45101, text.encode("utf-8"))
-    )
-    return _length_delimited_field(40800, segment)
 
 
 def test_qq_db_payload_imports_one_fictional_group_text_message(tmp_path) -> None:

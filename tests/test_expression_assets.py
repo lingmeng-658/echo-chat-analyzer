@@ -43,23 +43,6 @@ def _qq_data_uri_resolver():
     return resolver
 
 
-@pytest.fixture
-def qq_asset_root(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> Path:
-    """Point the QQ resolver at a throwaway directory of fake PNGs."""
-    root = tmp_path / "qq-emojis"
-    root.mkdir()
-    monkeypatch.setattr(
-        expression_assets, "QQ_ASSET_ROOT", str(root), raising=False
-    )
-    monkeypatch.setattr(
-        expression_assets, "_qq_asset_index", None, raising=False
-    )
-    return root
-
-
 def _write_qq_png(root: Path, face_id: str) -> None:
     (root / f"{face_id}.png").write_bytes(_FAKE_PNG_BYTES)
 

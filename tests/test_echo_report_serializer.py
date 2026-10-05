@@ -15,7 +15,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_ROOT))
 
-import qq_chat_analyzer.presentation.expression_assets as expression_assets  # noqa: E402
 from qq_chat_analyzer.analysis import models as analysis_models  # noqa: E402
 from qq_chat_analyzer.presentation import (  # noqa: E402
     ChartPoint,
@@ -700,23 +699,6 @@ def test_private_language_profile_serializes_new_layers_and_overview_density() -
 
 #: A throwaway payload; tests only assert it round-trips through base64.
 _FAKE_PNG_BYTES = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRfake-minimal-png"
-
-
-@pytest.fixture
-def qq_asset_root(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> Path:
-    """Point the QQ resolver at a throwaway directory of fake PNGs."""
-    root = tmp_path / "qq-emojis"
-    root.mkdir()
-    monkeypatch.setattr(
-        expression_assets, "QQ_ASSET_ROOT", str(root), raising=False
-    )
-    monkeypatch.setattr(
-        expression_assets, "_qq_asset_index", None, raising=False
-    )
-    return root
 
 
 def _expression_view(

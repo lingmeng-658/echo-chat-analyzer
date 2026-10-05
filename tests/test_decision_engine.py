@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
@@ -15,88 +17,86 @@ from qq_chat_analyzer.decision_engine import create_filter_decisions
 from qq_chat_analyzer.filter_decisions import FilterDecision
 
 
-def test_high_confidence_robot_sender_is_ignored() -> None:
-    candidate = Candidate(
-        target="虚构签到助手",
-        candidate_type="robot_sender",
-        score=0.95,
-    )
-
-    decisions = create_filter_decisions([candidate])
-
-    assert decisions == [
-        FilterDecision(
-            target="虚构签到助手",
-            target_type="sender",
-            action="ignore",
-            confidence=0.95,
-            reason="high_confidence_robot_sender",
-            source="auto",
-        )
-    ]
-
-
-def test_medium_confidence_robot_sender_is_reviewed() -> None:
-    candidate = Candidate(
-        target="虚构提醒助手",
-        candidate_type="robot_sender",
-        score=0.7,
-    )
-
-    decisions = create_filter_decisions([candidate])
-
-    assert decisions == [
-        FilterDecision(
-            target="虚构提醒助手",
-            target_type="sender",
-            action="review",
-            confidence=0.7,
-            reason="possible_robot_sender",
-            source="auto",
-        )
-    ]
-
-
-def test_high_confidence_welcome_template_is_ignored() -> None:
-    candidate = Candidate(
-        target="欢迎 {variable} 加入虚构群聊",
-        candidate_type="welcome_template",
-        score=0.94,
-    )
-
-    decisions = create_filter_decisions([candidate])
-
-    assert decisions == [
-        FilterDecision(
-            target="欢迎 {variable} 加入虚构群聊",
-            target_type="template",
-            action="ignore",
-            confidence=0.94,
-            reason="high_confidence_welcome_template",
-            source="auto",
-        )
-    ]
-
-
-def test_lower_confidence_welcome_template_is_reviewed() -> None:
-    candidate = Candidate(
-        target="欢迎 {variable} 加入虚构讨论组",
-        candidate_type="welcome_template",
-        score=0.58,
-    )
-
-    decisions = create_filter_decisions([candidate])
-
-    assert decisions == [
-        FilterDecision(
-            target="欢迎 {variable} 加入虚构讨论组",
-            target_type="template",
-            action="review",
-            confidence=0.58,
-            reason="possible_welcome_template",
-            source="auto",
-        )
-    ]
+@pytest.mark.parametrize(
+    ("candidate", "expected"),
+    [
+        pytest.param(
+            Candidate(target="虚构签到助手", candidate_type="robot_sender", score=0.95),
+            FilterDecision(
+                target="虚构签到助手", target_type="sender", action="ignore",
+                confidence=0.95, reason="high_confidence_robot_sender", source="auto",
+            ),
+            id="high_confidence_robot_sender_is_ignored",
+        ),
+        pytest.param(
+            Candidate(target="虚构提醒助手", candidate_type="robot_sender", score=0.7),
+            FilterDecision(
+                target="虚构提醒助手", target_type="sender", action="review",
+                confidence=0.7, reason="possible_robot_sender", source="auto",
+            ),
+            id="medium_confidence_robot_sender_is_reviewed",
+        ),
+        pytest.param(
+            Candidate(
+                target="欢迎 {variable} 加入虚构群聊",
+                candidate_type="welcome_template", score=0.94,
+            ),
+            FilterDecision(
+                target="欢迎 {variable} 加入虚构群聊", target_type="template", action="ignore",
+                confidence=0.94, reason="high_confidence_welcome_template", source="auto",
+            ),
+            id="high_confidence_welcome_template_is_ignored",
+        ),
+        pytest.param(
+            Candidate(
+                target="欢迎 {variable} 加入虚构讨论组",
+                candidate_type="welcome_template", score=0.58,
+            ),
+            FilterDecision(
+                target="欢迎 {variable} 加入虚构讨论组", target_type="template", action="review",
+                confidence=0.58, reason="possible_welcome_template", source="auto",
+            ),
+            id="lower_confidence_welcome_template_is_reviewed",
+        ),
+        pytest.param(
+            Candidate(
+                target="@{user} 虚构查询", candidate_type="repeated_template",
+                score=1.0, metadata={"static_character_count": 4},
+            ),
+            FilterDecision(
+                target="@{user} 虚构查询", target_type="template", action="review",
+                confidence=1.0, reason="possible_repeated_template", source="auto",
+            ),
+            id="high_score_repeated_template_with_short_static_text_is_reviewed",
+        ),
+        pytest.param(
+            Candidate(
+                target="签到成功，积分+{number}", candidate_type="repeated_template",
+                score=1.0, metadata={"static_character_count": 8},
+            ),
+            FilterDecision(
+                target="签到成功，积分+{number}", target_type="template", action="ignore",
+                confidence=1.0, reason="high_confidence_repeated_template", source="auto",
+            ),
+            id="high_confidence_repeated_template_is_ignored",
+        ),
+        pytest.param(
+            Candidate(
+                target="查询结果：{variable}", candidate_type="repeated_template", score=0.8,
+            ),
+            FilterDecision(
+                target="查询结果：{variable}", target_type="template", action="review",
+                confidence=0.8, reason="possible_repeated_template", source="auto",
+            ),
+            id="medium_confidence_repeated_template_is_reviewed",
+        ),
+    ],
+)
+def test_candidate_creates_expected_decision(
+    candidate: Candidate,
+    expected: FilterDecision,
+) -> None:
+    assert create_filter_decisions([candidate]) == [expected]
 
 
 def test_low_confidence_robot_sender_has_no_decision() -> None:
@@ -449,71 +449,6 @@ def test_same_sender_automation_candidates_create_one_decision() -> None:
             action="ignore",
             confidence=0.97,
             reason="high_confidence_interactive_bot",
-            source="auto",
-        )
-    ]
-
-
-def test_high_score_repeated_template_with_short_static_text_is_reviewed() -> None:
-    candidate = Candidate(
-        target="@{user} 虚构查询",
-        candidate_type="repeated_template",
-        score=1.0,
-        metadata={"static_character_count": 4},
-    )
-
-    decisions = create_filter_decisions([candidate])
-
-    assert decisions == [
-        FilterDecision(
-            target="@{user} 虚构查询",
-            target_type="template",
-            action="review",
-            confidence=1.0,
-            reason="possible_repeated_template",
-            source="auto",
-        )
-    ]
-
-
-def test_high_confidence_repeated_template_is_ignored() -> None:
-    candidate = Candidate(
-        target="签到成功，积分+{number}",
-        candidate_type="repeated_template",
-        score=1.0,
-        metadata={"static_character_count": 8},
-    )
-
-    decisions = create_filter_decisions([candidate])
-
-    assert decisions == [
-        FilterDecision(
-            target="签到成功，积分+{number}",
-            target_type="template",
-            action="ignore",
-            confidence=1.0,
-            reason="high_confidence_repeated_template",
-            source="auto",
-        )
-    ]
-
-
-def test_medium_confidence_repeated_template_is_reviewed() -> None:
-    candidate = Candidate(
-        target="查询结果：{variable}",
-        candidate_type="repeated_template",
-        score=0.8,
-    )
-
-    decisions = create_filter_decisions([candidate])
-
-    assert decisions == [
-        FilterDecision(
-            target="查询结果：{variable}",
-            target_type="template",
-            action="review",
-            confidence=0.8,
-            reason="possible_repeated_template",
             source="auto",
         )
     ]
