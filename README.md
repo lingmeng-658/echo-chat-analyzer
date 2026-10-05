@@ -70,8 +70,9 @@ Windows 桌面端当前支持：
 
 项目使用 Python `src` layout。
 
+在仓库根目录执行：
+
 ```powershell
-cd D:\ChatAnalyzerWorkspace\local-chat-analyzer
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[gui,dev]"
 echo-gui
