@@ -318,6 +318,7 @@ def _seed_generation(root: Path, generation_id: str) -> None:
 # ------------------------------------------------------------------ acquire
 
 
+@pytest.mark.slow_integration
 def test_passphrase_unavailable_removes_previous_plaintext_first(
     tmp_path: Path,
 ) -> None:
@@ -356,6 +357,7 @@ def test_passphrase_unavailable_removes_previous_plaintext_first(
         ),
     ),
 )
+@pytest.mark.slow_integration
 def test_acquire_logs_one_privacy_safe_diagnostic_stage(
     tmp_path: Path,
     config: dict,
@@ -374,6 +376,7 @@ def test_acquire_logs_one_privacy_safe_diagnostic_stage(
         assert fragment not in serialized, fragment
 
 @pytest.mark.parametrize("decrypt", ["false", "throw"])
+@pytest.mark.slow_integration
 def test_decrypt_failure_never_publishes_a_ready_generation(
     tmp_path: Path,
     decrypt: str,
@@ -389,6 +392,7 @@ def test_decrypt_failure_never_publishes_a_ready_generation(
     assert not (tmp_path / "staging").exists()
 
 
+@pytest.mark.slow_integration
 def test_missing_identity_fails_closed_without_decrypting(tmp_path: Path) -> None:
     output = _run_node(
         tmp_path,
@@ -401,6 +405,7 @@ def test_missing_identity_fails_closed_without_decrypting(tmp_path: Path) -> Non
     assert output["metrics"]["decryptCalls"] == 0
 
 
+@pytest.mark.slow_integration
 def test_identity_changed_during_decrypt_fails_closed(tmp_path: Path) -> None:
     output = _run_node(
         tmp_path,
@@ -420,6 +425,7 @@ def test_identity_changed_during_decrypt_fails_closed(tmp_path: Path) -> None:
     "failure_flag",
     ["decryptCreatesManifestDir", "decryptCreatesGenerationsFile"],
 )
+@pytest.mark.slow_integration
 def test_manifest_or_publish_failure_leaves_no_ready_generation(
     tmp_path: Path,
     failure_flag: str,
@@ -442,6 +448,7 @@ def test_manifest_or_publish_failure_leaves_no_ready_generation(
     assert _generation_ids(tmp_path) == []
 
 
+@pytest.mark.slow_integration
 def test_success_publishes_database_and_identity_in_one_generation(
     tmp_path: Path,
 ) -> None:
@@ -470,6 +477,7 @@ def test_success_publishes_database_and_identity_in_one_generation(
     assert not (tmp_path / "decrypted").exists()
 
 
+@pytest.mark.slow_integration
 def test_acquire_does_not_assimilate_database_api_adapter_as_a_thenable(
     tmp_path: Path,
 ) -> None:
@@ -486,6 +494,7 @@ def test_acquire_does_not_assimilate_database_api_adapter_as_a_thenable(
     assert output["results"][0]["result"]["status"] == "ready"
 
 
+@pytest.mark.slow_integration
 def test_acquire_trace_records_safe_phase_boundaries(tmp_path: Path, monkeypatch) -> None:
     trace_file = tmp_path / "runtime.log"
     monkeypatch.setenv("QCE_LOG_FILE", str(trace_file))
@@ -529,6 +538,7 @@ def test_acquire_trace_records_safe_phase_boundaries(tmp_path: Path, monkeypatch
     assert str(tmp_path) not in trace
 
 
+@pytest.mark.slow_integration
 def test_acquire_trace_records_privacy_safe_source_file_state(
     tmp_path: Path,
     monkeypatch,
@@ -566,6 +576,7 @@ def test_acquire_trace_records_privacy_safe_source_file_state(
     assert FICTIONAL_UIN not in trace
 
 
+@pytest.mark.slow_integration
 def test_acquire_trace_correlates_generation_with_exact_native_read_window(
     tmp_path: Path,
     monkeypatch,
@@ -604,6 +615,7 @@ def test_acquire_trace_correlates_generation_with_exact_native_read_window(
     assert FICTIONAL_UIN not in trace
 
 
+@pytest.mark.slow_integration
 def test_acquire_rejects_snapshot_when_source_changed_during_read(
     tmp_path: Path,
     monkeypatch,
@@ -637,6 +649,7 @@ def test_acquire_rejects_snapshot_when_source_changed_during_read(
     assert FICTIONAL_UIN not in failure_line and str(tmp_path) not in failure_line
 
 
+@pytest.mark.slow_integration
 def test_acquire_rejects_snapshot_when_native_read_state_is_unavailable(
     tmp_path: Path,
 ) -> None:
@@ -656,6 +669,7 @@ def test_acquire_rejects_snapshot_when_native_read_state_is_unavailable(
     assert not (tmp_path / "staging").exists()
 
 
+@pytest.mark.slow_integration
 def test_acquire_rejects_snapshot_when_only_wal_changes_during_read(
     tmp_path: Path,
 ) -> None:
@@ -676,6 +690,7 @@ def test_acquire_rejects_snapshot_when_only_wal_changes_during_read(
     assert _generation_ids(tmp_path) == []
 
 
+@pytest.mark.slow_integration
 def test_passphrase_wait_trace_identifies_a_bounded_false_poll(tmp_path: Path, monkeypatch) -> None:
     trace_file = tmp_path / "runtime.log"
     monkeypatch.setenv("QCE_LOG_FILE", str(trace_file))
@@ -694,6 +709,7 @@ def test_passphrase_wait_trace_identifies_a_bounded_false_poll(tmp_path: Path, m
     ]
 
 
+@pytest.mark.slow_integration
 def test_passphrase_wait_emits_progress_before_its_deadline(tmp_path: Path, monkeypatch) -> None:
     trace_file = tmp_path / "runtime.log"
     monkeypatch.setenv("QCE_LOG_FILE", str(trace_file))
@@ -710,6 +726,7 @@ def test_passphrase_wait_emits_progress_before_its_deadline(tmp_path: Path, monk
     assert stages.index("passphrase_wait_tick") < stages.index("passphrase_not_ready")
 
 
+@pytest.mark.slow_integration
 def test_passphrase_then_identity_become_ready_near_separate_wait_boundaries(
     tmp_path: Path,
 ) -> None:
@@ -727,6 +744,7 @@ def test_passphrase_then_identity_become_ready_near_separate_wait_boundaries(
     assert output["results"][0]["result"]["status"] == "ready"
 
 
+@pytest.mark.slow_integration
 def test_each_acquire_uses_a_fresh_opaque_generation_id(tmp_path: Path) -> None:
     output = _run_node(
         tmp_path,
@@ -746,6 +764,7 @@ def test_each_acquire_uses_a_fresh_opaque_generation_id(tmp_path: Path) -> None:
     assert second["generation_id"]
 
 
+@pytest.mark.slow_integration
 def test_concurrent_acquire_never_decrypts_in_parallel(tmp_path: Path) -> None:
     output = _run_node(
         tmp_path,
@@ -767,6 +786,7 @@ def test_concurrent_acquire_never_decrypts_in_parallel(tmp_path: Path) -> None:
     assert _generation_ids(tmp_path) == [second["generation_id"]]
 
 
+@pytest.mark.slow_integration
 def test_cleanup_failure_carries_a_stable_privacy_safe_code(tmp_path: Path) -> None:
     # A broken snapshot root (a file where a directory is required) makes the
     # fail-closed cleanup fail before any decryption can start.
@@ -792,6 +812,7 @@ def test_cleanup_failure_carries_a_stable_privacy_safe_code(tmp_path: Path) -> N
 # ------------------------------------------------------------------ cleanup
 
 
+@pytest.mark.slow_integration
 def test_cleanup_removes_only_the_requested_generation(tmp_path: Path) -> None:
     _seed_generation(tmp_path, "keep-me")
     _seed_generation(tmp_path, "delete-me")
@@ -811,6 +832,7 @@ def test_cleanup_removes_only_the_requested_generation(tmp_path: Path) -> None:
     assert _generation_ids(tmp_path) == ["keep-me"]
 
 
+@pytest.mark.slow_integration
 def test_cleanup_missing_generation_returns_a_stable_code(tmp_path: Path) -> None:
     output = _run_node(
         tmp_path,
@@ -826,6 +848,7 @@ def test_cleanup_missing_generation_returns_a_stable_code(tmp_path: Path) -> Non
     assert result == {"ok": False, "code": "generation_not_found", "status": "failed"}
 
 
+@pytest.mark.slow_integration
 def test_cleanup_rejects_path_traversal_and_leaves_everything_untouched(
     tmp_path: Path,
 ) -> None:
@@ -849,6 +872,7 @@ def test_cleanup_rejects_path_traversal_and_leaves_everything_untouched(
 # ------------------------------------------------------------------ recover
 
 
+@pytest.mark.slow_integration
 def test_recover_removes_orphan_staging_and_legacy_plaintext(
     tmp_path: Path,
 ) -> None:
@@ -876,6 +900,7 @@ def test_recover_removes_orphan_staging_and_legacy_plaintext(
 # ----------------------------------------------------------- status privacy
 
 
+@pytest.mark.slow_integration
 def test_status_objects_never_leak_identity_or_paths(tmp_path: Path) -> None:
     output = _run_node(
         tmp_path,
@@ -909,6 +934,7 @@ def test_snapshot_template_registers_echo_snapshot_api_on_runtimecore_apis() -> 
     assert "createSnapshotFromNapCatCore" not in text
 
 
+@pytest.mark.slow_integration
 def test_registration_exposes_acquire_cleanup_recover(tmp_path: Path) -> None:
     output = _run_node(tmp_path, {"register": True})
 

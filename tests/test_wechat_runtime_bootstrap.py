@@ -536,6 +536,7 @@ def test_bootstrap_fails_closed_with_a_nonzero_exit_code() -> None:
 
 
 # ------------------------------------------------------------ offline behaviour
+@pytest.mark.slow_integration
 def test_bootstrap_restores_node_and_koffi_from_verified_sources(
     tmp_path: Path,
 ) -> None:
@@ -576,6 +577,7 @@ def test_bootstrap_restores_node_and_koffi_from_verified_sources(
     assert _bootstrap_temp_entries() == temp_entries
 
 
+@pytest.mark.slow_integration
 def test_bootstrap_rejects_a_node_archive_that_does_not_match_the_pin(
     tmp_path: Path,
 ) -> None:
@@ -602,6 +604,7 @@ def test_bootstrap_rejects_a_node_archive_that_does_not_match_the_pin(
     assert _bootstrap_temp_entries() == temp_entries
 
 
+@pytest.mark.slow_integration
 def test_bootstrap_rejects_a_node_executable_that_does_not_match_the_pin(
     tmp_path: Path,
 ) -> None:
@@ -627,6 +630,7 @@ def test_bootstrap_rejects_a_node_executable_that_does_not_match_the_pin(
     assert not (tmp_path / "runtime" / "wechat" / "node.exe").exists()
 
 
+@pytest.mark.slow_integration
 def test_bootstrap_rejects_a_koffi_tarball_that_does_not_match_the_pin(
     tmp_path: Path,
 ) -> None:
@@ -653,6 +657,7 @@ def test_bootstrap_rejects_a_koffi_tarball_that_does_not_match_the_pin(
     assert not (tmp_path / "runtime" / "wechat" / "node.exe").exists()
 
 
+@pytest.mark.slow_integration
 def test_bootstrap_rejects_a_koffi_shasum_that_does_not_match_the_pin(
     tmp_path: Path,
 ) -> None:
@@ -676,6 +681,7 @@ def test_bootstrap_rejects_a_koffi_shasum_that_does_not_match_the_pin(
     assert _tree_hashes(tmp_path / "runtime" / "wechat") == before
 
 
+@pytest.mark.slow_integration
 def test_bootstrap_rejects_a_koffi_tarball_missing_a_whitelisted_member(
     tmp_path: Path,
 ) -> None:
@@ -703,6 +709,7 @@ def test_bootstrap_rejects_a_koffi_tarball_missing_a_whitelisted_member(
     assert _tree_hashes(tmp_path / "runtime" / "wechat") == before
 
 
+@pytest.mark.slow_integration
 def test_bootstrap_rejects_a_pin_file_that_is_missing_a_section(
     tmp_path: Path,
 ) -> None:
@@ -729,6 +736,7 @@ def test_bootstrap_rejects_a_pin_file_that_is_missing_a_section(
     assert not (tmp_path / "runtime" / "wechat" / "node_modules").exists()
 
 
+@pytest.mark.slow_integration
 def test_bootstrap_rejects_a_non_official_source_host(tmp_path: Path) -> None:
     node_archive = _fictional_node_archive(tmp_path / "node-win-x64.zip")
     koffi_tarball = _fictional_koffi_tarball(tmp_path / "koffi-2.16.2.tgz")
@@ -753,6 +761,7 @@ def test_bootstrap_rejects_a_non_official_source_host(tmp_path: Path) -> None:
     assert _tree_hashes(tmp_path / "runtime" / "wechat") == before
 
 
+@pytest.mark.slow_integration
 def test_bootstrap_is_idempotent(tmp_path: Path) -> None:
     node_archive = _fictional_node_archive(tmp_path / "node-win-x64.zip")
     koffi_tarball = _fictional_koffi_tarball(tmp_path / "koffi-2.16.2.tgz")
