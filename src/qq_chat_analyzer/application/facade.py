@@ -23,7 +23,9 @@ Everything that escapes this layer is either a plain view model or a
 from __future__ import annotations
 
 import logging
+import re
 import shutil
+import stat
 import threading
 from time import monotonic as _monotonic, perf_counter as _perf_counter
 from tempfile import TemporaryDirectory
@@ -65,8 +67,13 @@ from .qq.qce_compat.qq_export_import_service import (
     QQExportProgress,
 )
 from .qq.qq_setup_service import QQSetupStatus
-from .echo_report_export import ECHO_REPORT_HTML_NAME, package_echo_report
-from .report_history import InputIdentitySummary
+from .echo_report_export import (
+    ECHO_REPORT_HTML_NAME,
+    _require_no_reparse_points,
+    package_echo_report,
+)
+from .report_package_catalog import ReportPackageCatalog, ReportPackageListing
+from .report_package_metadata import build_report_metadata
 from .wechat.wechat_connection_service import WeChatConnectionStatus
 from .wechat.wechat_connection_progress import WeChatConnectionProgress
 from .wechat.wechat_environment_config import WeChatEnvironmentConfig
@@ -76,14 +83,17 @@ from .scope_filter import AnalysisScope, AnalysisScopeMode, resolve_scope
 
 
 _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.facade")
+_ANALYSIS_OUTPUT_NAME = re.compile(r"chat-analyzer-output-[0-9a-f]{8}\Z")
 
 
 class _RetainedReportDirectory:
     """Own one report directory while preserving its inherited ACL."""
 
     def __init__(self, parent: Path) -> None:
+        _require_no_reparse_points(parent)
+        self._parent = parent.resolve()
         while True:
-            directory = parent / f"chat-analyzer-output-{uuid4().hex[:8]}"
+            directory = self._parent / f"chat-analyzer-output-{uuid4().hex[:8]}"
             try:
                 directory.mkdir()
             except FileExistsError:
@@ -92,7 +102,56 @@ class _RetainedReportDirectory:
             break
 
     def cleanup(self) -> None:
-        shutil.rmtree(self.name, ignore_errors=True)
+        try:
+            _remove_owned_analysis_output(Path(self.name), self._parent)
+        except FileNotFoundError:
+            pass
+        except Exception:
+            _LOGGER.exception("Analysis scratch could not be cleaned: %s", self.name)
+
+
+def _remove_owned_analysis_output(directory: Path, root: Path) -> None:
+    _require_no_reparse_points(root)
+    if directory.parent != root or not _ANALYSIS_OUTPUT_NAME.fullmatch(directory.name):
+        raise ValueError("Analysis scratch is outside its ownership boundary.")
+    _require_no_reparse_points(directory)
+    info = directory.lstat()
+    if not stat.S_ISDIR(info.st_mode):
+        raise ValueError("Analysis scratch is not a directory.")
+    _require_safe_scratch_tree(directory)
+    _require_no_reparse_points(directory)
+    current = directory.lstat()
+    if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+        raise ValueError("Analysis scratch changed during cleanup.")
+    shutil.rmtree(directory)
+
+
+def _require_safe_scratch_tree(directory: Path) -> None:
+    for child in directory.iterdir():
+        _require_no_reparse_points(child)
+        if stat.S_ISDIR(child.lstat().st_mode):
+            _require_safe_scratch_tree(child)
+
+
+def _cleanup_stale_analysis_outputs(root: Path) -> None:
+    """Recover only direct scratch children; cleanup must not prevent startup."""
+    try:
+        _require_no_reparse_points(root)
+        root = root.resolve()
+        if not root.exists():
+            return
+        candidates = [
+            child for child in root.iterdir() if _ANALYSIS_OUTPUT_NAME.fullmatch(child.name)
+        ]
+        candidates.sort(key=lambda child: child.name)
+    except Exception:
+        _LOGGER.exception("Stale analysis scratch could not be enumerated: %s", root)
+        return
+    for directory in candidates:
+        try:
+            _remove_owned_analysis_output(directory, root)
+        except Exception:
+            _LOGGER.exception("Stale analysis scratch could not be cleaned: %s", directory)
 
 
 def _report_progress(
@@ -285,8 +344,8 @@ class AnalysisOutcome:
     report_path: Path | None = field(default=None, repr=False)
     report_directory: Path | None = field(default=None, repr=False)
     echo_report_view: EchoReportView | None = field(default=None, repr=False)
-    history_saved: bool | None = None
-    history_record_id: str | None = None
+    report_generated_at: datetime | None = None
+    retention_warning: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -318,7 +377,7 @@ class ChatAnalyzerFacade:
         ) = None,
         analysis_service: Any = None,
         presentation_builder: Any = None,
-        report_history_manager: Any = None,
+        report_package_catalog: Any = None,
         stopwords_directory: Path | None = None,
         shutdown_step_seconds: float = DEFAULT_SHUTDOWN_STEP_SECONDS,
     ) -> None:
@@ -337,9 +396,10 @@ class ChatAnalyzerFacade:
         self._built_sources: dict[ChatSource, Any] = {}
         self._analysis_service = analysis_service
         self._presentation_builder = presentation_builder
-        self._report_history_manager = report_history_manager
+        self._report_package_catalog = report_package_catalog or ReportPackageCatalog()
         self._stopwords_directory = stopwords_directory or resources_dir()
         self._retained_output_directory: _RetainedReportDirectory | None = None
+        self._scratch_recovery_done = False
         self._shutdown_step_seconds = shutdown_step_seconds
 
     @property
@@ -653,38 +713,48 @@ class ChatAnalyzerFacade:
             return None
         return min(epochs), max(epochs)
 
-    # ------------------------------------------------------- report history
-
-    def list_analysis_history(self) -> tuple[Any, ...]:
-        """Return metadata-only analysis history through the app boundary."""
-        if self._report_history_manager is None:
-            return ()
+    def list_report_packages(self) -> ReportPackageListing:
+        """List published package summaries and unreadable package issues."""
         try:
-            return tuple(self._report_history_manager.list_records())
-        except Exception:
-            _LOGGER.exception("Analysis history could not be read.")
-            return ()
-
-    def get_analysis_history(self, analysis_id: str) -> Any | None:
-        """Return one metadata-only history record by ID."""
-        if self._report_history_manager is None:
-            return None
-        try:
-            return self._report_history_manager.get_record(analysis_id)
-        except Exception:
-            _LOGGER.exception("Analysis history record could not be read.")
-            return None
-
-    def clear_analysis_history(self) -> None:
-        """Delete every saved analysis history record."""
-        if self._report_history_manager is None:
-            return
-        try:
-            self._report_history_manager.clear()
+            return self._report_package_catalog.list_reports()
         except Exception as exc:
+            _LOGGER.exception("Report package catalog could not be read.")
             raise FacadeError(
-                code="history_clear_failed",
-                public_message="无法清空 Echo 历史记录，请稍后重试。",
+                code="report_list_failed",
+                public_message="无法读取 Echo 本地报告，请稍后重试。",
+            ) from exc
+
+    def get_report_package_html_path(self, package_name: str) -> Path:
+        """Return a safely located historical report for the GUI opener."""
+        try:
+            return self._report_package_catalog.resolve_html_path(package_name)
+        except Exception as exc:
+            _LOGGER.exception("Report package HTML could not be located.")
+            raise FacadeError(
+                code="report_open_failed",
+                public_message="这份 Echo 报告已损坏或缺少报告文件。",
+            ) from exc
+
+    def delete_report_package(self, package_name: str) -> None:
+        """Delete a single complete package through the ownership boundary."""
+        try:
+            self._report_package_catalog.delete_package(package_name)
+        except Exception as exc:
+            _LOGGER.exception("Report package could not be deleted.")
+            raise FacadeError(
+                code="report_delete_failed",
+                public_message="这份 Echo 报告未能删除，请稍后重试。",
+            ) from exc
+
+    def clear_report_packages(self) -> None:
+        """Delete complete owned packages; surface any partial failure."""
+        try:
+            self._report_package_catalog.clear_all()
+        except Exception as exc:
+            _LOGGER.exception("Report packages could not all be deleted.")
+            raise FacadeError(
+                code="report_clear_failed",
+                public_message="部分 Echo 报告未能删除，请稍后重试。",
             ) from exc
 
     # -------------------------------------------------------------- analysis
@@ -920,6 +990,9 @@ class ChatAnalyzerFacade:
         """Run analysis then presentation for one local path."""
         analysis_service = self._require_analysis_service()
 
+        if config.output_directory is None and not self._scratch_recovery_done:
+            _cleanup_stale_analysis_outputs(user_data_dir() / "transient")
+            self._scratch_recovery_done = True
         output_directory, temporary_output = _create_output_directory(config)
         try:
             request = AnalysisRequestDTO(
@@ -954,60 +1027,75 @@ class ChatAnalyzerFacade:
             _report_progress(progress, "正在生成报告...")
             view = self._build_view(result)
             report_generated_at = datetime.now(timezone.utc)
-        except Exception:
+            report_path = _generated_echo_report_path(result, output_directory)
+            echo_report_view = getattr(result, "echo_report_view", None)
+            report_directory = None
+            retention_warning = ""
+            if report_path is not None:
+                try:
+                    metadata = build_report_metadata(
+                        result=result,
+                        source=source.value,
+                        scope=scope,
+                        generated_at=report_generated_at,
+                    )
+                    report_directory = package_echo_report(
+                        output_directory,
+                        reports_root=self._report_package_catalog.reports_root,
+                        metadata=metadata,
+                        now=report_generated_at.astimezone(),
+                    )
+                    report_path = report_directory / ECHO_REPORT_HTML_NAME
+                except Exception:
+                    _LOGGER.warning(
+                        "Analysis completed but the Echo report could not be "
+                        "packaged; keeping the generated report in place.",
+                        exc_info=True,
+                    )
+            if report_directory is not None:
+                try:
+                    retention = self._report_package_catalog.enforce_retention(
+                        published_package=report_directory,
+                    )
+                    retention_complete = retention.complete
+                except Exception:
+                    retention_complete = False
+                    _LOGGER.exception("Report saved but retention could not complete.")
+                if not retention_complete:
+                    retention_warning = (
+                        "报告已保存，但部分旧报告清理失败，本地报告数量可能超过 50 份。"
+                    )
+            _LOGGER.info(
+                "[facade] analysis outcome ready report_path=%s "
+                "report_directory=%s echo_view=%s",
+                report_path,
+                report_directory,
+                echo_report_view is not None,
+            )
+            if temporary_output is not None and report_path is None:
+                temporary_output.cleanup()
+                temporary_output = None
+
+            outcome = AnalysisOutcome(
+                view=view,
+                result=result,
+                source=source,
+                session=session,
+                artifact_directory=(
+                    output_directory if report_path is not None else None
+                ),
+                report_path=report_path,
+                report_directory=report_directory,
+                echo_report_view=echo_report_view,
+                report_generated_at=report_generated_at,
+                retention_warning=retention_warning,
+            )
+            _report_progress(progress, "分析完成")
+            self._replace_retained_output(temporary_output)
+        except BaseException:
             if temporary_output is not None:
                 temporary_output.cleanup()
             raise
-
-        report_path = _generated_echo_report_path(result, output_directory)
-        echo_report_view = getattr(result, "echo_report_view", None)
-        report_directory = None
-        if report_path is not None:
-            try:
-                report_directory = package_echo_report(output_directory)
-                report_path = report_directory / ECHO_REPORT_HTML_NAME
-            except Exception:
-                _LOGGER.warning(
-                    "Analysis completed but the Echo report could not be "
-                    "packaged; keeping the generated report in place.",
-                    exc_info=True,
-                )
-        _LOGGER.info(
-            "[facade] analysis outcome ready report_path=%s "
-            "report_directory=%s echo_view=%s",
-            report_path,
-            report_directory,
-            echo_report_view is not None,
-        )
-        if temporary_output is not None and report_path is None:
-            temporary_output.cleanup()
-            temporary_output = None
-        self._replace_retained_output(temporary_output)
-
-        history_saved, history_record_id = _save_analysis_history(
-            self._report_history_manager,
-            source=source,
-            session=session,
-            scope=scope,
-            result=result,
-            report_generated_at=report_generated_at,
-        )
-
-        outcome = AnalysisOutcome(
-            view=view,
-            result=result,
-            source=source,
-            session=session,
-            artifact_directory=(
-                output_directory if report_path is not None else None
-            ),
-            report_path=report_path,
-            report_directory=report_directory,
-            echo_report_view=echo_report_view,
-            history_saved=history_saved,
-            history_record_id=history_record_id,
-        )
-        _report_progress(progress, "分析完成")
         return outcome
 
     def _replace_retained_output(
@@ -1429,75 +1517,6 @@ class ChatAnalyzerFacade:
 # ------------------------------------------------------------------ helpers
 
 
-def _save_analysis_history(
-    manager: Any,
-    *,
-    source: ChatSource,
-    session: SessionInfo | None,
-    scope: AnalysisScope,
-    result: AnalysisResultDTO,
-    report_generated_at: datetime,
-) -> tuple[bool | None, str | None]:
-    """Save history metadata without failing an otherwise successful analysis."""
-    if manager is None:
-        return None, None
-
-    try:
-        diagnostic_counts = getattr(result, "diagnostic_counts", None)
-        history_record = manager.save_analysis(
-            source=source.value,
-            session_name=(
-                session.display_name if session is not None else None
-            ),
-            session_id=(
-                session.session_id if session is not None else None
-            ),
-            message_count=result.processed_message_count,
-            analysis_scope=scope.mode.value,
-            scope_start=scope.start_date,
-            scope_end=scope.end_date,
-            report_generated_at=report_generated_at,
-            session_type=(
-                session.session_type if session is not None else None
-            ),
-            input_identity_summary=_input_identity_summary(
-                source,
-                session,
-            ),
-            raw_message_count=getattr(
-                diagnostic_counts,
-                "raw_message_count",
-                None,
-            ),
-            imported_message_count=getattr(
-                diagnostic_counts,
-                "imported_message_count",
-                None,
-            ),
-            scope_message_count=getattr(
-                diagnostic_counts,
-                "scope_message_count",
-                None,
-            ),
-            filtered_message_count=getattr(
-                diagnostic_counts,
-                "filtered_message_count",
-                None,
-            ),
-            analyzed_message_count=getattr(
-                diagnostic_counts,
-                "analyzed_message_count",
-                None,
-            ),
-        )
-    except Exception:
-        _LOGGER.exception(
-            "Analysis completed but history metadata could not be saved."
-        )
-        return False, None
-    return True, history_record.analysis_id
-
-
 def _create_output_directory(
     config: AnalysisConfig,
 ) -> tuple[Path, _RetainedReportDirectory | None]:
@@ -1507,9 +1526,10 @@ def _create_output_directory(
         directory.mkdir(parents=True, exist_ok=True)
         return directory, None
 
-    reports_directory = user_data_dir() / "reports"
-    reports_directory.mkdir(parents=True, exist_ok=True)
-    scratch = _RetainedReportDirectory(reports_directory)
+    transient_directory = user_data_dir() / "transient"
+    _require_no_reparse_points(transient_directory)
+    transient_directory.mkdir(parents=True, exist_ok=True)
+    scratch = _RetainedReportDirectory(transient_directory)
     return Path(scratch.name), scratch
 
 
@@ -1672,24 +1692,6 @@ def _coerce_source(source: Any) -> ChatSource:
         return ChatSource(source)
     except (ValueError, TypeError):
         raise UnknownChatSource(source) from None
-
-
-def _input_identity_summary(
-    source: ChatSource,
-    session: SessionInfo | None,
-) -> InputIdentitySummary | None:
-    """Describe acquisition state without repeating input identity."""
-    if session is None:
-        return None
-    elif source is ChatSource.QQ:
-        capture_mode = "provider_export"
-    elif source is ChatSource.WECHAT:
-        capture_mode = "live_database"
-    else:
-        return None
-    return InputIdentitySummary(
-        capture_mode=capture_mode,
-    )
 
 
 def _to_session_info(source: ChatSource, raw_session: Any) -> SessionInfo:

@@ -64,7 +64,8 @@ flowchart TD
         ORCH["QQDirectDatabaseImportService<br/>QQExportImportService · WeChatExportImportService"]
         SVC["AnalysisApplicationService"]
         FACADE["ChatAnalyzerFacade"]
-        HISTORY["ReportHistoryManager<br/>元数据 JSONL"]
+        PACKAGER["Echo Report Packager<br/>staging → 正式 package"]
+        CATALOG["ReportPackageCatalog<br/>metadata / ownership / retention"]
     end
 
     subgraph CORE["Analysis Core 分析核心"]
@@ -106,7 +107,8 @@ flowchart TD
     FACADE --> ORCH
     FACADE --> SVC
     FACADE --> BUILD
-    FACADE --> HISTORY
+    FACADE --> PACKAGER
+    FACADE --> CATALOG
     GUI --> FACADE
     CLI --> SVC
     VIEW --> GUI
@@ -332,11 +334,49 @@ QCE Python Provider / CLI 导出与既有 JSON 文件兼容仍保留；Desktop r
 过滤发生在 ImportService 之后、现有智能过滤和 Analyzer 之前；Analyzer 不感知范围配置。
 “全部”模式直接保留原消息，指定范围过滤为空时在进入 Analyzer 前返回应用错误。
 
-**ReportHistoryManager** —— 结果层的分析历史元数据存储：
-只在分析结果与 Dashboard view 成功生成后由 Facade 调用，保存分析 ID、时间、
-来源、会话标识、消息数量与分析范围到用户数据目录中的 JSONL 文件。
-不保存聊天正文、原始消息、`AnalysisReports` 或 Dashboard 快照；读取损坏文件时
-返回空历史并记录日志，保存失败不改变本次分析成功结果。
+**Report Package 生命周期（BUG-03）** —— Report Package 是 Echo 唯一持久分析对象，
+也是 Local Data 历史列表的事实来源。`ReportHistoryManager`、`analysis_history.jsonl`
+及其读写 API 已退休，不再维护与报告目录分离的元数据历史。
+
+Windows 默认根目录为 `%LOCALAPPDATA%\LocalChatAnalyzer`（由 `user_data_dir()` 提供）：
+
+```text
+LocalChatAnalyzer/
+├─ reports/
+│  └─ Echo_Report_YYYYMMDD_HHMMSS[_N]/
+│     ├─ echo-report.html
+│     ├─ echo-report.json
+│     ├─ metadata.json
+│     └─ README.txt
+└─ transient/
+   └─ chat-analyzer-output-<8位十六进制>/
+```
+
+- `reports/` 的持久资产只包括正式 Report Package，不放默认分析 scratch 或 raw export。
+  发布期间在同一 root 创建 `.echo-report-<uuid>` staging，四文件完整写入后 rename
+  为正式 package；staging 不进入 catalog，不计入 retention，也不属于删除全部报告的目标。
+  普通发布异常会尝试清理 staging；这不等于异常终止后的 staging recovery。
+- `package_echo_report()` 只负责发布；Facade 显式使用 Catalog 的 canonical
+  `reports_root`，成功返回正式目录后才调用 Catalog retention。发布失败不淘汰旧报告。
+- `ReportPackageCatalog` 只读 `metadata.json` 构建 summary（包括 `conversation_kind`）；
+  检查 package 完整性时不读取 report JSON 或聊天正文。损坏或不完整 package
+  作为 issue 对用户可见，不因 metadata 不可读而脱离 package ownership 枚举。
+- listing、retention 与 delete 共用正式 package 候选边界：reports root 的直属真实目录，
+  且名称严格符合 ownership naming。合法名称的普通文件不是 Report Package，忽略并保留；
+  reparse / symlink / junction 仍进入安全拒绝流程，不跟随外部目标。
+- 正式 owned package 固定最多保留 50 份。可信 `generated_at` 按新到旧保留，
+  同时间按 `package_name` 升序；时间未知的 package 仍计数，超限时优先按名称升序淘汰。
+  仅缺少 HTML 而时间可读取的 package 仍按时间排序；不使用 mtime / ctime。
+  本次刚发布的 package 受保护。删除前验证 direct child、ownership naming、canonical root、
+  目录身份与整棵树的 symlink / junction / reparse 边界，不跟随外部路径。
+- 某个淘汰目标删除失败时只继续原定淘汰集合，不补删本应保留的新报告。
+  数量可暂时超过 50；本次分析仍成功，新报告仍保存，`AnalysisOutcome.retention_warning`
+  通过现有状态栏提示“报告已保存，但部分旧报告清理失败，本地报告数量可能超过 50 份。”
+- 默认 scratch 位于 `transient/`，Facade 持有最近一次成功分析的 scratch，替换或 shutdown
+  时清理；分析失败也清理。每个 Facade 首次创建默认 scratch 前执行一次 stale scratch
+  recovery，只处理严格命名的直属自有目录，拒绝 reparse，失败记日志并继续。
+  用户指定的 `output_directory` 不归该 scratch 清理流程所有；该 recovery 不处理旧 QCE
+  run 或 Direct DB generation，它们各有自己的生命周期边界。
 
 | | 内容 |
 | --- | --- |
@@ -405,8 +445,9 @@ Analysis 仍不得出现平台分支。
 - `list_sources()` → `tuple[SourceInfo, ...]`，含可用性标记
 - `list_sessions(source)` → `list[SessionInfo]`，统一 QQ 与微信差异
 - `get_connection_status(source)` → `QQConnectionStatus`，返回来源连接状态
-- `list_analysis_history()` → `tuple[AnalysisHistoryRecord, ...]`，返回元数据历史
-- `get_analysis_history(analysis_id)` → `AnalysisHistoryRecord | None`
+- `list_report_packages()` → `ReportPackageListing`，返回 metadata summaries 与 issues
+- `get_report_package_html_path(package_name)` → `Path`，安全定位 package 内的普通 HTML 文件
+- `clear_report_packages()`，删除完整自有 package，部分失败转换为公开错误
 - `analyze_session(source, session_id, config)` → `AnalysisOutcome`
 
 `ChatSource` 只有 `QQ` 与 `WECHAT` 两个现役来源；已无 `LOCAL_FILE`、
@@ -424,7 +465,7 @@ Analysis 仍不得出现平台分支。
    但这属于实现细节，不出现在返回值与 API 语义里。
 
 依赖注入构造（`qq_service`、`wechat_service`、`analysis_service`、
-`presentation_builder`、`report_history_manager`），测试可传入 stub。
+`presentation_builder`、`report_package_catalog`），测试可传入 stub 或临时 reports root。
 
 ### 4.8 GUI
 
@@ -437,8 +478,16 @@ Analysis 仍不得出现平台分支。
 
 GUI 层零业务逻辑。所有报告展示控件为只读
 （`setEditTriggers(NoEditTriggers)`），但保留选中与复制能力。
-分析成功后只在现有状态栏展示历史保存成功或失败；不直接读取历史文件，
-也不提供历史报告恢复页面。
+分析成功后在现有状态栏展示报告保存状态及非致命 retention warning。
+Local Data 通过 Facade 读取真实 package catalog，支持刷新、删除选中报告、删除全部报告、轻量搜索与 reopen。
+搜索仅对已加载的 summaries 做 `query.strip().casefold()` substring 匹配：会话名、来源、
+会话类型、生成日期、分析范围的显示文本；空查询显示全部，issues 始终可见。
+正常 retention 后最多 50 份；清理失败的超限状态不靠搜索静默隐藏。
+搜索不发起新的 Facade / Catalog 磁盘调用，refresh 后保留 query 并重新过滤。
+选中行的 `Qt.UserRole` 保存 `package_name`，打开按钮和双击共用 reopen 流程：
+Facade → Catalog 安全定位 `echo-report.html` → 注入的系统 opener。
+GUI 不拼接任意用户路径，metadata 不存绝对路径；定位或打开失败显示安全错误并保留记录。
+Reopen 使用系统默认浏览器查看已有 HTML，不重建 Dashboard 或重新分析。
 
 当前 GUI 结构由 `MainWindow` 承载 `HomePage`、`QQWorkspace`、
 `WeChatWorkspace`、处理页、`DashboardPage`、`LocalDataPage`。
@@ -596,7 +645,9 @@ GUI 只装配控件、转发事件、展示状态。
 | `application/wechat_connection_service.py` / `application/wechat_environment_config.py` | 保留的公共旧模块路径，仅重导出微信实现对象 |
 | `application/analysis_service.py` | 应用服务 |
 | `application/scope_filter.py` | 单次分析时间范围过滤 |
-| `application/report_history.py` | 分析历史元数据 JSONL 存储 |
+| `application/echo_report_export.py` | 四文件 Report Package staging 与正式发布 |
+| `application/report_package_metadata.py` | Report Package metadata 构建 |
+| `application/report_package_catalog.py` | metadata catalog、安全定位、完整 package 删除与固定 max-50 retention |
 | `application/dto.py` / `errors.py` / `task.py` / `export_config.py` | 应用契约 |
 | `application/facade.py` | Facade |
 | `runtime/` | 外部运行时契约（ChatRuntime）与捆绑运行时实现（BundledQQRuntime） |

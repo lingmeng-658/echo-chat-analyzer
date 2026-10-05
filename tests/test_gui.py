@@ -13,7 +13,7 @@ import os
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -119,8 +119,9 @@ class StubFacade:
         qq_runtime_status=None,
         qq_environment_config=None,
         message_range=None,
-        history=(),
-        clear_history_error=None,
+        reports=(),
+        report_issues=(),
+        clear_reports_error=None,
         share_image_path=None,
         share_image_error=None,
     ):
@@ -141,8 +142,9 @@ class StubFacade:
         self._qq_runtime_status = qq_runtime_status
         self._qq_environment_config = qq_environment_config
         self._message_range = message_range
-        self._history = list(history)
-        self._clear_history_error = clear_history_error
+        self._reports = list(reports)
+        self._report_issues = tuple(report_issues)
+        self._clear_reports_error = clear_reports_error
         self._share_image_path = share_image_path
         self._share_image_error = share_image_error
         self.list_sessions_calls: list[object] = []
@@ -168,9 +170,8 @@ class StubFacade:
         self.disconnect_wechat_calls: list[object] = []
         self.get_session_message_range_calls: list[tuple] = []
         self.analyze_session_calls: list[tuple] = []
-        self.list_analysis_history_calls: list[object] = []
-        self.clear_analysis_history_calls: list[object] = []
-        self.get_analysis_history_calls: list[object] = []
+        self.list_report_packages_calls: list[object] = []
+        self.clear_report_packages_calls: list[object] = []
         self.list_snapshots_calls: list[tuple] = []
         self.validate_snapshot_calls: list[object] = []
         self.remove_snapshot_calls: list[object] = []
@@ -178,26 +179,18 @@ class StubFacade:
         self.get_snapshot_storage_usage_calls: list[object] = []
         self.generate_share_image_calls: list[object] = []
 
-    def list_analysis_history(self):
-        self.list_analysis_history_calls.append(1)
-        return tuple(self._history)
+    def list_report_packages(self):
+        from qq_chat_analyzer.application.report_package_catalog import ReportPackageListing
+        self.list_report_packages_calls.append(1)
+        return ReportPackageListing(tuple(self._reports), self._report_issues)
 
-    def clear_analysis_history(self):
-        self.clear_analysis_history_calls.append(1)
-        if self._clear_history_error is not None:
-            raise self._clear_history_error
-        self._history = []
-
-    def get_analysis_history(self, analysis_id):
-        self.get_analysis_history_calls.append(analysis_id)
-        return next(
-            (
-                record
-                for record in self._history
-                if getattr(record, "analysis_id", None) == analysis_id
-            ),
-            None,
-        )
+    def clear_report_packages(self):
+        self.clear_report_packages_calls.append(1)
+        if self._clear_reports_error is not None:
+            self._reports = self._reports[:1]
+            raise self._clear_reports_error
+        self._reports = []
+        self._report_issues = ()
 
     def list_snapshots(self, source=None, session_id=None):
         self.list_snapshots_calls.append((source, session_id))
@@ -589,13 +582,11 @@ class _StubOutcome:
         self,
         view,
         *,
-        history_saved=None,
         data_acquired_at=None,
         report_path=None,
         report_directory=None,
     ):
         self.view = view
-        self.history_saved = history_saved
         self.data_acquired_at = data_acquired_at
         self.report_path = report_path
         self.report_directory = report_directory
@@ -2018,30 +2009,38 @@ def test_generate_share_executor_submission_failure_is_visible(
     assert window._generate_share_button.isEnabled()
 
 
-@pytest.mark.parametrize(
-    ("history_saved", "expected_status"),
-    [
-        (True, "分析已保存"),
-        (False, "分析完成，但历史记录保存失败。"),
-        (None, "分析完成"),
-    ],
-)
-def test_show_outcome_reports_history_save_status_after_success(
-    qt_app,
-    sources,
-    history_saved,
-    expected_status,
-) -> None:
-    from qq_chat_analyzer.gui.main_window import DASHBOARD_PAGE_INDEX
-
+@pytest.mark.parametrize("published", [True, False])
+def test_show_outcome_saved_status_uses_package_publication(qt_app, sources, tmp_path, published):
+    report = tmp_path / "echo-report.html"
+    report.write_text("fictional", encoding="utf-8")
     window = _main_window(qt_app, StubFacade(sources=sources))
+    window._report_opener = lambda path: True
+    window.show_outcome(_StubOutcome(_dashboard_view(), report_path=report,
+                                    report_directory=tmp_path if published else None))
+    assert window._status_label.text() == ("报告已保存" if published else "分析完成，报告暂未保存。")
 
-    window.show_outcome(
-        _StubOutcome(_dashboard_view(), history_saved=history_saved)
+
+@pytest.mark.parametrize("open_success", [True, False])
+def test_show_outcome_retention_warning_keeps_successful_report_openable(
+    qt_app, sources, tmp_path, open_success,
+):
+    report = tmp_path / "echo-report.html"
+    report.write_text("fictional", encoding="utf-8")
+    warning = "报告已保存，但部分旧报告清理失败，本地报告数量可能超过 50 份。"
+    outcome = SimpleNamespace(
+        report_path=report, report_directory=tmp_path, retention_warning=warning,
     )
-
-    assert window.stack.currentIndex() != DASHBOARD_PAGE_INDEX
-    assert window._status_label.text() == expected_status
+    window = _main_window(qt_app, StubFacade(sources=sources))
+    opened = []
+    window._report_opener = lambda path: opened.append(path) or open_success
+    window.show_outcome(outcome)
+    assert warning in window._status_label.text()
+    if open_success:
+        assert window._status_label.text() == warning
+    else:
+        assert "\n" in window._status_label.text()
+    assert opened == [report]
+    assert window._current_report_directory == tmp_path
 
 
 # -------------------------------------------------------------------- errors
@@ -4003,29 +4002,13 @@ def test_wechat_workspace_mismatch_message_exposes_no_internal_details(
 # GUI-6: Local Data page
 # ---------------------------------------------------------------
 
-def _gui_history_record(
-    analysis_id,
-    source="wechat",
-    session_name="测试会话",
-    analysis_scope="all",
-    scope_start=None,
-    scope_end=None,
-):
-    history_module = importlib.import_module(
-        "qq_chat_analyzer.application.report_history"
-    )
-    return history_module.AnalysisHistoryRecord(
-        analysis_id=analysis_id,
-        created_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
-        source=source,
-        session_name=session_name,
-        message_count=42,
-        analysis_scope=analysis_scope,
-        scope_start=scope_start,
-        scope_end=scope_end,
-    )
-
-
+def _gui_report_summary(package_name, source="wechat", session_name="测试会话",
+                        analysis_scope="all", scope_start=None, scope_end=None):
+    from qq_chat_analyzer.application.report_package_catalog import ReportPackageSummary
+    from qq_chat_analyzer.application.scope_filter import AnalysisScope, AnalysisScopeMode
+    return ReportPackageSummary(package_name, datetime(2026, 8, 1, tzinfo=timezone.utc),
+                                source, session_name, 42,
+                                AnalysisScope(AnalysisScopeMode(analysis_scope), scope_start, scope_end))
 
 
 def test_local_data_history_scope_uses_user_facing_labels(
@@ -4034,12 +4017,11 @@ def test_local_data_history_scope_uses_user_facing_labels(
 ) -> None:
     facade = StubFacade(
         sources=sources,
-        history=[
-            _gui_history_record("h-all", analysis_scope="all"),
-            _gui_history_record("h-six", analysis_scope="last-six-month"),
-            _gui_history_record("h-real-six", analysis_scope="last_six_months"),
-            _gui_history_record("h-year", analysis_scope="last_year"),
-            _gui_history_record(
+        reports=[
+            _gui_report_summary("h-all", analysis_scope="all"),
+            _gui_report_summary("h-real-six", analysis_scope="last_six_months"),
+            _gui_report_summary("h-year", analysis_scope="last_year"),
+            _gui_report_summary(
                 "h-custom",
                 analysis_scope="custom",
                 scope_start=datetime(2026, 1, 1).date(),
@@ -4052,23 +4034,165 @@ def test_local_data_history_scope_uses_user_facing_labels(
     _drain(window)
 
     table = window.local_data_page._history_table
-    assert table.rowCount() == 5
+    assert table.rowCount() == 4
     scopes = [table.item(row, 4).text() for row in range(table.rowCount())]
     assert scopes == [
         "全部消息",
-        "最近六个月",
         "最近六个月",
         "最近一年",
         "2026-01-01 至 2026-06-30",
     ]
 
 
-def test_local_data_clear_history_button_is_visible(qt_app, sources) -> None:
+def test_local_data_clear_reports_button_is_visible(qt_app, sources) -> None:
     window = _main_window(qt_app, StubFacade(sources=sources))
     window.show_local_data_page()
     _drain(window)
 
-    assert window.local_data_page._clear_history_button.isVisibleTo(window) is True
+    assert window.local_data_page._clear_reports_button.isVisibleTo(window) is True
+
+
+def _search_window(qt_app, sources):
+    first = _gui_report_summary(
+        "Echo_Report_20261004_120000", source="qq", session_name="虚构读书群 Straße",
+        analysis_scope="last_six_months",
+    )
+    second = _gui_report_summary(
+        "Echo_Report_20261004_120000_2", source="wechat", session_name="Fictional Alice",
+        analysis_scope="custom", scope_start=date(2026, 1, 1), scope_end=date(2026, 6, 30),
+    )
+    records = [dataclasses.replace(r, conversation_kind=kind)
+               for r, kind in ((first, "group"), (second, "private"))]
+    from qq_chat_analyzer.application.report_package_catalog import ReportPackageIssue
+    facade = StubFacade(sources=sources, reports=records)
+    facade._report_issues = (ReportPackageIssue("Echo_Report_20261003_120000", "metadata_unreadable"),)
+    window = _main_window(qt_app, facade)
+    window.show_local_data_page()
+    _drain(window)
+    return window, facade, records
+
+
+@pytest.mark.parametrize("query, indexes", [
+    ("  读书  ", [0]), ("fIcTiOnAl aLiCe", [1]), ("STRASSE", [0]),
+    ("qq", [0]), ("微信", [1]), ("群聊", [0]), ("私聊", [1]),
+    ("2026-08-01", [0, 1]), ("最近六个月", [0]), ("2026-01-01 至 2026-06-30", [1]),
+    ("42", []), ("Echo_Report_", []), ("no match", []), ("   ", [0, 1]),
+])
+def test_local_data_search_matches_only_summary_display_fields(qt_app, sources, query, indexes):
+    window, facade, records = _search_window(qt_app, sources)
+    page = window.local_data_page
+    page._search_input.setText(query)
+    table = page._history_table
+    assert [table.item(row, 0).data(Qt.ItemDataRole.UserRole) for row in range(table.rowCount())] == [
+        records[index].package_name for index in indexes
+    ]
+    assert page._issues_label.isVisibleTo(window)
+    assert page._issues_label.text() == "发现 1 个无法读取的 Echo 报告"
+    if not indexes:
+        assert page._history_empty_label.isVisibleTo(window)
+        assert page._history_empty_label.text() == "没有匹配的报告"
+
+
+def test_local_data_search_clear_restores_rows_without_storage_calls(qt_app, sources, monkeypatch):
+    window, facade, records = _search_window(qt_app, sources)
+    page = window.local_data_page
+    calls = list(facade.list_report_packages_calls)
+    def forbidden(*args, **kwargs):
+        pytest.fail("Typing a search must use only loaded summaries")
+    monkeypatch.setattr(facade, "list_report_packages", forbidden)
+    monkeypatch.setattr(facade, "get_report_package_html_path", forbidden, raising=False)
+    monkeypatch.setattr(facade, "clear_report_packages", forbidden)
+    monkeypatch.setattr(page, "_executor", forbidden)
+    monkeypatch.setattr(Path, "read_text", forbidden)
+    monkeypatch.setattr(Path, "open", forbidden)
+    monkeypatch.setattr(Path, "iterdir", forbidden)
+    for text in ("读书", "alice", "not found", ""):
+        page._search_input.setText(text)
+    assert page._history_table.rowCount() == 2
+    assert not page._history_empty_label.isVisibleTo(window)
+    assert facade.list_report_packages_calls == calls
+
+
+def test_local_data_search_refresh_and_delete_preserve_query(qt_app, sources):
+    window, facade, records = _search_window(qt_app, sources)
+    page = window.local_data_page
+    page._search_input.setText("alice")
+    facade._reports = [records[0]]
+    page.refresh()
+    assert page._search_input.text() == "alice"
+    assert page._history_table.rowCount() == 0
+    assert page._history_empty_label.text() == "没有匹配的报告"
+    facade._reports = records
+    page.refresh()
+    assert page._history_table.rowCount() == 1
+    page._confirm_clear_reports = lambda: True
+    page._clear_reports_button.click()
+    assert page._search_input.text() == "alice"
+    assert page._history_table.rowCount() == 0
+    assert page._history_empty_label.text() == "暂无报告"
+    assert page._history_empty_label.isVisibleTo(window)
+    assert not page._issues_label.isVisibleTo(window)
+    page._search_input.clear()
+    assert page._history_empty_label.text() == "暂无报告"
+
+
+def test_local_data_search_pending_refresh_uses_latest_query(qt_app, sources):
+    window, facade, records = _search_window(qt_app, sources)
+    page = window.local_data_page
+    executor = _DeferredExecutor()
+    page._executor = executor
+    page._search_input.setText("读书")
+    page.refresh()
+    page._search_input.setText("alice")
+    executor.succeed(executor.operation())
+    assert executor.submission_count == 1
+    assert page._search_input.text() == "alice"
+    assert page._history_table.rowCount() == 1
+    assert page._history_table.item(0, 0).data(Qt.ItemDataRole.UserRole) == records[1].package_name
+
+
+def test_local_data_search_partial_delete_keeps_filter_issues_and_error(qt_app, sources):
+    window, facade, records = _search_window(qt_app, sources)
+    page = window.local_data_page
+    facade._clear_reports_error = _facade_module().FacadeError("report_clear_failed", "部分报告删除失败。")
+    page._search_input.setText("alice")
+    page._confirm_clear_reports = lambda: True
+    page._clear_reports_button.click()
+    assert facade._reports == [records[0]]
+    assert page._search_input.text() == "alice"
+    assert page._history_table.rowCount() == 0
+    assert page._history_empty_label.text() == "没有匹配的报告"
+    assert page._issues_label.isVisibleTo(window)
+    assert page._status_label.text() == "部分报告删除失败。"
+    page._search_input.clear()
+    assert page._history_table.rowCount() == 1
+    assert page._status_label.text() == "部分报告删除失败。"
+
+
+@pytest.mark.parametrize("action", ["button", "double_click"])
+def test_local_data_search_reopen_keeps_identity_and_invalidates_selection(qt_app, sources, tmp_path, action):
+    window, facade, records = _search_window(qt_app, sources)
+    page = window.local_data_page
+    resolved, opened = [], []
+    html = tmp_path / "fictional.html"
+    facade.get_report_package_html_path = lambda name: resolved.append(name) or html
+    window._report_opener = lambda path: opened.append(path) or True
+    page._history_table.selectRow(0)
+    assert page._open_report_button.isEnabled()
+    page._search_input.setText("alice")
+    assert not page._open_report_button.isEnabled()
+    page._history_table.selectRow(0)
+    if action == "button":
+        page._open_report_button.click()
+    else:
+        page._history_table.cellDoubleClicked.emit(0, 2)
+    assert resolved == [records[1].package_name]
+    assert opened == [html]
+    page._search_input.setText("absent")
+    assert not page._open_report_button.isEnabled()
+    page.refresh()
+    assert page._search_input.text() == "absent"
+    assert not page._open_report_button.isEnabled()
 
 
 def test_local_data_page_exposes_history_without_retired_snapshot_controls(
@@ -4076,7 +4200,7 @@ def test_local_data_page_exposes_history_without_retired_snapshot_controls(
 ) -> None:
     from PySide6.QtWidgets import QGroupBox, QLabel, QPushButton, QTableWidget
 
-    facade = StubFacade(sources=sources, history=[_gui_history_record("h1")])
+    facade = StubFacade(sources=sources, reports=[_gui_report_summary("h1")])
     window = _main_window(qt_app, facade)
     window.show_local_data_page()
     _drain(window)
@@ -4084,21 +4208,263 @@ def test_local_data_page_exposes_history_without_retired_snapshot_controls(
 
     assert [box.title() for box in page.findChildren(QGroupBox)] == ["Echo 历史"]
     assert {button.text() for button in page.findChildren(QPushButton)} == {
-        "刷新", "删除全部历史", "返回首页",
+        "刷新", "打开报告", "删除选中报告", "删除全部报告", "返回首页",
     }
     assert all("快照" not in label.text() for label in page.findChildren(QLabel))
     assert len(page.findChildren(QTableWidget)) == 1
     assert page._history_table.rowCount() == 1
 
 
-def test_clear_history_confirmation_dialog_has_expected_copy(qt_app) -> None:
+def _reopen_window(qt_app, sources, tmp_path):
+    names = ["Echo_Report_20261004_120000", "Echo_Report_20261004_120000_2"]
+    facade = StubFacade(sources=sources, reports=[_gui_report_summary(name) for name in names])
+    resolved = tmp_path / "facade-resolved.html"
+    calls = []
+    def resolve(name):
+        calls.append(name)
+        return resolved
+    facade.get_report_package_html_path = resolve
+    window = _main_window(qt_app, facade)
+    opened = []
+    window._report_opener = lambda path: opened.append(path) or True
+    window.show_local_data_page()
+    return window, facade, names, calls, opened, resolved
+
+
+def test_local_data_selected_delete_confirmation_copy(qt_app):
+    page_module = importlib.import_module("qq_chat_analyzer.gui.local_data_page")
+    dialog = page_module._delete_report_confirmation_dialog()
+    assert "确定删除这份 Echo 报告吗？" in dialog.text()
+    assert {button.text() for button in dialog.buttons()} == {"删除", "取消"}
+
+
+def test_local_data_selected_delete_keeps_search_identity_and_reopen(qt_app, sources, tmp_path):
+    window, facade, records = _search_window(qt_app, sources)
+    page = window.local_data_page
+    deleted = []
+    def delete(name):
+        deleted.append(name)
+        facade._reports = [report for report in facade._reports if report.package_name != name]
+    facade.delete_report_package = delete
+    page._confirm_delete_report = lambda: True
+    assert not page._delete_report_button.isEnabled()
+    page._search_input.setText("alice")
+    page._history_table.selectRow(0)
+    assert page._delete_report_button.isEnabled()
+    # Display text is not identity.
+    page._history_table.item(0, 0).setText("misleading display text")
+    page._delete_report_button.click()
+    assert deleted == [records[1].package_name]
+    assert facade._reports == [records[0]]
+    assert page._search_input.text() == "alice"
+    assert page._history_table.rowCount() == 0
+    assert not page._delete_report_button.isEnabled()
+    assert page._issues_label.isVisibleTo(window)
+    assert page._status_label.text() == ""
+    page._search_input.clear()
+    page._history_table.selectRow(0)
+    resolved, opened = [], []
+    html = tmp_path / "fictional.html"
+    facade.get_report_package_html_path = lambda name: resolved.append(name) or html
+    window._report_opener = lambda path: opened.append(path) or True
+    page._history_table.cellDoubleClicked.emit(0, 2)
+    assert resolved == [records[0].package_name]
+    assert opened == [html]
+    page._search_input.setText("absent")
+    assert not page._delete_report_button.isEnabled()
+
+
+@pytest.mark.parametrize("confirm", [False, True])
+def test_local_data_selected_delete_cancel_or_failure_preserves_rows(qt_app, sources, tmp_path, confirm):
+    window, facade, names, _, _, _ = _reopen_window(qt_app, sources, tmp_path)
+    page = window.local_data_page
+    calls = []
+    def fail(name):
+        calls.append(name)
+        raise _facade_module().FacadeError("report_delete_failed", "这份 Echo 报告未能删除，请稍后重试。")
+    facade.delete_report_package = fail
+    page._confirm_delete_report = lambda: confirm
+    page._history_table.selectRow(1)
+    page._delete_report_button.click()
+    assert calls == ([names[1]] if confirm else [])
+    assert page._history_table.rowCount() == 2
+    if confirm:
+        assert page._status_label.text() == "这份 Echo 报告未能删除，请稍后重试。"
+        assert not page._delete_report_button.isEnabled()
+    page.refresh()
+    assert not page._delete_report_button.isEnabled()
+
+
+def test_local_data_reopen_identity_selection_and_refresh(qt_app, sources, tmp_path):
+    window, facade, names, calls, opened, resolved = _reopen_window(qt_app, sources, tmp_path)
+    page = window.local_data_page
+    assert not page._open_report_button.isEnabled()
+    for row, name in enumerate(names):
+        assert page._history_table.item(row, 0).data(Qt.ItemDataRole.UserRole) == name
+    page._history_table.selectRow(1)
+    assert page._open_report_button.isEnabled()
+    page._history_table.clearSelection()
+    assert not page._open_report_button.isEnabled()
+    page._history_table.selectRow(1)
+    # Same row count after refresh must not reuse an old selection for new records.
+    facade._reports = [_gui_report_summary(names[0]), _gui_report_summary("Echo_Report_20261004_130000")]
+    page.refresh()
+    assert not page._open_report_button.isEnabled()
+    facade._reports = []
+    page.refresh()
+    assert not page._open_report_button.isEnabled()
+    assert calls == opened == []
+
+
+def test_local_data_focus_frame_hidden_but_selection_remains_visible(qt_app, sources, tmp_path):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage, QPainter
+    from PySide6.QtWidgets import QStyle, QStyleFactory, QStyleOptionViewItem
+
+    window, _, _, _, _, _ = _reopen_window(qt_app, sources, tmp_path)
+    table = window.local_data_page._history_table
+    # Use a deterministic native style and compare states, not a golden screenshot.
+    style = QStyleFactory.create("Fusion")
+    style.setParent(table)
+    table.setStyle(style)
+    table.ensurePolished()
+
+    def draw(*, selected, focused):
+        option = QStyleOptionViewItem()
+        option.initFrom(table)
+        option.rect = QRect(0, 0, 160, 32)
+        option.state = QStyle.StateFlag.State_Enabled | QStyle.StateFlag.State_Active
+        if selected:
+            option.state |= QStyle.StateFlag.State_Selected
+        if focused:
+            option.state |= QStyle.StateFlag.State_HasFocus
+        option.showDecorationSelected = True
+        image = QImage(160, 32, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(Qt.GlobalColor.white)
+        painter = QPainter(image)
+        table.style().drawControl(QStyle.ControlElement.CE_ItemViewItem, option, painter, table)
+        painter.end()
+        return bytes(image.constBits())
+
+    selected = draw(selected=True, focused=False)
+    assert draw(selected=True, focused=True) == selected
+    assert selected != draw(selected=False, focused=False)
+    assert table.focusPolicy() != Qt.FocusPolicy.NoFocus
+
+
+@pytest.mark.parametrize("selected", [False, True])
+def test_local_data_hover_does_not_change_cell_background(qt_app, sources, tmp_path, selected):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage, QPainter
+    from PySide6.QtWidgets import QStyle, QStyleFactory, QStyleOptionViewItem
+    from qq_chat_analyzer.gui.theme import BASE_QSS
+
+    window, _, _, _, _, _ = _reopen_window(qt_app, sources, tmp_path)
+    # Reproduce the production theme's item:hover rule without changing app state.
+    window.setStyleSheet(BASE_QSS)
+    table = window.local_data_page._history_table
+    style = QStyleFactory.create("Fusion")
+    style.setParent(table)
+    table.setStyle(style)
+    table.ensurePolished()
+
+    def draw(*, selected, hovered):
+        option = QStyleOptionViewItem()
+        option.initFrom(table)
+        option.rect = QRect(0, 0, 160, 32)
+        option.state = QStyle.StateFlag.State_Enabled | QStyle.StateFlag.State_Active
+        if selected:
+            option.state |= QStyle.StateFlag.State_Selected
+        if hovered:
+            option.state |= QStyle.StateFlag.State_MouseOver
+        option.showDecorationSelected = True
+        image = QImage(160, 32, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(table.palette().base().color())
+        painter = QPainter(image)
+        table.style().drawControl(QStyle.ControlElement.CE_ItemViewItem, option, painter, table)
+        painter.end()
+        return bytes(image.constBits())
+
+    normal = draw(selected=selected, hovered=False)
+    assert draw(selected=selected, hovered=True) == normal
+    assert draw(selected=True, hovered=False) != draw(selected=False, hovered=False)
+
+
+def test_local_data_mouse_selection_keyboard_navigation_and_reopen(qt_app, sources, tmp_path):
+    window, facade, names, calls, opened, resolved = _reopen_window(qt_app, sources, tmp_path)
+    window.show()
+    _drain(window)
+    page = window.local_data_page
+    table = page._history_table
+    QTest.mouseClick(table.viewport(), Qt.MouseButton.LeftButton,
+                     pos=table.visualItemRect(table.item(0, 2)).center())
+    assert table.hasFocus()
+    assert page._selected_package_name() == names[0]
+    assert len(table.selectedItems()) == table.columnCount()
+    QTest.keyClick(table, Qt.Key.Key_Down)
+    assert page._selected_package_name() == names[1]
+    assert page._open_report_button.isEnabled()
+    page._open_report_button.click()
+    assert calls == [names[1]] and opened == [resolved]
+    QTest.keyClick(table, Qt.Key.Key_Up)
+    assert page._selected_package_name() == names[0]
+
+
+@pytest.mark.parametrize("action", ["button", "double_click"])
+def test_local_data_reopen_resolves_identity_and_uses_existing_opener(qt_app, sources, tmp_path, action):
+    window, facade, names, calls, opened, resolved = _reopen_window(qt_app, sources, tmp_path)
+    page = window.local_data_page
+    page._history_table.selectRow(1)
+    if action == "button":
+        page._open_report_button.click()
+    else:
+        page._history_table.cellDoubleClicked.emit(1, 2)
+    assert calls == [names[1]]
+    assert opened == [resolved]
+    assert page._status_label.text() == ""
+    assert page._history_table.rowCount() == 2
+
+
+def test_local_data_reopen_resolve_failure_preserves_rows(qt_app, sources, tmp_path):
+    window, facade, names, calls, opened, resolved = _reopen_window(qt_app, sources, tmp_path)
+    def fail(name):
+        raise _facade_module().FacadeError("report_open_failed", "这份 Echo 报告已损坏或缺少报告文件。")
+    facade.get_report_package_html_path = fail
+    page = window.local_data_page
+    page._history_table.selectRow(0)
+    page._open_report_button.click()
+    assert page._status_label.text() == "这份 Echo 报告已损坏或缺少报告文件。"
+    assert page._history_table.rowCount() == 2
+    assert opened == []
+    assert page._open_report_button.isEnabled()
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_local_data_reopen_opener_failure_is_visible(qt_app, sources, tmp_path, raises):
+    window, facade, names, calls, opened, resolved = _reopen_window(qt_app, sources, tmp_path)
+    def fail(path):
+        if raises:
+            raise OSError("internal-private-path")
+        return False
+    window._report_opener = fail
+    page = window.local_data_page
+    page._history_table.selectRow(0)
+    page._open_report_button.click()
+    assert calls == [names[0]]
+    assert page._status_label.text() == "无法打开 Echo 报告，请检查系统默认浏览器后重试。"
+    assert page._history_table.rowCount() == 2
+
+
+def test_clear_reports_confirmation_dialog_has_expected_copy(qt_app) -> None:
     from PySide6.QtWidgets import QMessageBox
 
     page_module = importlib.import_module("qq_chat_analyzer.gui.local_data_page")
-    dialog = page_module._clear_history_confirmation_dialog()
+    dialog = page_module._clear_reports_confirmation_dialog()
 
     assert dialog.windowTitle() == "确认删除"
-    assert "确定删除全部 Echo 历史记录吗？" in dialog.text()
+    assert "全部历史报告及其报告文件" in dialog.text()
+    assert "QQ / 微信原始聊天数据" in dialog.text()
+    assert "用户另存到其他位置" in dialog.text()
     assert "删除后无法恢复。" in dialog.text()
     buttons = {button.text(): button for button in dialog.buttons()}
     assert "删除" in buttons
@@ -4111,17 +4477,17 @@ def test_local_data_clear_history_cancel_does_not_delete(
 ) -> None:
     facade = StubFacade(
         sources=sources,
-        history=[_gui_history_record("h1")],
+        reports=[_gui_report_summary("h1")],
     )
     window = _main_window(qt_app, facade)
-    window.local_data_page._confirm_clear_history = lambda: False
+    window.local_data_page._confirm_clear_reports = lambda: False
     window.show_local_data_page()
     _drain(window)
 
-    window.local_data_page._clear_history_button.click()
+    window.local_data_page._clear_reports_button.click()
     _drain(window)
 
-    assert facade.clear_analysis_history_calls == []
+    assert facade.clear_report_packages_calls == []
     assert window.local_data_page._history_table.rowCount() == 1
 
 
@@ -4131,46 +4497,48 @@ def test_local_data_clear_history_confirm_empties_list(
 ) -> None:
     facade = StubFacade(
         sources=sources,
-        history=[_gui_history_record("h1")],
+        reports=[_gui_report_summary("h1")],
     )
     window = _main_window(qt_app, facade)
-    window.local_data_page._confirm_clear_history = lambda: True
+    window.local_data_page._confirm_clear_reports = lambda: True
     window.show_local_data_page()
     _drain(window)
 
-    window.local_data_page._clear_history_button.click()
+    window.local_data_page._clear_reports_button.click()
     _drain(window)
 
-    assert facade.clear_analysis_history_calls == [1]
+    assert facade.clear_report_packages_calls == [1]
     assert window.local_data_page._history_table.rowCount() == 0
     assert window.local_data_page._history_empty_label.isVisibleTo(window) is True
 
 
-def test_local_data_clear_history_failure_shows_public_message(
+def test_local_data_clear_reports_failure_refreshes_remaining_content(
     qt_app,
     sources,
 ) -> None:
     module = _facade_module()
     facade = StubFacade(
         sources=sources,
-        history=[_gui_history_record("h1")],
-        clear_history_error=module.FacadeError(
-            code="history_clear_failed",
-            public_message="无法清空 Echo 历史记录，请稍后重试。",
+        reports=[_gui_report_summary("h1"), _gui_report_summary("h2")],
+        clear_reports_error=module.FacadeError(
+            code="report_clear_failed",
+            public_message="部分 Echo 报告未能删除，请稍后重试。",
         ),
     )
     window = _main_window(qt_app, facade)
-    window.local_data_page._confirm_clear_history = lambda: True
+    window.local_data_page._confirm_clear_reports = lambda: True
     window.show_local_data_page()
     _drain(window)
 
-    window.local_data_page._clear_history_button.click()
+    window.local_data_page._clear_reports_button.click()
     _drain(window)
 
     assert window.local_data_page._status_label.text() == (
-        "无法清空 Echo 历史记录，请稍后重试。"
+        "部分 Echo 报告未能删除，请稍后重试。"
     )
     assert window.local_data_page._history_table.rowCount() == 1
+
+    assert len(facade.list_report_packages_calls) == 2
 
 
 def test_qq_connect_error_snapshot_keeps_workspace_usable(
@@ -4265,19 +4633,14 @@ def test_main_window_owns_its_status_label(qt_app, sources) -> None:
     assert window._status_label.text() == "分析已取消。"
 
 
-def test_local_data_page_shows_local_file_label_for_legacy_history(
-    qt_app,
-    sources,
-) -> None:
-    facade = StubFacade(
-        sources=sources,
-        history=[_gui_history_record("legacy-local-1", source="local_file")],
-    )
+def test_local_data_page_exposes_unreadable_package_count(qt_app, sources):
+    from qq_chat_analyzer.application.report_package_catalog import ReportPackageIssue
+    facade = StubFacade(sources=sources, report_issues=[ReportPackageIssue("Echo_Report_20261004_120000", "metadata_unreadable")])
     window = _main_window(qt_app, facade)
     window.show_local_data_page()
     _drain(window)
-
-    assert window.local_data_page._history_table.item(0, 1).text() == "本地文件"
+    assert window.local_data_page._issues_label.text() == "发现 1 个无法读取的 Echo 报告"
+    assert window.local_data_page._issues_label.isVisibleTo(window)
 
 
 # ---------------------------------------------------------------------------

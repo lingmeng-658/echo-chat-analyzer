@@ -51,10 +51,11 @@ from .import_outcome import ImportOutcome
 from .import_request import ImportRequest
 from .import_result import ImportResult
 from .import_service import ImportService
-from .report_history import (
-    AnalysisHistoryRecord,
-    ReportHistoryManager,
-    ReportHistoryWriteError,
+from .report_package_catalog import (
+    ReportPackageCatalog,
+    ReportPackageSummary,
+    ReportPackageIssue,
+    ReportPackageListing,
 )
 from .qq.qq_connection_service import (
     QQConnectionService,
@@ -107,11 +108,14 @@ from .task import AnalysisTask
 from .scope_filter import AnalysisScope, AnalysisScopeMode
 
 __all__ = [
+    "ReportPackageCatalog",
+    "ReportPackageSummary",
+    "ReportPackageIssue",
+    "ReportPackageListing",
     "ActivityReport",
     "AnalysisApplicationService",
     "AnalysisConfig",
     "AnalysisDiagnosticCounts",
-    "AnalysisHistoryRecord",
     "AnalysisOutcome",
     "AnalysisReports",
     "AnalysisRequestDTO",
@@ -158,8 +162,6 @@ __all__ = [
     "QQAuthBridge",
     "QQConnectionService",
     "QQConnectionStatus",
-    "ReportHistoryManager",
-    "ReportHistoryWriteError",
     "SessionInfo",
     "SourceInfo",
     "SourceUnavailable",

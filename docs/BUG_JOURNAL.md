@@ -727,3 +727,91 @@ Facade 按顺序清理 Direct DB 与 Echo 自有进程树，超时后有强制�
 - `tests/test_gui.py::test_main_window_close_owns_shutdown_without_waiting`
 
 状态：CLOSED / 真人验收通过；本轮尚未提交。
+
+---
+
+## Journal 011 — BUG-03 Report Package 生命周期与测试用户目录隔离
+
+### 1. 现象
+
+Local Data 的历史记录与实际报告文件生命周期缺少统一的持久对象边界。
+曾观察到点击删除后 GUI 列表为空，但真实 `reports/` 中 package 仍在；该观察后来未复现，
+根因未确定，不能写成已证实的 deletion 缺陷原因。
+
+独立确认的问题是自动测试污染真实 `%LOCALAPPDATA%\LocalChatAnalyzer\reports`：
+一次相关 / Fast 测试前后 production candidates 从 120 增至 130，新增 10 个测试 package。
+
+### 2. 为什么难查
+
+GUI 列表、独立元数据历史、正式 package、默认 scratch 和来源 acquisition 临时资源
+原本是不同观察面；仅看到列表变化不足以证明磁盘 package 被删除。
+测试又能走默认用户数据路径，使真人验收环境混入自动生成的报告。
+
+### 3. 当时错误 / 竞争假设
+
+曾考虑 composition 注入了另一个 root、旧 compatibility API、缓存列表清空或安全校验
+拒绝删除等可能性。它们没有被确认为上述未复现观察的根因；确认测试污染也不等于证明
+“GUI 空但磁盘未空”由测试污染导致。
+
+### 4. 最终根因
+
+已确认并修复的边界缺口是：独立 JSONL history 只表示元数据记录，不能作为报告文件
+是否存在或已删除的事实源；测试隔离只覆盖部分 helper / monkeypatch 调用，未覆盖所有
+使用默认 `user_data_dir()` 的 packaging / composition 入口，因而可写入真实用户目录。
+未复现的删除观察仍保留“原因未知”，不据此补写路径错误或 stub 根因。
+
+### 5. 原代码的隐含假设
+
+元数据历史可以代表持久分析结果；给部分测试 helper 传 `tmp_path` 或 patch packager
+就足以隔离整个测试集的默认路径。两者都缺少覆盖真实 package / 默认 composition 的边界保证。
+
+### 6. 为什么开发机或普通场景没有暴露
+
+部分测试已有局部隔离，不能证明其余默认路径安全；更早未暴露的具体条件证据不足。
+不把某次未复现观察归因于开发机环境、用户操作或未经验证的配置。
+
+### 7. 哪个诊断 / 实验真正钉死根因
+
+不读取真实报告正文，记录 production candidate count，确认测试运行新增了 10 个 package。
+随后用 fake 用户目录与禁止未隔离访问的 sentinel regression 验证默认 packager、
+`build_facade()`、环境变量缺失时的 home fallback 都落入测试临时目录。
+隔离修复后的 focused / Fast / Full 前后 count 与真实用户目录属性快照保持不变。
+后续真人验收通过批量删除及真实分析 → 保存正式 package → 删除链路。
+
+### 8. 最终修复
+
+- Report Package 成为唯一持久分析对象；四文件 staging 完整写入后 rename 发布，
+  `metadata.json` 驱动 Catalog，损坏 package 作为 issue 可见。JSONL history 与 manager 已退休。
+- 默认 scratch 移至 `transient/`；首次创建默认 scratch 前回收严格命名的 stale 自有目录，
+  正常替换、失败与 shutdown 清理；用户自定义输出、未知目录及外部 reparse target 不归其所有。
+- Local Data 删除完整 owned package；reopen 经 Facade / Catalog 安全定位 HTML，
+  搜索只过滤内存 summaries，不读取报告正文，不隐藏 issues。
+- 新 package 发布成功后执行固定 max-50 retention，publisher 与 Catalog 共用 root；
+  时间未知 package 计数且优先淘汰，删除失败只继续原定淘汰集合，新报告仍成功并显示 warning。
+- `tests/conftest.py` 的 autouse fixture 为每个测试设置 fake `LOCALAPPDATA`、`APPDATA`、
+  home / XDG 目录并 patch `Path.home()`；测试 helper 显式注入临时 Catalog root，
+  sentinel regression 覆盖默认 composition 和 packaging，禁止再碰真实用户数据。
+
+### 9. 可推广的工程经验
+
+持久对象的列表、打开、删除与 retention 应共享磁盘 ownership 边界；
+GUI 视觉清空不能替代 filesystem 验证。测试隔离必须覆盖默认路径、composition 和 fallback，
+不能只依赖单个 helper；环境污染与产品缺陷需要分别取证。
+
+### 10. 可以反向审计仓库的规则
+
+检查所有默认用户数据写入入口是否被 suite fixture 隔离；检查发布成功后才执行旧资产清理、
+目录 ownership / reparse 校验是否复用，以及公开成功状态是否如实附带清理失败 warning。
+对未复现现象保留事实与未知，不把竞争假设写成最终根因。
+
+### 11. 对应 regression test
+
+- `tests/test_gui_report_package_deletion.py::test_desktop_delete_all_changes_disk_and_refreshes_remaining_packages`
+- `tests/test_report_package_catalog.py`：metadata listing、损坏 package、ownership / reparse、reopen 与 retention。
+- `tests/test_facade.py::test_recovery_runs_once_before_first_default_scratch`
+- `tests/test_facade.py::test_retention_after_successful_publication_uses_injected_root_and_preserves_new`
+- `tests/test_facade.py::test_retention_publication_failure_never_calls_cleanup`
+- `tests/test_test_user_data_isolation.py::test_user_data_isolation`
+- `tests/test_gui.py`：Local Data 搜索、reopen、selection / keyboard 与 focus / hover 样式回归。
+
+状态：CLOSED / 真人验收通过；本轮尚未提交。

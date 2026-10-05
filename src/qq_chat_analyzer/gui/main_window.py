@@ -104,7 +104,10 @@ class MainWindow(QMainWindow):
         processing_layout.addWidget(self._cancel_analysis_button)
         processing_layout.addStretch(1)
         self.dashboard_page = DashboardPage()
-        self.local_data_page = LocalDataPage(facade, executor=executor)
+        self.local_data_page = LocalDataPage(
+            facade, executor=executor,
+            report_opener=lambda path: self._report_opener(path),
+        )
 
         # Header row
         header_layout = QHBoxLayout()
@@ -296,17 +299,13 @@ class MainWindow(QMainWindow):
             getattr(outcome, "report_path", None),
             getattr(outcome, "report_directory", None),
         )
-        history_saved = getattr(outcome, "history_saved", None)
-        if history_saved is True:
-            status_message = "\u5206\u6790\u5df2\u4fdd\u5b58"
-        elif history_saved is False:
-            status_message = (
-                "\u5206\u6790\u5b8c\u6210\uff0c\u4f46\u5386\u53f2"
-                "\u8bb0\u5f55\u4fdd\u5b58\u5931\u8d25\u3002"
-            )
+        retention_warning = getattr(outcome, "retention_warning", "")
+        if getattr(outcome, "report_directory", None) is not None:
+            self._status_label.setText(retention_warning or "报告已保存")
+        elif getattr(outcome, "report_path", None) is not None:
+            self._status_label.setText("分析完成，报告暂未保存。")
         else:
-            status_message = "\u5206\u6790\u5b8c\u6210"
-        self._status_label.setText(status_message)
+            self._status_label.setText("分析完成")
         outcome_key = (
             id(outcome),
             str(getattr(outcome, "report_path", "")),
@@ -318,6 +317,8 @@ class MainWindow(QMainWindow):
             _LOGGER.info("[gui] show_outcome opening echo report once")
             self._auto_opened_outcome_key = outcome_key
             self.open_echo_report()
+        if retention_warning and self._status_label.text() != retention_warning:
+            self._status_label.setText(f"{retention_warning}\n{self._status_label.text()}")
         self._return_to_workspace_after_success()
 
     def _return_to_workspace_after_success(self) -> None:

@@ -240,17 +240,17 @@ def test_composition_root_shares_factory_with_setup(
     assert setup._provider_factory is connection._shared_factory
 
 
-def test_composition_root_injects_lazy_report_history_manager(
+def test_composition_root_injects_lazy_report_package_catalog_manager(
     monkeypatch,
 ) -> None:
-    from qq_chat_analyzer.application import report_history
+    from qq_chat_analyzer.application import report_package_catalog
     from qq_chat_analyzer.gui import app as gui_app
 
     def fail_if_storage_is_resolved_during_startup():
         raise AssertionError("history storage resolved during startup")
 
     monkeypatch.setattr(
-        report_history,
+        report_package_catalog,
         "user_data_dir",
         fail_if_storage_is_resolved_during_startup,
     )
@@ -258,8 +258,8 @@ def test_composition_root_injects_lazy_report_history_manager(
     facade = gui_app.build_facade()
 
     assert isinstance(
-        facade._report_history_manager,
-        report_history.ReportHistoryManager,
+        facade._report_package_catalog,
+        report_package_catalog.ReportPackageCatalog,
     )
 
 

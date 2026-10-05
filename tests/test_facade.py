@@ -448,8 +448,11 @@ def _result(message_count: int = 2):
 
 def _result_with_echo_artifact(message_count: int = 2):
     dto = _dto()
+    result = _result(message_count)
+    presentation = importlib.import_module("qq_chat_analyzer.presentation")
     return dataclasses.replace(
-        _result(message_count),
+        result,
+        echo_report_view=presentation.build_echo_report_view(result.reports),
         artifacts=(
             dto.ArtifactDTO(
                 kind="echo_report_json",
@@ -461,6 +464,111 @@ def _result_with_echo_artifact(message_count: int = 2):
             ),
         ),
     )
+
+
+@pytest.mark.parametrize("source", ["qq", "wechat"])
+def test_package_metadata_and_outcome_share_one_generated_time(
+    tmp_path, monkeypatch, source,
+):
+    module = _facade_module()
+    fixed = datetime(2026, 10, 4, 1, tzinfo=timezone.utc)
+    calls = []
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            calls.append(tz)
+            return fixed
+
+    monkeypatch.setattr(module, "datetime", _Clock)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local-app-data"))
+    presentation = importlib.import_module("qq_chat_analyzer.presentation")
+    result = dataclasses.replace(
+        _result_with_echo_artifact(999),
+        echo_report_view=presentation.EchoReportView(
+            title="Echo", conversation_name="Fictional Report Name",
+            conversation_kind="private", total_message_count=120,
+            active_days=8, participant_count=2,
+        ),
+    )
+
+    class _WritingService(_StubAnalysisService):
+        def execute(self, request):
+            self.requests.append(request)
+            for name in ("echo-report.html", "echo-report.json"):
+                (request.output_directory / name).write_text("fictional", encoding="utf-8")
+            return result
+
+    export = _export_file(tmp_path)
+    facade = _facade(
+        tmp_path=tmp_path, analysis_service=_WritingService(),
+        qq_service=_StubQQService(export_path=export),
+        wechat_service=_StubWeChatService(export_path=export),
+    )
+    outcome = facade.analyze_session(
+        source, "fictional-session", module.AnalysisConfig(
+            scope_mode=module.AnalysisScopeMode.CUSTOM,
+            start_time="2024-01-01", end_time="2024-01-31",
+        ),
+    )
+    assert outcome.report_directory is not None
+    metadata = json.loads((outcome.report_directory / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["source"] == source
+    assert metadata["conversation_name"] == "Fictional Report Name"
+    assert metadata["conversation_kind"] == "private"
+    assert metadata["message_count"] == 120
+    assert metadata["active_days"] == 8
+    assert metadata["participant_count"] == 2
+    assert metadata["analysis_scope"] == {
+        "mode": "custom", "start_date": "2024-01-01", "end_date": "2024-01-31",
+    }
+    assert metadata["generated_at"] == fixed.isoformat()
+    assert not list(tmp_path.rglob("analysis_history.jsonl"))
+    assert not hasattr(outcome, "history_saved")
+    assert not hasattr(outcome, "history_record_id")
+    assert outcome.report_generated_at is fixed
+    assert calls == [timezone.utc]
+
+
+@pytest.mark.parametrize("failure", ["build", "write"])
+def test_metadata_failure_keeps_retained_scratch_and_creates_no_package(
+    tmp_path, monkeypatch, failure,
+):
+    module = _facade_module()
+
+    class _WritingService(_StubAnalysisService):
+        def execute(self, request):
+            self.requests.append(request)
+            for name in ("echo-report.html", "echo-report.json"):
+                (request.output_directory / name).write_text("fictional", encoding="utf-8")
+            return _result_with_echo_artifact()
+
+    def fail_build(**kwargs):
+        raise ValueError("fictional metadata build failure")
+
+    write = Path.write_text
+
+    def fail_write(path, *args, **kwargs):
+        if path.name == "metadata.json":
+            raise OSError("fictional metadata write failure")
+        return write(path, *args, **kwargs)
+
+    if failure == "build":
+        monkeypatch.setattr(module, "build_report_metadata", fail_build, raising=False)
+    else:
+        monkeypatch.setattr(Path, "write_text", fail_write)
+    facade, _ = _qq_session_facade(
+        tmp_path, analysis_service=_WritingService(), retain_output=True,
+    )
+    outcome = facade.analyze_session(module.ChatSource.QQ, _FICTIONAL_SESSION_ID)
+    assert outcome.report_directory is None
+    assert outcome.artifact_directory is not None
+    assert outcome.report_path.is_file()
+    assert list((tmp_path / "facade-reports").glob("*")) == []
+    scratch = outcome.artifact_directory
+    assert scratch.parent == tmp_path / "facade-user-data" / "transient"
+    facade.shutdown()
+    assert not scratch.exists()
 
 
 class _StubAnalysisService:
@@ -532,28 +640,21 @@ def _facade(
         "analysis_service": _StubAnalysisService(result=_result()),
     }
     defaults.update(overrides)
+    if tmp_path is not None:
+        defaults.setdefault("report_package_catalog", module.ReportPackageCatalog(tmp_path / "facade-reports"))
     facade = module.ChatAnalyzerFacade(**defaults)
     if tmp_path is None:
         return facade
 
     output_directory = tmp_path / "facade-output"
-    reports_root = tmp_path / "facade-reports"
 
     def _with_test_output(operation):
-        package_echo_report = module.package_echo_report
         user_data_dir = module.user_data_dir
-
-        def _package_echo_report(output_directory, *args, **kwargs):
-            kwargs.setdefault("reports_root", reports_root)
-            return package_echo_report(output_directory, *args, **kwargs)
-
-        module.package_echo_report = _package_echo_report
         if retain_output:
             module.user_data_dir = lambda: tmp_path / "facade-user-data"
         try:
             return operation()
         finally:
-            module.package_echo_report = package_echo_report
             module.user_data_dir = user_data_dir
 
     def _test_config(config):
@@ -1369,11 +1470,14 @@ def test_default_output_keeps_generated_echo_report_after_return(
     assert outcome.artifact_directory != outcome.report_directory
     assert outcome.artifact_directory is not None
     assert outcome.artifact_directory.is_relative_to(
-        local_app_data / "LocalChatAnalyzer" / "reports"
+        local_app_data / "LocalChatAnalyzer" / "transient"
     )
     assert outcome.report_directory.is_relative_to(
         local_app_data / "LocalChatAnalyzer" / "reports"
     )
+    listing = facade.list_report_packages()
+    assert [report.package_name for report in listing.reports] == [outcome.report_directory.name]
+    assert not listing.issues
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows ACL regression")
@@ -1464,6 +1568,7 @@ def test_second_analysis_updates_to_the_latest_generated_report(
     assert first.report_path is not None
     assert first.report_path.exists()
     assert first.artifact_directory is not None
+    assert first.artifact_directory.parent.name == "transient"
     assert not first.artifact_directory.exists()
     assert second.report_path.read_text(encoding="utf-8") == (
         "<html>report 2</html>"
@@ -1498,12 +1603,150 @@ def test_shutdown_cleans_scratch_but_keeps_packaged_report(
     assert outcome.artifact_directory is not None
     scratch_directory = outcome.artifact_directory
     packaged_directory = outcome.report_directory
+    assert scratch_directory.parent.name == "transient"
 
     facade.shutdown()
 
     assert not scratch_directory.exists()
     assert packaged_directory.exists()
     assert outcome.report_path.exists()
+
+
+def test_default_scratch_is_transient_and_custom_output_is_unowned(tmp_path, monkeypatch):
+    module = _facade_module()
+    monkeypatch.setattr(module, "user_data_dir", lambda: tmp_path)
+    directory, owner = module._create_output_directory(module.AnalysisConfig())
+    try:
+        assert directory.parent == tmp_path / "transient"
+        assert len(directory.name.removeprefix("chat-analyzer-output-")) == 8
+    finally:
+        owner.cleanup()
+    custom = tmp_path / "custom-output"
+    directory, owner = module._create_output_directory(module.AnalysisConfig(output_directory=custom))
+    assert directory == custom
+    assert owner is None
+    module.ChatAnalyzerFacade().shutdown()
+    assert custom.is_dir()
+
+
+def test_recovery_deletes_only_strict_owned_direct_children_and_continues(tmp_path, monkeypatch, caplog):
+    module = _facade_module()
+    root = tmp_path / "transient"
+    root.mkdir()
+    stale = root / "chat-analyzer-output-abcdef12"
+    stale.mkdir()
+    failed = root / "chat-analyzer-output-12345678"
+    failed.mkdir()
+    preserved = [root / "chat-analyzer-output-not-owned", root / "qq-acquisition",
+                 root / "wechat-export", tmp_path / "custom-output",
+                 tmp_path / "reports" / "Echo_Report_20261004_120000"]
+    for directory in preserved:
+        directory.mkdir(parents=True)
+    nested = preserved[1] / "chat-analyzer-output-aaaaaaaa"
+    nested.mkdir()
+    original = module.shutil.rmtree
+    def failing(path, *args, **kwargs):
+        if Path(path) == failed:
+            raise PermissionError("fictional cleanup failure")
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(module.shutil, "rmtree", failing)
+    monkeypatch.setattr(module, "user_data_dir", lambda: tmp_path)
+    facade = module.ChatAnalyzerFacade(analysis_service=_StubAnalysisService(result=_result()))
+    facade._analyze_path(Path("fictional.json"), module.AnalysisConfig(),
+                         source=module.ChatSource.QQ, session=None, scope=module.AnalysisScope.all())
+    assert not stale.exists()
+    assert failed.exists()
+    assert all(directory.is_dir() for directory in preserved)
+    assert nested.is_dir()
+    assert "fictional cleanup failure" in caplog.text
+
+
+@pytest.mark.parametrize("failure", ["analysis", "presentation", "descriptor", "outcome"])
+def test_exception_before_scratch_transfer_leaves_no_orphan(tmp_path, monkeypatch, failure):
+    module = _facade_module()
+    monkeypatch.setattr(module, "user_data_dir", lambda: tmp_path)
+    facade = module.ChatAnalyzerFacade(analysis_service=_StubAnalysisService(result=_result()))
+    def fail(*args, **kwargs):
+        raise RuntimeError("fictional generation failure")
+    if failure == "analysis":
+        monkeypatch.setattr(facade._analysis_service, "execute", fail)
+    elif failure == "presentation":
+        monkeypatch.setattr(facade, "_build_view", fail)
+    elif failure == "outcome":
+        monkeypatch.setattr(module, "AnalysisOutcome", fail)
+    else:
+        monkeypatch.setattr(module, "_generated_echo_report_path", fail)
+    with pytest.raises(Exception):
+        facade._analyze_path(Path("fictional.json"), module.AnalysisConfig(),
+                             source=module.ChatSource.QQ, session=None, scope=module.AnalysisScope.all())
+    assert not list(tmp_path.rglob("chat-analyzer-output-*"))
+
+
+def test_recovery_runs_once_before_first_default_scratch(tmp_path, monkeypatch):
+    module = _facade_module()
+    monkeypatch.setattr(module, "user_data_dir", lambda: tmp_path)
+    calls = []
+    original = module._cleanup_stale_analysis_outputs
+    def recover(root):
+        calls.append(root)
+        return original(root)
+    monkeypatch.setattr(module, "_cleanup_stale_analysis_outputs", recover)
+    facade = module.ChatAnalyzerFacade(analysis_service=_StubAnalysisService(result=_result()))
+    custom = tmp_path / "custom"
+    for config in (module.AnalysisConfig(output_directory=custom),
+                   module.AnalysisConfig(), module.AnalysisConfig()):
+        facade._analyze_path(Path("fictional.json"), config, source=module.ChatSource.QQ,
+                             session=None, scope=module.AnalysisScope.all())
+    assert calls == [tmp_path / "transient"]
+    facade.shutdown()
+    assert custom.is_dir()
+
+
+def test_custom_output_survives_analysis_failure_recovery_and_shutdown(tmp_path, monkeypatch):
+    module = _facade_module()
+    monkeypatch.setattr(module, "user_data_dir", lambda: tmp_path)
+    custom = tmp_path / "external" / "chat-analyzer-output-abcdef12"
+    custom.mkdir(parents=True)
+    original = custom / "fictional-original.json"
+    original.write_text("fictional", encoding="utf-8")
+    facade = module.ChatAnalyzerFacade(
+        analysis_service=_StubAnalysisService(error=RuntimeError("fictional failure")))
+    with pytest.raises(module.FacadeError):
+        facade._analyze_path(Path("fictional.json"), module.AnalysisConfig(output_directory=custom),
+                             source=module.ChatSource.QQ, session=None, scope=module.AnalysisScope.all())
+    module._cleanup_stale_analysis_outputs(tmp_path / "transient")
+    facade.shutdown()
+    assert original.read_text(encoding="utf-8") == "fictional"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction regression")
+@pytest.mark.parametrize("location", ["candidate", "inside", "root"])
+def test_stale_scratch_junction_never_follows_target(tmp_path, location, caplog):
+    module = _facade_module()
+    root = tmp_path / "transient"
+    root.mkdir()
+    external = tmp_path / "external"
+    external.mkdir()
+    original = external / "fictional-original.json"
+    original.write_text("fictional", encoding="utf-8")
+    if location == "root":
+        root.rmdir()
+        link = root
+    elif location == "candidate":
+        link = root / "chat-analyzer-output-abcdef12"
+    else:
+        directory = root / "chat-analyzer-output-abcdef12"
+        directory.mkdir()
+        link = directory / "linked-export"
+    subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(external)],
+                   check=True, capture_output=True)
+    try:
+        module._cleanup_stale_analysis_outputs(root)
+        assert original.read_text(encoding="utf-8") == "fictional"
+        assert link.exists()
+        assert caplog.records
+    finally:
+        link.rmdir()
 
 
 def test_missing_echo_artifact_returns_no_report_path(tmp_path: Path) -> None:
@@ -1543,6 +1786,7 @@ def test_echo_packaging_failure_falls_back_to_generated_report(
     facade, _ = _qq_session_facade(
         tmp_path,
         analysis_service=_WritingAnalysisService(),
+        retain_output=True,
     )
 
     outcome = facade.analyze_session(
@@ -1555,6 +1799,14 @@ def test_echo_packaging_failure_falls_back_to_generated_report(
     assert outcome.report_path.is_file()
     assert outcome.report_directory is None
     assert outcome.artifact_directory == outcome.report_path.parent
+    assert outcome.artifact_directory.parent.name == "transient"
+    from qq_chat_analyzer.application.report_package_catalog import ReportPackageCatalog
+    assert not ReportPackageCatalog(tmp_path / "facade-user-data" / "reports").list_reports().reports
+    next_outcome = facade.analyze_session(module.ChatSource.QQ, _FICTIONAL_SESSION_ID)
+    assert not outcome.artifact_directory.exists()
+    assert next_outcome.report_path.is_file()
+    facade.shutdown()
+    assert not next_outcome.artifact_directory.exists()
 
 
 def _share_outcome(
@@ -1926,228 +2178,179 @@ def test_wechat_analysis_ignores_qq_force_refresh_flag(tmp_path: Path) -> None:
     assert request.session_id == "wxid_fictional_force_refresh"
 
 
-def test_successful_qq_analysis_saves_scoped_history_metadata(
-    tmp_path: Path,
-) -> None:
+def test_facade_delegates_report_listing_and_clear():
+    calls = []
+    class Catalog:
+        def list_reports(self):
+            calls.append("list")
+            return "listing"
+        def clear_all(self):
+            calls.append("clear")
+    facade = _facade(report_package_catalog=Catalog())
+    assert facade.list_report_packages() == "listing"
+    facade.clear_report_packages()
+    assert calls == ["list", "clear"]
+
+
+def test_facade_translates_report_clear_failure():
     module = _facade_module()
-    history_module = importlib.import_module(
-        "qq_chat_analyzer.application.report_history"
-    )
-    history_manager = history_module.ReportHistoryManager(
-        tmp_path / "qq-history.jsonl"
-    )
-    result = _result(message_count=5)
-    expected_view = object()
-    session_id = "fictional-qq-session"
-    facade = _facade(
-        qq_service=_StubQQService(
-            groups=[_FakeQQGroup(session_id, "Fictional QQ Group")],
-            export_path=_export_file(tmp_path, "qq-history-export.json"),
-        ),
-        analysis_service=_StubAnalysisService(result=result),
-        presentation_builder=_RecordingBuilder(view=expected_view),
-        report_history_manager=history_manager,
-        tmp_path=tmp_path,
-    )
-
-    outcome = facade.analyze_session(
-        module.ChatSource.QQ,
-        session_id,
-        module.AnalysisConfig(
-            scope_mode=module.AnalysisScopeMode.CUSTOM,
-            start_time="2026-02-01",
-            end_time="2026-08-11",
-        ),
-    )
-
-    records = history_manager.list_records()
-    assert len(records) == 1
-    record = records[0]
-    assert record.source == "qq"
-    assert record.session_name == "Fictional QQ Group"
-    assert record.session_id == session_id
-    assert record.message_count == 5
-    assert record.analysis_scope == "custom"
-    assert record.scope_start == date(2026, 2, 1)
-    assert record.scope_end == date(2026, 8, 11)
-    assert record.report_generated_at.tzinfo is not None
-    assert outcome.result is result
-    assert outcome.view is expected_view
-    assert outcome.history_saved is True
-    assert outcome.history_record_id == record.analysis_id
+    class Catalog:
+        def clear_all(self):
+            raise PermissionError("internal-path")
+    facade = _facade(report_package_catalog=Catalog())
+    with pytest.raises(module.FacadeError) as caught:
+        facade.clear_report_packages()
+    assert caught.value.public_message == "部分 Echo 报告未能删除，请稍后重试。"
 
 
-def test_successful_wechat_analysis_saves_history_metadata(
-    tmp_path: Path,
-) -> None:
+def test_facade_delegates_single_report_deletion():
+    calls = []
+    class Catalog:
+        def delete_package(self, name):
+            calls.append(name)
+    facade = _facade(report_package_catalog=Catalog())
+    facade.delete_report_package("Echo_Report_20261004_120000")
+    assert calls == ["Echo_Report_20261004_120000"]
+
+
+@pytest.mark.parametrize("error", [ValueError, FileNotFoundError, PermissionError, RuntimeError])
+def test_facade_translates_single_report_deletion_failure(tmp_path, error):
     module = _facade_module()
-    history_module = importlib.import_module(
-        "qq_chat_analyzer.application.report_history"
-    )
-    history_manager = history_module.ReportHistoryManager(
-        tmp_path / "wechat-history.jsonl"
-    )
-    session_id = "wxid_fictional_history"
-    result = _result(message_count=8)
-    facade = _facade(
-        wechat_service=_StubWeChatService(
-            sessions=[_FakeWeChatSession(session_id, "Fictional WeChat")],
-            export_path=_export_file(tmp_path, "wechat-history-export.json"),
-        ),
-        analysis_service=_StubAnalysisService(result=result),
-        report_history_manager=history_manager,
-        tmp_path=tmp_path,
-    )
-
-    outcome = facade.analyze_session(module.ChatSource.WECHAT, session_id)
-
-    record = history_manager.list_records()[0]
-    assert record.source == "wechat"
-    assert record.session_name == "Fictional WeChat"
-    assert record.session_id == session_id
-    assert record.message_count == 8
-    assert record.analysis_scope == "all"
-    assert record.scope_start is None
-    assert record.scope_end is None
-    assert record.session_type == "friend"
-    assert record.input_identity_summary == history_module.InputIdentitySummary(
-        capture_mode="live_database",
-    )
-    assert record.scope_message_count == 8
-    assert record.filtered_message_count == 7
-    assert record.analyzed_message_count == 7
-    assert outcome.result is result
-    assert outcome.history_saved is True
+    internal_path = str(tmp_path / "internal-private-path")
+    class Catalog:
+        def delete_package(self, name):
+            raise error(internal_path)
+    facade = _facade(report_package_catalog=Catalog())
+    with pytest.raises(module.FacadeError) as caught:
+        facade.delete_report_package("Echo_Report_20261004_120000")
+    assert caught.value.code == "report_delete_failed"
+    assert caught.value.public_message == "这份 Echo 报告未能删除，请稍后重试。"
+    assert internal_path not in str(caught.value)
 
 
-def test_history_save_failure_does_not_replace_successful_analysis(
-    tmp_path: Path,
-    caplog,
-) -> None:
-    history_module = importlib.import_module(
-        "qq_chat_analyzer.application.report_history"
-    )
-    invalid_history_path = tmp_path / "history-is-a-directory"
-    invalid_history_path.mkdir()
+def test_facade_delegates_report_package_html_path(tmp_path):
+    calls = []
+    expected = tmp_path / "resolved.html"
+    class Catalog:
+        def resolve_html_path(self, name):
+            calls.append(name)
+            return expected
+    facade = _facade(report_package_catalog=Catalog())
+    assert facade.get_report_package_html_path("Echo_Report_20261004_120000") == expected
+    assert calls == ["Echo_Report_20261004_120000"]
+
+
+@pytest.mark.parametrize("error", [ValueError, FileNotFoundError, PermissionError, RuntimeError])
+def test_facade_translates_report_package_html_path_failure(tmp_path, error):
     module = _facade_module()
-    result = _result(message_count=3)
-    expected_view = object()
-    facade, _ = _qq_session_facade(
-        tmp_path,
-        analysis_service=_StubAnalysisService(result=result),
-        presentation_builder=_RecordingBuilder(view=expected_view),
-        report_history_manager=history_module.ReportHistoryManager(
-            invalid_history_path
-        ),
-    )
+    internal_path = str(tmp_path / "internal-private-path")
+    class Catalog:
+        def resolve_html_path(self, name):
+            raise error(internal_path)
+    facade = _facade(report_package_catalog=Catalog())
+    with pytest.raises(module.FacadeError) as caught:
+        facade.get_report_package_html_path("Echo_Report_20261004_120000")
+    assert caught.value.code == "report_open_failed"
+    assert caught.value.public_message == "这份 Echo 报告已损坏或缺少报告文件。"
+    assert internal_path not in str(caught.value)
 
-    with caplog.at_level(
-        "ERROR",
-        logger="qq_chat_analyzer.desktop.facade",
-    ):
-        outcome = facade.analyze_session(
-            module.ChatSource.QQ,
-            _FICTIONAL_SESSION_ID,
+
+def _retention_analysis(tmp_path):
+    module = _facade_module()
+    root = tmp_path / "injected-reports"
+    catalog = module.ReportPackageCatalog(root)
+    source = tmp_path / "old-report-source"
+    source.mkdir()
+    for name in ("echo-report.html", "echo-report.json"):
+        (source / name).write_text("fictional", encoding="utf-8")
+    old = []
+    for index in range(50):
+        metadata = module.build_report_metadata(
+            result=_result_with_echo_artifact(), source="qq",
+            scope=module.AnalysisScope.all(),
+            generated_at=datetime(2020, 1, 1, 0, 0, index, tzinfo=timezone.utc),
         )
-
-    assert outcome.result is result
-    assert outcome.view is expected_view
-    assert outcome.history_saved is False
-    assert outcome.history_record_id is None
-    assert any(
-        record.name == "qq_chat_analyzer.desktop.facade"
-        and record.levelname == "ERROR"
-        for record in caplog.records
-    )
-
-
-def test_facade_reads_history_through_the_application_boundary(
-    tmp_path: Path,
-) -> None:
-    history_module = importlib.import_module(
-        "qq_chat_analyzer.application.report_history"
-    )
-    history_manager = history_module.ReportHistoryManager(
-        tmp_path / "history.jsonl"
-    )
+        old.append(module.package_echo_report(source, reports_root=root, metadata=metadata))
+    class WritingService(_StubAnalysisService):
+        def execute(self, request):
+            for name in ("echo-report.html", "echo-report.json"):
+                (request.output_directory / name).write_text("fictional", encoding="utf-8")
+            return _result_with_echo_artifact()
     facade, _ = _qq_session_facade(
-        tmp_path,
-        report_history_manager=history_manager,
+        tmp_path, analysis_service=WritingService(), report_package_catalog=catalog,
     )
-
-    outcome = facade.analyze_session(
-        _facade_module().ChatSource.QQ,
-        _FICTIONAL_SESSION_ID,
-    )
-
-    records = facade.list_analysis_history()
-    assert len(records) == 1
-    assert records[0].analysis_id == outcome.history_record_id
-    assert facade.get_analysis_history(records[0].analysis_id) == records[0]
-    assert facade.get_analysis_history("missing") is None
+    return facade, catalog, root, old
 
 
-def test_analysis_failure_does_not_create_history(tmp_path: Path) -> None:
+@pytest.mark.parametrize("mode", ["normal", "corrupt", "locked_corrupt", "catalog_error"])
+def test_retention_after_successful_publication_uses_injected_root_and_preserves_new(
+    tmp_path, monkeypatch, mode,
+):
     module = _facade_module()
-    errors = _errors()
-    history_module = importlib.import_module(
-        "qq_chat_analyzer.application.report_history"
-    )
-    history_manager = history_module.ReportHistoryManager(
-        tmp_path / "history.jsonl"
-    )
-    facade, _ = _qq_session_facade(
-        tmp_path,
-        analysis_service=_StubAnalysisService(error=errors.InputPathNotFound()),
-        report_history_manager=history_manager,
-    )
-
-    with pytest.raises(module.FacadeError):
-        facade.analyze_session(module.ChatSource.QQ, _FICTIONAL_SESSION_ID)
-
-    assert history_manager.list_records() == ()
-
-
-def test_facade_without_history_manager_preserves_old_outcome_behavior(
-    tmp_path: Path,
-) -> None:
-    module = _facade_module()
-    facade, _ = _qq_session_facade(tmp_path)
-
+    facade, catalog, root, old = _retention_analysis(tmp_path)
+    if mode in {"corrupt", "locked_corrupt"}:
+        (old[-1] / "metadata.json").write_text("broken", encoding="utf-8")
+    attempted = []
+    original_delete = module.shutil.rmtree
+    def delete(path, *args, **kwargs):
+        if Path(path).parent == root:
+            attempted.append(Path(path))
+        if mode == "locked_corrupt" and Path(path) == old[-1]:
+            raise PermissionError("fictional internal path")
+        return original_delete(path, *args, **kwargs)
+    monkeypatch.setattr(module.shutil, "rmtree", delete)
+    calls = []
+    original = getattr(catalog, "enforce_retention", None)
+    def enforce(*, published_package):
+        assert published_package.parent == root
+        assert len(list(root.iterdir())) == 51
+        assert all((published_package / name).is_file() for name in (
+            "echo-report.html", "echo-report.json", "metadata.json", "README.txt",
+        ))
+        calls.append(published_package)
+        if mode == "catalog_error":
+            raise PermissionError("fictional internal path")
+        return original(published_package=published_package)
+    monkeypatch.setattr(catalog, "enforce_retention", enforce, raising=False)
+    catalog_module = importlib.import_module("qq_chat_analyzer.application.report_package_catalog")
+    def forbidden_default():
+        pytest.fail("An injected Catalog must never resolve default user data")
+    monkeypatch.setattr(catalog_module, "user_data_dir", forbidden_default)
     outcome = facade.analyze_session(module.ChatSource.QQ, _FICTIONAL_SESSION_ID)
-
-    assert outcome.history_saved is None
-    assert outcome.history_record_id is None
-    assert _facade().list_analysis_history() == ()
-    assert _facade().get_analysis_history("missing") is None
-
-
-def test_facade_clear_analysis_history_delegates_to_manager() -> None:
-    calls: list[int] = []
-
-    class _StubHistoryManager:
-        def clear(self) -> None:
-            calls.append(1)
-
-    facade = _facade(report_history_manager=_StubHistoryManager())
-
-    facade.clear_analysis_history()
-
-    assert calls == [1]
+    assert outcome.report_directory.parent == root
+    assert calls == [outcome.report_directory]
+    assert outcome.report_path == outcome.report_directory / "echo-report.html"
+    assert outcome.report_path.is_file()
+    failed = mode in {"locked_corrupt", "catalog_error"}
+    assert len(list(root.iterdir())) == (51 if failed else 50)
+    assert bool(outcome.retention_warning) is failed
+    if failed:
+        assert outcome.retention_warning == "报告已保存，但部分旧报告清理失败，本地报告数量可能超过 50 份。"
+        assert str(root) not in outcome.retention_warning
+        assert all(package.exists() for package in old)
+    elif mode == "corrupt":
+        assert attempted == [old[-1]]
+        assert all(package.exists() for package in old[:-1])
+    else:
+        assert attempted == [old[0]]
+        assert all(package.exists() for package in old[1:])
 
 
-def test_facade_clear_analysis_history_translates_failures() -> None:
-    class _StubHistoryManager:
-        def clear(self) -> None:
-            raise RuntimeError("boom")
-
-    facade = _facade(report_history_manager=_StubHistoryManager())
-
-    with pytest.raises(_facade_module().FacadeError) as caught:
-        facade.clear_analysis_history()
-
-    assert caught.value.code == "history_clear_failed"
-    assert "无法清空 Echo 历史记录" in caught.value.public_message
+def test_retention_publication_failure_never_calls_cleanup(tmp_path, monkeypatch):
+    module = _facade_module()
+    facade, catalog, root, old = _retention_analysis(tmp_path)
+    def fail_publication(*args, **kwargs):
+        raise OSError("fictional publication failure")
+    def forbidden_cleanup(*args, **kwargs):
+        pytest.fail("Failed publication must not run retention")
+    monkeypatch.setattr(module, "package_echo_report", fail_publication)
+    monkeypatch.setattr(catalog, "enforce_retention", forbidden_cleanup, raising=False)
+    outcome = facade.analyze_session(module.ChatSource.QQ, _FICTIONAL_SESSION_ID)
+    assert outcome.report_directory is None
+    assert outcome.report_path.is_file()
+    assert outcome.retention_warning == ""
+    assert len(list(root.iterdir())) == 50
+    assert all(package.exists() for package in old)
 
 
 def test_analyze_private_qq_session_preserves_private_export_identity(

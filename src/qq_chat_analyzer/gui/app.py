@@ -52,7 +52,7 @@ def build_facade() -> ChatAnalyzerFacade:
     WeChat tooling still gets a working window with those sources disabled.
     """
     from ..application.analysis_service import AnalysisApplicationService
-    from ..application.report_history import ReportHistoryManager
+    from ..application.report_package_catalog import ReportPackageCatalog
 
     return ChatAnalyzerFacade(
         source_builders={
@@ -60,7 +60,7 @@ def build_facade() -> ChatAnalyzerFacade:
             ChatSource.WECHAT: _wechat_bundle_factory,
         },
         analysis_service=AnalysisApplicationService(),
-        report_history_manager=ReportHistoryManager(),
+        report_package_catalog=ReportPackageCatalog(),
         stopwords_directory=resources_dir(),
     )
 

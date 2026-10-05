@@ -77,19 +77,31 @@ Release Blocker：TBD。
 
 ### BUG-03 「删除全部本地数据 / 缓存」语义与实际生命周期不完整
 
-已知事实：
+状态：CLOSED。
 
-- 用户无法确信 GUI 所称删除操作真正删除了预期的本地数据。
-- 生产路径中的 `ChatDataSnapshot` 已删除；QQ raw export 改为 Echo-owned transient
-  lease，正常分析结束后自动 cleanup，重新分析会重新 acquisition 而不复用长期 stale raw snapshot。
-- 当前桌面 QQ Direct DB 每次获取使用新的 generation；正常获取完成后清理 plaintext，
-  启动和 shutdown 均有 `recover`。真人验收确认 shutdown 后 `snapshot.db` 无残留。
-- 仍需要从 filesystem / transient run / report history / persisted result 整条链审计；
-  上述完成项不等同于完整的“删除全部本地数据”产品语义。
+Release Blocker：No / CLOSED。
 
-状态：部分修复，仍待审计
+完成边界：
 
-Release Blocker：Yes。
+- Report Package 是唯一持久分析对象；四文件完整发布，`metadata.json` 驱动 Local Data
+  catalog，损坏 package 作为 issue 可见。`analysis_history.jsonl` / `ReportHistoryManager` 已退休。
+- `reports/` 保存正式报告，默认 scratch 位于 `transient/`；首次创建默认 scratch 前
+  recovery 遗留自有 scratch，正常替换、失败及 shutdown 清理遵守 ownership / reparse 边界。
+- Local Data 支持“删除选中报告”、“删除全部报告”、安全 reopen 与纯内存轻量搜索；删除目标是完整自有
+  package，不是 QQ / 微信原始数据或用户另存文件。单项删除已完成，刷新后保留搜索 query，失败明确可见。
+- listing、retention 与 delete 共用正式 package 候选边界：reports root 的直属真实目录，
+  且名称严格符合 ownership naming。合法名称的普通文件忽略并保留；reparse / symlink / junction
+  仍走安全拒绝，不跟随外部目标。
+- 固定 max-50 retention 在新 package 发布成功后执行；损坏 metadata package 仍计数、
+  时间未知者优先淘汰。清理失败保留新报告成功结果，公开 warning，并允许暂时超限。
+- Automated tests 通过 autouse fixture 隔离真实用户数据目录，默认 packaging / production
+  composition 测试也落入临时环境；sentinel regression 固定该边界。
+
+真人验收：已通过批量删除及真实分析 → 正式报告保存 → 删除链路，确认实际 package 被删除。
+此前一次“GUI 列表为空但磁盘 package 仍在”的观察后来未复现，根因未确定；不将测试污染
+或某个未经证实的路径错误写成该观察的确定原因。
+
+工程复盘：`docs/BUG_JOURNAL.md` Journal 011。
 
 ### BUG-05 WeChat 英文官方表情别名污染普通语言画像
 
@@ -223,12 +235,13 @@ QCE 提供 messageCount、progress、status、message，
 
 状态：已记录，本次不实现。
 
-### REL-02 History 可以直接 reopen 完整分析结果
+### REL-02 History 可以直接 reopen 已保存的 Echo Report
 
-当前历史能力不等于完整结果恢复。
-目标是避免用户点击历史后必须重新分析。
+已随 BUG-03 完成：Local Data 选中或双击历史报告，通过 Facade / Catalog 安全定位
+package 内的 HTML，使用系统默认浏览器打开，无需重新分析。
+文件缺失或 opener 失败显示明确错误，不崩溃、不静默隐藏报告；不重建历史 Dashboard。
 
-状态：未审计。
+状态：CLOSED。
 
 ### REL-03 Cache / Snapshot / History 生命周期统一
 
@@ -236,7 +249,10 @@ QCE 提供 messageCount、progress、status、message，
 
 - 生产 `ChatDataSnapshot` 已删除；QQ raw acquisition 是一次性 transient lease。
 - 正常分析结束后会清理 transient payload；重新分析会重新 acquisition。
-- Echo Report 是保留的结果资产；history 当前保存的是元数据，不是 raw snapshot。
+- Report Package 是唯一持久分析对象，Local Data 从 package metadata 构建 catalog；
+  独立 JSONL history 已退休。报告 reopen、完整 package deletion、固定 max-50 retention
+  与默认 analysis scratch / stale recovery 已随 BUG-03 完成。
+- Local Data 的最终用户措辞为“删除全部报告”，不承诺删除 QQ / 微信原始数据或用户另存文件。
 - 桌面 QQ Direct DB generation 在会话查询或 payload 物化后清理；启动与 shutdown
   的 `recover` 负责遗留 plaintext。真人验收确认正常 shutdown 后 `snapshot.db` 无残留。
 - 所选会话的 `qq-db-json` payload 位于本次分析临时目录，由 consumer 完成或异常退出时
@@ -246,12 +262,9 @@ QCE 提供 messageCount、progress、status、message，
 
 - 旧 QCE transient run 在异常终止后的 orphan cleanup；Direct DB runtime generation
   已有启动/关闭 `recover`，不能混为同一项；
-- report history reopen；
-- report deletion；
-- retention / max-count policy；
-- “删除全部本地数据”的最终用户措辞。
 
-状态：部分完成，未关闭。
+状态：Report Package / 默认 analysis scratch 部分已随 BUG-03 关闭；旧 QCE orphan run
+cleanup 仍属单独待审计项，本条不扩大其完成范围。
 
 ### REL-04 按阶段区分的用户安全错误提示
 

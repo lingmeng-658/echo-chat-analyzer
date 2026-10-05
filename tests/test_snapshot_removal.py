@@ -5,8 +5,6 @@ After removing ChatDataSnapshotManager:
 2. No snapshot is created or persisted.
 3. QQ bounded still uses transient lease + cleanup.
 4. WeChat analysis unchanged.
-5. History no longer writes snapshot_id.
-6. Old history rows with snapshot_id still read fine.
 """
 
 from __future__ import annotations
@@ -26,10 +24,7 @@ from qq_chat_analyzer.application import (
     QQExportImportRequest,
     QQExportImportService,
 )
-from qq_chat_analyzer.application.report_history import (
-    AnalysisHistoryRecord,
-    ReportHistoryManager,
-)
+
 
 
 # --------------------------------------------------------------------- fixtures
@@ -149,62 +144,3 @@ def test_qq_bounded_analysis_uses_transient_lease(tmp_path: Path) -> None:
 
     # Transient run directory must be cleaned up
     assert not run_dir.exists(), "Transient export run was not cleaned up"
-
-
-def test_qq_analysis_history_record_has_no_snapshot_id(tmp_path: Path) -> None:
-    """New history records must not write snapshot_id."""
-    manager = ReportHistoryManager(tmp_path / "history.jsonl")
-
-    record = manager.save_analysis(
-        source="qq",
-        session_name="Test Group",
-        session_id="700000001",
-        message_count=10,
-        analysis_scope="all",
-        scope_start=None,
-        scope_end=None,
-        report_generated_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
-    )
-
-    # Verify persisted JSONL does not contain snapshot_id
-    lines = (tmp_path / "history.jsonl").read_text(encoding="utf-8").strip().splitlines()
-    import json
-    payload = json.loads(lines[0])
-    assert "snapshot_id" not in payload, (
-        "Persisted history record should not contain snapshot_id"
-    )
-
-
-def test_old_history_row_with_snapshot_id_still_reads(tmp_path: Path) -> None:
-    """Old history JSONL with snapshot_id must still be readable."""
-    history_path = tmp_path / "history.jsonl"
-    history_path.write_text(
-        json.dumps({
-            "analysis_id": "old-001",
-            "created_at": "2025-01-01T00:00:00+00:00",
-            "source": "qq",
-            "session_name": "Old Group",
-            "session_id": "123456",
-            "message_count": 5,
-            "analysis_scope": "all",
-            "scope_start": None,
-            "scope_end": None,
-            "report_generated_at": "2025-01-01T00:00:00+00:00",
-            "snapshot_id": "11111111-1111-1111-1111-111111111111",
-        }, ensure_ascii=False, separators=(",", ":")),
-        encoding="utf-8",
-    )
-
-    manager = ReportHistoryManager(history_path)
-    records = manager.list_records()
-
-    assert len(records) == 1
-    assert records[0].analysis_id == "old-001"
-    # snapshot_id may or may not be populated on read — key is: no crash
-    # snapshot_id is stripped at read time; key is: no crash
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
-
-from datetime import datetime, timezone
