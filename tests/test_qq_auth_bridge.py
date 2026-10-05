@@ -202,32 +202,6 @@ def test_start_auth_flow_returns_connected_without_starting_anything() -> None:
 # ---------------------------------------------------------- waiting for auth
 
 
-def test_start_auth_flow_opens_login_window_without_pre_starting_runtime() -> None:
-    module = _connection_module()
-    service = _StubConnectionService(
-        _status(available=False, runtime_running=False, qq_online=False)
-    )
-    setup = _StubSetupService(
-        connect_status=_status(
-            available=False,
-            runtime_running=True,
-            qq_online=False,
-        ),
-        runtime_status=_runtime_status(),
-    )
-    launcher = _RecordingLauncher()
-
-    snapshot = _bridge(
-        setup_service=setup,
-        connection_service=service,
-        window_launcher=launcher,
-    ).start_auth_flow()
-
-    assert setup.connect_calls == 0
-    assert launcher.calls == 1
-    assert snapshot.state is module.ConnectionState.WAITING_AUTH
-
-
 def test_start_auth_flow_does_not_pre_start_runtime_before_launcher() -> None:
     module = _connection_module()
     service = _StubConnectionService(

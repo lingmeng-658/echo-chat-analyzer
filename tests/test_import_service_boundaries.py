@@ -205,6 +205,7 @@ def test_only_sidecar_returns_unsupported(tmp_path):
     assert result.result.warnings == (
         UNSUPPORTED_FORMAT,
     )
+    assert result.result.platform is None
 
 
 # ----------------------------
@@ -223,6 +224,7 @@ def test_unknown_json_not_treated_as_qq(tmp_path):
     assert result.result.warnings == (
         UNSUPPORTED_FORMAT,
     )
+    assert result.result.platform is None
 
 
 def test_unknown_json_in_directory_warns(tmp_path):
@@ -356,33 +358,3 @@ def test_mismatch_warning_hides_filename(tmp_path):
         assert "\u79d8\u5bc6\u7fa4" not in warning
         assert "123456" not in warning
         assert path.name not in warning
-
-
-# ----------------------------
-# unresolved platform
-# ----------------------------
-
-
-def test_unresolved_platform_is_none(tmp_path):
-    path = tmp_path / "unknown.json"
-    write_unknown_json(path)
-
-    result = ImportService().execute(
-        ImportRequest(path)
-    )
-
-    assert result.result.platform is None
-
-
-def test_only_sidecar_platform_is_none(tmp_path):
-    directory = tmp_path / "export"
-    directory.mkdir()
-
-    write_manifest(directory / "manifest.json")
-    write_avatars(directory / "avatars.json")
-
-    result = ImportService().execute(
-        ImportRequest(directory)
-    )
-
-    assert result.result.platform is None

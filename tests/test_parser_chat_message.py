@@ -14,15 +14,10 @@ from qq_chat_analyzer.message import ChatMessage
 from qq_chat_analyzer.parser import parse_messages
 
 
-def test_parse_messages_returns_chat_message() -> None:
-    parsed = parse_messages([_raw_text_message()])
-
-    assert isinstance(parsed[0], ChatMessage)
-
-
 def test_parse_messages_preserves_fields_in_chat_message() -> None:
     parsed = parse_messages([_raw_text_message()])
 
+    assert isinstance(parsed[0], ChatMessage)
     assert parsed == [
         ChatMessage(
             timestamp=1767315600,

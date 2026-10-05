@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
@@ -60,77 +62,43 @@ def test_template_ignore_filters_matching_template_messages() -> None:
     assert result.applied_decisions == [decision]
 
 
-def test_number_fingerprint_ignore_filters_matching_message() -> None:
-    ignored_message = _message(
-        "虚构运势助手",
-        "综合指数:42.5 财运指数:68",
-        1,
-    )
+@pytest.mark.parametrize(
+    ("sender", "text", "template"),
+    [
+        pytest.param(
+            "虚构运势助手",
+            "综合指数:42.5 财运指数:68",
+            "综合指数:{number} 财运指数:{number}",
+            id="number",
+        ),
+        pytest.param(
+            "虚构查询助手",
+            "查询编号123456",
+            "查询编号{id}",
+            id="id",
+        ),
+        pytest.param(
+            "虚构运势助手",
+            "@虚构用户 今日运势:99",
+            "@{user} 今日运势:{number}",
+            id="user",
+        ),
+        pytest.param(
+            "虚构查询助手",
+            "详情:https://example.test/a/42，版本:3",
+            "详情:{url}，版本:{number}",
+            id="url",
+        ),
+    ],
+)
+def test_fingerprint_ignore_filters_matching_message(
+    sender: str,
+    text: str,
+    template: str,
+) -> None:
+    ignored_message = _message(sender, text, 1)
     decision = _decision(
-        target="综合指数:{number} 财运指数:{number}",
-        target_type="template",
-        action="ignore",
-    )
-
-    result = FilterPipeline().apply_filter_decisions(
-        [ignored_message],
-        [decision],
-    )
-
-    assert result.filtered_messages == [ignored_message]
-    assert result.applied_decisions == [decision]
-
-
-def test_id_fingerprint_ignore_filters_matching_message() -> None:
-    ignored_message = _message(
-        "虚构查询助手",
-        "查询编号123456",
-        1,
-    )
-    decision = _decision(
-        target="查询编号{id}",
-        target_type="template",
-        action="ignore",
-    )
-
-    result = FilterPipeline().apply_filter_decisions(
-        [ignored_message],
-        [decision],
-    )
-
-    assert result.filtered_messages == [ignored_message]
-    assert result.applied_decisions == [decision]
-
-
-def test_user_fingerprint_ignore_filters_matching_message() -> None:
-    ignored_message = _message(
-        "虚构运势助手",
-        "@虚构用户 今日运势:99",
-        1,
-    )
-    decision = _decision(
-        target="@{user} 今日运势:{number}",
-        target_type="template",
-        action="ignore",
-    )
-
-    result = FilterPipeline().apply_filter_decisions(
-        [ignored_message],
-        [decision],
-    )
-
-    assert result.filtered_messages == [ignored_message]
-    assert result.applied_decisions == [decision]
-
-
-def test_url_fingerprint_ignore_filters_matching_message() -> None:
-    ignored_message = _message(
-        "虚构查询助手",
-        "详情:https://example.test/a/42，版本:3",
-        1,
-    )
-    decision = _decision(
-        target="详情:{url}，版本:{number}",
+        target=template,
         target_type="template",
         action="ignore",
     )
