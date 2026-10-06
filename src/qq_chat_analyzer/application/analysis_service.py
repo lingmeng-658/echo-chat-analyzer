@@ -397,7 +397,7 @@ def _generate_content_report_or_fallback(
     expression_source: str | None,
     success_status: AnalysisStatus = AnalysisStatus.EXPRESSION_ONLY,
 ) -> AnalysisResultDTO:
-    """Export a content report, or remove partial artifacts and return NO_TOKENS."""
+    """Export a content report, removing partial artifacts before propagating errors."""
     try:
         with timed_stage("report_build"):
             reports = _build_reports(
@@ -408,20 +408,23 @@ def _generate_content_report_or_fallback(
                 conversation_type=conversation_type,
                 rich_by_instance=rich_by_instance,
             )
-        with timed_stage("artifact_export"):
-            echo_report_view = _export_echo_artifacts(
-                request,
-                reports,
-                viewer_speaker_key=_viewer_speaker_key(
-                    kept_messages,
-                    request.viewer_speaker_key,
-                ),
-                conversation_kind=conversation_type,
-                expression_source=expression_source,
-            )
+        try:
+            with timed_stage("artifact_export"):
+                echo_report_view = _export_echo_artifacts(
+                    request,
+                    reports,
+                    viewer_speaker_key=_viewer_speaker_key(
+                        kept_messages,
+                        request.viewer_speaker_key,
+                    ),
+                    conversation_kind=conversation_type,
+                    expression_source=expression_source,
+                )
+        except (OSError, ValueError):
+            raise ArtifactGenerationFailed() from None
     except Exception:
         _LOGGER.warning(
-            "content-only report generation failed; falling back",
+            "content-only report generation failed",
             exc_info=True,
         )
         for filename in (
@@ -432,12 +435,7 @@ def _generate_content_report_or_fallback(
                 (request.output_directory / filename).unlink(missing_ok=True)
             except OSError:
                 pass
-        return AnalysisResultDTO(
-            status=AnalysisStatus.NO_TOKENS,
-            processed_message_count=processed_message_count,
-            valid_text_count=analyzed.valid_text_count,
-            diagnostic_counts=diagnostic_counts,
-        )
+        raise
     return AnalysisResultDTO(
         status=success_status,
         processed_message_count=processed_message_count,

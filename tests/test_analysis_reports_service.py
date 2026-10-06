@@ -962,9 +962,11 @@ def test_private_semantic_expression_word_remains_a_language_word(tmp_path: Path
     assert "表情" in {word.word for word in result.echo_report_view.language_profile.shared_words}
 
 
-def test_expression_only_failure_falls_back_without_artifacts(
+@pytest.mark.parametrize("failure_type", [PermissionError, OSError, ValueError])
+def test_content_report_export_failure_becomes_safe_application_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    failure_type: type[Exception],
 ) -> None:
     application = _application_module()
     service_module = importlib.import_module(
@@ -976,22 +978,19 @@ def test_expression_only_failure_falls_back_without_artifacts(
     _write_wechat_db_sticker_export(input_path)
 
     def fail_echo_export(*args, **kwargs):
-        raise OSError("fictional export failure")
+        raise failure_type(r"fictional export failure: C:\Users\Fictional\Private\report.json")
 
-    monkeypatch.setattr(
-        service_module,
-        "_export_echo_artifacts",
-        fail_echo_export,
-    )
+    monkeypatch.setattr(service_module, "_export_echo_artifacts", fail_echo_export)
+    with pytest.raises(application.ArtifactGenerationFailed) as caught:
+        application.AnalysisApplicationService().execute(
+            _request(application, tmp_path, input_path)
+        )
 
-    result = application.AnalysisApplicationService().execute(
-        _request(application, tmp_path, input_path)
-    )
-
-    assert result.status is application.AnalysisStatus.NO_TOKENS
-    assert result.artifacts == ()
-    assert (output_directory / "echo-report.json").exists() is False
-    assert (output_directory / "echo-report.html").exists() is False
+    assert caught.value.code == "artifact_generation_failed"
+    assert "Fictional" not in caught.value.public_message
+    assert caught.value.__cause__ is None
+    assert not (output_directory / "echo-report.json").exists()
+    assert not (output_directory / "echo-report.html").exists()
 
 
 @pytest.mark.parametrize("with_expression", [False, True])
@@ -1050,14 +1049,41 @@ def test_content_report_failure_removes_partially_written_artifacts(
         raise OSError("fictional export failure")
 
     monkeypatch.setattr(service_module, "_export_echo_artifacts", partially_export)
-    result = service_module.AnalysisApplicationService().execute(
-        _request(application, tmp_path, input_path)
-    )
+    with pytest.raises(application.ArtifactGenerationFailed):
+        service_module.AnalysisApplicationService().execute(
+            _request(application, tmp_path, input_path)
+        )
 
-    assert result.status is application.AnalysisStatus.NO_TOKENS
-    assert result.artifacts == ()
     assert not (output_directory / "echo-report.json").exists()
     assert not (output_directory / "echo-report.html").exists()
+
+
+@pytest.mark.parametrize("failure_kind", ["unexpected", "application"])
+def test_content_report_builder_failure_propagates_without_a_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_kind: str,
+) -> None:
+    application = _application_module()
+    service_module = importlib.import_module("qq_chat_analyzer.application.analysis_service")
+    input_path = tmp_path / "fictional-builder-failure.json"
+    (tmp_path / "private-output").mkdir()
+    _write_wechat_db_sticker_export(input_path)
+    original = (
+        RuntimeError("fictional report builder failure")
+        if failure_kind == "unexpected" else application.ApplicationServiceError()
+    )
+
+    def fail_build(*args, **kwargs):
+        raise original
+
+    monkeypatch.setattr(service_module, "_build_reports", fail_build)
+    with pytest.raises(type(original)) as caught:
+        application.AnalysisApplicationService().execute(
+            _request(application, tmp_path, input_path)
+        )
+
+    assert caught.value is original
+    assert not (tmp_path / "private-output" / "echo-report.json").exists()
+    assert not (tmp_path / "private-output" / "echo-report.html").exists()
 
 
 def test_execute_generates_echo_report_html_artifact(tmp_path: Path) -> None:
