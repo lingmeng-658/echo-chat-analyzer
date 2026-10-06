@@ -171,9 +171,14 @@ def _optional_wechat_setup_service(
 
 def main(argv: list[str] | None = None) -> int:
     """Start the Qt event loop with the main window."""
-    configure_logging()
     install_global_exception_handler()
-    log_startup(APP_VERSION)
+    logger = None
+    try:
+        logger = configure_logging()
+        log_startup(APP_VERSION)
+    except Exception:
+        # Diagnostics are optional; an unwritable log must not prevent GUI startup.
+        logger = None
 
     arguments = list(sys.argv[1:] if argv is None else argv)
 
@@ -192,7 +197,12 @@ def main(argv: list[str] | None = None) -> int:
         _finish_process_exit(exit_code, window=window)
         return exit_code
     except Exception as error:
-        configure_logging().exception("desktop startup failed", exc_info=error)
+        if logger is not None:
+            try:
+                logger.exception("desktop startup failed", exc_info=error)
+            except Exception:
+                # Reporting a startup failure must not fail with the log itself.
+                pass
         app = QApplication.instance()
         if app is not None:
             QMessageBox.critical(None, "\u9519\u8bef", STARTUP_FAILED_MESSAGE)

@@ -193,6 +193,99 @@ def test_global_exception_handler_is_installed(
         sys.excepthook = original
 
 
+@pytest.fixture
+def desktop_startup(monkeypatch: pytest.MonkeyPatch):
+    """Isolate the Qt event loop and forced process exit, keeping main real."""
+    from types import SimpleNamespace
+    from PySide6 import QtWidgets
+    from qq_chat_analyzer.gui import app as entry, main_window
+
+    application = mock.Mock()
+    application.exec.return_value = 7
+    application_class = mock.Mock(return_value=application)
+    application_class.instance.return_value = application
+    window = mock.Mock()
+    window_class = mock.Mock(return_value=window)
+    critical = mock.Mock()
+    finish_exit = mock.Mock()
+    build_facade = mock.Mock(return_value=object())
+    logger = mock.Mock(spec=logging.Logger)
+    configure = mock.Mock(return_value=logger)
+    monkeypatch.setattr(QtWidgets, "QApplication", application_class)
+    monkeypatch.setattr(QtWidgets.QMessageBox, "critical", critical)
+    monkeypatch.setattr(main_window, "MainWindow", window_class)
+    monkeypatch.setattr(entry, "build_facade", build_facade)
+    monkeypatch.setattr(entry, "_finish_process_exit", finish_exit)
+    monkeypatch.setattr(entry, "configure_logging", configure)
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
+    return SimpleNamespace(
+        entry=entry, application=application, window=window,
+        window_class=window_class, build_facade=build_facade,
+        critical=critical, finish_exit=finish_exit, logger=logger,
+        configure=configure,
+    )
+
+
+@pytest.mark.parametrize("logging_fails", [False, True])
+def test_main_starts_gui_even_when_logging_initialization_fails(
+    desktop_startup, logging_fails: bool,
+) -> None:
+    startup = desktop_startup
+    if logging_fails:
+        startup.configure.side_effect = PermissionError(
+            13, "Permission denied", r"C:\Users\Fictional\Private\logs\echo.log",
+        )
+
+    assert startup.entry.main([]) == 7
+
+    startup.window.show.assert_called_once_with()
+    startup.application.exec.assert_called_once_with()
+    startup.finish_exit.assert_called_once_with(7, window=startup.window)
+    startup.critical.assert_not_called()
+    startup.configure.assert_called_once_with()
+
+
+@pytest.mark.parametrize("logging_fails", [False, True])
+@pytest.mark.parametrize("failure_stage", ["facade", "window"])
+def test_main_startup_failure_is_safe_without_retrying_logging(
+    desktop_startup, logging_fails: bool, failure_stage: str,
+) -> None:
+    startup = desktop_startup
+    original = RuntimeError(r"fictional startup failure at C:\Users\Fictional\Private")
+    failing_operation = (
+        startup.build_facade if failure_stage == "facade" else startup.window_class
+    )
+    failing_operation.side_effect = original
+    if logging_fails:
+        startup.configure.side_effect = PermissionError("fictional log write denied")
+
+    assert startup.entry.main([]) == 1
+
+    startup.critical.assert_called_once_with(
+        None, "错误", startup.entry.STARTUP_FAILED_MESSAGE,
+    )
+    startup.application.exec.assert_not_called()
+    startup.finish_exit.assert_not_called()
+    startup.configure.assert_called_once_with()
+    if not logging_fails:
+        startup.logger.exception.assert_called_once_with(
+            "desktop startup failed", exc_info=original,
+        )
+
+
+def test_main_startup_error_still_returns_failure_if_log_emission_fails(desktop_startup) -> None:
+    startup = desktop_startup
+    startup.build_facade.side_effect = RuntimeError("fictional startup failure")
+    startup.logger.exception.side_effect = PermissionError("fictional log write denied")
+
+    assert startup.entry.main([]) == 1
+
+    startup.critical.assert_called_once_with(
+        None, "错误", startup.entry.STARTUP_FAILED_MESSAGE,
+    )
+    startup.application.exec.assert_not_called()
+
+
 def test_gui_app_no_longer_exposes_headless_analysis_entry() -> None:
     """The legacy headless local-file entry point is removed with LOCAL_FILE."""
     app = importlib.import_module("qq_chat_analyzer.gui.app")
