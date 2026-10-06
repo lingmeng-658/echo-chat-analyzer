@@ -336,6 +336,8 @@ def _build_reports(
     analysis core therefore stays unaware of QQ or WeChat naming rules, and
     omitting the mappings keeps the previous raw-identifier behavior.
     """
+    # Lexical rankings and rates must exclude the separate expression channel.
+    text_sender_tokens = _text_sender_tokens(sender_tokens)
     with timed_stage("ActivityAnalyzer"):
         activity = ActivityAnalyzer().analyze(messages)
     with timed_stage("MessageLengthAnalyzer"):
@@ -343,7 +345,7 @@ def _build_reports(
     with timed_stage("UserProfileAnalyzer"):
         user_profiles = UserProfileAnalyzer().analyze(
             messages,
-            sender_tokens=sender_tokens,
+            sender_tokens=text_sender_tokens,
             speaker_names=speaker_names,
         )
     with timed_stage("ConversationAnalyzer"):
@@ -357,12 +359,12 @@ def _build_reports(
         conversation_sessions = analyze_conversation_sessions(messages)
     with timed_stage("DistinctiveWordAnalyzer"):
         distinctive_words = DistinctiveWordAnalyzer().analyze(
-            sender_tokens,
+            text_sender_tokens,
             conversation_type=conversation_type,
         )
     with timed_stage("PrivateLanguageAnalyzer"):
         private_language = PrivateLanguageAnalyzer().analyze(
-            sender_tokens,
+            text_sender_tokens,
             conversation_type=conversation_type,
         )
     with timed_stage("ExpressionAnalyzer.report"):

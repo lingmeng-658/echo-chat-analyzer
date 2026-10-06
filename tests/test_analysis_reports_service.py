@@ -793,8 +793,8 @@ def test_private_qce_expression_fallback_does_not_leak_into_voice_words(
     ]
     assert "Facepalm" not in profile_words
     assert "Facepalm" not in private_words
-    assert "expression:market-facepalm" in profile_words
-    assert "expression:market-facepalm" in private_words
+    assert profile_words == []
+    assert private_words == []
 
 
 def test_sticker_only_chat_returns_expression_only_with_echo_artifacts(
@@ -861,8 +861,7 @@ def test_wechat_text_official_emoji_reaches_expression_report(
         for word in profile.top_words
     ]
     assert "哈哈" in profile_words
-    assert "expression:捂脸" in profile_words
-    assert "expression:旺柴" in profile_words
+    assert all(not word.startswith("expression:") for word in profile_words)
     assert "捂脸" not in profile_words
     payload = json.loads(
         (output_directory / "echo-report.json").read_text(encoding="utf-8")
@@ -896,9 +895,8 @@ def test_wechat_expression_placeholders_are_not_language_words(
         for word in profile.top_words
     ]
     assert "哈哈" in profile_words
-    assert "expression:😂" in profile_words
-    assert "expression:[表情]" in profile_words
-    assert "expression:表情" in profile_words
+    assert result.reports.expression.expression_occurrence_count > 0
+    assert all(not word.startswith("expression:") for word in profile_words)
     assert "表情" not in profile_words
 
 
