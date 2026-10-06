@@ -3809,6 +3809,36 @@ def _drive_wechat_database_mismatch(
     return window, facade, executor
 
 
+@pytest.mark.parametrize("code", ["query_failed", "unexpected_error"])
+def test_wechat_session_load_failure_exits_reading_state_and_allows_restart(
+    qt_app, sources, code,
+) -> None:
+    executor = _DeferredExecutor()
+    facade = _wechat_mismatch_facade(sources, verify_error=None)
+    workspace = _wechat_guide_module().WeChatWorkspace(facade, executor=executor)
+    workspace._show_connection_status(_wechat_connected_status(), True)
+    panel = workspace.session_panel
+    assert panel._session_list.item(0).text() == "正在读取聊天数据..."
+
+    executor.fail(code, "虚构会话读取失败，请重试。")
+
+    assert panel._session_list.item(0).text() == "暂无会话\n连接数据源后，这里会显示聊天记录"
+    assert not panel._sessions_ready
+    assert not workspace._sessions_loaded
+    assert not panel._analyze_button.isEnabled()
+    assert workspace._status_label.toolTip() == "虚构会话读取失败，请重试。"
+    assert getattr(workspace, "_wechat_setup_dialog", None) is None
+    button = workspace._wechat_connect_button
+    assert button.text() == "重新开始"
+    assert button.isVisibleTo(workspace)
+    assert button.isEnabled()
+    assert not workspace._wechat_disconnect_button.isVisibleTo(workspace)
+
+    button.click()
+    assert executor.submission_count == 2
+    assert panel._session_list.item(0).text() == "正在连接数据源..."
+
+
 def test_wechat_workspace_verifies_the_database_before_listing_sessions(
     qt_app, sources
 ) -> None:
@@ -3857,6 +3887,7 @@ def test_wechat_workspace_verifies_the_database_before_listing_sessions(
     assert facade.verify_wechat_database_calls
     assert facade.list_sessions_calls == [module.ChatSource.WECHAT]
     assert window.wechat_workspace.session_panel._sessions_ready is True
+    assert window.wechat_workspace.session_panel._session_list.item(0).text() == "测试会话1"
 
 
 def test_wechat_workspace_mismatch_returns_to_directory_selection(
@@ -3877,6 +3908,8 @@ def test_wechat_workspace_mismatch_returns_to_directory_selection(
     assert facade._verify_error.public_message in workspace._status_label.text()
     assert workspace._wechat_connect_button.text() == "\u91cd\u65b0\u5f00\u59cb"
     assert workspace._wechat_connect_button.isEnabled() is True
+    assert workspace.session_panel._session_list.item(0).text() == "暂无会话\n连接数据源后，这里会显示聊天记录"
+    assert not workspace.session_panel._sessions_ready
 
 
 def test_wechat_workspace_reselected_root_reuses_the_captured_key(

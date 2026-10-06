@@ -799,6 +799,7 @@ class WeChatWorkspace(QWidget):
         if code == _WECHAT_DATABASE_UNREADABLE_CODE:
             self._offer_wechat_directory_reselection(message)
             return
+        self.session_panel.show_disconnected_placeholder()
         database_codes = {
             "database_not_found",
             "key_unavailable",
