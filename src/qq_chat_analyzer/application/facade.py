@@ -1576,11 +1576,7 @@ def _translated_errors(source: ChatSource | None) -> Iterator[None]:
     except ApplicationServiceError as error:
         raise FacadeError(
             code=getattr(error, "code", "application_error"),
-            public_message=getattr(
-                error,
-                "public_message",
-                str(error),
-            ),
+            public_message=_provider_error_message(error),
             source=source,
         ) from error
     except Exception as error:
@@ -1600,14 +1596,11 @@ def _provider_error_code(error: Exception) -> str:
 
 
 def _provider_error_message(error: Exception) -> str:
-    """Use a provider's user-facing message when it offers one."""
+    """Trust explicit public messages; never expose raw exception text."""
     message = getattr(error, "public_message", None)
     if isinstance(message, str) and message.strip():
         return message
-    text = str(error).strip()
-    if text:
-        return text
-    return "\u5206\u6790\u8fc7\u7a0b\u51fa\u73b0\u9519\u8bef\u3002"
+    return "操作失败，请稍后重试。"
 
 
 def _snake_case(name: str) -> str:

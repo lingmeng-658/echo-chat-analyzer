@@ -2817,6 +2817,94 @@ def test_unlabelled_errors_still_produce_a_safe_message() -> None:
         raise AssertionError("expected a FacadeError")
 
 
+@pytest.mark.parametrize("source", ["qq", "wechat"])
+@pytest.mark.parametrize("original, public_message, expected_code", [
+    pytest.param(
+        PermissionError(13, "Permission denied", r"C:\Users\FictionalUser\Private\chat.json"),
+        "missing", "permission_error", id="private-windows-path",
+    ),
+    pytest.param(RuntimeError("Traceback: fictional native hook at 0xdeadbeef"),
+                 "missing", "runtime_error", id="internal-details"),
+    pytest.param(RuntimeError("fictional internal failure"), None, "runtime_error", id="null"),
+    pytest.param(RuntimeError("fictional internal failure"), "", "runtime_error", id="empty"),
+    pytest.param(RuntimeError("fictional internal failure"), " \n", "runtime_error", id="blank"),
+    pytest.param(RuntimeError("fictional internal failure"), 123, "runtime_error", id="non-string"),
+])
+def test_untrusted_exception_text_never_becomes_a_public_message(
+    source, original, public_message, expected_code,
+) -> None:
+    module = _facade_module()
+    if public_message != "missing":
+        original.public_message = public_message
+    facade = _facade(**{f"{source}_service": _StubQQService(error=original)})
+    chat_source = module.ChatSource(source)
+
+    with pytest.raises(module.FacadeError) as caught:
+        facade.list_sessions(chat_source)
+
+    error = caught.value
+    assert error.public_message == "操作失败，请稍后重试。"
+    assert str(original) not in error.public_message
+    assert error.code == expected_code
+    assert error.source is chat_source
+    assert error.__cause__ is original
+
+
+@pytest.mark.parametrize("source", ["qq", "wechat"])
+@pytest.mark.parametrize("public_message", ["missing", None, "", " \n", 123])
+def test_application_error_without_valid_public_message_is_safe(
+    source, public_message, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _facade_module()
+    base_error = _errors().ApplicationServiceError
+
+    class InternalApplicationError(base_error):
+        code = "fictional_application_failure"
+
+        def __init__(self) -> None:
+            Exception.__init__(self, r"Traceback: C:\Users\FictionalUser\Private\chat.json")
+
+    if public_message == "missing":
+        monkeypatch.delattr(base_error, "public_message")
+    else:
+        monkeypatch.setattr(InternalApplicationError, "public_message", public_message)
+    original = InternalApplicationError()
+    facade = _facade(**{f"{source}_service": _StubQQService(error=original)})
+    chat_source = module.ChatSource(source)
+
+    with pytest.raises(module.FacadeError) as caught:
+        facade.list_sessions(chat_source)
+
+    error = caught.value
+    assert error.public_message == "操作失败，请稍后重试。"
+    assert str(original) not in error.public_message
+    assert error.code == "fictional_application_failure"
+    assert error.source is chat_source
+    assert error.__cause__ is original
+
+
+@pytest.mark.parametrize("source", ["qq", "wechat"])
+@pytest.mark.parametrize("kind", ["application", "provider"])
+def test_existing_public_error_message_and_identity_are_preserved(source, kind) -> None:
+    module = _facade_module()
+    if kind == "application":
+        original = _errors().InputPathNotFound()
+    else:
+        provider = importlib.import_module("qq_chat_analyzer.providers.wechat_database_provider")
+        original = provider.DatabaseNotFound()
+    message = original.public_message
+    facade = _facade(**{f"{source}_service": _StubQQService(error=original)})
+    chat_source = module.ChatSource(source)
+
+    with pytest.raises(module.FacadeError) as caught:
+        facade.list_sessions(chat_source)
+
+    assert caught.value.public_message == message
+    assert caught.value.code == original.code
+    assert caught.value.source is chat_source
+    assert caught.value.__cause__ is original
+
+
 def test_unknown_source_raises_a_facade_error() -> None:
     module = _facade_module()
     facade = _facade()
