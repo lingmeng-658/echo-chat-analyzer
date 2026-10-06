@@ -359,8 +359,12 @@ LocalChatAnalyzer/
 
 - `reports/` 的持久资产只包括正式 Report Package，不放默认分析 scratch 或 raw export。
   发布期间在同一 root 创建 `.echo-report-<uuid>` staging，四文件完整写入后 rename
-  为正式 package；staging 不进入 catalog，不计入 retention，也不属于删除全部报告的目标。
-  普通发布异常会尝试清理 staging；这不等于异常终止后的 staging recovery。
+  为正式 package；staging 不进入 catalog，不计入 retention。发布时创建同 root ownership
+  sidecar，绑定 root、staging 和 sidecar 的文件系统身份，并持有 OS 文件锁。
+  普通发布异常会尝试清理 staging；catalog list / clear_all 会恢复清理具有有效 ownership
+  且未被活跃发布锁定的 staging。清理前拒绝 reparse point、身份变化和未知成员；仅有前缀
+  或缺少有效 sidecar 的旧 staging 不会被删除。恢复失败只记录安全诊断，clear_all 沿用
+  既有失败错误；staging 不作为正式报告或不可读报告 issue 展示。
 - `package_echo_report()` 只负责发布；Facade 显式使用 Catalog 的 canonical
   `reports_root`，成功返回正式目录后才调用 Catalog retention。发布失败不淘汰旧报告。
 - `ReportPackageCatalog` 只读 `metadata.json` 构建 summary（包括 `conversation_kind`）；
@@ -651,6 +655,7 @@ GUI 只装配控件、转发事件、展示状态。
 | `application/analysis_service.py` | 应用服务 |
 | `application/scope_filter.py` | 单次分析时间范围过滤 |
 | `application/echo_report_export.py` | 四文件 Report Package staging 与正式发布 |
+| `application/report_staging.py` | Report staging ownership、发布锁与安全恢复清理 |
 | `application/report_package_metadata.py` | Report Package metadata 构建 |
 | `application/report_package_catalog.py` | metadata catalog、安全定位、完整 package 删除与固定 max-50 retention |
 | `application/dto.py` / `errors.py` / `task.py` / `export_config.py` | 应用契约 |

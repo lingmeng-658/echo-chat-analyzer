@@ -14,6 +14,7 @@ import stat
 from ..resources import user_data_dir
 from .echo_report_export import ECHO_REPORT_HTML_NAME, _require_no_reparse_points
 from .scope_filter import AnalysisScope, AnalysisScopeMode
+from .report_staging import recover_report_staging
 
 _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.report_package")
 _PACKAGE_NAME = re.compile(r"Echo_Report_[0-9]{8}_[0-9]{6}(?:_(?:[2-9]|[1-9][0-9]+))?\Z")
@@ -145,6 +146,7 @@ class ReportPackageCatalog:
 
     def list_reports(self) -> ReportPackageListing:
         root = self._root()
+        recover_report_staging(root)
         reports, issues = [], []
         candidates = _candidates(root)
         _LOGGER.info("Report catalog scan root=%s candidates=%d", root, len(candidates))
@@ -178,7 +180,7 @@ class ReportPackageCatalog:
 
     def clear_all(self) -> None:
         root = self._root()
-        failed = False
+        failed = not recover_report_staging(root)
         candidates = _candidates(root)
         deleted = 0
         _LOGGER.info("Report package clear started root=%s candidates=%d", root, len(candidates))

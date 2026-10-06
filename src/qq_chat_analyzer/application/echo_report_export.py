@@ -9,7 +9,6 @@ import stat
 from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
-from uuid import uuid4
 
 from ..resources import user_data_dir
 
@@ -68,17 +67,9 @@ def package_echo_report(
     ).strftime("%Y%m%d_%H%M%S")
     root.mkdir(parents=True, exist_ok=True)
     target = _next_report_directory(root, stamp)
-    # mkdir retains the existing package ACL inheritance on Windows; Python
-    # 3.13 mkdtemp's mode=0700 would instead install a restrictive ACL.
-    while True:
-        staging = root / f".echo-report-{uuid4().hex}"
-        try:
-            staging.mkdir()
-            break
-        except FileExistsError:
-            continue
+    from .report_staging import owned_report_staging
 
-    try:
+    with owned_report_staging(root) as staging:
         shutil.copy2(source_html, staging / ECHO_REPORT_HTML_NAME, follow_symlinks=False)
         shutil.copy2(source_json, staging / ECHO_REPORT_JSON_NAME, follow_symlinks=False)
         (staging / ECHO_REPORT_METADATA_NAME).write_text(
@@ -102,13 +93,6 @@ def package_echo_report(
                 break
             except FileExistsError:
                 target = _next_report_directory(root, stamp)
-    except Exception:
-        try:
-            _require_no_reparse_points(staging)
-            shutil.rmtree(staging)
-        except (OSError, EchoReportExportError):
-            _LOGGER.warning("Report package staging cleanup failed.", exc_info=True)
-        raise
     return target
 
 
