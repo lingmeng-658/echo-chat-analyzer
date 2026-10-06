@@ -21,11 +21,6 @@ from .dto import (
     ArtifactDTO,
     WordFrequencyDTO,
 )
-from .qq.qce_compat.export_task_manager import (
-    ExportTaskManager,
-    ExportTaskState,
-    ExportTaskStatus,
-)
 from .export_config import ExportConfig
 from .errors import (
     ApplicationServiceError,
@@ -60,15 +55,6 @@ from .report_package_catalog import (
 from .qq.qq_connection_service import (
     QQConnectionService,
     QQConnectionStatus,
-)
-from .qq.qce_compat.qq_export_import_service import (
-    QQExportAcquisition,
-    QQExportFileMissing,
-    QQExportImportRequest,
-    QQExportImportService,
-    QQExportProgress,
-    QQExportProvider,
-    QQExportUnavailable,
 )
 from .qq.qq_runtime_manager import (
     QQRuntimeManager,
@@ -134,9 +120,6 @@ __all__ = [
     "ConversationReport",
     "ConversationSessionReport",
     "ExportConfig",
-    "ExportTaskManager",
-    "ExportTaskState",
-    "ExportTaskStatus",
     "FacadeError",
     "ImportOutcome",
     "ImportRequest",
@@ -148,13 +131,6 @@ __all__ = [
     "MessageLengthReport",
     "NoSupportedInput",
     "NoMessagesInScope",
-    "QQExportFileMissing",
-    "QQExportAcquisition",
-    "QQExportImportRequest",
-    "QQExportImportService",
-    "QQExportProgress",
-    "QQExportProvider",
-    "QQExportUnavailable",
     "QQRuntimeManager",
     "QQRuntimeState",
     "QQRuntimeStatus",

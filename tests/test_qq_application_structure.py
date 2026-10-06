@@ -23,19 +23,10 @@ MOVES = {
     "connection.qq_auth_bridge": "qq.qq_auth_bridge",
     "runtime.qq_runtime_manager": "qq.qq_runtime_manager",
     "connection.models": "connection_models",
-    "qq_export_import_service": "qq.qce_compat.qq_export_import_service",
-    "export_task_manager": "qq.qce_compat.export_task_manager",
-    "qq_transient_export": "qq.qce_compat.qq_transient_export",
 }
 CONTRACTS = (
     ("qq_connection_service", "qq.qq_connection_service",
      ("QQConnectionService", "QQConnectionStatus")),
-    ("qq_export_import_service", "qq.qce_compat.qq_export_import_service",
-     ("QQExportAcquisition", "QQExportFileMissing", "QQExportImportRequest",
-      "QQExportImportService", "QQExportProgress", "QQExportProvider",
-      "QQExportUnavailable")),
-    ("export_task_manager", "qq.qce_compat.export_task_manager",
-     ("ExportTaskManager", "ExportTaskState", "ExportTaskStatus")),
     ("runtime.qq_runtime_manager", "qq.qq_runtime_manager",
      ("QQRuntimeManager", "QQRuntimeState", "QQRuntimeStatus")),
     ("runtime", "qq.qq_runtime_manager",
@@ -73,7 +64,7 @@ def test_old_new_and_application_exports_share_identity(old, new, symbols) -> No
         assert name in application.__all__
 
 
-@pytest.mark.parametrize("package", ("qq", "qq/qce_compat"))
+@pytest.mark.parametrize("package", ("qq",))
 def test_new_qq_packages_do_not_route_imports(package: str) -> None:
     tree = ast.parse(
         (APPLICATION_ROOT / package / "__init__.py").read_text(encoding="utf-8-sig")

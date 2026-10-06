@@ -38,20 +38,6 @@ def test_application_package_exports_qq_connection_types() -> None:
     assert callable(application.QQConnectionService.check_status)
 
 
-def test_application_package_exports_qq_snapshot_acquisition() -> None:
-    application = importlib.import_module("qq_chat_analyzer.application")
-    service_module = importlib.import_module(
-        "qq_chat_analyzer.application.qq_export_import_service"
-    )
-
-    assert application.QQExportAcquisition is service_module.QQExportAcquisition
-    assert "QQExportAcquisition" in application.__all__
-    assert callable(application.QQExportImportService.acquired_export)
-    # Stage 1.1: acquisition is only reachable through the owned-lease
-    # context manager. A public unmanaged entry point would let QCE fall
-    # back to its default exports directory and hand callers a path Echo
-    # never cleans up.
-    assert not hasattr(application.QQExportImportService, "acquire_export")
 
 
 def test_application_package_exports_wechat_connection_types() -> None:
@@ -105,24 +91,6 @@ def test_application_package_exports_wechat_environment_config() -> None:
         assert name in application.__all__
 
 
-def test_application_package_exports_export_task_types() -> None:
-    application = importlib.import_module("qq_chat_analyzer.application")
-    manager_module = importlib.import_module(
-        "qq_chat_analyzer.application.export_task_manager"
-    )
-
-    assert application.ExportTaskManager is manager_module.ExportTaskManager
-    assert application.ExportTaskStatus is manager_module.ExportTaskStatus
-    assert application.ExportTaskState is manager_module.ExportTaskState
-    for name in (
-        "ExportTaskManager",
-        "ExportTaskState",
-        "ExportTaskStatus",
-    ):
-        assert name in application.__all__
-    assert callable(application.ExportTaskManager.start_export)
-    assert callable(application.ExportTaskManager.get_status)
-    assert callable(application.ExportTaskManager.wait_for_completion)
 
 
 def test_application_package_exports_runtime_manager_types() -> None:

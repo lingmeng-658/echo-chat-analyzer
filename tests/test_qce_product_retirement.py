@@ -2,6 +2,8 @@
 
 from contextlib import contextmanager
 from dataclasses import fields
+import importlib
+from pathlib import Path
 
 import pytest
 
@@ -66,3 +68,61 @@ def test_facade_rejects_export_only_qq_service(tmp_path):
     with pytest.raises(FacadeError):
         facade.analyze_session(ChatSource.QQ, "fictional-group")
     assert calls == []
+
+
+RETIRED_MODULES = (
+    "qq_chat_analyzer.providers.qq_chat_exporter_provider",
+    "qq_chat_analyzer.application.qq.qce_compat",
+    "qq_chat_analyzer.application.qq.qce_compat.qq_export_import_service",
+    "qq_chat_analyzer.application.qq.qce_compat.export_task_manager",
+    "qq_chat_analyzer.application.qq.qce_compat.qq_transient_export",
+    "qq_chat_analyzer.application.qq_export_import_service",
+    "qq_chat_analyzer.application.export_task_manager",
+)
+
+
+@pytest.mark.parametrize("module_name", RETIRED_MODULES)
+def test_retired_qce_modules_cannot_be_imported(module_name):
+    with pytest.raises(ModuleNotFoundError) as caught:
+        importlib.import_module(module_name)
+    assert module_name == caught.value.name or module_name.startswith(
+        caught.value.name + "."
+    )
+
+
+def test_retired_qce_modules_are_physically_absent():
+    source_root = Path(__file__).resolve().parents[1] / "src"
+    for module_name in RETIRED_MODULES:
+        path = source_root.joinpath(*module_name.split("."))
+        assert not path.with_suffix(".py").exists()
+        assert not path.exists()
+
+
+@pytest.mark.parametrize(
+    "package_name, retired_names",
+    [
+        (
+            "qq_chat_analyzer.application",
+            {
+                "QQExportAcquisition", "QQExportFileMissing", "QQExportImportRequest",
+                "QQExportImportService", "QQExportProgress", "QQExportProvider",
+                "QQExportUnavailable", "ExportTaskManager", "ExportTaskState",
+                "ExportTaskStatus",
+            },
+        ),
+        (
+            "qq_chat_analyzer.providers",
+            {
+                "DEFAULT_BASE_URL", "ExportGroup", "ExportTask", "ExportTaskCancelled",
+                "ExportTaskFailed", "ExportTaskLimitReached", "ExportTimeout",
+                "QQChatExporterError", "QQChatExporterProvider", "RequestFailed",
+                "ServiceHealth", "ServiceUnavailable", "TaskNotFound", "TokenUnavailable",
+                "read_token", "resolve_security_candidates", "resolve_security_path",
+            },
+        ),
+    ],
+)
+def test_public_packages_do_not_export_qce_types(package_name, retired_names):
+    package = importlib.import_module(package_name)
+    assert retired_names.isdisjoint(package.__all__)
+    assert not any(hasattr(package, name) for name in retired_names)
