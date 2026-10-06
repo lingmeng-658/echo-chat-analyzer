@@ -8,10 +8,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QApplication,
+    QFrame,
     QSizePolicy,
     QHBoxLayout,
     QLabel,
@@ -29,7 +30,7 @@ from .home_page import HomePage
 from .local_data_page import LocalDataPage
 from .qq_workspace import QQWorkspace
 from .shutdown import ShutdownProtocol
-from .theme import STATUS_STYLE_BASE, WINDOW_TITLE_STYLE
+from .theme import STATUS_STYLE_BASE, WINDOW_CLIENT_SEPARATOR_STYLE, WINDOW_TITLE_STYLE
 from .wechat_workspace import WeChatWorkspace
 from .workers import shutdown as shutdown_workers
 from .workers import submit
@@ -89,6 +90,9 @@ class MainWindow(QMainWindow):
 
         container = QWidget()
         layout = QVBoxLayout(container)
+        self._page_layout = layout
+        self._workspace_margins = layout.contentsMargins()
+        self._workspace_spacing = layout.spacing()
 
         # Create pages (order matters for stack indices)
         self.home_page = HomePage()
@@ -166,7 +170,15 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(container)
 
+        # Overlay the client edge without consuming any page layout space.
+        # Window decorations, dragging, and resizing remain owned by Windows.
+        self._client_separator = QFrame(container)
+        self._client_separator.setObjectName("echoClientSeparator")
+        self._client_separator.setStyleSheet(WINDOW_CLIENT_SEPARATOR_STYLE)
+        self._client_separator.setAttribute(Qt.WA_TransparentForMouseEvents)
+
         self.setMinimumSize(800, 600)
+        self.resize(1200, 760)
         self.stack.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
 
         # Home navigation
@@ -184,9 +196,22 @@ class MainWindow(QMainWindow):
         self.wechat_workspace.status_changed.connect(self.show_status)
 
         # Start at home
+        self.stack.currentChanged.connect(self._sync_page_chrome)
         self.show_home_page()
+        self._sync_page_chrome(HOME_PAGE_INDEX)
 
     # ---------------------------------------------------------------- navigation
+
+    def _sync_page_chrome(self, index: int) -> None:
+        """Let Home fill the native window; restore existing chrome elsewhere."""
+        is_home = index == HOME_PAGE_INDEX
+        self._title_label.setVisible(not is_home)
+        if is_home:
+            self._page_layout.setContentsMargins(0, 0, 0, 0)
+            self._page_layout.setSpacing(0)
+        else:
+            self._page_layout.setContentsMargins(self._workspace_margins)
+            self._page_layout.setSpacing(self._workspace_spacing)
 
     def show_home_page(self) -> None:
         """Navigate to the home page."""
@@ -505,6 +530,11 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, _ERROR_TITLE, message)
 
     # ---------------------------------------------------------------- lifecycle
+
+    def resizeEvent(self, event: Any) -> None:
+        super().resizeEvent(event)
+        self._client_separator.setGeometry(0, 0, self.centralWidget().width(), 1)
+        self._client_separator.raise_()
 
     def closeEvent(self, event: Any) -> None:
         """Close quickly; one bounded protocol owns the owned-process cleanup.

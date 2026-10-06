@@ -2508,17 +2508,138 @@ def test_main_window_starts_at_home_page(qt_app, sources) -> None:
     # home_page is the current (top) page in the stack
 
 
-def test_home_page_has_three_entry_buttons(qt_app, sources) -> None:
-    """HomePage has QQ, WeChat, and local data buttons."""
+def test_main_window_default_size_is_shared_and_remains_resizable(qt_app, sources):
+    window = _main_window(qt_app, StubFacade(sources=sources))
+    window.show()
+    _drain(window)
+    assert window.size().toTuple() == (1200, 760)
+    assert window.minimumSize().toTuple() == (800, 600)
+    assert not window.windowFlags() & Qt.FramelessWindowHint
+    for navigate in (window.show_qq_workspace, window.show_wechat_workspace,
+                     window.show_local_data_page, window.show_home_page):
+        navigate()
+        _drain(window)
+        assert window.size().toTuple() == (1200, 760)
+    window.resize(900, 650)
+    _drain(window)
+    assert window.size().toTuple() == (900, 650)
+    window.hide()
+
+
+@pytest.mark.parametrize("activation", ["mouse", "keyboard"])
+@pytest.mark.parametrize(
+    "name, destination, active_source",
+    [("从QQ开始", 1, "qq"), ("从微信开始", 2, "wechat"),
+     ("查看本地报告", 5, None)],
+)
+def test_home_entries_navigate_by_mouse_and_keyboard(
+    qt_app, sources, name, destination, active_source, activation,
+) -> None:
+    """The two identically captioned start links must route to their own source."""
+    from PySide6.QtWidgets import QPushButton
+
     facade = StubFacade(sources=sources)
     window = _main_window(qt_app, facade)
+    window.show()
+    _drain(window)
+    buttons = window.home_page.findChildren(QPushButton)
+    matches = [button for button in buttons if button.accessibleName() == name]
+    assert len(matches) == 1
+    button = matches[0]
+    if activation == "mouse":
+        QTest.mouseClick(button, Qt.LeftButton)
+    else:
+        button.setFocus()
+        QTest.keyClick(button, Qt.Key_Space)
+    _drain(window)
+    assert window.stack.currentIndex() == destination
+    assert window._active_source == active_source
+    window.hide()
+
+
+def test_home_uses_full_content_area_and_restores_workspace_header(qt_app, sources):
+    """Home has no duplicate header or outer gutter; workspace chrome returns."""
+    window = _main_window(qt_app, StubFacade(sources=sources))
+    window.resize(960, 720)
+    window.show()
+    _drain(window)
+    initial_size = window.size()
+    assert not window._title_label.isVisibleTo(window)
+    assert window.home_page.size() == window.centralWidget().size()
+
+    window.show_qq_workspace()
+    _drain(window)
+    assert window._title_label.isVisibleTo(window)
+    assert window._home_button.isVisibleTo(window)
+    assert window.centralWidget().layout().contentsMargins().left() > 0
+
+    window._home_button.click()
+    _drain(window)
+    assert not window._title_label.isVisibleTo(window)
+    assert window.home_page.size() == window.centralWidget().size()
+    assert window.size() == initial_size
+    window.hide()
+
+
+def test_home_theme_preserves_type_hierarchy_on_first_show(qt_app):
+    """The generic Home rule must not flatten named title/secondary styles."""
+    from PySide6.QtWidgets import QLabel, QWidget
+    from qq_chat_analyzer.gui.home_page import HomePage
+    from qq_chat_analyzer.gui.theme import BASE_QSS
+
+    host = QWidget()
+    host.setStyleSheet(BASE_QSS)
+    page = HomePage(host)
+    host.show()
+    _drain(host)
+    title = page.findChild(QLabel, "homeTitle")
+    source = page.findChild(QLabel, "homeSourceName")
+    description = page.findChild(QLabel, "homeSourceDescription")
+    assert title.font().pixelSize() > source.font().pixelSize()
+    assert source.font().pixelSize() > description.font().pixelSize()
+    assert source.palette().windowText().color() != description.palette().windowText().color()
+    host.hide()
+
+
+@pytest.mark.parametrize("size", [(800, 600), (960, 720), (1200, 728), (1600, 900)])
+def test_home_content_fits_resized_window(qt_app, sources, size):
+    """Responsive gutters must keep source copy and all actions unclipped."""
+    from PySide6.QtCore import QPoint, QRect
+    from PySide6.QtWidgets import QLabel, QPushButton
+    from qq_chat_analyzer.gui.theme import BASE_QSS
+
+    window = _main_window(qt_app, StubFacade(sources=sources))
+    window.setStyleSheet(BASE_QSS)
+    window.resize(*size)
+    window.show()
+    _drain(window)
     page = window.home_page
-    from PySide6.QtWidgets import QPushButton
-    buttons = page.findChildren(QPushButton)
-    labels = {b.text() for b in buttons}
-    assert "QQ" in labels
-    assert "\u5fae\u4fe1" in labels
-    assert "\u672c\u5730\u6570\u636e" in labels
+    assert window.size().toTuple() == size
+    for widget in page.findChildren(QLabel) + page.findChildren(QPushButton):
+        bounds = QRect(widget.mapTo(page, QPoint()), widget.size())
+        assert page.rect().contains(bounds), widget.objectName() or widget.text()
+        if isinstance(widget, QLabel) and widget.wordWrap():
+            assert widget.height() >= widget.heightForWidth(widget.width())
+        else:
+            assert widget.width() >= widget.sizeHint().width()
+            assert widget.height() >= widget.sizeHint().height()
+    assert page._sources.geometry().bottom() < page._local_data_btn.geometry().top()
+    window.hide()
+
+
+def test_home_tab_order_follows_source_then_report_hierarchy(qt_app, sources):
+    window = _main_window(qt_app, StubFacade(sources=sources))
+    window.show()
+    _drain(window)
+    page = window.home_page
+    page._qq_btn.setFocus()
+    QTest.keyClick(page._qq_btn, Qt.Key_Tab)
+    assert page._wechat_btn.hasFocus()
+    QTest.keyClick(page._wechat_btn, Qt.Key_Tab)
+    assert page._local_data_btn.hasFocus()
+    QTest.keyClick(page._local_data_btn, Qt.Key_Backtab)
+    assert page._wechat_btn.hasFocus()
+    window.hide()
 
 
 def test_click_qq_navigates_to_qq_workspace_with_qq_source(qt_app, sources) -> None:

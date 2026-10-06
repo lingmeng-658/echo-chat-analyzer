@@ -60,6 +60,60 @@ GUIDE_STYLE_EMPHASIS = (
 
 HOME_TITLE_STYLE = f"font-size: {FONT_SIZE_HOME_TITLE}; font-weight: 600;"
 HOME_SUBTITLE_STYLE = f"font-size: 14px; color: {COLOR_MUTED};"
+
+# v0 Home OKLCH colors converted to sRGB. Scope these to Home so the
+# established workspace/report palette is unaffected by this visual refresh.
+HOME_COLOR_PAPER = "#f8f5ed"
+HOME_COLOR_LEAF = "#f1ece4"
+HOME_COLOR_TEXT = "#1d1a17"
+HOME_COLOR_MUTED = "#69625d"
+HOME_COLOR_ACCENT = "#a75e41"
+HOME_QSS = f"""
+QWidget#echoHome, QWidget#echoHome QWidget {{
+    font-family: "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+    font-size: 13px;
+    font-weight: 400;
+    color: {HOME_COLOR_TEXT};
+    background: transparent;
+    border: none;
+    border-radius: 0;
+}}
+QWidget#echoHome {{ background: {HOME_COLOR_PAPER}; }}
+QWidget#echoHome QFrame#homeBrand {{ background: {HOME_COLOR_LEAF}; }}
+QWidget#echoHome QFrame#homeContent {{ border-left: 1px solid #eeebe3; }}
+QWidget#echoHome QLabel#homeTitle {{
+    font-family: {SERIF_FAMILY};
+    font-size: 48px;
+    font-weight: 500;
+}}
+QWidget#echoHome QLabel#homeEnglish,
+QWidget#echoHome QLabel#homeSourceDescription {{ color: {HOME_COLOR_MUTED}; }}
+QWidget#echoHome QLabel#homeDescription {{ color: #524f4a; }}
+QWidget#echoHome QLabel#homePrivacy {{ font-size: 12px; color: {HOME_COLOR_MUTED}; }}
+QWidget#echoHome QLabel#homeSourceName {{ font-size: 24px; font-weight: 500; }}
+QWidget#echoHome QFrame#homeRule {{ background: #e2dfd8; }}
+QWidget#echoHome QPushButton {{
+    color: {HOME_COLOR_ACCENT};
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    outline: none;
+    padding: 6px 4px;
+}}
+QWidget#echoHome QPushButton:hover,
+QWidget#echoHome QPushButton:focus {{
+    color: {HOME_COLOR_ACCENT};
+    text-decoration: underline;
+}}
+QWidget#echoHome QPushButton:pressed {{ color: {HOME_COLOR_TEXT}; }}
+QWidget#echoHome QPushButton#homeReports {{ font-size: 12px; color: {HOME_COLOR_MUTED}; }}
+QWidget#echoHome QPushButton#homeReports:hover {{ color: {HOME_COLOR_TEXT}; text-decoration: none; }}
+QWidget#echoHome QPushButton#homeReports:focus {{ color: {HOME_COLOR_ACCENT}; text-decoration: underline; }}
+"""
+
+WINDOW_CLIENT_SEPARATOR_STYLE = (
+    f"QFrame#echoClientSeparator {{ background: {COLOR_RULE_SOFT}; border: none; }}"
+)
 WINDOW_TITLE_STYLE = f"font-size: {FONT_SIZE_TITLE}; font-weight: 600;"
 DASHBOARD_TITLE_STYLE = (
     f"font-size: {FONT_SIZE_DASHBOARD_TITLE}; font-weight: 600;"
@@ -258,10 +312,17 @@ __all__ = [
     "GUIDE_STYLE_EMPHASIS",
     "HOME_SUBTITLE_STYLE",
     "HOME_TITLE_STYLE",
+    "HOME_COLOR_ACCENT",
+    "HOME_COLOR_LEAF",
+    "HOME_COLOR_MUTED",
+    "HOME_COLOR_PAPER",
+    "HOME_COLOR_TEXT",
+    "HOME_QSS",
     "METRIC_CARD_STYLE",
     "SERIF_FAMILY",
     "SESSION_LIST_STYLE",
     "STATUS_STYLE_BASE",
     "STATUS_STYLE_ERROR",
     "WINDOW_TITLE_STYLE",
+    "WINDOW_CLIENT_SEPARATOR_STYLE",
 ]

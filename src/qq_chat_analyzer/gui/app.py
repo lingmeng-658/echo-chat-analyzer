@@ -191,7 +191,6 @@ def main(argv: list[str] | None = None) -> int:
         app.setQuitOnLastWindowClosed(True)
         app.setStyleSheet(BASE_QSS)
         window = MainWindow(build_facade())
-        window.resize(960, 720)
         window.show()
         exit_code = app.exec()
         _finish_process_exit(exit_code, window=window)
