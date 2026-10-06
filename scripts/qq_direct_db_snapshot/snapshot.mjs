@@ -383,7 +383,7 @@ export function createEchoSnapshotApi(core, options = {}) {
           const ready = api.hasPassphrase() === true;
           if (ready) {
             if (!firstPollRecorded) traceStage('passphrase_wait_polled');
-            // QCE's API adapter is a Proxy whose unknown-method fallback also
+            // The DatabaseApi namespace Proxy's unknown-method fallback also
             // exposes a callable `then`. Returning that Proxy directly from an
             // async function makes Promise resolution treat it as a thenable;
             // the fallback ignores resolve/reject, so this wait never settles.

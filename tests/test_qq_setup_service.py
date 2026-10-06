@@ -1,7 +1,7 @@
 """Behavior tests for the QQ setup service one-click connect flow.
 
 Everything here uses fictional temp paths and stub runtime/connection
-collaborators. No real QCE process, token, or chat data is ever touched.
+collaborators. No real QQ process, authorization, or chat data is ever touched.
 """
 
 from __future__ import annotations

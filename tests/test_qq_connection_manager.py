@@ -171,7 +171,7 @@ def test_runtime_started_without_qq_login_maps_to_waiting_auth() -> None:
     assert snapshot.state is module.ConnectionState.WAITING_AUTH
 
 
-def test_auth_waiting_keeps_waiting_when_qce_not_ready() -> None:
+def test_auth_waiting_keeps_waiting_when_napcat_not_ready() -> None:
     module = _connection_module()
     runtime = importlib.import_module(
         "qq_chat_analyzer.application.qq.qq_runtime_manager"
@@ -221,7 +221,7 @@ def test_auth_waiting_survives_status_probe_failure() -> None:
     assert snapshot.state is module.ConnectionState.WAITING_AUTH
 
 
-def test_auth_waiting_clears_once_qce_becomes_ready() -> None:
+def test_auth_waiting_clears_once_napcat_becomes_ready() -> None:
     module = _connection_module()
     service = _StubConnectionService(
         _status(

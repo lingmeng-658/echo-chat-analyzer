@@ -1,5 +1,9 @@
 # Echo 统一数据模型概念设计
 
+> **基线导航（2026-10-07）**：本文保留历史概念设计，不作为当前实现合同。
+> QCE resources 等来源描述属于已退休的审计基线；现役统一模型与 QQ Direct DB / WeChat
+> 边界见 [ARCHITECTURE](../ARCHITECTURE.md)，不据此恢复旧文件兼容。
+
 ## 1. 目的与范围
 
 本文定义 Echo 未来统一数据模型的概念边界。它不设计 Python class、数据库表、

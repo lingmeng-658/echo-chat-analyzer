@@ -470,11 +470,11 @@ def test_runtime_build_rejects_empty_official_static_directory(
 ) -> None:
     """The official NapCat UI payload remains required."""
     runtime = _fictional_runtime(tmp_path)
-    static_qce = runtime / "qq-napcat-candidate/static"
-    for child in static_qce.rglob("*"):
+    static_assets = runtime / "qq-napcat-candidate/static"
+    for child in static_assets.rglob("*"):
         if child.is_file():
             child.unlink()
-    assert static_qce.is_dir()
+    assert static_assets.is_dir()
 
     completed = _copy_runtime(tmp_path)
 

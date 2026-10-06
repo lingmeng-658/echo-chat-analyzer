@@ -1181,7 +1181,7 @@ def test_get_connection_status_accepts_a_plain_source_string() -> None:
             qq_online=False,
             version=None,
             message="\u4e0d\u53ef\u7528",
-            action_hint="\u542f\u52a8 QQChatExporter",
+            action_hint="\u542f\u52a8 NapCat",
         )
     )
     facade = _facade(qq_connection_service=connection_service)
@@ -2998,7 +2998,7 @@ def _snapshot(
         session_type="group",
         acquired_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
         data_size_bytes=size,
-        storage_format="qce_json",
+        storage_format="qq-db-json",
         storage_path=f"data/snapshots/qq/{snapshot_id}/export.json",
         payload_state=(
             payload_state or module.SnapshotPayloadState.AVAILABLE

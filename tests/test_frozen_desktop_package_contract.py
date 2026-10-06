@@ -1,4 +1,4 @@
-"""Frozen Windows desktop package contract for the jieba LAC / numpy pruning.
+"""Frozen Windows package contracts for retained modules and retired capabilities.
 
 Full-only: this inspects an already built ``dist/Echo`` tree. Building the
 package is a separate step (``scripts/build_windows_exe.ps1``), so the tests
@@ -22,6 +22,16 @@ EXECUTABLE = DIST_APP / "Echo.exe"
 # Retained on purpose: Echo never uses jieba LAC, but plain segmentation and
 # the other jieba data files stay in the package.
 KEPT_RUNTIME_DIRECTORIES = ("PySide6", "shiboken6", "zstandard")
+
+RETIRED_QQ_MODULES = (
+    "qq_chat_analyzer.providers.qq_chat_exporter_provider",
+    "qq_chat_analyzer.application.qq.qce_compat",
+    "qq_chat_analyzer.application.qq_export_import_service",
+    "qq_chat_analyzer.application.export_task_manager",
+    "qq_chat_analyzer.application.qq_transient_export",
+    "qq_chat_analyzer.qq_chat_exporter_adapter",
+    "qq_chat_analyzer.parser",
+)
 
 pytestmark = pytest.mark.slow_integration
 
@@ -60,6 +70,27 @@ def test_frozen_package_uses_pinned_echo_napcat_without_qce() -> None:
 
 def test_frozen_import_graph_contains_napcat_provider() -> None:
     assert 'qq_chat_analyzer.providers.napcat_qq_provider' in _frozen_modules()
+
+
+def test_frozen_package_has_no_retired_qq_python_modules() -> None:
+    modules = _frozen_modules()
+    retired = sorted(
+        name for name in modules
+        if any(name == prefix or name.startswith(prefix + ".")
+               for prefix in RETIRED_QQ_MODULES)
+    )
+    assert retired == []
+    # Also reject loose modules/package trees outside the embedded PYZ.
+    for package_root in DIST_APP.rglob("qq_chat_analyzer"):
+        if not package_root.is_dir():
+            continue
+        for module in RETIRED_QQ_MODULES:
+            relative = module.removeprefix("qq_chat_analyzer.").replace(".", "/")
+            path = package_root / relative
+            assert not path.exists(), path
+            assert not path.with_suffix(".py").exists(), path
+            assert not path.with_suffix(".pyc").exists(), path
+            assert not list((path.parent / "__pycache__").glob(path.name + ".*.pyc")), path
 
 
 def test_frozen_package_does_not_contain_numpy() -> None:

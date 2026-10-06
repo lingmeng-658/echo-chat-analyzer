@@ -1,4 +1,4 @@
-"""QCE product entrypoints stay retired; source compatibility is separate."""
+"""QCE product entrypoints stay retired; file-format retirement is covered separately."""
 
 from contextlib import contextmanager
 from dataclasses import fields

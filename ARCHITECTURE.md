@@ -2,7 +2,7 @@
 
 本文档是 Local Chat Analyzer 的**唯一架构事实来源**。
 
-描述范围：当前已实现并通过测试的结构（v0.7.0 Desktop MVP Foundation）。
+描述范围：当前已实现并通过测试的结构；发布状态与版本治理见 `docs/HARDENING.md`。
 不包含未来路线图、环境搭建步骤和用户使用说明，参见第 9 节的文档边界。
 
 ---
@@ -12,8 +12,8 @@
 项目要同时满足四个约束：
 
 1. **隐私优先** —— 真实聊天记录只在用户本机处理，不出网络，不进日志。
-2. **多来源** —— GUI 现役来源为 QQ 与微信。JSON / JSONL 的 parser 与
-   `ImportService` 保留为统一分析核心的底层导入能力，但不构成 `LOCAL_FILE`
+2. **多来源** —— GUI 现役来源为 QQ 与微信。现役 adapter / `wechat_parser` 与
+   `ImportService` 提供当前支持格式的本地文件导入，`echo-chat` 仍使用该能力，但不构成 `LOCAL_FILE`
    GUI 产品入口或 Facade 分析入口。
 3. **分析核心稳定** —— 新增来源不应该迫使分析逻辑改动。
 4. **面向普通用户** —— 最终形态是桌面应用，而非命令行脚本。
@@ -36,32 +36,30 @@ GUI 带来第二个问题：界面若直接调用各个 Service，就会把来�
 flowchart TD
     subgraph EXT["外部数据源（进程外）"]
         QQDB["QQ 本地数据库<br/>NapCat 解密快照"]
-        QCE["QQChatExporter<br/>CLI compatibility"]
+        NAPCAT["NapCat<br/>启动 / 登录 / 本地解密"]
         WXAPP["微信本地数据库"]
         FILE["已导出文件<br/>JSON / JSONL"]
     end
 
     subgraph ACQ["Provider 数据获取"]
         PQQDB["qq_database_provider"]
-        PQQ["qq_chat_exporter_provider"]
         PWXDB["wechat_database_provider"]
         PWXCLI["wechat_cli_provider"]
     end
 
     subgraph ADP["Adapter / Parser 格式转换"]
         AQQDB["qq_db_adapter"]
-        AQQ["qq_chat_exporter_adapter"]
         AWXDB["wechat_db_adapter"]
         AWXCLI["wechat_cli_adapter"]
-        PARSER["parser / wechat_parser"]
+        PARSER["wechat_parser"]
     end
 
-    MSG["ChatMessage<br/>统一领域模型"]
+    MSG["统一消息模型<br/>RichMessage / ChatMessage"]
 
     subgraph APP["Application 应用层"]
         IMPORT["ImportService"]
         SCOPE["Analysis Scope Filter"]
-        ORCH["QQDirectDatabaseImportService<br/>QQExportImportService · WeChatExportImportService"]
+        ORCH["QQDirectDatabaseImportService<br/>WeChatExportImportService"]
         SVC["AnalysisApplicationService"]
         FACADE["ChatAnalyzerFacade"]
         PACKAGER["Echo Report Packager<br/>staging → 正式 package"]
@@ -86,16 +84,20 @@ flowchart TD
         EXP["exporters<br/>CSV · 词云"]
     end
 
-    QQDB --> PQQDB --> AQQDB --> MSG
-    QCE --> PQQ --> AQQ --> MSG
+    NAPCAT --> QQDB --> PQQDB --> AQQDB --> MSG
     WXAPP --> PWXDB --> AWXDB --> MSG
     WXAPP --> PWXCLI --> AWXCLI --> MSG
     FILE --> PARSER --> MSG
+    FILE --> AQQDB
+    FILE --> AWXDB
+    FILE --> AWXCLI
 
     ORCH --> PQQDB
-    ORCH --> PQQ
     ORCH --> PWXDB
     IMPORT --> PARSER
+    IMPORT --> AQQDB
+    IMPORT --> AWXDB
+    IMPORT --> AWXCLI
     MSG --> IMPORT --> SCOPE --> SVC
     ORCH --> IMPORT
 
@@ -197,13 +199,18 @@ Adapter 与 Parser 属于**同一层的两种形态**：
 它直接引用全部 parser 与 adapter，是格式识别的集中点。
 不做分析，不做导出。
 
+当前支持格式只有 `qq-db-json`、`wechat-db-json`、`detailed-json`、`chatlab-jsonl`
+和 `cli-json`（符合微信 CLI schema 的 bare array）。`echo-chat` 是这些格式的本地文件
+分析入口；已退休的 QCE JSON 与旧 QQ JSON/JSONL 不会通过显式 platform hint 恢复支持。
+
 **来源编排服务** —— 桌面 QQ 使用 `QQDirectDatabaseImportService`，微信使用
-`WeChatExportImportService`；`QQExportImportService` 仍供 QCE CLI 路径使用。
+`WeChatExportImportService`。
 它们把“先获取、再导入”串起来，并提供会话列表查询。Provider 负责来源数据获取，
 Adapter 负责格式转换，分析核心不读取 QQ 原生字段。
 
 #### QQ Direct DB 当前主链
 
+正式 QQ 产品链只有：NapCat → Direct DB → `qq_db_adapter` → 统一消息模型 → Analysis。
 桌面 QQ 先通过 NapCat 启动 / 登录；会话列表和分析的正式获取路径为：
 
 ```text
@@ -234,7 +241,7 @@ main 改变、WAL reset/truncate 或无法证明一致性均 fail closed，不�
 复用同一个 hardened capture 模块生成 staging 加密合并文件，交给现有 NapCat 解密；
 native read telemetry 校验的是该 staging 输入。发布前删除加密合并文件，复核身份未改变后
 写入原 schema manifest 并原子发布 generation。RPC 客户端的
-acquire 超时覆盖两个顺序等待窗口。QCE API Proxy 的可调用 `then` 不能作为 async
+acquire 超时覆盖两个顺序等待窗口。DatabaseApi namespace Proxy 的可调用 `then` 不能作为 async
 函数返回值直接返回，否则 Promise 会把它当作 thenable 而永久 pending；helper
 通过普通对象承载该 Proxy。应用服务校验 generation 后只读查询，清理 generation
 后才让下游消费临时 payload；失败时不使用旧 generation。
@@ -257,9 +264,9 @@ payload 属于本次分析的临时目录，在导入、分析消费结束或抛
 长期 cache。启动 `recover` 和关闭时的 `recover` 处理遗留的 runtime plaintext；
 cleanup 失败会作为错误上报，不能假装分析已安全完成。
 
-QCE JSON → `qq_chat_exporter_adapter` 保留既有文件导入与 CLI compatibility；
-QCE Provider 仅由 CLI 导出路径消费。Desktop 不含 QCE runtime 或 rollback。DB 原生字段与
-protobuf 解释留在 Provider / Adapter 边界内，不能进入分析核心。已有真人验收确认
+QQChatExporter / QCE 的 runtime、provider/service、CLI 命令、QCE JSON 和旧 QQ JSON/JSONL
+兼容均已退休，`parser.py` 与 `qq_chat_exporter_adapter.py` 已删除；不存在 QCE fallback。
+DB 原生字段与 protobuf 解释留在 Provider / Adapter 边界内，不能进入分析核心。已有真人验收确认
 正式 hardened main+WAL acquisition、解密、会话列表、分析、JSON / HTML 报告
 和正常 shutdown 清理可用。2026-10-02 最终验收已关闭 Stage 3.5、A4、A5、A6，
 Final Cleanup / Final Smoke 均 PASS；此前 main-only 损坏快照问题已关闭。
@@ -284,12 +291,13 @@ Final Cleanup 已移除 `analysis-ordering` 专用计数/日志与闲置 `pollCo
 保留 `analysis-timing`、DEBUG member-shape、identity coverage，以及
 failure_stage / guard_code、WAL/SHM/identity/checkpoint witness、native telemetry、
 generation/source/snapshot/`quick_check`、cleanup/recover/shutdown 等长期诊断。
+Direct DB helper 的 `QCE_LOG_FILE` 仅是保留的历史诊断变量名，不代表 QCE 能力；
+保留该诊断接口，不为字符串清零强改运行逻辑。来源注释修正同步模板、pin 与部署副本。
 
 获取范围是减少无关数据的优化边界；`Analysis Scope Filter` 才是最终 correctness
 guarantee。两者必须同时保留，且时间单位按来源区分：QQ Direct DB 获取使用
-epoch seconds 查询；保留的 QCE export 路径使用 epoch milliseconds；
-WeChat 转换为 epoch seconds 用于 `m.create_time` SQL 条件，不能把
-它们写成统一单位协议。
+epoch seconds 查询；WeChat 转换为 epoch seconds 用于 `m.create_time` SQL 条件。
+QCE 的毫秒获取分支已退休，不再构成时间单位协议。
 
 WeChat 的一个 session 的 `Msg_*` table 可分布在 0..N 个 `message_N.db` shard。
 Provider 发现全部匹配 shard，对每个 shard 使用同一时间范围查询，再做全局
@@ -301,11 +309,6 @@ Provider 发现全部匹配 shard，对每个 shard 使用同一时间范围查�
 翻译成 `QQConnectionStatus`（runtime ready、有效 QQ 登录、独立的 Direct DB ready、
 下一步操作提示）。它是应用层内 Provider 的合法调用者之一；GUI 通过 Facade
 获取状态，不直接接触 Provider。
-
-**QCE 兼容导出任务管理** —— `ExportTaskManager`。把 QCE 底层 `ExportTask` 快照与
-Provider 异常翻译成用户层 `ExportTaskStatus`（创建 / 导出中 / 完成 / 失败 /
-已取消），不复制 Provider 的轮询逻辑。当前为轻量应用层封装，不引入异步框架；
-仅属保留的 QCE CLI 兼容边界，不作为 Desktop 0.1 的 Facade 接入待办；桌面无 QCE fallback。
 
 **运行时管理** —— `QQRuntimeManager`。负责检测、启动、停止外部 QQ 采集
 运行环境，并把底层异常转换成用户层 `QQRuntimeStatus`。它只依赖
@@ -325,8 +328,8 @@ Provider 异常翻译成用户层 `ExportTaskStatus`（创建 / 导出中 / 完�
 `windows_runtime_manifest.json` 限定发布程序资产，build 在复制前后校验
 `qq_napcat_runtime_pins.json` 的关键产物 hash。正式 portable 不携带旧 `runtime/qq`、
 qce-server、QCE plugin 或 static/qce；不自动回退 QCE。
-QCE Python Provider / CLI 导出与既有 JSON 文件兼容仍保留；Desktop rollback、
-旧 QCE bootstrap / pins / manifest 和 token / security / health 配置已退休。
+QCE Python provider/service、`qce_compat`、文件 adapter 与旧 `parser` 均不得进入 fresh
+发行包或 frozen PYZ；现有 runtime forbidden checks 和 frozen package 合同共同守护。
 旧 Desktop 配置只迁移 QQ 安装路径，不能恢复旧 runtime 或 API endpoint。
 
 **AnalysisApplicationService** —— 业务流程编排：
@@ -384,8 +387,8 @@ LocalChatAnalyzer/
 - 默认 scratch 位于 `transient/`，Facade 持有最近一次成功分析的 scratch，替换或 shutdown
   时清理；分析失败也清理。每个 Facade 首次创建默认 scratch 前执行一次 stale scratch
   recovery，只处理严格命名的直属自有目录，拒绝 reparse，失败记日志并继续。
-  用户指定的 `output_directory` 不归该 scratch 清理流程所有；该 recovery 不处理旧 QCE
-  run 或 Direct DB generation，它们各有自己的生命周期边界。
+  用户指定的 `output_directory` 不归该 scratch 清理流程所有；该 recovery 不处理
+  Direct DB generation，后者有独立的生命周期边界。
 
 | | 内容 |
 | --- | --- |
@@ -620,13 +623,12 @@ GUI 只装配控件、转发事件、展示状态。
 
 | 目录 / 模块 | 架构层 |
 | --- | --- |
-| `providers/qq_chat_exporter_provider.py` | Provider |
+| `providers/qq_database_provider.py` / `providers/napcat_qq_provider.py` | QQ Direct DB 获取 / NapCat readiness 与 metadata |
 | `providers/wechat_database_provider.py` | Provider |
 | `providers/wechat_cli_provider.py` | Provider |
-| `qq_chat_exporter_adapter.py` | Adapter |
+| `qq_db_adapter.py` | QQ Direct DB Adapter |
 | `wechat_db_adapter.py` | Adapter |
 | `wechat_cli_adapter.py` | Adapter |
-| `parser.py` | Parser（QQ 导出文件） |
 | `wechat_parser.py` | Parser（微信导出文件） |
 | `message.py` | 领域模型 ChatMessage |
 | `application/import_service.py` | 导入编排 |
@@ -637,11 +639,8 @@ GUI 只装配控件、转发事件、展示状态。
 | `application/qq/qq_setup_service.py` / `application/qq/qq_environment_config.py` | QQ 连接设置与配置 |
 | `application/qq/qq_provider_factory.py` | QQ Provider 装配与缓存 |
 | `application/qq/qq_runtime_manager.py` / `application/qq/qq_process_registry.py` | QQ runtime 管理与自有进程记录 |
-| `application/qq/qce_compat/qq_export_import_service.py` | 保留的 QCE CLI 导出与导入编排 |
-| `application/qq/qce_compat/export_task_manager.py` | QCE 导出任务管理 |
-| `application/qq/qce_compat/qq_transient_export.py` | QCE 临时导出目录所有权与清理 |
 | `application/connection_models.py` | 来源无关的连接状态契约 |
-| `application/qq_connection_service.py` / `application/qq_export_import_service.py` / `application/export_task_manager.py` | 保留的公共旧模块路径，仅重导出实现对象 |
+| `application/qq_connection_service.py` | 保留的公共旧模块路径，仅重导出连接服务实现对象 |
 | `application/connection/__init__.py` / `application/runtime/__init__.py` / `application/runtime/qq_runtime_manager.py` | 保留的连接与 runtime 公共兼容出口，无业务实现 |
 | `application/wechat/wechat_export_import_service.py` | 来源编排（微信） |
 | `application/wechat/wechat_connection_service.py` | 微信连接状态 |

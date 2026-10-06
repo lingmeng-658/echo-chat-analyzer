@@ -1,9 +1,7 @@
 """Orchestrate a WeChat database export into the existing import pipeline.
 
-This module is the WeChat counterpart of
-:mod:`~qq_chat_analyzer.application.qq.qce_compat.qq_export_import_service`, and keeps the
-same seam between two pieces that must not know about each other: the WeChat
-database provider produces a local JSON file, and the existing
+This module keeps the seam between two pieces that must not know about each
+other: the WeChat database provider produces a local JSON file, and the existing
 :class:`~qq_chat_analyzer.application.import_service.ImportService` turns local
 files into :class:`~qq_chat_analyzer.message.ChatMessage` objects.
 

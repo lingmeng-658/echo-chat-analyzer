@@ -1,4 +1,4 @@
-"""Stage 4A release contract: source QCE compatibility must never ship."""
+"""Release contract: retired QCE capabilities must never ship."""
 import json
 from pathlib import Path
 

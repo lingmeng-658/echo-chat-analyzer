@@ -1,5 +1,9 @@
 # Echo 数据与分析能力映射
 
+> **基线导航（2026-10-07）**：本文保留 Phase 9.2 的历史能力审计与设计判断。
+> 下文 QCE 原始来源基线已退休，不代表现役输入能力；当前 Direct DB / WeChat 能力以
+> [ARCHITECTURE](../ARCHITECTURE.md) 为准，发布状态见 [HARDENING](HARDENING.md)。
+
 ## 1. 文档目的
 
 本文定义 Phase 9.2 对“Echo 未来应该理解什么数据”的判断。它把已经确认的

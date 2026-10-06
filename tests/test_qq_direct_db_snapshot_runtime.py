@@ -159,7 +159,7 @@ function buildCore() {
             if (typeof realMethod === 'function') {
               return realMethod.bind(databaseApi);
             }
-            // Mirrors QCE's createApiAdapter fallback, including for `then`.
+            // Mirrors the API namespace fallback, including for `then`.
             return async () => ({ result: 0, errMsg: '' });
           },
         })
@@ -481,7 +481,7 @@ def test_success_publishes_database_and_identity_in_one_generation(
 def test_acquire_does_not_assimilate_database_api_adapter_as_a_thenable(
     tmp_path: Path,
 ) -> None:
-    """QCE's unknown-method fallback exposes ``then`` on API namespace proxies."""
+    """The unknown-method fallback exposes ``then`` on API namespace proxies."""
     output = _run_node(
         tmp_path,
         _acquire({

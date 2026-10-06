@@ -36,13 +36,20 @@ Echo 的设计前提是：真实聊天数据属于用户自己。
 
 ### QQ
 
-桌面端通过 NapCat 启动 / 登录 QQ，再由 Direct DB 在本机读取聊天数据，交给 Echo 分析。
-桌面端不依赖 QQChatExporter（QCE），也没有 QCE fallback。
-QCE 仅保留 CLI 调用外部服务的能力和既有 JSON 文件导入兼容。
+正式链路为 NapCat → Direct DB → `qq_db_adapter` → 统一消息模型 → Analysis。
+NapCat 负责启动 / 登录和本地解密，Direct DB 负责会话查询与消息获取。
+QQChatExporter（QCE）已完全退休：不再支持其 runtime、CLI 服务调用、QCE JSON，
+也不再支持旧 QQ JSON / JSONL 文件兼容或 QCE fallback。
 
 ### 微信
 
 支持在 Windows 本机读取微信数据库，与 QQ 使用同一套分析能力。
+
+### 本地文件 CLI
+
+`echo-chat` 保留为当前支持格式的本地文件分析入口：`qq-db-json`、`wechat-db-json`、
+`detailed-json`、`chatlab-jsonl` 和 `cli-json`（符合微信 CLI schema 的 bare array）。
+它不再提供 `qce list` / `qce analyze`，也不导入 QCE 或旧 QQ 导出文件。
 
 ## Echo Report
 

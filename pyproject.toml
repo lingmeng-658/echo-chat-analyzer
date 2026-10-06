@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "qq-chat-analyzer"
 version = "0.1.0"
-description = "A fully local analyzer for QQChatExporter JSON exports."
+description = "A privacy-first, fully local QQ and WeChat chat analyzer."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

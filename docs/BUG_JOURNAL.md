@@ -1,5 +1,9 @@
 # Echo Bug Journal
 
+> **退休导航（2026-10-07）**：QCE 产品与文件输入能力已正式移除。
+> 下文 QCE payload、旧命令与已删除测试路径是历史证据，保持原样；现役架构与状态分别见
+> [ARCHITECTURE](../ARCHITECTURE.md) 和 [HARDENING](HARDENING.md)。
+
 > **定位**：只记录「已经解决并验证」的真实工程问题。
 >
 > Active Bug 不放这里，放 `docs/HARDENING.md`（它同时承担 Active Bug Backlog）。

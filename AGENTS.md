@@ -9,7 +9,8 @@
 目标： - 支持多个聊天来源； - 将不同来源转换为统一消息模型； -
 提供高质量聊天分析； - 最终让普通用户无需命令行即可使用。
 
-当前来源： - QQ Direct DB（桌面正式入口） - 微信聊天记录 - QQChatExporter（保留的 CLI 与既有 JSON 文件兼容路径）
+当前来源： - QQ Direct DB（通过 NapCat 启动 / 登录与本地解密） - 微信聊天记录。
+`echo-chat` 保留为当前支持格式的本地文件分析入口；输入格式以 ARCHITECTURE.md 为准。
 
 ------------------------------------------------------------------------
 
@@ -50,7 +51,8 @@ Analysis Core → Exporter / GUI
 
 桌面 QQ 会话列表与分析使用正式 QQ Direct DB 链路，已完成真人 E2E 和最终 smoke。
 具体数据流、获取与清理边界以 ARCHITECTURE.md 为准，不在本文件复制架构图。
-QQChatExporter 的 CLI 与既有 JSON 文件兼容仍保留；Desktop QCE runtime 与 rollback 已退休。
+QQChatExporter / QCE 已完全退休：runtime、CLI 服务调用、QCE JSON 与旧 QQ JSON/JSONL
+兼容均不再支持；不得重新引入 QCE fallback。正式链路与统一消息模型边界见 ARCHITECTURE.md。
 
 架构约束：
 
@@ -293,7 +295,7 @@ py -m pytest
 
 第三方工具只是数据来源。
 
-例如： - CipherTalk CLI； - QQChatExporter。
+例如： - NapCat； - CipherTalk CLI。
 
 推荐：
 

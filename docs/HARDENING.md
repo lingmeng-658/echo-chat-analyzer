@@ -21,18 +21,19 @@ Echo 已经过了「先证明有没有人愿意用」的阶段。
 默认不新增大型功能或新数据来源。
 新能力需要人工确认。
 
-2026-10-06 状态校准：以 main `4e99bc8`、近期 Git 历史、当前实现和已确认的
+2026-10-07 状态校准：以 Stage 4 main `76d7476`、近期 Git 历史、当前实现和已确认的
 0.1 / 0.2 产品范围为依据。下文旧 checkpoint 是当时验收记录，不代表当前发布已就绪。
 
 ## 0.1 当前待办总览
 
-正式桌面 QQ 主链：NapCat 启动 / 登录 → Direct DB → snapshot / decrypt → adapter
-→ analysis / report。桌面不依赖 QCE，也没有 QCE fallback。QCE 仅保留 CLI 外部能力和
-既有 JSON 导入兼容，不属于 Desktop 0.1 主线；架构细节以 `ARCHITECTURE.md` 为准。
+正式 QQ 产品链：NapCat → Direct DB → `qq_db_adapter` → 统一消息模型 → Analysis。
+QQChatExporter / QCE 的 runtime、provider/service、CLI 命令、QCE JSON 和旧 QQ JSON/JSONL
+兼容均已退休，不存在 QCE fallback。`echo-chat` 保留当前支持格式的本地文件分析入口，
+WeChat 当前能力不变；架构细节以 `ARCHITECTURE.md` 为准。
 
 | 当前待办 | 状态 / 收口边界 |
 | --- | --- |
-| REL-04 用户错误提示 | 现状审计，按实际缺口做必要修正 |
+| REL-04 用户错误提示 | CLOSED：现役错误安全边界已收口；分享与最终真人验收仍各归原条目 |
 | REL-06 Windows 普通用户发布 / 分发体验 | 未完成；已有 portable build 不等于最终分发完成 |
 | REL-07 GUI 最终 polish | 未完成；只处理明显视觉 / 交互问题 |
 | REL-08 分享闭环 | **Release Blocker：Yes**；未完成，按钮隐藏只是临时雪藏 |
@@ -47,21 +48,21 @@ Echo 已经过了「先证明有没有人愿意用」的阶段。
 Architecture & Complexity Audit v1 已 COMPLETE / CLOSED，0.1 不再重复开展泛化全仓架构审计；
 发布前仅保留 QA-02 定点 release / privacy / build audit。
 测试治理当前阶段已完成，非 Release Blocker。BUG-01 和旧 QCE Desktop 任务已退休；
-BUG-02 转入 0.2，BUG-03 / 05 / 06 / 07 保持 CLOSED。REL-05 大数据性能 / UX 与
+BUG-02 随 QCE 输入移除标记 RETIRED，BUG-03 / 05 / 06 / 07 / 08 保持 CLOSED。REL-05 大数据性能 / UX 与
 REL-09 语言画像优化均为非阻塞后续工作。完整历史证据保留在本文后半部。
 
 已有分支验收、历史 build checkpoint 和测试治理完成不代表 0.1 已可发布。
 
 ## Active Bugs
 
-当前没有已确认的 Active Bug。BUG-01 已退休，BUG-02 转入 0.2，BUG-03 / 05 / 06 / 07
+当前没有已确认的 Active Bug。BUG-01 / BUG-02 已退休，BUG-03 / 05 / 06 / 07 / 08
 保持 CLOSED。REL-08 是未完成的发布能力，仍为 Release Blocker；新的真实 regression 按当前链路另行记录。
 
 ## 0.1 产品交付条目
 
 ### REL-04 按阶段区分的用户安全错误提示
 
-先审计当前 NapCat / Direct DB 与微信主链的用户错误提示，再按实际缺口修正。例如：
+现役 NapCat / Direct DB 与微信主链的错误提示已完成必要收口，覆盖：
 
 - 数据获取失败
 - 导出失败
@@ -72,7 +73,12 @@ REL-09 语言画像优化均为非阻塞后续工作。完整历史证据保留�
 GUI 不展示 traceback。
 真实诊断写 privacy-safe diagnostics。
 
-状态：未审计，0.1 发布前必做；仅做必要修正。
+状态：CLOSED（当前已确认缺口已修复，无确认 Active Bug）。
+
+证据：`9ef734e` 不向用户透传未知异常正文；`633249d` 避免日志失败阻断启动；
+`1b4da6e` 让 content-only 报告生成失败进入正式错误生命周期；`cbdf85b` 让微信
+会话读取失败退出 loading 并允许重新开始（BUG-08）。对应 Facade / analysis / GUI
+regression 保留。此关闭不代表 REL-08 Share、最终真实验收或跨机器 RC 已完成。
 
 ### REL-06 Windows 普通用户发布 / 安装体验
 
@@ -148,7 +154,8 @@ Release Blocker：Yes。
 
 `tests/test_frozen_desktop_package_contract.py` 检查磁盘上已有的 `dist/Echo`，测试本身不会构建
 fresh artifact。目前没有把已有 frozen artifact 与当前 Git HEAD 绑定的可验证 provenance；
-旧 EXE 可被新 contract tests 检查并产生误导性的 RED，本次两个 packaging failures 即属于此类。
+旧 EXE 可被新 contract tests 检查并产生误导性的 RED；2026-10-04 checkpoint 的两个
+packaging failures 即属于此类。本轮旧包中的退休模块也必须在 fresh build 后重新核验。
 
 当前处理原则：Final Release / packaging acceptance 必须先执行正式完整 fresh build，
 不允许用历史 `dist/Echo` 代表当前源码。后续可考虑 build provenance / commit identity，
@@ -231,7 +238,8 @@ Feature Freeze
 
 ### 0.2 Backlog（已确认范围）
 
-- Sticker / 表情包语义：完整身份、资源与语义支持，包含 BUG-02 后续；已有基础映射保留。
+- Sticker / 表情包语义：现役 QQ Direct DB / WeChat 的完整身份、资源与语义支持；已有基础映射保留。
+  已退休的 BUG-02 / QCE `type_17` 不属于后续兼容待办。
 - Reply / 引用回复分析：已有 ReplyRelation 与 authored text 隔离不等于完整回复分析已交付。
 - Local Data 高级批量管理：不重新打开已 CLOSED 的 BUG-03 基础生命周期能力。
 - 快捷登录 / 统一 UX 优化：现有授权闭环不等于快捷登录完成，不阻塞 0.1。
@@ -380,13 +388,13 @@ Hardening / Active Bug 唯一实时工作地图，`docs/BUG_JOURNAL.md` 只记�
 
 Release Blocker：No。
 
-### BUG-02 QQ market_face / type_17 兼容问题
+### BUG-02 旧 QCE market_face / type_17 兼容问题
 
 审计结论（2026-10-06）：
 
 - 旧记录将 `market_face` 与 `type_17` 并列，但没有证据证明二者等价。
   Git 历史中 `type_17` 仅进入过此 backlog；当前代码和测试未建立它的字段语义契约。
-- 保留的 QCE adapter 已将 `market_face` / elementType 37 映射为 sticker `ExpressionContent`，
+- 当时的 QCE adapter 曾将 `market_face` / elementType 37 映射为 sticker `ExpressionContent`，
   有 adapter 与 analysis-report 测试；顶层消息类型仍只接受 text / reply，不宣称支持 `type_17`。
 - 当前桌面 Direct DB adapter 使用 protobuf `45002=11` 与 `45600` bytes 建立
   `qq-marketface:sha256:` 不透明身份，保留标签或安全 fallback；这不是 QCE 数字 emoji ID，
@@ -396,7 +404,8 @@ Release Blocker：No。
 - 不把未知 `type_17` 加进允许列表，也不将其标记为已修复；后续若有正文丢失、分析失败或统计污染
   的新证据，应另按 correctness regression 审计。
 
-状态：DEFERRED（退出 Active Bugs，归入 0.2 Sticker 支持；旧类型语义未确认）。
+状态：RETIRED（QCE JSON 与旧 QQ JSON/JSONL 输入能力已正式移除；退出当前兼容待办）。
+退休不等于修复或确认 `type_17` 语义；现役 Direct DB / WeChat 的 sticker 扩展仍归 0.2。
 
 Release Blocker：No。
 
@@ -504,9 +513,43 @@ Windows/libuv identity 比较统一为 descriptor fstat，保留 dev / ino 保�
 Stage 3.5 已关闭，正式真人 E2E 与最终 smoke 均 PASS。长期 correctness 诊断继续保留；
 本机验收不替代跨机器 Direct DB RC 验证。历史研究结论仍保留在 `docs/research/`。
 
-**明确注明：QCE / Windows 权限弹窗不是 Bug。**
+### BUG-08 微信会话读取失败后仍停留在 loading
 
-这是正常权限行为，UX 已经做过优化，不应重新进入 Active Bugs。
+状态：CLOSED。Release Blocker：No。
+
+`cbdf85b` 已让 query failure / unexpected error 清除会话读取状态，恢复空会话提示，
+禁用分析并允许“重新开始”；成功路径仍显示实际会话。regression 为
+`tests/test_gui.py::test_wechat_session_load_failure_exits_reading_state_and_allows_restart`。
+本轮仅同步既有修复状态，不声称完成新的真人登录验收。
+
+### QCE Final Retirement
+
+状态：CLOSED（Stages 2–4 已移除全部产品与文件输入能力；Stage 5 同步事实源和发行合同）。
+
+保留 public/product/file retirement tests、config migration protection、runtime forbidden
+checks 和 frozen module absence 检查；它们只能阻止能力复活，不提供 QCE 运行或导入能力。
+fresh build 与验收结果记录在本轮 Stage 5 checkpoint；不替代 QA-01 / QA-06 人工验收。
+
+### QCE Final Retirement Stage 5 checkpoint（2026-10-07）
+
+- 源码基线：Stage 4 `76d7476` 已提交并推送；本轮 Stage 5 working diff 尚未提交。
+- RED：旧 frozen artifact 的 PYZ 仍含 7 个已退休 Python modules，新 absence 合同失败。
+  fresh build 后该合同 GREEN；保留 runtime forbidden checks，不靠删除检查来通过验收。
+- Focused：来源 / retirement / release 合同 337 passed；诊断 / template pin / bootstrap
+  合同 218 passed；fresh package / release / Windows runtime 合同 100 passed。
+- Fast：标准单进程命令 2617 passed、282 deselected；没有 GUI native crash。
+- `scripts/build_windows_exe.ps1` fresh build 成功（PyInstaller 6.22.3，项目 Python 3.13.9）。
+  `dist/Echo/Echo.exe` 为 Windows x64，3,398,866 bytes；生成时间为
+  `2026-10-06T17:09:32.020700Z`（本地 2026-10-07）。SHA-256：
+  `eeab7c5fa50211bd246e10735870f5b5a423199a28e1491dae7e75a23eeb21a6`。
+- fresh PYZ 与发行树未发现 QCE provider/service、`qce_compat`、QCE adapter、旧 parser
+  或 QCE runtime assets；Direct DB / WeChat provider、adapter 与 application modules 保留。
+- Full：2897 passed、1 skipped、1 failed。失败为已有 `known_failure`
+  `test_generate_share_button_creates_and_opens_share_image`（REL-08 按钮仍隐藏）；
+  skip 为未提供 `ECHO_NATIVE_WCDB_CLI_PATH` 的 native CLI 测试。不能宣称 Full passed。
+- `git diff --check` 通过。QCE Final Retirement CLOSED；这不是整体 Release Ready。
+  REL-08、GOV-04、update check、RC / cross-machine acceptance 仍未完成。
+  本轮未做真人 QQ / WeChat 登录、shutdown 或 report acceptance，保留人工验收安排。
 
 ## 历史 checkpoint 与兼容边界
 
@@ -515,7 +558,7 @@ Stage 3.5 已关闭，正式真人 E2E 与最终 smoke 均 PASS。长期 correct
 ### 已退休的 Desktop QCE 项
 
 REL-01 / REL-01.1 和 REL-03 中旧 QCE transient orphan cleanup 均已退出 Desktop 0.1 backlog。
-QCE CLI 与既有 JSON 兼容仍保留，不将旧 Desktop 任务转为当前发布前置。
+当时保留的 QCE CLI 与既有 JSON 兼容也已在 Final Retirement 中移除；以下仍为历史证据。
 
 REL-03 旧 QCE transient orphan cleanup：RETIRED（仅退休旧 Desktop 待办，不声称已实现）。
 原记录关注 QCE transient run 异常终止后的遗留清理；当前 Direct DB generation 已有启动 / 关闭
@@ -571,11 +614,12 @@ QCE 提供 messageCount、progress、status、message，
 
 ### Windows portable package hardening checkpoint（REL-06 历史记录）
 
-当前 De-QCE 发布合同：先使用项目 `.venv` 的 Python 运行
+当前 QCE Final Retirement 发布合同：先使用项目 `.venv` 的 Python 运行
 `scripts/bootstrap_qq_napcat_runtime.py`（可用 `--archive` 复用官方 archive，仍校验 hash），
 再运行 `scripts/build_windows_exe.ps1`。QQ 发布源为 `runtime/qq-napcat-candidate`，
 不要求旧 QCE runtime 存在；Stage 4B 已移除旧 Desktop bootstrap 与 rollback。
-CLI QCE 导出与既有 JSON 导入仍保留，CLI 使用自行部署的外部 QCE 服务。
+QCE CLI、provider/service、文件 adapter 与旧 parser 均已退休；fresh PYZ 与发行树
+不得包含这些 Python modules 或 `qce_compat`。
 正式发布不携带 qce-server、napcat-plugin-qce、static/qce 或账户配置、日志、snapshot
 plaintext。程序白名单和关键 hash 在复制前后检查，MSVC DLL 复制至 candidate 与 WeChat。
 本轮保留官方 NapCat 完整依赖布局，不应用下述历史 PACK-SIZE-01 native pruning。
@@ -654,8 +698,8 @@ wordcloud.png
 
 ### QQ Direct DB 最终验收 checkpoint（2026-10-02）
 
-桌面 QQ 会话查询与分析当前使用 Direct DB 主链；QCE CLI 与既有 JSON 文件兼容仍保留，
-桌面分析没有自动 QCE fallback。架构与生命周期以 `ARCHITECTURE.md` 为准。
+桌面 QQ 会话查询与分析当前使用 Direct DB 主链；QCE CLI 与既有 JSON 文件兼容已在
+Final Retirement 中移除，不存在 QCE fallback。架构与生命周期以 `ARCHITECTURE.md` 为准。
 
 最终状态：Stage 3.5 CLOSED、A4 CLOSED、A5 CLOSED、A6 CLOSED、
 Final Cleanup PASS、Final Smoke PASS。本分支 QQ Direct DB replacement 已完成最终

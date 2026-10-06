@@ -5,12 +5,12 @@
 余音 Echo is a privacy-first local chat analysis tool.
 
 Current GUI / ChatSource product sources:
-- QQ Direct DB for desktop session discovery and analysis; bundled QQ / NapCat / QCE runtime for connection
+- QQ Direct DB for desktop session discovery and analysis; bundled QQ / NapCat runtime for connection
 - WeChat local database (data directory detection, key acquisition, session analysis)
 
-JSON / JSONL parser and import capabilities remain in the lower-level pipeline,
-including WeChat detailed JSON / chatlab JSONL formats. They are not the removed
-`LOCAL_FILE` GUI product entry point.
+Current-format JSON / JSONL import capabilities remain in the lower-level pipeline
+and the echo-chat local-file CLI, including WeChat detailed JSON / chatlab JSONL.
+They are not the removed `LOCAL_FILE` GUI product entry point.
 
 The project is designed to:
 - run locally;
@@ -208,7 +208,6 @@ ImportService handles:
 
 Source parsers:
 - QQ Direct DB adapter converts the transient qq-db-json payload into source-neutral rich messages and ChatMessage;
-- QQ parser converts QQChatExporter JSON/JSONL into ChatMessage;
 - WeChat parser converts WeChat detailed JSON/JSONL into ChatMessage;
 - parsers must not depend on analysis core or UI layers.
 
@@ -220,105 +219,58 @@ CLI/Application layers or source-specific types.
 
 ## 7.1 Multi-source Input Design Principles
 
-- Use one independent parser per chat source.
+- Use an independent adapter/parser for each supported source format.
 - Every parser returns ChatMessage.
 - ImportService recognizes the source and routes the file.
 - AnalysisApplicationService calls ImportService and keeps the analysis workflow.
 - ImportService must reuse existing parsers and must not duplicate parsing logic.
 - Core analysis modules only consume ChatMessage.
-- Do not copy the QQ parser when adding a new source.
+- Do not duplicate source parsing when adding a new source.
 - Do not introduce platform branches in analyzer.py, tokenizer.py, or cleaner.py.
 - Confirm real sample fields before choosing the first supported format.
 
 ------------------------------------------------------------------------
 
-## 7.2 Phase 6.2 Import Pipeline
-
-Completed:
+## 7.2 Current Local Import Pipeline
 
 - ImportRequest describes the input path and optional platform hint.
-- ImportOutcome is an internal pipeline result carrying ImportResult, ChatMessage, and processed_message_count.
-- ImportService owns path validation, file discovery, source recognition, and parser routing.
-- AnalysisApplicationService now obtains ChatMessage through ImportService.
-- Old file discovery and parsing helpers inside AnalysisApplicationService were removed.
-- Parser modules, ChatMessage, and CLI were not modified.
+- ImportOutcome carries ImportResult, ChatMessage, RichMessage and processed_message_count.
+- ImportService owns path validation, file discovery, source recognition and adapter/parser routing.
+- AnalysisApplicationService obtains messages through ImportService, then applies the final analysis scope.
+- Supported formats: qq-db-json, wechat-db-json, detailed-json, chatlab-jsonl,
+  and cli-json (a bare array conforming to the WeChat CLI schema).
+- echo-chat remains the local-file analysis entry point for these formats. It
+  does not provide qce list / qce analyze or import retired QQ file formats.
 
-Next phase:
-
-This research phase is complete: the QQChatExporter data source integration
-described in section 7.3 is implemented and accepted against the real QCE
-desktop application.
+QQChatExporter / QCE runtime, provider/service, QCE JSON and old QQ JSON/JSONL
+compatibility are retired. parser.py and qq_chat_exporter_adapter.py are absent.
+Retirement tests and release forbidden checks must remain.
 
 ------------------------------------------------------------------------
 
-## 7.3 QQChatExporter Data Source Integration
+## 7.3 Current QQ / WeChat Source Integration
 
-This section describes the retained QCE CLI flow and its historical acceptance.
-Desktop QQ session discovery and analysis now use the formally accepted Direct DB
-flow composed by `gui/app.py`; they do not fall back to QCE exports. Architecture
-is defined in `ARCHITECTURE.md`; current acceptance and backlog are recorded in
-`docs/HARDENING.md`.
+The only official QQ product chain is:
 
-Completed:
+```text
+NapCat -> Direct DB -> qq_db_adapter -> unified message model -> Analysis
+```
 
-- QCE HTTP Provider: health check, security.json token, group list, export task creation and polling.
-- QCE JSON Adapter: recognizes single-file QCE JSON exports and converts text/reply messages to ChatMessage.
-- QQExportImportService: orchestrates QQ acquisition through a bounded,
-  Echo-owned transient lease, then imports through the existing ImportService;
-  exposes context-managed acquired_export() and list_groups().
-- Limited analysis scope is pushed down to QCE in epoch milliseconds; the
-  application scope filter remains the final correctness boundary.
-- WeChat local DB acquisition uses epoch-second SQL bounds, reads every matching
-  message shard, globally orders the merged rows, and is unlimited by default.
-- CLI reaches the QCE flow only through the Application layer; it does not construct a provider directly.
+- NapCat owns startup/login and local decryption; QQDirectDatabaseImportService
+  orchestrates session acquisition and transient cleanup through acquired_session().
+- QQDatabaseProvider reads the validated snapshot and materializes qq-db-json;
+  qq_db_adapter interprets it into source-neutral RichMessage / ChatMessage.
+- QQ acquisition uses epoch seconds. The application scope filter remains the
+  final correctness boundary. No QCE export fallback exists.
+- WeChat acquisition remains unchanged: epoch-second SQL bounds, all matching
+  message shards, global ordering and unlimited acquisition by default.
+- CLI delegates local-file analysis to Application services; GUI uses
+  ChatAnalyzerFacade. Analysis does not know source formats or runtime tools.
 
-Module responsibilities in the QCE flow:
-
-- Provider: external data acquisition only. Talks to the QCE HTTP API, manages
-  export tasks, and returns a local QCE JSON path.
-- Adapter: format conversion only. Recognizes QCE single-file JSON and converts
-  it to ChatMessage.
-- Application layer: business orchestration. QQExportImportService ties
-  export, then import together; the CLI never calls Provider or Adapter directly.
-- CLI: user interaction only. Parses commands and delegates to Application
-  layer services.
-
-Architecture rules for this integration:
-
-- Provider only fetches data from the QCE HTTP service.
-- Adapter only converts QCE JSON to ChatMessage.
-- Application layer owns orchestration.
-- CLI calls Application layer services; GUI uses ChatAnalyzerFacade.
-- parser.py, provider internals, and ImportService core routing were not modified.
-
-Historical QCE desktop acceptance (commands below retain their names at the time):
-
-- QCE desktop app ran normally on the acceptance machine.
-- Provider read the real token from the desktop config directory
-  `%LOCALAPPDATA%\QQChatExporter\.qce-config\security.json`.
-- `qqchat qce list` returned the real QQ group list.
-- `qqchat qce analyze --group <group_code>` completed the full flow:
-  QQ export -> QCE JSON -> Adapter -> ChatMessage -> analysis -> output files.
-- Real group chat data was processed on the user's machine.
-
-Token path compatibility fix:
-
-- `QCE_CONFIG_DIR` keeps the highest priority.
-- Windows desktop default path `%LOCALAPPDATA%\QQChatExporter\.qce-config\security.json`
-  was added ahead of the legacy fallback.
-- The legacy `~/.qq-chat-exporter/security.json` fallback remains supported.
-- Candidate resolution is covered by provider tests.
-
-Limits of this retained QCE flow:
-
-- Desktop QQ flow starts the bundled runtime; the CLI `qce` commands still require a running service.
-- Chunked manifest/chunks exports are not supported.
-- JSON format only.
-- This section does not define Direct DB content coverage. Direct DB preserves
-  image / unknown content occurrences, and pure-image analysis can complete with
-  empty word frequencies; see the current architecture and acceptance checkpoint.
-- Desktop GUI MVP is available.
-
+Current architecture and acceptance boundaries are in ARCHITECTURE.md and
+docs/HARDENING.md. Earlier QCE integration and acceptance remain historical
+records in docs/BUG_JOURNAL.md and docs/superpowers/; their old commands, token
+paths and tests are not supported current interfaces.
 
 ## 7.4 GUI / Facade / Presentation 开发规则
 
@@ -380,9 +332,8 @@ src/qq_chat_analyzer/
     gui/               # PySide6 GUI MVP
     providers/         # QQ / WeChat data providers
     message.py         # source-neutral ChatMessage model
-    parser.py          # QQChatExporter message parsing
     wechat_parser.py   # WeChat detailed JSON parsing
-    qq_chat_exporter_adapter.py  # QCE JSON adapter
+    qq_db_adapter.py   # QQ Direct DB payload conversion
     wechat_db_adapter.py         # WeChat DB adapter
     wechat_cli_adapter.py        # WeChat CLI adapter
     smart_profile.py   # Smart Profile orchestration

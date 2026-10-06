@@ -1,5 +1,9 @@
 # Echo 聊天分析质量增强设计方案
 
+> 当前状态导航（2026-10-07）：本文的现状取证是设计时的历史基线，不是当前架构合同。
+> QCE adapter 与旧 QQ 文件输入已退休；现役 QQ 使用 NapCat → Direct DB → qq_db_adapter。
+> 后续实现以 [ARCHITECTURE](../ARCHITECTURE.md) 和 [HARDENING](HARDENING.md) 为准，保留原设计证据供追溯。
+
 ## 文档状态
 
 - 阶段：分析质量增强设计（Analysis Quality Enhancement Design）

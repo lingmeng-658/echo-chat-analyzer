@@ -1,5 +1,9 @@
 # 余音 Echo Project Status
 
+> **当前导航（2026-10-07）**：QCE runtime、CLI 和 QCE / 旧 QQ 文件兼容已退休。
+> 当前正式 QQ 链路为 NapCat → Direct DB → qq_db_adapter → 统一消息模型 → Analysis。
+> 状态见 [HARDENING](docs/HARDENING.md)；下方旧导航与正文均保留为历史，不表示当前支持。
+
 > **历史快照声明（2026-09-16）**
 >
 > 本文件是**历史阶段快照**，不再作为当前项目状态事实源。

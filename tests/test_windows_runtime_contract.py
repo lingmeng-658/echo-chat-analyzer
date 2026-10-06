@@ -80,7 +80,7 @@ PRIVATE_PATHS = {
     "qq-napcat-candidate/loadNapCat.js",
 }
 
-# Filename prefixes NapCat/QCE use for per-install configuration. They carry a
+# Filename prefixes NapCat uses for per-install configuration. They carry a
 # real QQ identifier, so no contract entry may ever be named like one.
 INSTALL_SCOPED_PREFIXES = ("napcat_", "napcat-protocol_", "onebot11_")
 
