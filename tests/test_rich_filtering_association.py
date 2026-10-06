@@ -8,6 +8,8 @@ from datetime import date, datetime
 
 import pytest
 
+from chat_input_test_data import detailed_payload
+
 from qq_chat_analyzer.application import AnalysisRequestDTO, ImportRequest, ImportService
 from qq_chat_analyzer.application.scope_filter import AnalysisScope
 from qq_chat_analyzer.analysis.models import AnalysisReports
@@ -198,12 +200,12 @@ def test_unique_ids_preserve_existing_analysis(tmp_path, monkeypatch, source):
     assert voice_expressions(analyzed) == [f"expression:{key}"]
 
 
-def test_mixed_legacy_and_rich_files_preserve_fallback(tmp_path, monkeypatch):
-    legacy = {"messages": [{"timestamp": 1760000000,
+def test_mixed_detailed_and_rich_files_preserve_fallback(tmp_path, monkeypatch):
+    text_only = detailed_payload([{"timestamp": 1760000000,
         "sender": {"nickname": "Fiction legacy"}, "type": "text",
-        "content": {"text": "Legacy authored 🐱"}}]}
+        "content": {"text": "Legacy authored 🐱"}}])
     result, (kept, analyzed) = analyze(tmp_path, monkeypatch, [
-        legacy, qq_file([qq_row(None, "Rich authored", 14)]),
+        text_only, qq_file([qq_row(None, "Rich authored", 14)]),
     ])
     assert len(kept) == 2
     assert expression_counts(result) == {"🐱": 1, "14": 1}

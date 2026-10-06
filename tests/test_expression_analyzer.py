@@ -18,7 +18,8 @@ from qq_chat_analyzer.analysis.analyzers.expression_analyzer import (
 )
 from qq_chat_analyzer.legacy_projection import project_legacy_messages
 from qq_chat_analyzer.message import ChatMessage
-from qq_chat_analyzer.qq_chat_exporter_adapter import parse_qce_rich_messages
+from qq_chat_analyzer.qq_db_adapter import parse_qq_db_rich_messages
+from qq_db_test_data import qq_db_payload, qq_db_record
 from qq_chat_analyzer.rich_message import (
     ExpressionContent,
     RichMessage,
@@ -97,51 +98,9 @@ def test_unicode_emoji_clusters_are_counted_and_attributed() -> None:
 
 
 def test_reply_auto_mention_emoji_does_not_contaminate_sender_expression_stats() -> None:
-    raw_message = {
-        "id": "fictional-reply-1",
-        "timestamp": 1750000000000,
-        "sender": {
-            "uid": "fictional-user-alice",
-            "uin": "1001",
-            "name": "Alice",
-            "nickname": "Alice",
-        },
-        "type": "reply",
-        "content": {
-            "text": "[回复消息]@Fictional Bob🐊 依旧😂",
-            "elements": [
-                {
-                    "type": "reply",
-                    "data": {
-                        "messageId": "fictional-target-message",
-                        "senderUin": "2002",
-                        "senderName": "Fictional Bob🐊",
-                        "content": "Fictional quoted text",
-                        "timestamp": 1750000000,
-                    },
-                },
-                {
-                    "type": "at",
-                    "data": {
-                        "uid": "fictional-user-bob",
-                        "uin": "2002",
-                        "name": "Fictional Bob🐊",
-                        "atType": 2,
-                    },
-                },
-                {
-                    "type": "text",
-                    "data": {"text": " 依旧😂"},
-                },
-            ],
-            "resources": [],
-            "mentions": [],
-        },
-        "recalled": False,
-        "system": False,
-    }
-
-    rich_messages, warnings = parse_qce_rich_messages([raw_message])
+    record = qq_db_record(" \u4f9d\u65e7\U0001f602", sender_id="fictional-user-alice", nickname="Alice",
+                          mention="@Fictional Bob\U0001f410", reply_sequence=42)
+    rich_messages, warnings = parse_qq_db_rich_messages(qq_db_payload([record]))
     report = ExpressionAnalyzer().analyze(
         project_legacy_messages(rich_messages),
         rich_messages=rich_messages,

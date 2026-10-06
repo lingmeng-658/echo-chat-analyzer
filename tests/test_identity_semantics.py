@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib
 import json
+from qq_db_test_data import qq_db_payload, qq_db_record
 import re
 import sys
 from pathlib import Path
@@ -52,29 +53,6 @@ def _conversation_analyzer():
     return importlib.import_module(
         "qq_chat_analyzer.analysis.analyzers.conversation_analyzer"
     ).ConversationAnalyzer()
-
-
-def _qce_row(
-    message_id: str,
-    uid: str,
-    nickname: str,
-) -> dict[str, object]:
-    return {
-        "id": message_id,
-        "timestamp": 1750000000000,
-        "sender": {"uid": uid, "uin": uid, "nickname": nickname},
-        "type": "text",
-        "content": {"text": "fictional message", "elements": [], "mentions": []},
-        "recalled": False,
-        "system": False,
-    }
-
-
-def _write_qce(path: Path, chat_info: dict[str, object], rows: list[object]) -> None:
-    path.write_text(
-        json.dumps({"chatInfo": chat_info, "messages": rows}, ensure_ascii=False),
-        encoding="utf-8",
-    )
 
 
 def _write_wechat_db(
@@ -309,131 +287,55 @@ def test_word_speaker_tokens_use_stable_sender_key(tmp_path: Path) -> None:
 # -------------------------------------------------------------- QQ wiring
 
 
-def test_qq_private_export_sets_conversation_type(tmp_path: Path) -> None:
-    export_path = tmp_path / "qq-private.json"
-    _write_qce(
-        export_path,
-        {"chatType": 1, "peerUid": "u-fictional-peer"},
-        [_qce_row("m1", "u-fictional-self", "Fictional Self")],
-    )
+def _qq_import(tmp_path, records, **context):
+    path = tmp_path / "qq-db.json"
+    path.write_text(json.dumps(qq_db_payload(records, **context)), encoding="utf-8")
+    return _import_outcome(path, "qq")
 
-    outcome = _import_outcome(export_path, "qq")
 
+def test_qq_private_export_sets_conversation_type(tmp_path):
+    outcome = _qq_import(tmp_path, [qq_db_record("private text")], session_type="private")
     assert outcome.messages[0].conversation_type == "private"
 
 
-def test_qq_group_export_sets_conversation_type(tmp_path: Path) -> None:
-    export_path = tmp_path / "qq-group.json"
-    _write_qce(
-        export_path,
-        {"type": "group", "groupCode": "fictional-group"},
-        [_qce_row("m1", "u-fictional-member", "Fictional Member")],
-    )
-
-    outcome = _import_outcome(export_path, "qq")
-
+def test_qq_group_export_sets_conversation_type(tmp_path):
+    outcome = _qq_import(tmp_path, [qq_db_record("group text")], session_type="group")
     assert outcome.messages[0].conversation_type == "group"
 
 
-def test_qq_missing_conversation_type_stays_unknown(tmp_path: Path) -> None:
-    export_path = tmp_path / "qq-unknown.json"
-    _write_qce(export_path, {}, [_qce_row("m1", "u-fictional-1", "Fictional 1")])
-
-    outcome = _import_outcome(export_path, "qq")
-
-    assert outcome.messages[0].conversation_type == "unknown"
+def test_qq_missing_conversation_context_does_not_invent_identity(tmp_path):
+    outcome = _qq_import(tmp_path, [qq_db_record("fictional text")], session_type=None)
+    assert outcome.messages == ()
+    assert outcome.result.warnings == ("qq_db_record_skipped",)
 
 
-def test_qq_self_identity_only_when_reliable_identity_supplied() -> None:
-    qq_adapter = importlib.import_module("qq_chat_analyzer.qq_chat_exporter_adapter")
-    rows = [
-        _qce_row("m1", "u-fictional-self", "Fictional Self"),
-        _qce_row("m2", "u-fictional-peer", "Fictional Peer"),
-    ]
-
-    known_messages, _warnings = qq_adapter.parse_qce_messages(
-        rows,
-        self_identity="u-fictional-self",
-    )
-    unknown_messages, _warnings = qq_adapter.parse_qce_messages(rows)
-
-    assert [message.is_self for message in known_messages] == [True, False]
-    assert [message.is_self for message in unknown_messages] == [None, None]
+def test_qq_self_identity_only_when_reliable_identity_supplied():
+    qq_adapter = importlib.import_module("qq_chat_analyzer.qq_db_adapter")
+    rows = [qq_db_record("mine", sender_id="100000001"), qq_db_record("theirs", sender_id="100000002")]
+    known, _ = qq_adapter.parse_qq_db_messages(qq_db_payload(rows, self_uin="100000001"))
+    unknown, _ = qq_adapter.parse_qq_db_messages(qq_db_payload(rows))
+    assert [message.is_self for message in known] == [True, False]
+    assert [message.is_self for message in unknown] == [None, None]
 
 
-def test_qq_export_self_uid_flows_through_import(tmp_path: Path) -> None:
-    export_path = tmp_path / "qq-self-uid.json"
-    _write_qce(
-        export_path,
-        {
-            "chatType": 2,
-            "groupCode": "fictional-group",
-            "selfUid": "u-fictional-self",
-            "selfUin": "fictional-self-uin",
-        },
-        [
-            _qce_row("m1", "u-fictional-self", "Fictional Self"),
-            _qce_row("m2", "u-fictional-peer", "Fictional Peer"),
-        ],
-    )
-
-    outcome = _import_outcome(export_path, "qq")
-
+def test_qq_db_self_uin_flows_through_import(tmp_path):
+    outcome = _qq_import(tmp_path, [
+        qq_db_record("mine", sender_id="100000001"),
+        qq_db_record("theirs", sender_id="100000002"),
+    ], self_uin="100000001")
     assert [message.is_self for message in outcome.messages] == [True, False]
 
 
-def test_qq_export_self_uin_fallback_flows_through_import(
-    tmp_path: Path,
-) -> None:
-    export_path = tmp_path / "qq-self-uin.json"
-    _write_qce(
-        export_path,
-        {
-            "chatType": 1,
-            "peerUid": "u-fictional-peer",
-            "selfUin": "100000001",
-        },
-        [
-            _qce_row("m1", "u-fictional-self", "Fictional Self"),
-            _qce_row("m2", "u-fictional-peer", "Fictional Peer"),
-        ],
-    )
-    rows = json.loads(export_path.read_text(encoding="utf-8"))["messages"]
-    rows[0]["sender"]["uin"] = "100000001"
-    rows[1]["sender"]["uin"] = "100000002"
-    export_path.write_text(
-        json.dumps(
-            {"chatInfo": json.loads(export_path.read_text(encoding="utf-8"))["chatInfo"], "messages": rows},
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-
-    outcome = _import_outcome(export_path, "qq")
-
-    assert [message.is_self for message in outcome.messages] == [True, False]
+def test_qq_db_unreliable_self_uin_stays_unknown(tmp_path):
+    outcome = _qq_import(tmp_path, [qq_db_record("fictional text")], self_uin="0")
+    assert outcome.messages[0].is_self is None
 
 
-def test_qq_export_matches_all_reliable_self_identity_aliases(
-    tmp_path: Path,
-) -> None:
-    export_path = tmp_path / "qq-self-aliases.json"
-    self_row = _qce_row("m1", "u-fictional-current", "Fictional Self")
-    self_row["sender"]["uin"] = "100000001"
-    peer_row = _qce_row("m2", "u-fictional-peer", "Fictional Peer")
-    peer_row["sender"]["uin"] = "100000002"
-    _write_qce(
-        export_path,
-        {
-            "type": "private",
-            "selfUid": "u-fictional-stale",
-            "selfUin": "100000001",
-        },
-        [self_row, peer_row],
-    )
-
-    outcome = _import_outcome(export_path, "qq")
-
+def test_qq_db_self_identity_canonicalizes_numeric_sender(tmp_path):
+    outcome = _qq_import(tmp_path, [
+        qq_db_record("mine", sender_id=100000001),
+        qq_db_record("theirs", sender_id=100000002),
+    ], self_uin="100000001")
     assert [message.is_self for message in outcome.messages] == [True, False]
 
 

@@ -20,11 +20,8 @@ from qq_chat_analyzer.detectors import (
     detect_robot_candidates,
     detect_template_candidates,
 )
-from qq_chat_analyzer.parser import (
-    ParsedMessage,
-    load_messages,
-    parse_messages,
-)
+from qq_chat_analyzer.application import ImportRequest, ImportService
+from qq_chat_analyzer.message import ChatMessage
 from qq_chat_analyzer.smart_profile import run_smart_profile
 
 
@@ -62,12 +59,11 @@ def collect_profile_statistics(
     if not input_files:
         raise ValueError("No supported input files were found.")
 
-    raw_message_count = 0
-    parsed_messages: list[ParsedMessage] = []
-    for path in input_files:
-        raw_messages = load_messages(path)
-        raw_message_count += len(raw_messages)
-        parsed_messages.extend(parse_messages(raw_messages))
+    outcome = ImportService().execute(ImportRequest(Path(input_path)))
+    if outcome.result.format is None and not outcome.messages:
+        raise ValueError("No supported input files were found.")
+    raw_message_count = outcome.processed_message_count
+    parsed_messages: list[ChatMessage] = list(outcome.messages)
 
     robot_candidates = detect_robot_candidates(parsed_messages)
     template_candidates = detect_template_candidates(parsed_messages)
@@ -148,7 +144,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "input_path",
         metavar="聊天记录位置",
-        help="QQChatExporter JSON/JSONL 文件或目录。",
+        help="当前支持的聊天记录 JSON/JSONL 文件或目录。",
     )
     arguments = parser.parse_args(argv)
 
@@ -184,7 +180,7 @@ def _find_input_files(input_path: Path) -> list[Path]:
 def _print_report(report: ProfileReport) -> None:
     print(f"输入文件数量: {report.input_file_count}")
     print(f"原始消息数量: {report.raw_message_count}")
-    print(f"ParsedMessage 数量: {report.parsed_message_count}")
+    print(f"ChatMessage 数量: {report.parsed_message_count}")
     print(
         "robot_sender candidate 数量: "
         f"{report.robot_sender_candidate_count}"

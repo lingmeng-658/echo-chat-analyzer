@@ -128,7 +128,7 @@ def _build_argument_parser() -> argparse.ArgumentParser:
   echo-chat "聊天记录路径"
 
 例如：
-  echo-chat "C:\\Users\\你的用户名\\Documents\\QQChatExporter\\exports\\group_xxx"
+  echo-chat "C:\\Users\\你的用户名\\Documents\\Echo\\exports\\qq-db.json"
 
 默认行为
   直接运行上述命令时，默认：

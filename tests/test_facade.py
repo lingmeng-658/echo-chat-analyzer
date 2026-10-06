@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import importlib
 import json
+from qq_db_test_data import qq_db_payload, qq_db_record
 import os
 import subprocess
 import sys
@@ -681,7 +682,7 @@ def _facade(
 
 def _export_file(tmp_path: Path, name: str = "export.json") -> Path:
     path = tmp_path / name
-    path.write_text('{"messages": []}', encoding="utf-8")
+    path.write_text(json.dumps(qq_db_payload([])), encoding="utf-8")
     return path
 
 
@@ -1482,13 +1483,10 @@ def test_default_report_directory_inherits_current_user_access(
 def test_real_analysis_report_survives_facade_return(tmp_path: Path) -> None:
     application = importlib.import_module("qq_chat_analyzer.application")
     input_path = tmp_path / "fictional-chat.json"
-    input_path.write_text(
-        '{"messages": ['
-        '{"timestamp": 1704099600, "sender": {"nickname": "Fictional-Alice"}, '
-        '"type": "text", "content": {"text": "Python 数据分析"}}'
-        "]}",
-        encoding="utf-8",
-    )
+    input_path.write_text(json.dumps(qq_db_payload([
+        qq_db_record("Python \u6570\u636e\u5206\u6790", timestamp=1704099600,
+                     nickname="Fictional-Alice"),
+    ])), encoding="utf-8")
     facade = _facade(
         qq_service=_StubQQService(export_path=input_path),
         analysis_service=application.AnalysisApplicationService(),
@@ -2451,27 +2449,11 @@ def test_source_analysis_uses_the_shared_application_scope_filter(
         "qq_chat_analyzer.application.analysis_service"
     )
     export_path = tmp_path / "fictional-scoped-export.json"
-    export_path.write_text(
-        json.dumps(
-            {
-                "messages": [
-                    {
-                        "timestamp": "2026-01-31 23:59:59",
-                        "sender": {"nickname": "Fictional Alice"},
-                        "type": "text",
-                        "content": {"text": "OutsideMarker"},
-                    },
-                    {
-                        "timestamp": "2026-02-01 12:00:00",
-                        "sender": {"nickname": "Fictional Alice"},
-                        "type": "text",
-                        "content": {"text": "InsideMarker"},
-                    },
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
+    export_path.write_text(json.dumps(qq_db_payload([
+        qq_db_record("OutsideMarker", timestamp="2026-01-31 23:59:59"),
+        qq_db_record("InsideMarker", timestamp="2026-02-01 12:00:00",
+                     message_id="fictional-inside"),
+    ])), encoding="utf-8")
     source = module.ChatSource.QQ
     services = {
         "qq_service": _StubQQService(export_path=export_path),

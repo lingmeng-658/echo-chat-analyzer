@@ -2,25 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..legacy_projection import project_legacy_messages
 from ..message import ChatMessage
-from ..parser import (
-    load_messages as load_qq_messages,
-    parse_messages as parse_qq_messages,
-)
 from ..rich_message import RichMessage
-from ..qq_chat_exporter_adapter import (
-    is_qce_export,
-    load_qce_json,
-    parse_qce_rich_messages,
-    qce_conversation_id,
-    qce_conversation_type,
-    qce_self_identities,
-)
 from ..qq_db_adapter import (
     QQ_DB_JSON_FORMAT,
     is_qq_db_export,
@@ -54,7 +41,6 @@ _SUPPORTED_INPUT_SUFFIXES = frozenset({".json", ".jsonl"})
 _SUPPORTED_PLATFORMS = frozenset({"qq", "wechat"})
 
 WECHAT_CLI_FORMAT = "cli-json"
-QQ_QCE_FORMAT = "qce-json"
 
 _SIDECAR_FILE_NAMES = frozenset({"manifest.json", "avatars.json"})
 _SIDECAR_DIR_NAMES = frozenset({"resources"})
@@ -189,10 +175,14 @@ def _import_file(
     input_file: Path,
     platform_hint: str | None,
 ) -> _ImportedFile:
+    if platform_hint is not None and not _matches_platform_shape(
+        input_file, platform_hint
+    ):
+        return _unsupported_file(WARNING_PLATFORM_HINT_FORMAT_MISMATCH)
     if platform_hint == "wechat":
         return _import_wechat_file(input_file)
     if platform_hint == "qq":
-        return _import_qq_file(input_file)
+        return _import_qq_db_file(input_file)
     if is_qq_db_export(input_file):
         return _import_qq_db_file(input_file)
     if is_wechat_db_export(input_file):
@@ -201,37 +191,17 @@ def _import_file(
         return _import_wechat_file(input_file)
     if is_wechat_cli_export(input_file):
         return _import_wechat_cli_file(input_file)
-    if _looks_like_qq_export(input_file):
-        return _import_qq_file(input_file)
+    return _unsupported_file(WARNING_UNSUPPORTED_FORMAT)
+
+
+def _unsupported_file(warning: str) -> _ImportedFile:
     return _ImportedFile(
         platform=_UNKNOWN_PLATFORM,
         messages=(),
         rich_messages=(),
         format=None,
-        warnings=(WARNING_UNSUPPORTED_FORMAT,),
+        warnings=(warning,),
         raw_count=0,
-    )
-
-
-def _import_qq_file(
-    input_file: Path,
-) -> _ImportedFile:
-    if is_qq_db_export(input_file):
-        return _import_qq_db_file(input_file)
-    if is_qce_export(input_file):
-        return _import_qce_file(input_file)
-
-    raw_messages = load_qq_messages(input_file)
-    parsed_messages = tuple(parse_qq_messages(raw_messages))
-    warnings = _import_warnings(input_file, "qq", raw_messages, parsed_messages)
-    file_format = "jsonl" if input_file.suffix.lower() == ".jsonl" else "json"
-    return _ImportedFile(
-        platform="qq",
-        messages=parsed_messages,
-        rich_messages=(),
-        format=file_format,
-        warnings=warnings,
-        raw_count=len(raw_messages),
     )
 
 
@@ -253,32 +223,6 @@ def _import_qq_db_file(
         format=QQ_DB_JSON_FORMAT,
         warnings=warnings,
         raw_count=len(raw_records),
-    )
-
-
-def _import_qce_file(
-    input_file: Path,
-) -> _ImportedFile:
-    payload = load_qce_json(input_file)
-    raw_messages = payload.get("messages", []) if payload is not None else []
-    rich_messages, parse_warnings = parse_qce_rich_messages(
-        raw_messages,
-        conversation_id=qce_conversation_id(payload),
-        conversation_type=qce_conversation_type(payload),
-        self_identity=qce_self_identities(payload),
-    )
-    parsed_messages = tuple(project_legacy_messages(rich_messages))
-    warnings = (
-        *parse_warnings,
-        *_import_warnings(input_file, "qq", raw_messages, parsed_messages),
-    )
-    return _ImportedFile(
-        platform="qq",
-        messages=parsed_messages,
-        rich_messages=tuple(rich_messages),
-        format=QQ_QCE_FORMAT,
-        warnings=warnings,
-        raw_count=len(raw_messages),
     )
 
 
@@ -384,44 +328,8 @@ def _matches_platform_shape(input_file: Path, platform: str) -> bool:
             or is_wechat_cli_export(input_file)
         )
     if platform == "qq":
-        return (
-            is_qq_db_export(input_file)
-            or is_qce_export(input_file)
-            or _looks_like_qq_export(input_file)
-        )
-    return _looks_like_qq_export(input_file)
-
-
-def _looks_like_qq_export(input_file: Path) -> bool:
-    if input_file.suffix.lower() == ".jsonl":
-        if is_wechat_export(input_file):
-            return False
-        return bool(load_qq_messages(input_file))
-
-    if (
-        is_wechat_cli_export(input_file)
-        or is_wechat_db_export(input_file)
-        or is_qq_db_export(input_file)
-    ):
-        return False
-
-    payload = _load_json_object(input_file)
-    if payload is None:
-        return False
-    if is_wechat_export(input_file):
-        return False
-    return isinstance(payload.get("messages"), list)
-
-
-def _load_json_object(input_file: Path) -> dict | None:
-    try:
-        with input_file.open("r", encoding="utf-8") as file:
-            payload = json.load(file)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    return payload
+        return is_qq_db_export(input_file)
+    return False
 
 
 def _resolve_platform(

@@ -7,7 +7,7 @@ import importlib.util
 from qq_chat_analyzer.detectors.interactive_bot_detector import (
     detect_interactive_bot_candidates,
 )
-from qq_chat_analyzer.parser import ParsedMessage
+from qq_chat_analyzer.message import ChatMessage
 
 
 BOT = "虚构交互助手"
@@ -23,7 +23,7 @@ def test_interactive_bot_detector_module_exists() -> None:
 
 def test_frequent_mention_triggered_responses_create_high_confidence_candidate(
 ) -> None:
-    messages: list[ParsedMessage] = []
+    messages: list[ChatMessage] = []
     start_timestamp = 1_700_000_000_000
     for index in range(20):
         timestamp = start_timestamp + index * 10_000
@@ -66,7 +66,7 @@ def test_frequent_mention_triggered_responses_create_high_confidence_candidate(
 
 
 def test_intervening_senders_do_not_prevent_response_detection() -> None:
-    messages: list[ParsedMessage] = []
+    messages: list[ChatMessage] = []
     for index in range(5):
         timestamp = index * 10
         messages.extend(
@@ -106,7 +106,7 @@ def test_unique_trigger_source_count_counts_distinct_mention_senders(
         "虚构用户甲",
         "虚构用户乙",
     ]
-    messages: list[ParsedMessage] = []
+    messages: list[ChatMessage] = []
     for index, trigger_sender in enumerate(trigger_senders):
         timestamp = index * 10
         messages.extend(
@@ -131,7 +131,7 @@ def test_unique_trigger_source_count_counts_distinct_mention_senders(
 
 
 def test_unique_trigger_source_count_ignores_blank_senders() -> None:
-    messages: list[ParsedMessage] = []
+    messages: list[ChatMessage] = []
     for index in range(5):
         timestamp = index * 10
         messages.extend(
@@ -152,7 +152,7 @@ def test_unique_trigger_source_count_ignores_blank_senders() -> None:
 
 
 def test_number_normalized_responses_have_high_template_score() -> None:
-    messages: list[ParsedMessage] = []
+    messages: list[ChatMessage] = []
     for index in range(5):
         timestamp = index * 10
         messages.extend(
@@ -188,7 +188,7 @@ def test_varied_responses_have_low_template_score() -> None:
         "虚构分析丁",
         "虚构结论戊",
     ]
-    messages: list[ParsedMessage] = []
+    messages: list[ChatMessage] = []
     for index, response_text in enumerate(response_texts):
         timestamp = index * 10
         messages.extend(
@@ -213,7 +213,7 @@ def test_varied_responses_have_low_template_score() -> None:
 
 
 def test_low_response_rate_sender_is_not_a_candidate() -> None:
-    messages: list[ParsedMessage] = []
+    messages: list[ChatMessage] = []
     for index in range(10):
         timestamp = index * 10
         messages.append(
@@ -232,7 +232,7 @@ def test_low_response_rate_sender_is_not_a_candidate() -> None:
 
 
 def test_fewer_than_five_mentions_is_not_a_candidate() -> None:
-    messages: list[ParsedMessage] = []
+    messages: list[ChatMessage] = []
     for index in range(4):
         timestamp = index * 10
         messages.extend(
@@ -250,7 +250,7 @@ def test_fewer_than_five_mentions_is_not_a_candidate() -> None:
 
 
 def test_response_after_twenty_messages_is_outside_window() -> None:
-    messages: list[ParsedMessage] = []
+    messages: list[ChatMessage] = []
     for mention_index in range(5):
         timestamp = mention_index * 100
         messages.append(
@@ -276,7 +276,7 @@ def test_response_after_twenty_messages_is_outside_window() -> None:
 
 
 def test_response_after_three_hundred_seconds_is_outside_window() -> None:
-    messages: list[ParsedMessage] = []
+    messages: list[ChatMessage] = []
     for index in range(5):
         timestamp = index * 1_000
         messages.extend(
@@ -297,8 +297,8 @@ def _message(
     sender: str,
     text: str,
     timestamp: int,
-) -> ParsedMessage:
-    return ParsedMessage(
+) -> ChatMessage:
+    return ChatMessage(
         timestamp=timestamp,
         sender=sender,
         message_type="text",

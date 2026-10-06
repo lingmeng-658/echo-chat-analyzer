@@ -13,7 +13,7 @@ sys.path.insert(0, str(SRC_ROOT))
 from qq_chat_analyzer.detectors.robot_detector import (
     detect_robot_candidates,
 )
-from qq_chat_analyzer.parser import ParsedMessage
+from qq_chat_analyzer.message import ChatMessage
 
 
 def test_repetitive_sender_becomes_robot_candidate() -> None:
@@ -93,8 +93,8 @@ def test_empty_messages_have_no_candidates() -> None:
     assert detect_robot_candidates([]) == []
 
 
-def _message(sender: str, text: str, timestamp: int) -> ParsedMessage:
-    return ParsedMessage(
+def _message(sender: str, text: str, timestamp: int) -> ChatMessage:
+    return ChatMessage(
         timestamp=timestamp,
         sender=sender,
         message_type="text",

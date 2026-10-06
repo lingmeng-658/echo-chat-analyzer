@@ -22,9 +22,7 @@ from qq_chat_analyzer.application import (
 )
 from qq_chat_analyzer.application.errors import InputPathNotFound, NoSupportedInput
 from qq_chat_analyzer.message import ChatMessage
-from qq_chat_analyzer.qq_chat_exporter_adapter import (
-    WARNING_QCE_NON_TEXT_MESSAGE_SKIPPED,
-)
+from qq_db_test_data import qq_db_payload, qq_db_record
 
 
 WECHAT_TEXT_TYPE = "\u6587\u672c\u6d88\u606f"
@@ -32,138 +30,6 @@ WECHAT_TEXT_TYPE = "\u6587\u672c\u6d88\u606f"
 
 def _import_service_module():
     return importlib.import_module("qq_chat_analyzer.application.import_service")
-
-
-def _write_qq_json(path: Path) -> None:
-    path.write_text(
-        json.dumps(
-            {
-                "messages": [
-                    {
-                        "timestamp": 1767315600,
-                        "sender": {
-                            "uin": "100000001",
-                            "nickname": "Fictional Alice",
-                        },
-                        "type": "text",
-                        "content": {"text": "Hello from QQ JSON"},
-                    },
-                    {
-                        "timestamp": 1767315660,
-                        "sender": {
-                            "uin": "100000002",
-                            "nickname": "Fictional Bob",
-                        },
-                        "type": "image",
-                        "content": {"text": "[image]"},
-                    },
-                ]
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-
-
-def _write_qq_jsonl(path: Path) -> None:
-    messages = [
-        {
-            "id": "fictional-jsonl-1",
-            "timestamp": 1767402000,
-            "sender": {
-                "uin": "200000001",
-                "nickname": "Fictional Alice",
-            },
-            "type": "text",
-            "content": {"text": "Hello from QQ JSONL"},
-            "recalled": False,
-            "system": False,
-        },
-        {
-            "id": "fictional-jsonl-2",
-            "timestamp": 1767402060,
-            "sender": {
-                "uin": "200000002",
-                "nickname": "Fictional Bob",
-            },
-            "type": "reply",
-            "content": {"text": "Reply from QQ JSONL"},
-            "recalled": False,
-            "system": False,
-        },
-    ]
-    path.write_text(
-        "\n".join(
-            json.dumps(message, ensure_ascii=False) for message in messages
-        ),
-        encoding="utf-8",
-    )
-
-
-def _write_qce_json(path: Path) -> None:
-    payload = {
-        "metadata": {
-            "name": "QQChatExporter",
-            "copyright": "fictional-example",
-            "version": "0.0.0-test",
-        },
-        "chatInfo": {
-            "groupCode": "fictional-group-9001",
-            "name": "Fictional Group",
-            "type": "group",
-            "participantCount": 3,
-        },
-        "statistics": {"totalMessages": 3},
-        "messages": [
-            {
-                "id": "fictional-qce-001",
-                "seq": "1",
-                "timestamp": 1750000000000,
-                "time": "2025-06-15 12:00:00",
-                "sender": {
-                    "uid": "user-1001",
-                    "uin": "1001",
-                    "name": "Fictional Alice",
-                    "nickname": "Fictional Alice",
-                },
-                "type": "text",
-                "content": {"text": "Hello from QCE", "elements": []},
-                "recalled": False,
-                "system": False,
-            },
-            {
-                "id": "fictional-qce-002",
-                "seq": "2",
-                "timestamp": 1750000001000,
-                "time": "2025-06-15 12:00:01",
-                "sender": {
-                    "uid": "user-1002",
-                    "uin": "1002",
-                    "name": "Fictional Bob",
-                },
-                "type": "reply",
-                "content": {"text": "Reply from QCE", "elements": []},
-                "recalled": False,
-                "system": False,
-            },
-            {
-                "id": "fictional-qce-003",
-                "seq": "3",
-                "timestamp": 1750000002000,
-                "time": "2025-06-15 12:00:02",
-                "sender": {
-                    "uid": "user-1003",
-                    "uin": "1003",
-                    "name": "Fictional Carol",
-                },
-                "type": "file",
-                "content": {"text": "[file]", "elements": []},
-                "recalled": False,
-                "system": False,
-            },
-        ],
-    }
-    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
 def _write_wechat_json(path: Path) -> None:
@@ -204,7 +70,7 @@ def _write_wechat_json(path: Path) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
-def test_qq_json_import_returns_result_and_messages(tmp_path: Path) -> None:
+def test_qq_db_import_returns_result_and_messages(tmp_path: Path) -> None:
     input_path = tmp_path / "qq.json"
     _write_qq_json(input_path)
 
@@ -218,97 +84,12 @@ def test_qq_json_import_returns_result_and_messages(tmp_path: Path) -> None:
         platform="qq",
         message_count=1,
         valid_text_count=1,
-        format="json",
+        format="qq-db-json",
+        warnings=("qq_db_record_skipped",),
     )
     assert len(outcome.messages) == 1
     assert isinstance(outcome.messages[0], ChatMessage)
-    assert outcome.messages[0].text == "Hello from QQ JSON"
-
-
-def test_qq_jsonl_import_returns_result_and_messages(tmp_path: Path) -> None:
-    input_path = tmp_path / "qq.jsonl"
-    _write_qq_jsonl(input_path)
-
-    outcome = ImportService().execute(
-        ImportRequest(input_path=input_path, platform="qq")
-    )
-
-    assert outcome.result == ImportResult(
-        platform="qq",
-        message_count=2,
-        valid_text_count=2,
-        format="jsonl",
-    )
-    assert [message.text for message in outcome.messages] == [
-        "Hello from QQ JSONL",
-        "Reply from QQ JSONL",
-    ]
-
-
-def test_qce_json_import_returns_result_messages_and_warning(
-    tmp_path: Path,
-) -> None:
-    input_path = tmp_path / "qce.json"
-    _write_qce_json(input_path)
-
-    outcome = ImportService().execute(
-        ImportRequest(input_path=input_path, platform="qq")
-    )
-
-    assert outcome.processed_message_count == 3
-    assert outcome.result == ImportResult(
-        platform="qq",
-        message_count=2,
-        valid_text_count=2,
-        format="qce-json",
-        warnings=(WARNING_QCE_NON_TEXT_MESSAGE_SKIPPED,),
-    )
-    assert [message.text for message in outcome.messages] == [
-        "Hello from QCE",
-        "Reply from QCE",
-    ]
-    assert all(
-        message.conversation_id == "fictional-group-9001"
-        for message in outcome.messages
-    )
-
-
-def test_qce_json_auto_detection_without_platform(tmp_path: Path) -> None:
-    input_path = tmp_path / "qce.json"
-    _write_qce_json(input_path)
-
-    outcome = ImportService().execute(
-        ImportRequest(input_path=input_path)
-    )
-
-    assert outcome.result.platform == "qq"
-    assert outcome.result.format == "qce-json"
-    assert len(outcome.messages) == 2
-
-
-def test_qce_json_import_carries_rich_messages(tmp_path: Path) -> None:
-    input_path = tmp_path / "qce.json"
-    _write_qce_json(input_path)
-
-    outcome = ImportService().execute(
-        ImportRequest(input_path=input_path, platform="qq")
-    )
-
-    assert len(outcome.rich_messages) == 2
-    assert outcome.rich_messages[0].source == "qq"
-    assert outcome.rich_messages[0].message_id == "fictional-qce-001"
-    assert outcome.rich_messages[1].message_id == "fictional-qce-002"
-
-
-def test_qq_json_import_keeps_rich_messages_empty(tmp_path: Path) -> None:
-    input_path = tmp_path / "qq.json"
-    _write_qq_json(input_path)
-
-    outcome = ImportService().execute(
-        ImportRequest(input_path=input_path, platform="qq")
-    )
-
-    assert outcome.rich_messages == ()
+    assert outcome.messages[0].text == "Hello from QQ DB"
 
 
 def test_wechat_detailed_json_import_returns_result_and_messages(
@@ -352,15 +133,15 @@ def test_directory_import_discovers_supported_files(tmp_path: Path) -> None:
     directory = tmp_path / "chats"
     directory.mkdir()
     _write_qq_json(directory / "chat.json")
-    _write_qq_jsonl(directory / "chat.jsonl")
+    _write_wechat_json(directory / "wechat.json")
 
     outcome = ImportService().execute(
-        ImportRequest(input_path=directory, platform="qq")
+        ImportRequest(input_path=directory)
     )
 
     assert outcome.result.message_count == 3
     assert outcome.result.format is None
-    assert outcome.result.warnings == ()
+    assert outcome.result.warnings == ("qq_db_record_skipped",)
 
 
 def test_missing_input_path_raises_input_path_not_found(tmp_path: Path) -> None:
@@ -393,50 +174,12 @@ def test_corrupt_json_returns_warning_and_empty_result(tmp_path: Path) -> None:
     assert outcome.messages == ()
 
 
-def test_qq_import_reuses_existing_qq_parser_functions(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    input_path = tmp_path / "qq.json"
-    input_path.write_text("{}", encoding="utf-8")
-    module = _import_service_module()
-    calls: list[str] = []
-    raw_messages = [{"fictional": "raw"}]
-    parsed = [
-        ChatMessage(
-            timestamp=1,
-            sender="Fictional Alice",
-            message_type="text",
-            text="Hello",
-        )
-    ]
-
-    def fake_load(_: Path) -> list[dict[str, str]]:
-        calls.append("load_qq")
-        return raw_messages
-
-    def fake_parse(raw: object) -> list[ChatMessage]:
-        calls.append("parse_qq")
-        assert raw is raw_messages
-        return parsed
-
-    monkeypatch.setattr(module, "load_qq_messages", fake_load)
-    monkeypatch.setattr(module, "parse_qq_messages", fake_parse)
-
-    outcome = ImportService().execute(
-        ImportRequest(input_path=input_path, platform="qq")
-    )
-
-    assert calls == ["load_qq", "parse_qq"]
-    assert outcome.messages == tuple(parsed)
-
-
 def test_wechat_import_reuses_existing_wechat_parser_functions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     input_path = tmp_path / "wechat.json"
-    input_path.write_text("{}", encoding="utf-8")
+    _write_wechat_json(input_path)
     module = _import_service_module()
     calls: list[str] = []
     raw_messages = [{"fictional": "raw"}]
@@ -461,16 +204,12 @@ def test_wechat_import_reuses_existing_wechat_parser_functions(
     ) -> list[ChatMessage]:
         calls.append("parse_wechat")
         assert raw is raw_messages
-        assert conversation_id is None
-        assert conversation_type == "unknown"
+        assert conversation_id == "fictional-chatroom"
+        assert conversation_type == "group"
         return parsed
-
-    def unexpected_detect(_: Path) -> bool:
-        raise AssertionError("explicit platform should skip detection")
 
     monkeypatch.setattr(module, "load_wechat_messages", fake_load)
     monkeypatch.setattr(module, "parse_wechat_messages", fake_parse)
-    monkeypatch.setattr(module, "is_wechat_export", unexpected_detect)
 
     outcome = ImportService().execute(
         ImportRequest(input_path=input_path, platform="wechat")
@@ -478,3 +217,19 @@ def test_wechat_import_reuses_existing_wechat_parser_functions(
 
     assert calls == ["load_wechat", "parse_wechat"]
     assert outcome.messages == tuple(parsed)
+
+
+def _write_qq_json(path: Path) -> None:
+    text = qq_db_record("Hello from QQ DB")
+    nontext = qq_db_record(message_id="fictional-nontext")
+    # An uninterpretable record is counted as raw input, but never as text.
+    path.write_text(json.dumps(qq_db_payload([text, nontext])), encoding="utf-8")
+
+
+def test_qq_db_auto_detection_carries_rich_messages(tmp_path):
+    path = tmp_path / "qq-db.json"
+    _write_qq_json(path)
+    outcome = ImportService().execute(ImportRequest(path))
+    assert outcome.result.platform == "qq"
+    assert outcome.result.format == "qq-db-json"
+    assert len(outcome.rich_messages) == len(outcome.messages) == 1

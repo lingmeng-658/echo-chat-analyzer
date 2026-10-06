@@ -14,7 +14,7 @@ sys.path.insert(0, str(SRC_ROOT))
 
 from qq_chat_analyzer import smart_profile
 from qq_chat_analyzer.candidates import Candidate
-from qq_chat_analyzer.parser import ParsedMessage
+from qq_chat_analyzer.message import ChatMessage
 from qq_chat_analyzer.smart_profile import run_smart_profile
 
 
@@ -219,8 +219,8 @@ def _interactive_messages(
     *,
     mention_count: int,
     start_timestamp: int = 1_700_000_000,
-) -> list[ParsedMessage]:
-    messages: list[ParsedMessage] = []
+) -> list[ChatMessage]:
+    messages: list[ChatMessage] = []
     for index in range(mention_count):
         timestamp = start_timestamp + index * 10
         response_suffix = chr(0x4E00 + index)
@@ -241,8 +241,8 @@ def _interactive_messages(
     return messages
 
 
-def _message(sender: str, text: str, timestamp: int) -> ParsedMessage:
-    return ParsedMessage(
+def _message(sender: str, text: str, timestamp: int) -> ChatMessage:
+    return ChatMessage(
         timestamp=timestamp,
         sender=sender,
         message_type="text",

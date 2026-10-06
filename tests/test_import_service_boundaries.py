@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from qq_db_test_data import qq_db_payload, qq_db_record
 from pathlib import Path
 
 import pytest
@@ -11,28 +12,6 @@ from qq_chat_analyzer.application import ImportRequest, ImportService
 NO_MESSAGES_LOADED = "no_messages_loaded"
 UNSUPPORTED_FORMAT = "unsupported_format"
 PLATFORM_HINT_FORMAT_MISMATCH = "platform_hint_format_mismatch"
-
-
-def write_qq_json(path: Path, messages=None):
-    if messages is None:
-        messages = [
-            {
-                "timestamp": 1767315600,
-                "sender": {
-                    "uin": "100000001",
-                    "nickname": "Alice",
-                },
-                "type": "text",
-                "content": {
-                    "text": "hello"
-                },
-            }
-        ]
-
-    path.write_text(
-        json.dumps({"messages": messages}, ensure_ascii=False),
-        encoding="utf-8",
-    )
 
 
 def write_empty_qq_json(path: Path):
@@ -358,3 +337,8 @@ def test_mismatch_warning_hides_filename(tmp_path):
         assert "\u79d8\u5bc6\u7fa4" not in warning
         assert "123456" not in warning
         assert path.name not in warning
+
+
+def write_qq_json(path: Path, messages=None):
+    records = [qq_db_record("hello", nickname="Alice")] if messages is None else messages
+    path.write_text(json.dumps(qq_db_payload(records)), encoding="utf-8")

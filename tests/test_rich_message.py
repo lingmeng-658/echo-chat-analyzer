@@ -66,7 +66,7 @@ def _text_message(
     return RichMessage(
         message_id="fictional-message-1",
         source="qq",
-        source_type="qce-json",
+        source_type="qq-db-json",
         conversation_id="fictional-group-1",
         sender=SenderIdentity(
             identity_id="fictional-user-1",

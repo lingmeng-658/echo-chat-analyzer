@@ -1,0 +1,106 @@
+"""Current fictional file inputs for shared analysis and privacy tests."""
+
+
+def detailed_payload(messages):
+    return {
+        "exportInfo": {"format": "detailed-json"},
+        "session": {"wxid": "fictional-room", "platform": "wechat", "isGroup": True},
+        "messages": [
+            {
+                "localId": index,
+                "createTime": row["timestamp"],
+                "type": "文本消息" if row.get("type") in {"text", "reply"} else "图片消息",
+                "content": row.get("content", {}).get("text", ""),
+                "senderUsername": row["sender"].get("uin", row["sender"].get("nickname")),
+                "senderDisplayName": row["sender"].get("nickname", "Fictional Sender"),
+            }
+            for index, row in enumerate(messages, start=1)
+        ],
+    }
+
+
+def chatlab_lines(messages):
+    rows = [{"_type": "header", "meta": {
+        "platform": "wechat", "type": "group", "groupId": "fictional-room",
+    }}]
+    rows.extend({
+        "_type": "message", "timestamp": row["timestamp"],
+        "sender": row["sender"].get("uin", row["sender"].get("nickname")),
+        "accountName": row["sender"].get("nickname", "Fictional Sender"),
+        "type": 0 if row.get("type") in {"text", "reply"} else 1,
+        "content": row.get("content", {}).get("text", ""),
+    } for row in messages)
+    return rows
+
+
+FICTIONAL_DETAILED_EXPORT = {'exportInfo': {'format': 'detailed-json'},
+ 'session': {'wxid': 'fictional-room', 'platform': 'wechat', 'isGroup': True},
+ 'messages': [{'localId': 1,
+               'createTime': 1767315600,
+               'type': '文本消息',
+               'content': '今天一起学习 Python 数据分析',
+               'senderUsername': '100000001',
+               'senderDisplayName': '虚构用户甲'},
+              {'localId': 2,
+               'createTime': 1767315660,
+               'type': '文本消息',
+               'content': '好呀，下午两点开始吧',
+               'senderUsername': '100000002',
+               'senderDisplayName': '虚构用户乙'},
+              {'localId': 3,
+               'createTime': 1767315720,
+               'type': '图片消息',
+               'content': '[图片]',
+               'senderUsername': '100000003',
+               'senderDisplayName': '虚构用户丙'},
+              {'localId': 4,
+               'createTime': 1767315780,
+               'type': '图片消息',
+               'content': '[视频]',
+               'senderUsername': '100000001',
+               'senderDisplayName': '虚构用户甲'},
+              {'localId': 5,
+               'createTime': 1767315840,
+               'type': '图片消息',
+               'content': '[文件] fictional-notes.pdf',
+               'senderUsername': '100000002',
+               'senderDisplayName': '虚构用户乙'},
+              {'localId': 6,
+               'createTime': 1767315900,
+               'type': '图片消息',
+               'content': '虚构用户丁加入了群聊',
+               'senderUsername': '0',
+               'senderDisplayName': '系统'},
+              {'localId': 7,
+               'createTime': 1767315960,
+               'type': '文本消息',
+               'content': '@虚构用户乙   [图片]\u200b  明天    下午\t一起  复习吧',
+               'senderUsername': '100000003',
+               'senderDisplayName': '虚构用户丙'}]}
+
+FICTIONAL_CHATLAB_EXPORT = [{'_type': 'header',
+  'meta': {'platform': 'wechat', 'type': 'group', 'groupId': 'fictional-room'}},
+ {'_type': 'message',
+  'timestamp': 1767402000,
+  'sender': '200000001',
+  'accountName': '虚构JSONL用户甲',
+  'type': 0,
+  'content': '量子课程今天开课'},
+ {'_type': 'message',
+  'timestamp': 1767402060,
+  'sender': '200000002',
+  'accountName': '虚构JSONL用户乙',
+  'type': 0,
+  'content': '下午继续研究算法'},
+ {'_type': 'message',
+  'timestamp': 1767402120,
+  'sender': '200000003',
+  'accountName': '虚构JSONL用户丙',
+  'type': 1,
+  'content': '[图片]'},
+ {'_type': 'message',
+  'timestamp': 1767402180,
+  'sender': '0',
+  'accountName': '虚构系统',
+  'type': 1,
+  'content': '虚构系统通知'}]

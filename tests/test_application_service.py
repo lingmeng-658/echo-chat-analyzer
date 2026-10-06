@@ -6,6 +6,7 @@ import builtins
 import dataclasses
 import importlib
 import json
+from chat_input_test_data import detailed_payload
 import sys
 from datetime import date
 from pathlib import Path
@@ -40,7 +41,7 @@ def _service_module():
 
 def _write_fictional_chat(path: Path, messages: list[dict[str, object]]) -> None:
     path.write_text(
-        json.dumps({"messages": messages}, ensure_ascii=False),
+        json.dumps(detailed_payload(messages), ensure_ascii=False),
         encoding="utf-8",
     )
 
@@ -352,7 +353,10 @@ def test_importing_service_does_not_import_cli(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module_name = "qq_chat_analyzer.application.analysis_service"
-    sys.modules.pop(module_name, None)
+    parent = importlib.import_module("qq_chat_analyzer.application")
+    original_module = importlib.import_module(module_name)
+    monkeypatch.setattr(parent, "analysis_service", original_module)
+    monkeypatch.delitem(sys.modules, module_name)
     real_import = builtins.__import__
 
     def guarded_import(

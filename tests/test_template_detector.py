@@ -13,7 +13,7 @@ sys.path.insert(0, str(SRC_ROOT))
 from qq_chat_analyzer.detectors.template_detector import (
     detect_template_candidates,
 )
-from qq_chat_analyzer.parser import ParsedMessage
+from qq_chat_analyzer.message import ChatMessage
 
 
 def test_welcome_messages_form_welcome_template_candidate() -> None:
@@ -223,8 +223,8 @@ def test_empty_messages_have_no_template_candidates() -> None:
     assert detect_template_candidates([]) == []
 
 
-def _message(sender: str, text: str, timestamp: int) -> ParsedMessage:
-    return ParsedMessage(
+def _message(sender: str, text: str, timestamp: int) -> ChatMessage:
+    return ChatMessage(
         timestamp=timestamp,
         sender=sender,
         message_type="text",

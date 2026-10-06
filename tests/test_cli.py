@@ -6,6 +6,11 @@ import ast
 import csv
 import importlib.metadata
 import json
+from chat_input_test_data import (
+    FICTIONAL_CHATLAB_EXPORT,
+    FICTIONAL_DETAILED_EXPORT,
+    detailed_payload,
+)
 import os
 import shutil
 import subprocess
@@ -19,8 +24,6 @@ from PIL import Image
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
-FIXTURE_PATH = PROJECT_ROOT / "tests" / "fixtures" / "sample_chat.json"
-JSONL_FIXTURE_PATH = PROJECT_ROOT / "tests" / "fixtures" / "sample_chat.jsonl"
 STOPWORDS_PATH = PROJECT_ROOT / "stopwords.txt"
 sys.path.insert(0, str(SRC_ROOT))
 
@@ -67,7 +70,7 @@ def test_module_cli_help_guides_first_time_users() -> None:
     assert 'echo-chat "聊天记录路径"' in result.stdout
     assert (
         r'echo-chat "C:\Users\你的用户名\Documents'
-        r'\QQChatExporter\exports\group_xxx"'
+        r'\Echo\exports\qq-db.json"'
     ) in result.stdout
     assert "默认行为" in result.stdout
     assert "使用 default 默认过滤模式" in result.stdout
@@ -321,13 +324,14 @@ def test_main_displays_empty_analysis_status_without_top_words(
 
 
 def test_simplified_cli_path_with_spaces_uses_automatic_output_directory(
+    detailed_input_path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     input_dir = tmp_path / "fictional group"
     input_dir.mkdir()
-    shutil.copyfile(FIXTURE_PATH, input_dir / "sample.json")
+    shutil.copyfile(detailed_input_path, input_dir / "sample.json")
     monkeypatch.chdir(tmp_path)
 
     exit_code = main(
@@ -464,10 +468,11 @@ def test_cli_does_not_directly_import_core_pipeline_modules() -> None:
 
 @pytest.mark.slow_integration
 def test_module_cli_file_input_generates_outputs_without_printing_chat(
+    detailed_input_path,
     tmp_path: Path,
 ) -> None:
     input_path = tmp_path / "fictional-chat.json"
-    shutil.copyfile(FIXTURE_PATH, input_path)
+    shutil.copyfile(detailed_input_path, input_path)
     output_dir = tmp_path / "generated-output"
     font_path = _available_chinese_font()
     environment = os.environ.copy()
@@ -514,8 +519,7 @@ def test_cli_generates_word_speaker_csvs_for_fictional_senders(
     input_path = tmp_path / "fictional-multi-sender.json"
     input_path.write_text(
         json.dumps(
-            {
-                "messages": [
+            detailed_payload([
                     {
                         "timestamp": 1767317100,
                         "sender": {"nickname": "小青"},
@@ -528,8 +532,7 @@ def test_cli_generates_word_speaker_csvs_for_fictional_senders(
                         "type": "text",
                         "content": {"text": "Python 数据分析"},
                     },
-                ]
-            },
+                ]),
             ensure_ascii=False,
         ),
         encoding="utf-8",
@@ -616,7 +619,7 @@ def test_smart_profile_filtered_messages_do_not_enter_word_frequency(
         }
     )
     input_path.write_text(
-        json.dumps({"messages": messages}, ensure_ascii=False),
+        json.dumps(detailed_payload(messages), ensure_ascii=False),
         encoding="utf-8",
     )
     output_dir = tmp_path / "output"
@@ -663,12 +666,13 @@ def test_smart_profile_filtered_messages_do_not_enter_word_frequency(
 
 
 def test_directory_input_ignores_one_invalid_json_file(
+    detailed_input_path,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     input_dir = tmp_path / "input"
     input_dir.mkdir()
-    shutil.copyfile(FIXTURE_PATH, input_dir / "valid.json")
+    shutil.copyfile(detailed_input_path, input_dir / "valid.json")
     (input_dir / "invalid.json").write_text("{not valid json", encoding="utf-8")
     output_dir = tmp_path / "output"
 
@@ -695,11 +699,12 @@ def test_directory_input_ignores_one_invalid_json_file(
 
 
 def test_jsonl_file_input_generates_outputs_without_printing_chat(
+    chatlab_input_path,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     input_path = tmp_path / "fictional-chat.jsonl"
-    shutil.copyfile(JSONL_FIXTURE_PATH, input_path)
+    shutil.copyfile(chatlab_input_path, input_path)
     output_dir = tmp_path / "output"
 
     exit_code = main(
@@ -728,12 +733,13 @@ def test_jsonl_file_input_generates_outputs_without_printing_chat(
 
 
 def test_directory_input_recursively_discovers_jsonl(
+    chatlab_input_path,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     chunks_dir = tmp_path / "export" / "chunks"
     chunks_dir.mkdir(parents=True)
-    shutil.copyfile(JSONL_FIXTURE_PATH, chunks_dir / "c000001.jsonl")
+    shutil.copyfile(chatlab_input_path, chunks_dir / "c000001.jsonl")
     output_dir = tmp_path / "output"
 
     exit_code = main(
@@ -765,16 +771,14 @@ def test_no_valid_text_does_not_create_output_files(
     input_path = tmp_path / "system-only.json"
     input_path.write_text(
         json.dumps(
-            {
-                "messages": [
+            detailed_payload([
                     {
                         "timestamp": 1767317000,
                         "sender": {"nickname": "系统"},
                         "type": "system",
                         "content": {"text": "虚构系统通知"},
                     }
-                ]
-            },
+                ]),
             ensure_ascii=False,
         ),
         encoding="utf-8",
@@ -829,3 +833,17 @@ def _available_chinese_font() -> Path:
             return candidate
 
     pytest.skip("No Chinese font is available for the CLI test.")
+
+
+@pytest.fixture
+def detailed_input_path(tmp_path):
+    path = tmp_path / "fixture-detailed.json"
+    path.write_text(json.dumps(FICTIONAL_DETAILED_EXPORT, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def chatlab_input_path(tmp_path):
+    path = tmp_path / "fixture-chatlab.jsonl"
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in FICTIONAL_CHATLAB_EXPORT), encoding="utf-8")
+    return path

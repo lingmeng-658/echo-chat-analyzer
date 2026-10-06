@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import importlib
 import json
+import hashlib
+from qq_db_test_data import qq_db_payload, qq_db_record
+from chat_input_test_data import detailed_payload
 import re
 import sys
 from pathlib import Path
@@ -22,7 +25,7 @@ def _application_module():
 
 def _write_fictional_chat(path: Path, messages: list[dict[str, object]]) -> None:
     path.write_text(
-        json.dumps({"messages": messages}, ensure_ascii=False),
+        json.dumps(detailed_payload(messages), ensure_ascii=False),
         encoding="utf-8",
     )
 
@@ -41,49 +44,14 @@ def _raw_message(
     }
 
 
-def _write_qce_chat(path: Path) -> None:
-    payload = {
-        "chatInfo": {
-            "groupCode": "fictional-expression-group",
-            "name": "Fictional Expression Group",
-            "type": "group",
-        },
-        "messages": [
-            {
-                "id": "fictional-expression-1",
-                "timestamp": 1704099600,
-                "sender": {"uid": "u-1", "uin": "1", "name": "Fictional Alice"},
-                "type": "text",
-                "content": {
-                    "text": "今天 😀 开心",
-                    "elements": [
-                        {
-                            "type": "text",
-                            "textElement": {"content": "今天 😀 开心"},
-                        },
-                        {"type": "face", "data": {"id": "1", "name": "[笑]"}}
-                    ],
-                },
-                "recalled": False,
-                "system": False,
-            },
-            {
-                "id": "fictional-expression-2",
-                "timestamp": 1704099660,
-                "sender": {"uid": "u-2", "uin": "2", "name": "Fictional Bob"},
-                "type": "text",
-                "content": {
-                    "text": "",
-                    "elements": [
-                        {"type": "face", "data": {"id": "2", "name": "[赞]"}}
-                    ],
-                },
-                "recalled": False,
-                "system": False,
-            },
-        ],
-    }
-    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+def _write_qq_db_chat(path: Path) -> None:
+    records = [
+        qq_db_record("\u4eca\u5929 \U0001f600 \u5f00\u5fc3", sender_id="1", nickname="Fictional Alice", timestamp=1704099600,
+                     message_id="fictional-expression-1", faces=((1, "[\u7b11]"),)),
+        qq_db_record(sender_id="2", nickname="Fictional Bob", timestamp=1704099660,
+                     message_id="fictional-expression-2", faces=((2, "[\u8d5e]"),)),
+    ]
+    path.write_text(json.dumps(qq_db_payload(records), ensure_ascii=False), encoding="utf-8")
 
 
 def _write_wechat_db_sticker_export(path: Path) -> None:
@@ -181,102 +149,17 @@ def _write_wechat_expression_placeholder_export(path: Path) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
-def _write_qce_market_face_chat(path: Path) -> None:
-    payload = {
-        "chatInfo": {
-            "groupCode": "fictional-market-face-group",
-            "name": "Fictional Market Face Group",
-            "type": "group",
-        },
-        "messages": [
-            {
-                "id": "fictional-market-face-1",
-                "timestamp": 1704099600,
-                "sender": {"uid": "u-1", "uin": "1", "name": "Fictional Alice"},
-                "type": "text",
-                "content": {
-                    "text": "来一个",
-                    "elements": [
-                        {
-                            "type": "text",
-                            "textElement": {"content": "来一个"},
-                        },
-                        {
-                            "type": "market_face",
-                            "marketFaceElement": {
-                                "faceName": "[肘击]",
-                                "emojiId": "market-1",
-                            },
-                        }
-                    ],
-                },
-                "recalled": False,
-                "system": False,
-            }
-        ],
-    }
-    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+def _write_qq_db_sticker_chat(path: Path) -> None:
+    records = [qq_db_record("\u6765\u4e00\u4e2a", stickers=(("market-1", "[\u8098\u51fb]"),))]
+    path.write_text(json.dumps(qq_db_payload(records), ensure_ascii=False), encoding="utf-8")
 
 
-def _write_private_qce_expression_fallback_export(path: Path) -> None:
-    payload = {
-        "chatInfo": {
-            "peerUid": "fictional-private-peer",
-            "name": "Fictional Private Chat",
-            "type": "private",
-        },
-        "messages": [
-            {
-                "id": "fictional-private-fallback-1",
-                "timestamp": 1704099600,
-                "sender": {
-                    "uid": "u-1",
-                    "uin": "1",
-                    "name": "Fictional Alice",
-                },
-                "type": "text",
-                "content": {
-                    "text": "Facepalm",
-                    "elements": [
-                        {
-                            "type": "market_face",
-                            "marketFaceElement": {
-                                "emojiId": "market-facepalm",
-                                "faceName": "Facepalm",
-                            },
-                        }
-                    ],
-                },
-                "recalled": False,
-                "system": False,
-            },
-            {
-                "id": "fictional-private-fallback-2",
-                "timestamp": 1704099660,
-                "sender": {
-                    "uid": "u-2",
-                    "uin": "2",
-                    "name": "Fictional Bob",
-                },
-                "type": "text",
-                "content": {
-                    "text": "Facepalm",
-                    "elements": [
-                        {
-                            "type": "market_face",
-                            "marketFaceElement": {
-                                "emojiId": "market-facepalm",
-                                "faceName": "Facepalm",
-                            },
-                        }
-                    ],
-                },
-                "recalled": False,
-                "system": False,
-            },
-        ],
-    }
-    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+def _write_private_qq_db_expression_export(path: Path) -> None:
+    records = [qq_db_record(sender_id=str(index), nickname=name,
+                           message_id=f"fictional-private-{index}", timestamp=1704099600 + index * 60,
+                           stickers=(("market-facepalm", "Facepalm"),))
+               for index, name in enumerate(("Fictional Alice", "Fictional Bob"), start=1)]
+    path.write_text(json.dumps(qq_db_payload(records, session_type="private"), ensure_ascii=False), encoding="utf-8")
 
 
 def _request(application, tmp_path: Path, input_path: Path):
@@ -678,14 +561,14 @@ def test_execute_generates_echo_report_json_artifact(tmp_path: Path) -> None:
     assert payload["schema_version"] == "echo-report.v0.7"
 
 
-def test_expression_report_reaches_echo_pipeline_from_qce(
+def test_expression_report_reaches_echo_pipeline_from_qq_db(
     tmp_path: Path,
 ) -> None:
     application = _application_module()
     input_path = tmp_path / "fictional-expression-chat.json"
     output_directory = tmp_path / "private-output"
     output_directory.mkdir()
-    _write_qce_chat(input_path)
+    _write_qq_db_chat(input_path)
 
     result = application.AnalysisApplicationService().execute(
         _request(application, tmp_path, input_path)
@@ -719,7 +602,7 @@ def test_completed_analysis_reuses_expression_report(
     )
     input_path = tmp_path / "fictional-expression-chat.json"
     (tmp_path / "private-output").mkdir()
-    _write_qce_chat(input_path)
+    _write_qq_db_chat(input_path)
     original_analyze = service_module.ExpressionAnalyzer.analyze
     expression_reports = []
 
@@ -745,12 +628,12 @@ def test_completed_analysis_reuses_expression_report(
     assert result.reports.expression.expression_message_count == 2
 
 
-def test_market_face_reaches_expression_report_from_qce(tmp_path: Path) -> None:
+def test_market_face_reaches_expression_report_from_qq_db(tmp_path: Path) -> None:
     application = _application_module()
     input_path = tmp_path / "fictional-market-face-chat.json"
     output_directory = tmp_path / "private-output"
     output_directory.mkdir()
-    _write_qce_market_face_chat(input_path)
+    _write_qq_db_sticker_chat(input_path)
 
     result = application.AnalysisApplicationService().execute(
         _request(application, tmp_path, input_path)
@@ -759,19 +642,19 @@ def test_market_face_reaches_expression_report_from_qce(tmp_path: Path) -> None:
     assert result.status is application.AnalysisStatus.COMPLETED
     expression = result.reports.expression
     assert expression is not None
-    assert expression.top_expressions[0].expression_key == "market-1"
+    assert expression.top_expressions[0].expression_key == "qq-marketface:sha256:" + hashlib.sha256(b"market-1").hexdigest()
     assert expression.top_expressions[0].kind == "sticker"
     assert expression.top_expressions[0].with_text_message_count == 1
 
 
-def test_private_qce_expression_fallback_does_not_leak_into_voice_words(
+def test_private_qq_db_expression_labels_does_not_leak_into_voice_words(
     tmp_path: Path,
 ) -> None:
     application = _application_module()
     input_path = tmp_path / "fictional-private-expression-fallback.json"
     output_directory = tmp_path / "private-output"
     output_directory.mkdir()
-    _write_private_qce_expression_fallback_export(input_path)
+    _write_private_qq_db_expression_export(input_path)
 
     result = application.AnalysisApplicationService().execute(
         _request(application, tmp_path, input_path)
@@ -780,7 +663,7 @@ def test_private_qce_expression_fallback_does_not_leak_into_voice_words(
     expression = result.reports.expression
     assert expression is not None
     assert expression.expression_occurrence_count == 2
-    assert expression.top_expressions[0].expression_key == "market-facepalm"
+    assert expression.top_expressions[0].expression_key == "qq-marketface:sha256:" + hashlib.sha256(b"market-facepalm").hexdigest()
     assert all(word.word != "Facepalm" for word in result.top_words)
 
     profile_words = [
@@ -906,7 +789,7 @@ def test_private_expression_tokens_do_not_reenter_language_profile(tmp_path: Pat
     input_path = tmp_path / "fictional-private-expressions.json"
     (tmp_path / "private-output").mkdir()
     if source == "qq":
-        _write_private_qce_expression_fallback_export(input_path)
+        _write_private_qq_db_expression_export(input_path)
     else:
         rows = []
         for sender in ("wxid_fictional_self", "wxid_fictional_peer"):

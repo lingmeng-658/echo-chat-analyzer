@@ -1,9 +1,8 @@
-"""匿名输出真实 QQChatExporter 数据的 Smart Profile 调试统计。"""
+"""匿名输出本地聊天记录的 Smart Profile 调试统计。"""
 
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import sys
 from collections.abc import Mapping, Sequence
@@ -22,15 +21,15 @@ from qq_chat_analyzer.detectors import (
     detect_robot_candidates,
     detect_template_candidates,
 )
-from qq_chat_analyzer.parser import (
-    ParsedMessage,
-    load_messages,
-    parse_messages,
+from qq_chat_analyzer.application import (
+    ApplicationServiceError,
+    ImportRequest,
+    ImportService,
 )
+from qq_chat_analyzer.message import ChatMessage
 from qq_chat_analyzer.smart_profile import run_smart_profile
 
 
-SUPPORTED_FILE_SUFFIXES = frozenset({".json", ".jsonl"})
 METRIC_LABELS = (
     ("mention_count", "触发次数"),
     ("response_count", "响应次数"),
@@ -53,23 +52,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     """运行只输出匿名聚合数字的 Smart Profile 调试报告。"""
     parser = _PrivacySafeArgumentParser(
         prog="匿名自动化画像调试",
-        description="QQChatExporter 匿名 Smart Profile 调试分析",
+        description="Echo 匿名 Smart Profile 调试分析",
     )
     parser.add_argument(
         "input_path",
         metavar="聊天记录位置",
-        help="单个 JSON/JSONL 文件或 chunked_jsonl 文件夹。",
+        help="当前支持的聊天记录 JSON/JSONL 文件或目录。",
     )
     arguments = parser.parse_args(argv)
 
     try:
-        input_files = _find_input_files(Path(arguments.input_path))
-        if not input_files:
-            raise ValueError("没有可处理的输入文件")
         raw_message_count, parsed_messages = _load_parsed_messages(
-            input_files
+            Path(arguments.input_path)
         )
-    except (OSError, TypeError, ValueError):
+    except (OSError, TypeError, ValueError, ApplicationServiceError):
         print(
             "错误：未找到可处理的 JSON 或 JSONL 输入。",
             file=sys.stderr,
@@ -110,49 +106,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-def _find_input_files(input_path: Path) -> list[Path]:
-    if input_path.is_file():
-        if input_path.suffix.lower() in SUPPORTED_FILE_SUFFIXES:
-            return [input_path]
-        return []
-    if not input_path.is_dir():
-        return []
-
-    return sorted(
-        path
-        for path in input_path.rglob("*")
-        if path.is_file() and path.suffix.lower() == ".jsonl"
-    )
-
-
-def _load_parsed_messages(
-    input_files: Sequence[Path],
-) -> tuple[int, list[ParsedMessage]]:
-    raw_message_count = 0
-    parsed_messages: list[ParsedMessage] = []
-
-    for path in input_files:
-        raw_messages = load_messages(path)
-        if not raw_messages and not _is_valid_empty_input(path):
-            raise ValueError("输入内容无法解析")
-        raw_message_count += len(raw_messages)
-        parsed_messages.extend(parse_messages(raw_messages))
-
-    return raw_message_count, parsed_messages
-
-
-def _is_valid_empty_input(path: Path) -> bool:
-    if path.suffix.lower() == ".json":
-        with path.open("r", encoding="utf-8") as input_file:
-            payload = json.load(input_file)
-        return (
-            isinstance(payload, dict)
-            and type(payload.get("messages")) is list
-            and not payload["messages"]
-        )
-
-    with path.open("r", encoding="utf-8") as input_file:
-        return all(not line.strip() for line in input_file)
+def _load_parsed_messages(input_path: Path) -> tuple[int, list[ChatMessage]]:
+    outcome = ImportService().execute(ImportRequest(input_path))
+    if outcome.result.format is None and not outcome.messages:
+        raise ValueError("Unsupported input format")
+    return outcome.processed_message_count, list(outcome.messages)
 
 
 def _print_report(

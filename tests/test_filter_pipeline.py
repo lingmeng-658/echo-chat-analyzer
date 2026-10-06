@@ -17,7 +17,7 @@ from qq_chat_analyzer.decision_engine import create_filter_decisions
 from qq_chat_analyzer.filter_decisions import FilterDecision
 from qq_chat_analyzer.filter_pipeline import FilterPipeline
 from qq_chat_analyzer import filter_pipeline
-from qq_chat_analyzer.parser import ParsedMessage
+from qq_chat_analyzer.message import ChatMessage
 
 
 def test_sender_ignore_filters_matching_sender_messages() -> None:
@@ -270,8 +270,8 @@ def test_automation_source_sender_ignore_reuses_sender_filtering() -> None:
     assert result.applied_decisions == decisions
 
 
-def _message(sender: str, text: str, timestamp: int) -> ParsedMessage:
-    return ParsedMessage(
+def _message(sender: str, text: str, timestamp: int) -> ChatMessage:
+    return ChatMessage(
         timestamp=timestamp,
         sender=sender,
         message_type="text",

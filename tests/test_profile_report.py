@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from chat_input_test_data import detailed_payload, chatlab_lines
 import sys
 from pathlib import Path
 
@@ -49,7 +50,7 @@ def test_profile_report_output_contains_only_aggregate_statistics(
     assert exit_code == 0
     assert "输入文件数量: 2" in captured.out
     assert "原始消息数量: 38" in captured.out
-    assert "ParsedMessage 数量: 38" in captured.out
+    assert "ChatMessage 数量: 38" in captured.out
     assert "robot_sender candidate 数量: 1" in captured.out
     assert "template candidate 数量: 2" in captured.out
     assert "Template Candidate:" in captured.out
@@ -93,7 +94,7 @@ def _write_fictional_export(tmp_path: Path) -> Path:
         for index in range(30)
     ]
     (input_directory / "messages.json").write_text(
-        json.dumps({"messages": robot_messages}, ensure_ascii=False),
+        json.dumps(detailed_payload(robot_messages), ensure_ascii=False),
         encoding="utf-8",
     )
 
@@ -126,7 +127,7 @@ def _write_fictional_export(tmp_path: Path) -> Path:
     (chunks_directory / "messages.jsonl").write_text(
         "\n".join(
             json.dumps(message, ensure_ascii=False)
-            for message in jsonl_messages
+            for message in chatlab_lines(jsonl_messages)
         ),
         encoding="utf-8",
     )
