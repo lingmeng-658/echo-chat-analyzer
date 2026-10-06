@@ -11,6 +11,7 @@ import sys
 from contextlib import contextmanager
 from datetime import date, datetime, time, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -60,13 +61,6 @@ class _FakeQQFriend:
         self.session_type = "private"
 
 
-class _FakeExportTask:
-    """Mirror the minimum surface of a QCE export task snapshot."""
-
-    def __init__(self, task_id: str) -> None:
-        self.task_id = task_id
-
-
 class _FakeWeChatSession:
     """Mirror the fields of a real WeChat session listing."""
 
@@ -91,17 +85,14 @@ class _StubQQService:
         groups=(),
         export_path: Path | None = None,
         error=None,
-        tasks=(),
         message_range=None,
     ):
         self._groups = list(groups)
         self._export_path = export_path
         self._error = error
-        self._tasks = None if tasks is None else list(tasks)
         self._message_range = message_range
         self.export_requests: list[object] = []
         self.list_calls = 0
-        self.list_tasks_calls = 0
         self.range_requests: list[tuple[object, dict[str, object]]] = []
 
     def list_groups(self):
@@ -113,14 +104,11 @@ class _StubQQService:
     def list_sessions(self):
         return self.list_groups()
 
-    def list_tasks(self):
-        self.list_tasks_calls += 1
-        if self._error is not None:
-            raise self._error
-        return self._tasks
-
     @contextmanager
-    def acquired_export(self, request, progress=None):
+    def acquired_session(self, session_id, *, start_time=None, end_time=None):
+        request = SimpleNamespace(
+            session_id=session_id, start_time=start_time, end_time=end_time
+        )
         self.export_requests.append(request)
         if self._error is not None:
             raise self._error
@@ -129,6 +117,14 @@ class _StubQQService:
             (),
             {
                 "payload_path": self._export_path,
+                "session": next(
+                    (
+                        item for item in self._groups
+                        if getattr(item, "session_id", getattr(item, "group_code", None))
+                        == session_id
+                    ),
+                    None,
+                ),
                 "snapshot_id": None,
                 "acquired_at": None,
                 "reused_snapshot": False,
@@ -142,21 +138,8 @@ class _StubQQService:
         return self._message_range
 
 
-class _SnapshotQQService(_StubQQService):
-    def __init__(self, *, acquisition, groups=()) -> None:
-        super().__init__(groups=groups, export_path=acquisition.payload_path)
-        self._acquisition = acquisition
-        self.progress_callbacks: list[object] = []
-
-    @contextmanager
-    def acquired_export(self, request, progress=None):
-        self.export_requests.append(request)
-        self.progress_callbacks.append(progress)
-        yield self._acquisition
-
-
 class _ContextManagedQQService(_StubQQService):
-    """Model the QCE lease that must span the facade's complete analysis."""
+    """Model Direct DB payload ownership across complete facade analysis."""
 
     def __init__(self, run_directory: Path, *, error=None) -> None:
         super().__init__(groups=[_FakeQQGroup("fictional-session", "Fictional")])
@@ -165,7 +148,10 @@ class _ContextManagedQQService(_StubQQService):
         self.entered = False
         self.exited = False
 
-    def acquired_export(self, request, progress=None):
+    def acquired_session(self, session_id, *, start_time=None, end_time=None):
+        request = SimpleNamespace(
+            session_id=session_id, start_time=start_time, end_time=end_time
+        )
         service = self
 
         class _AcquisitionContext:
@@ -175,13 +161,14 @@ class _ContextManagedQQService(_StubQQService):
                 service._run_directory.mkdir(parents=True)
                 payload_path = _export_file(
                     service._run_directory,
-                    "qce-export.json",
+                    "direct-db-payload.json",
                 )
                 return type(
                     "Acquisition",
                     (),
                     {
                         "payload_path": payload_path,
+                        "session": service._groups[0],
                         "snapshot_id": None,
                         "acquired_at": None,
                         "reused_snapshot": False,
@@ -210,7 +197,10 @@ class _FailingExportQQService(_StubQQService):
         self._export_error = error
 
     @contextmanager
-    def acquired_export(self, request, progress=None):
+    def acquired_session(self, session_id, *, start_time=None, end_time=None):
+        request = SimpleNamespace(
+            session_id=session_id, start_time=start_time, end_time=end_time
+        )
         self.export_requests.append(request)
         if self._export_error is not None:
             raise self._export_error
@@ -871,25 +861,6 @@ def test_list_sessions_keeps_qq_private_sessions_visible() -> None:
     assert [(item.session_id, item.display_name, item.session_type) for item in sessions] == [
         ("u_fictional_1", "Fictional Alice", "private")
     ]
-
-
-def test_get_qq_export_tasks_delegates_to_the_qq_service() -> None:
-    tasks = [_FakeExportTask("task-1"), _FakeExportTask("task-2")]
-    service = _StubQQService(tasks=tasks)
-    facade = _facade(qq_service=service)
-
-    result = facade.get_qq_export_tasks()
-
-    assert result == tasks
-    assert service.list_tasks_calls == 1
-
-
-def test_get_qq_export_tasks_turns_none_into_empty_list() -> None:
-    service = _StubQQService(tasks=None)
-    facade = _facade(qq_service=service)
-
-    assert facade.get_qq_export_tasks() == []
-    assert service.list_tasks_calls == 1
 
 
 def test_list_sessions_hides_unnamed_qq_group_id() -> None:
@@ -2143,14 +2114,13 @@ def test_analyze_session_dispatches_to_the_qq_service(tmp_path: Path) -> None:
     assert len(qq_service.export_requests) == 1
     assert wechat_service.export_requests == []
     request = qq_service.export_requests[0]
-    assert request.group_code == "10001"
-    # The dated scope now bounds the QCE export itself; before the fix this
-    # request stayed unbounded and produced the full-history acquisition.
+    assert request.session_id == "10001"
+    # Direct DB acquisition uses inclusive epoch-second bounds.
     assert request.start_time == int(
-        datetime.combine(date(2024, 1, 1), time.min).timestamp() * 1000
+        datetime.combine(date(2024, 1, 1), time.min).timestamp()
     )
     assert request.end_time == int(
-        datetime.combine(date(2024, 2, 2), time.min).timestamp() * 1000
+        datetime.combine(date(2024, 2, 2), time.min).timestamp()
     ) - 1
     assert analysis_service.requests[0].input_path == export_path
     assert analysis_service.requests[0].scope == module.AnalysisScope.custom(
@@ -2159,23 +2129,6 @@ def test_analyze_session_dispatches_to_the_qq_service(tmp_path: Path) -> None:
     )
     assert outcome.source is module.ChatSource.QQ
     assert outcome.session.session_id == "10001"
-
-
-def test_wechat_analysis_ignores_qq_force_refresh_flag(tmp_path: Path) -> None:
-    module = _facade_module()
-    export_path = _export_file(tmp_path, "wechat-force-refresh.json")
-    wechat_service = _StubWeChatService(export_path=export_path)
-    facade = _facade(wechat_service=wechat_service, tmp_path=tmp_path)
-
-    outcome = facade.analyze_session(
-        module.ChatSource.WECHAT,
-        "wxid_fictional_force_refresh",
-        module.AnalysisConfig(force_refresh=True),
-    )
-
-    request = wechat_service.export_requests[0]
-    assert not hasattr(request, "force_refresh")
-    assert request.session_id == "wxid_fictional_force_refresh"
 
 
 def test_facade_delegates_report_listing_and_clear():
@@ -2372,9 +2325,7 @@ def test_analyze_private_qq_session_preserves_private_export_identity(
     )
 
     request = qq_service.export_requests[0]
-    assert request.chat_type == 1
-    assert request.peer_uin == "200001"
-    assert request.session_name == "Fictional Alice"
+    assert request.session_id == "u_fictional_1"
     assert outcome.session.display_name == "Fictional Alice"
     assert outcome.session.session_type == "private"
 
@@ -2630,14 +2581,14 @@ def test_analyze_session_hides_the_intermediate_export_file(
     assert not hasattr(outcome, "export_path")
 
 
-def test_qq_bounded_export_lease_spans_successful_facade_analysis(
+def test_qq_bounded_payload_ownership_spans_successful_facade_analysis(
     tmp_path: Path,
 ) -> None:
     module = _facade_module()
-    qce_service = _ContextManagedQQService(
-        tmp_path / "LocalChatAnalyzer" / "transient" / "qce-exports" / "run-1"
+    direct_service = _ContextManagedQQService(
+        tmp_path / "LocalChatAnalyzer" / "transient" / "qq-payloads" / "run-1"
     )
-    facade = _facade(qq_service=qce_service, tmp_path=tmp_path)
+    facade = _facade(qq_service=direct_service, tmp_path=tmp_path)
 
     facade.analyze_session(
         module.ChatSource.QQ,
@@ -2648,20 +2599,20 @@ def test_qq_bounded_export_lease_spans_successful_facade_analysis(
         ),
     )
 
-    assert qce_service.entered is True
-    assert qce_service.exited is True
-    assert not qce_service._run_directory.exists()
+    assert direct_service.entered is True
+    assert direct_service.exited is True
+    assert not direct_service._run_directory.exists()
 
 
-def test_qq_bounded_export_lease_closes_when_facade_analysis_fails(
+def test_qq_bounded_payload_ownership_closes_when_facade_analysis_fails(
     tmp_path: Path,
 ) -> None:
     module = _facade_module()
-    qce_service = _ContextManagedQQService(
-        tmp_path / "LocalChatAnalyzer" / "transient" / "qce-exports" / "run-2"
+    direct_service = _ContextManagedQQService(
+        tmp_path / "LocalChatAnalyzer" / "transient" / "qq-payloads" / "run-2"
     )
     facade = _facade(
-        qq_service=qce_service,
+        qq_service=direct_service,
         analysis_service=_StubAnalysisService(error=RuntimeError("fictional failure")),
         tmp_path=tmp_path,
     )
@@ -2676,27 +2627,22 @@ def test_qq_bounded_export_lease_closes_when_facade_analysis_fails(
             ),
         )
 
-    assert qce_service.entered is True
-    assert qce_service.exited is True
-    assert not qce_service._run_directory.exists()
+    assert direct_service.entered is True
+    assert direct_service.exited is True
+    assert not direct_service._run_directory.exists()
 
 
 def test_qq_export_failure_during_analysis_becomes_a_facade_error(
     tmp_path: Path,
 ) -> None:
-    """A QCE failure must reach callers as a FacadeError, never raw.
-
-    Stage 1.1: moving the acquisition into a context manager dropped the QQ
-    branch's error translation, so the GUI could only fall back to its
-    generic "unexpected error" message when QCE was not running.
-    """
+    """Direct DB acquisition errors retain their public facade contract."""
     module = _facade_module()
     provider_errors = importlib.import_module(
-        "qq_chat_analyzer.providers.qq_chat_exporter_provider"
+        "qq_chat_analyzer.application.qq.qq_direct_database_import_service"
     )
     facade = _facade(
         qq_service=_FailingExportQQService(
-            provider_errors.ServiceUnavailable()
+            provider_errors.QQDirectDatabaseUnavailable()
         ),
         tmp_path=tmp_path,
     )
@@ -2711,10 +2657,10 @@ def test_qq_export_failure_during_analysis_becomes_a_facade_error(
             ),
         )
 
-    assert excinfo.value.code == provider_errors.ServiceUnavailable.code
+    assert excinfo.value.code == provider_errors.QQDirectDatabaseUnavailable.code
     assert (
         excinfo.value.public_message
-        == provider_errors.ServiceUnavailable.public_message
+        == provider_errors.QQDirectDatabaseUnavailable.public_message
     )
     assert excinfo.value.source is module.ChatSource.QQ
 
@@ -3144,144 +3090,6 @@ class _StubSnapshotManager:
         return removed
 
 
-def _application_package():
-    return importlib.import_module("qq_chat_analyzer.application")
-
-
-def _qq_export_progress(
-    *,
-    status: str = "running",
-    progress: int | None = None,
-    message_count: int | None = None,
-    message: str | None = None,
-):
-    """Build one structured QQ export snapshot exactly as the app emits it."""
-    return _application_package().QQExportProgress(
-        status=status,
-        progress=progress,
-        message_count=message_count,
-        message=message,
-    )
-
-
-def _qq_acquisition(
-    payload_path: Path,
-    *,
-    snapshot_id: str | None = None,
-    reused_snapshot: bool = False,
-):
-    return type(
-        "Acquisition",
-        (),
-        {
-            "payload_path": payload_path,
-            "snapshot_id": snapshot_id,
-            "acquired_at": datetime(2026, 8, 11, 12, 0, tzinfo=timezone.utc),
-            "reused_snapshot": reused_snapshot,
-        },
-    )()
-
-
-class _ProgressQQService(_StubQQService):
-    """QQ service that replays structured export progress during acquisition."""
-
-    def __init__(self, *, acquisition, snapshots=(), groups=()) -> None:
-        super().__init__(groups=groups, export_path=acquisition.payload_path)
-        self._acquisition = acquisition
-        self._snapshots = list(snapshots)
-        self.progress_callbacks: list[object] = []
-
-    @contextmanager
-    def acquired_export(self, request, progress=None):
-        self.export_requests.append(request)
-        self.progress_callbacks.append(progress)
-        if progress is not None:
-            for snapshot in self._snapshots:
-                progress(snapshot)
-        yield self._acquisition
-
-
-def test_analyze_session_reports_qq_export_message_count_without_percentage(
-    tmp_path: Path,
-) -> None:
-    """QCE's stalled percentage never replaces its useful message count."""
-    module = _facade_module()
-    service = _ProgressQQService(
-        acquisition=_qq_acquisition(_export_file(tmp_path, "qq-progress.json")),
-        snapshots=[_qq_export_progress(progress=50, message_count=360424)],
-    )
-    facade = _facade(qq_service=service, tmp_path=tmp_path)
-    progress: list[str] = []
-
-    facade.analyze_session(
-        module.ChatSource.QQ,
-        "fictional-session",
-        progress=progress.append,
-    )
-
-    assert len(service.progress_callbacks) == 1
-    assert callable(service.progress_callbacks[0])
-    assert "正在获取 QQ 聊天记录 · 已获取 360,424 条" in progress
-    assert not any("50%" in message for message in progress)
-
-
-@pytest.mark.parametrize("message_count", [None, 0])
-def test_analyze_session_reports_plain_qq_progress_without_reliable_count(
-    tmp_path: Path,
-    message_count: int | None,
-) -> None:
-    module = _facade_module()
-    service = _ProgressQQService(
-        acquisition=_qq_acquisition(_export_file(tmp_path, "qq-zero.json")),
-        snapshots=[_qq_export_progress(progress=50, message_count=message_count)],
-    )
-    facade = _facade(qq_service=service, tmp_path=tmp_path)
-    progress: list[str] = []
-
-    facade.analyze_session(
-        module.ChatSource.QQ,
-        "fictional-session",
-        progress=progress.append,
-    )
-
-    assert "正在获取 QQ 聊天记录" in progress
-    assert not any("50%" in message for message in progress)
-
-
-@pytest.mark.parametrize("progress_value", [None, 0, 42, 97, 100])
-def test_analyze_session_never_renders_a_qce_percentage(
-    tmp_path: Path,
-    progress_value: int | None,
-) -> None:
-    """QCE's raw ``progress`` number is not a trusted percentage.
-
-    Turning it into a ``…%`` label is exactly what produced the misleading
-    0%→97% progress that never completed. The provider's own ``message`` may
-    also embed a percentage, so it must not be relayed verbatim either.
-    """
-    module = _facade_module()
-    service = _ProgressQQService(
-        acquisition=_qq_acquisition(_export_file(tmp_path, "qq-pct.json")),
-        snapshots=[
-            _qq_export_progress(
-                progress=progress_value,
-                message_count=1234,
-                message="正在导出 42%",
-            )
-        ],
-    )
-    facade = _facade(qq_service=service, tmp_path=tmp_path)
-    progress: list[str] = []
-
-    facade.analyze_session(
-        module.ChatSource.QQ,
-        "fictional-session",
-        progress=progress.append,
-    )
-
-    assert "正在获取 QQ 聊天记录 · 已获取 1,234 条" in progress
-    assert not any("%" in message for message in progress)
-
 # --------------------------------------------------------------- WeChat scope push-down
 
 def test_wechat_export_pushes_scope_time_window_to_provider(
@@ -3289,7 +3097,7 @@ def test_wechat_export_pushes_scope_time_window_to_provider(
     monkeypatch,
 ) -> None:
     """When WeChat analysis uses a date scope, acquisition must receive
-    start_time/end_time from _scope_export_window(scope).
+    inclusive epoch-second start_time/end_time.
 
     Regression test: the old code always passed start_time=None,
     end_time=None to WeChatExportImportRequest, bypassing the provider's

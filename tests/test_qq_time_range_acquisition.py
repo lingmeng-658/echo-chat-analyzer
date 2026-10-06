@@ -1,19 +1,6 @@
-﻿"""Regression tests for the QQ acquisition time-range bug.
+"""Direct DB facade scope and retained QCE service scope are independent.
 
-Reported symptom: the GUI selects a short window ("last two days"), yet the
-progress line reports a full-history acquisition ("已获取 185,823 条").
-Root cause: the facade dropped the resolved scope when building the QQ export
-request (``start_time=None`` / ``end_time=None``), so QCE exported every
-message and the reported count was the whole conversation.
-
-These tests pin the fixed contract:
-
-* a dated scope reaches the QQ request as inclusive local-day milliseconds;
-* the QCE page scan stops once the window is covered (no full-history scan);
-* the "all time" scope keeps the previous unfiltered behavior.
-
-Every collaborator is fictional: the QCE transport is faked, no real service
-or chat data is contacted.
+All collaborators and payloads are fictional; no runtime is contacted.
 """
 
 from __future__ import annotations
@@ -24,6 +11,7 @@ import sys
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +20,7 @@ sys.path.insert(0, str(SRC_ROOT))
 
 from qq_chat_analyzer.application import (
     QQExportImportService,
+    QQExportImportRequest,
 )
 from qq_chat_analyzer.application.qq.qce_compat.qq_transient_export import (
     QQTransientExportWorkspace,
@@ -133,7 +122,10 @@ class _RecordingQQService:
         return []
 
     @contextmanager
-    def acquired_export(self, request, progress=None):
+    def acquired_session(self, session_id, *, start_time=None, end_time=None):
+        request = SimpleNamespace(
+            session_id=session_id, start_time=start_time, end_time=end_time
+        )
         self.requests.append(request)
         yield _acquisition(self._export_path)
 
@@ -267,10 +259,10 @@ class _FakeQceExportBackend:
         return counted
 
 
-def _end_to_end_facade(
+def _end_to_end_service(
     tmp_path: Path,
     backend: _FakeQceExportBackend,
-) -> ChatAnalyzerFacade:
+) -> QQExportImportService:
     """Wire the real QQ service + provider around the fake QCE transport."""
     provider = QQChatExporterProvider(
         token=FAKE_TOKEN,
@@ -281,17 +273,13 @@ def _end_to_end_facade(
         provider=provider,
         transient_workspace=QQTransientExportWorkspace(tmp_path / "user-data"),
     )
-    return ChatAnalyzerFacade(
-        qq_service=service,
-        analysis_service=_RecordingAnalysisService(_analysis_result()),
-        presentation_builder=_RecordingPresentationBuilder(),
-    )
+    return service
 
 
-def test_qq_scope_reaches_the_acquisition_request_as_milliseconds(
+def test_direct_db_scope_reaches_acquisition_as_seconds(
     tmp_path: Path,
 ) -> None:
-    """RED before the fix: the QQ request carried ``start_time=None``."""
+    """A dated QQ scope must reach Direct DB acquisition in epoch seconds."""
     qq_service = _RecordingQQService(_export_file(tmp_path))
     facade = _recording_facade(qq_service, _RecordingAnalysisService(_analysis_result()))
     expected_start, expected_end = _inclusive_window(
@@ -306,15 +294,15 @@ def test_qq_scope_reaches_the_acquisition_request_as_milliseconds(
     )
 
     request = qq_service.requests[0]
-    assert request.start_time == expected_start
-    assert request.end_time == expected_end
-    assert request.start_time > 10**12  # milliseconds, never epoch seconds
+    assert request.start_time == expected_start // 1000
+    assert request.end_time == expected_end // 1000
+    assert request.start_time < 10**12  # epoch seconds
 
 
 def test_qq_acquisition_window_covers_both_inclusive_local_days(
     tmp_path: Path,
 ) -> None:
-    """Boundary contract: 00:00:00.000 through 23:59:59.999 local, inclusive."""
+    """Direct DB boundary: local midnight through 23:59:59, inclusive."""
     qq_service = _RecordingQQService(_export_file(tmp_path))
     facade = _recording_facade(qq_service, _RecordingAnalysisService(_analysis_result()))
 
@@ -323,16 +311,14 @@ def test_qq_acquisition_window_covers_both_inclusive_local_days(
     request = qq_service.requests[0]
     assert isinstance(request.start_time, int)
     assert isinstance(request.end_time, int)
-    assert request.start_time % 1000 == 0  # midnight, no leftover millis
-    assert request.end_time % 1000 == 999  # last millisecond of the end date
-    assert datetime.fromtimestamp(request.start_time / 1000) == datetime(
+    assert datetime.fromtimestamp(request.start_time) == datetime(
         2026, 8, 10, 0, 0
     )
-    assert datetime.fromtimestamp((request.end_time + 1) / 1000) == datetime(
+    assert datetime.fromtimestamp(request.end_time + 1) == datetime(
         2026, 8, 12, 0, 0
     )
     # A mid-August window has no DST transition on any supported host.
-    assert request.end_time - request.start_time == 2 * ONE_DAY_MILLIS - 1
+    assert request.end_time - request.start_time == 2 * 24 * 60 * 60 - 1
 
 
 def test_acquisition_window_matches_the_analysis_scope(tmp_path: Path) -> None:
@@ -353,8 +339,8 @@ def test_acquisition_window_matches_the_analysis_scope(tmp_path: Path) -> None:
     )
     request = qq_service.requests[0]
     assert (request.start_time, request.end_time) == (
-        expected_start,
-        expected_end,
+        expected_start // 1000,
+        expected_end // 1000,
     )
 
 
@@ -385,20 +371,16 @@ def test_two_day_scope_stops_the_qce_page_scan_early(tmp_path: Path) -> None:
         export_path=export_path,
         newest_millis=_midnight_millis(end + timedelta(days=1)) - 1,
     )
-    facade = _end_to_end_facade(tmp_path, backend)
+    service = _end_to_end_service(tmp_path, backend)
     expected_start, expected_end = _inclusive_window(start, end)
-    progress: list[str] = []
-
-    facade.analyze_session(
-        ChatSource.QQ,
-        "700000001",
-        AnalysisConfig(
-            start_time=start.isoformat(),
-            end_time=end.isoformat(),
-            output_directory=tmp_path / "facade-output",
-        ),
-        progress=progress.append,
-    )
+    with service.acquired_export(
+        QQExportImportRequest(
+            group_code="700000001",
+            start_time=expected_start,
+            end_time=expected_end,
+        )
+    ) as acquisition:
+        assert acquisition.payload_path.is_file()
 
     # Two pages: the recent one plus the page that proves the cutoff is past.
     assert backend.pages_scanned == 2
@@ -406,8 +388,6 @@ def test_two_day_scope_stops_the_qce_page_scan_early(tmp_path: Path) -> None:
         "startTime": expected_start,
         "endTime": expected_end,
     }
-    assert "正在获取 QQ 聊天记录 · 已获取 2 条" in progress
-    assert not any("200,000" in message for message in progress)
 
 
 def test_all_scope_still_scans_the_full_history(tmp_path: Path) -> None:
@@ -417,16 +397,11 @@ def test_all_scope_still_scans_the_full_history(tmp_path: Path) -> None:
         export_path=export_path,
         newest_millis=_midnight_millis(date(2026, 8, 12)) - 1,
     )
-    facade = _end_to_end_facade(tmp_path, backend)
-    progress: list[str] = []
-
-    facade.analyze_session(
-        ChatSource.QQ,
-        "700000001",
-        AnalysisConfig(output_directory=tmp_path / "facade-output"),
-        progress=progress.append,
-    )
+    service = _end_to_end_service(tmp_path, backend)
+    with service.acquired_export(
+        QQExportImportRequest(group_code="700000001")
+    ) as acquisition:
+        assert acquisition.payload_path.is_file()
 
     assert backend.pages_scanned == TOTAL_FICTIONAL_MESSAGES // PAGE_SIZE
     assert "filter" not in backend.export_bodies[0]
-    assert "正在获取 QQ 聊天记录 · 已获取 200,000 条" in progress

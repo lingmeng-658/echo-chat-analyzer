@@ -62,10 +62,6 @@ from .qq.qq_connection_service import (
     QQConnectionStatus,
 )
 from .qq.qq_environment_config import QQEnvironmentConfig
-from .qq.qce_compat.qq_export_import_service import (
-    QQExportImportRequest,
-    QQExportProgress,
-)
 from .qq.qq_setup_service import QQSetupStatus
 from .echo_report_export import (
     ECHO_REPORT_HTML_NAME,
@@ -163,28 +159,6 @@ def _report_progress(
         progress(message)
 
 
-def _qq_export_progress_relay(
-    progress: Callable[[str], None] | None,
-) -> Callable[[QQExportProgress], None] | None:
-    """Translate QQ export progress into the caller's string channel.
-
-    Returns ``None`` when the caller is not listening, so the service keeps
-    its original call shape. QCE's percentage can remain frozen during both
-    message retrieval and long post-processing, so only a positive message
-    count is shown; missing, zero or invalid counts use the plain stage label.
-    """
-    if progress is None:
-        return None
-
-    def _relay(snapshot: QQExportProgress) -> None:
-        message = "正在获取 QQ 聊天记录"
-        if snapshot.message_count is not None and snapshot.message_count > 0:
-            message = f"{message} · 已获取 {snapshot.message_count:,} 条"
-        progress(message)
-
-    return _relay
-
-
 DEFAULT_TOP = 50
 DEFAULT_PROFILE = "default"
 
@@ -253,7 +227,6 @@ class AnalysisConfig:
     start_time: Any = None
     end_time: Any = None
     scope_mode: AnalysisScopeMode = AnalysisScopeMode.ALL
-    force_refresh: bool = False
     top: int = DEFAULT_TOP
     profile: str = DEFAULT_PROFILE
     output_directory: Path | None = None
@@ -453,11 +426,6 @@ class ChatAnalyzerFacade:
             for raw_session in raw_sessions or ()
         ]
 
-    def get_qq_export_tasks(self) -> list[Any]:
-        """Return the current QCE export task list through the QQ service."""
-        service = self._require_service(ChatSource.QQ)
-        with _translated_errors(ChatSource.QQ):
-            return service.list_tasks() or []
 
     def get_connection_status(
         self,
@@ -771,9 +739,8 @@ class ChatAnalyzerFacade:
     ) -> AnalysisOutcome:
         """Export one conversation, analyze it, and return a view.
 
-        QQ exports are written to a private QCE transient lease and kept until
-        this analysis completes. WeChat exports use the facade scratch
-        directory. Neither path refers to QQChatExporter's default exports.
+        QQ Direct DB acquisition owns its payload until analysis completes.
+        WeChat exports use the facade scratch directory.
         """
         chat_source = _coerce_source(source)
         resolved_config = config or AnalysisConfig()
@@ -781,9 +748,7 @@ class ChatAnalyzerFacade:
         _report_progress(progress, "正在准备分析...")
         _report_progress(progress, "正在读取聊天记录...")
         service = self._require_service(chat_source)
-        if chat_source is ChatSource.QQ and callable(
-            getattr(service, "acquired_session", None)
-        ):
+        if chat_source is ChatSource.QQ:
             # Direct DB: one acquisition owns both the payload and the session
             # descriptor. Listing sessions here would acquire a second
             # generation, so the descriptor is resolved from the acquisition.
@@ -1294,69 +1259,30 @@ class ChatAnalyzerFacade:
     ) -> Iterator[_SessionExport]:
         """Yield an export while preserving source-specific ownership.
 
-        A dated analysis scope is translated into QCE millisecond bounds so
-        the provider stops paging once the requested window is covered
-        instead of exporting the entire history. The scope filter still
-        re-checks every imported message, so these bounds are an acquisition
-        optimisation, never a correctness dependency.
-
-        QQ acquisition failures are translated into :class:`FacadeError`
-        exactly as before, while the owned lease stays open for the whole
-        consumer: only the acquisition itself is translated, never
-        shortened.
+        Acquisition receives inclusive epoch-second scope bounds. The final
+        scope filter re-checks every imported message. QQ payload ownership
+        spans the consumer, and acquisition failures become FacadeError.
         """
         if source is ChatSource.QQ:
-            direct_acquire = getattr(service, "acquired_session", None)
-            if callable(direct_acquire):
-                start_seconds, end_seconds = _scope_export_window_seconds(scope)
-                with ExitStack() as ownership:
-                    with _translated_errors(source):
-                        acquisition = ownership.enter_context(
-                            direct_acquire(
-                                session_id,
-                                start_time=start_seconds,
-                                end_time=end_seconds,
-                            )
-                        )
-                    raw_session = getattr(acquisition, "session", None)
-                    yield _SessionExport(
-                        payload_path=Path(acquisition.payload_path),
-                        conversation_id=getattr(
-                            raw_session, "conversation_id", None
-                        ),
-                        session=(
-                            _to_session_info(source, raw_session)
-                            if raw_session is not None
-                            else None
-                        ),
-                    )
-                return
-
-            session_type = _first_string(raw_session, "session_type")
-            start_millis, end_millis = _scope_export_window(scope)
-            request = QQExportImportRequest(
-                group_code=session_id,
-                start_time=start_millis,
-                end_time=end_millis,
-                chat_type=1 if session_type == "private" else 2,
-                peer_uin=_first_string(raw_session, "peer_uin") or None,
-                session_name=_first_string(
-                    raw_session,
-                    "display_name",
-                    "group_name",
-                ) or None,
-                force_refresh=config.force_refresh,
-            )
+            start_seconds, end_seconds = _scope_export_window_seconds(scope)
             with ExitStack() as ownership:
                 with _translated_errors(source):
                     acquisition = ownership.enter_context(
-                        service.acquired_export(
-                            request,
-                            progress=_qq_export_progress_relay(progress),
+                        service.acquired_session(
+                            session_id,
+                            start_time=start_seconds,
+                            end_time=end_seconds,
                         )
                     )
+                raw_session = getattr(acquisition, "session", None)
                 yield _SessionExport(
                     payload_path=Path(acquisition.payload_path),
+                    conversation_id=getattr(raw_session, "conversation_id", None),
+                    session=(
+                        _to_session_info(source, raw_session)
+                        if raw_session is not None
+                        else None
+                    ),
                 )
             return
 
@@ -1612,51 +1538,16 @@ def _snake_case(name: str) -> str:
     return "".join(characters)
 
 
-def _epoch_millis(epoch_seconds: int | None) -> int | None:
-    """Convert epoch seconds to milliseconds for the QCE export API."""
-    if epoch_seconds is None:
-        return None
-    return epoch_seconds * 1000
-
-
-def _scope_export_window(
-    scope: AnalysisScope | None,
-) -> tuple[int | None, int | None]:
-    """Translate an inclusive calendar scope into QCE millisecond bounds.
-
-    ``(None, None)`` means "no filter", which keeps the full-history export
-    path unchanged for the ALL scope. The end bound is the last millisecond
-    of the inclusive end date, matching the local-day scope filter.
-    """
-    if scope is None or scope.start_date is None or scope.end_date is None:
-        return None, None
-    try:
-        start_seconds = _local_midnight_epoch_seconds(scope.start_date)
-        end_exclusive_seconds = _local_midnight_epoch_seconds(
-            scope.end_date + timedelta(days=1)
-        )
-    except (OverflowError, OSError, ValueError):
-        # A calendar bound outside the platform clock keeps the provider's
-        # unfiltered export; the analysis scope still filters the messages.
-        return None, None
-    end_millis = _epoch_millis(end_exclusive_seconds)
-    return (
-        _epoch_millis(start_seconds),
-        None if end_millis is None else end_millis - 1,
-    )
-
 def _scope_export_window_seconds(
     scope: AnalysisScope | None,
 ) -> tuple[int | None, int | None]:
-    """Translate an inclusive calendar scope into WeChat epoch-second bounds.
+    """Translate an inclusive calendar scope into QQ/WeChat epoch-second bounds.
 
     ``(None, None)`` means "no filter", which keeps the full-history export
     path unchanged for the ALL scope. The end bound is the last second
     (23:59:59) of the inclusive end date, matching WeChat second-precision
     m.create_time column.
 
-    Unlike _scope_export_window, this helper returns epoch seconds because
-    WeChat SQLite stores create_time as epoch seconds, not milliseconds.
     """
     if scope is None or scope.start_date is None or scope.end_date is None:
         return None, None
