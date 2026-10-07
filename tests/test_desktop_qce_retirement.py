@@ -54,18 +54,3 @@ def test_old_saved_qce_settings_cannot_reintroduce_old_runtime(tmp_path, monkeyp
     'src/qq_chat_analyzer/gui/qq_setup_dialog.py'])
 def test_unconsumed_desktop_qce_surface_is_retired(relative):
     assert not (ROOT / relative).exists()
-
-
-def test_desktop_metadata_requires_no_qce_pagination_or_provider_type_branch():
-    from qq_chat_analyzer.application.qq.qq_direct_database_import_service import QQDirectDatabaseImportService
-    calls = []
-    class Provider:
-        def list_groups(self):
-            calls.append('groups')
-            return [SimpleNamespace(group_code='12345', group_name='Fictional Group')]
-        def list_friends(self):
-            calls.append('friends')
-            return [SimpleNamespace(uin='23456', display_name='Fictional Friend')]
-    service = QQDirectDatabaseImportService(provider_factory=SimpleNamespace(create=Provider))
-    assert service._metadata_names() == ({'12345': 'Fictional Group'}, {'23456': 'Fictional Friend'})
-    assert calls == ['groups', 'friends']

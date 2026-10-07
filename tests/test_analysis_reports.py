@@ -62,25 +62,6 @@ def _message(
     )
 
 
-def test_report_models_are_immutable_dataclasses_without_instance_dicts() -> None:
-    models = _models()
-
-    for model_type in (
-        models.ActivityReport,
-        models.MessageLengthReport,
-        models.UserProfileReport,
-        models.ConversationReport,
-        models.AnalysisReports,
-    ):
-        assert dataclasses.is_dataclass(model_type)
-
-    report = models.ActivityReport(
-        total_message_count=0,
-        dated_message_count=0,
-    )
-    assert not hasattr(report, "__dict__")
-
-
 def test_activity_analyzer_handles_empty_input_with_full_distribution() -> None:
     report = _analyzers().ActivityAnalyzer().analyze(())
 

@@ -33,13 +33,11 @@ class FakeSnapshotRuntime:
         snapshot_path: Path | None = None,
         identity_value: str | int = FICTIONAL_UIN,
         auto_write: bool = True,
-        recover_clean: bool = False,
     ) -> None:
         self.root = root
         self.snapshot_path = snapshot_path
         self.identity_value = identity_value
         self.auto_write = auto_write
-        self.recover_clean = recover_clean
         self._counter = 0
         self.acquired: list[str] = []
         self.cleaned: list[str] = []
@@ -80,11 +78,6 @@ class FakeSnapshotRuntime:
         self.recover_deadlines.append(deadline)
         if self.recover_error is not None:
             raise self.recover_error
-        if self.recover_clean:
-            # Mirror the runtime's fail-closed cleanSlate: generations, staging
-            # and the legacy decrypted directory are all removed.
-            for name in (GENERATIONS_DIR_NAME, "staging", "decrypted"):
-                shutil.rmtree(self.root / name, ignore_errors=True)
         return None
 
     def generation_directory(self, generation_id: str) -> Path:

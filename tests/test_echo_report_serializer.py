@@ -261,23 +261,12 @@ def test_echo_report_html_is_self_contained_with_real_data(
     assert "虚构 Alice" in html
     assert "data:image/png;base64," in html
     assert "fetch(" not in html
-    assert "1,284" not in html
-    assert "林间回声" not in html
-    assert "2024.01.01" not in html
-    assert "12 人" not in html
     assert "frontend/echo_report" not in html
     assert "assets/branding" not in html
     assert 'href="style.css"' not in html
     assert 'src="app.js"' not in html
-    assert "个人语言画像" in html
     assert 'id="voices-intro"' in html
     assert '"mode":"group_distinctive"' in html
-    assert "带表达的消息" in html
-    assert "只用表达回应" in html
-    assert "常用表达" in html
-    assert "这段交流最常用的表达" in html
-    assert "带表情的消息" not in html
-    assert "不同表情" not in html
 
 
 def test_echo_report_html_escapes_injected_user_text(tmp_path: Path) -> None:

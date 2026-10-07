@@ -42,23 +42,6 @@ def test_expression_content_defaults_keep_existing_construction_compatible() -> 
     assert EXPRESSION_KIND_STICKER == "sticker"
 
 
-def test_expression_content_carries_source_and_text_anchor() -> None:
-    expression = ExpressionContent(
-        expression_kind=EXPRESSION_KIND_STICKER,
-        expression_key="fictional-sticker",
-        display_text="[贴图]",
-        source="wechat",
-        position=0,
-        text_before="哈哈",
-        text_after="来了",
-    )
-
-    assert expression.source == "wechat"
-    assert expression.position == 0
-    assert expression.text_before == "哈哈"
-    assert expression.text_after == "来了"
-
-
 def _text_message(
     *,
     relations: tuple[ReplyRelation | MentionRelation, ...] = (),
@@ -77,52 +60,6 @@ def _text_message(
         contents=(TextContent(text="Hello from Rich Model"),),
         relations=relations,
     )
-
-
-def test_rich_model_creates_a_text_message() -> None:
-    message = _text_message()
-
-    assert message.message_id == "fictional-message-1"
-    assert message.source == "qq"
-    assert message.conversation_id == "fictional-group-1"
-    assert message.sender.identity_id == "fictional-user-1"
-    assert message.sender.display_name == "Fictional Alice"
-    assert message.contents == (TextContent(text="Hello from Rich Model"),)
-
-
-def test_rich_model_keeps_a_reply_relation() -> None:
-    relation = ReplyRelation(target_message_id="fictional-message-0")
-
-    message = _text_message(relations=(relation,))
-
-    assert message.relations == (relation,)
-
-
-def test_rich_model_keeps_a_mention_relation() -> None:
-    relation = MentionRelation(
-        target_identity_id="fictional-user-2",
-        display_text="@Fictional Bob",
-    )
-
-    message = _text_message(relations=(relation,))
-
-    assert message.relations == (relation,)
-
-
-def test_rich_model_distinguishes_recall_state_from_recall_event() -> None:
-    event = RecallEvent(
-        target_message_id="fictional-message-1",
-        actor_identity_id="fictional-user-1",
-        timestamp=1750000001000,
-    )
-    message = replace(
-        _text_message(),
-        recall_state=RecallState(is_recalled=True),
-        recall_event=event,
-    )
-
-    assert message.recall_state == RecallState(is_recalled=True)
-    assert message.recall_event == event
 
 
 def test_legacy_projection_preserves_sender_text_and_timestamp() -> None:

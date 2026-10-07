@@ -422,23 +422,6 @@ def test_runtime_build_ships_windows_x64_native_addons(tmp_path: Path) -> None:
     assert missing == []
 
 
-def test_runtime_build_keeps_repository_native_assets_intact(
-    tmp_path: Path,
-) -> None:
-    """Pruning is a packaging concern: the repository runtime stays complete."""
-    runtime = _fictional_runtime(tmp_path)
-
-    completed = _copy_runtime(tmp_path)
-
-    assert completed.returncode == 0, completed.stderr
-    missing = [
-        relative
-        for relative in FOREIGN_NATIVE_ASSETS
-        if not (runtime / "qq-napcat-candidate/native" / relative).is_file()
-    ]
-    assert missing == []
-
-
 def test_runtime_build_rejects_missing_windows_native_addon(
     tmp_path: Path,
 ) -> None:

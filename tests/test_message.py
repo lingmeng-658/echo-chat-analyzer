@@ -20,45 +20,6 @@ def _chat_message_class():
     return message_module.ChatMessage
 
 
-def test_chat_message_can_be_imported() -> None:
-    ChatMessage = _chat_message_class()
-
-    assert ChatMessage.__name__ == "ChatMessage"
-
-
-def test_chat_message_can_be_created_as_a_dataclass() -> None:
-    ChatMessage = _chat_message_class()
-
-    message = ChatMessage(
-        timestamp=1,
-        sender="Fictional Alice",
-        message_type="text",
-        text="Hello",
-    )
-
-    assert is_dataclass(message)
-
-
-def test_chat_message_preserves_explicit_field_values() -> None:
-    ChatMessage = _chat_message_class()
-
-    message = ChatMessage(
-        timestamp="1767315600",
-        sender="Fictional Bob",
-        message_type="reply",
-        text="Current reply only",
-        platform="wechat",
-        source_type=57,
-    )
-
-    assert message.timestamp == "1767315600"
-    assert message.sender == "Fictional Bob"
-    assert message.message_type == "reply"
-    assert message.text == "Current reply only"
-    assert message.platform == "wechat"
-    assert message.source_type == 57
-
-
 def test_chat_message_is_frozen() -> None:
     ChatMessage = _chat_message_class()
     message = ChatMessage(
@@ -114,21 +75,3 @@ def test_chat_message_new_fields_have_defaults() -> None:
     assert message.sender_remark is None
     assert message.sender_nickname is None
     assert message.sender_contextual_name is None
-
-
-def test_chat_message_preserves_qq_identity_fields() -> None:
-    ChatMessage = _chat_message_class()
-    message = ChatMessage(
-        timestamp=1,
-        sender="Alice",
-        message_type="text",
-        text="Hello",
-        sender_id="10001",
-        sender_remark="老王",
-        sender_nickname="Nickname",
-        sender_contextual_name="达拉崩吧",
-    )
-
-    assert message.sender_remark == "老王"
-    assert message.sender_nickname == "Nickname"
-    assert message.sender_contextual_name == "达拉崩吧"

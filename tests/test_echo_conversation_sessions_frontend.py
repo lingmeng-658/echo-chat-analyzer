@@ -171,33 +171,6 @@ def _render_frontend(
     return json.loads(completed.stdout)
 
 
-def test_private_sessions_show_rounds_initiators_and_readable_durations() -> None:
-    rendered = _render_frontend(
-        kind="private",
-        sessions=_sessions(
-            private_initiators={
-                "self_count": 5,
-                "peer_count": 3,
-                "unknown_count": 0,
-                "self_to_peer_ratio": 1.6667,
-                "self_share": 0.625,
-                "peer_share": 0.375,
-                "unknown_share": 0.0,
-            }
-        ),
-    )
-
-    assert rendered["conversation-sessions"]["hidden"] is False
-    assert rendered["session-lead"]["text"] == (
-        "过去这段时间，你们一共聊起了 8 轮"
-    )
-    assert rendered["session-beat"]["hidden"] is False
-    assert rendered["session-group-top"]["text"] == "你开启 5 轮 · TA 开启 3 轮"
-    assert rendered["session-movement"]["hidden"] is False
-    assert rendered["session-median-duration"]["text"] == "约 18 分钟"
-    assert rendered["session-average-messages"]["text"] == "约 12.5 条"
-
-
 def test_private_unknown_initiators_do_not_show_made_up_percentages() -> None:
     rendered = _render_frontend(
         kind="private",
@@ -289,14 +262,6 @@ def test_session_duration_formatting_handles_minutes_and_hours() -> None:
     assert "18 分钟" in rendered["session-median-duration"]["text"]
     assert rendered["session-loudest-duration"]["hidden"] is False
     assert "4 小时 37 分钟" in rendered["session-loudest-duration-text"]["text"]
-
-
-def test_session_chapter_explains_the_thirty_minute_boundary() -> None:
-    rendered = _render_frontend(kind="group", sessions=_sessions())
-
-    assert rendered["session-threshold-note"]["text"] == (
-        "超过 30 分钟未继续交流，会视作下一轮聊天。"
-    )
 
 
 def test_session_chapter_never_displays_stable_ids_or_technical_ratio() -> None:

@@ -135,12 +135,6 @@ def test_repeated_shutdown_never_terminates_a_pid_twice() -> None:
     assert terminated == [4321]
 
 
-def test_shutdown_step_window_has_a_finite_default() -> None:
-    module = _facade_module()
-
-    assert module.DEFAULT_SHUTDOWN_STEP_SECONDS > 0
-
-
 def test_facade_shutdown_closes_the_direct_db_gate_before_terminating() -> None:
     """Order matters: plaintext recover, then the owned runtime tree."""
     direct_db = importlib.import_module(

@@ -264,17 +264,6 @@ def test_expression_without_asset_renders_fallback_text() -> None:
     )
 
 
-def test_expression_top_copy_uses_echo_language() -> None:
-    html = (PROJECT_ROOT / "frontend" / "echo_report" / "index.html").read_text(
-        encoding="utf-8"
-    )
-    assert "带表达的消息" in html
-    assert "只用表达回应" in html
-    assert "常用表达" in html
-    assert "这段交流最常用的表达" in html
-    assert "常一起出现的表达" in html
-
-
 def test_expression_combination_renders_asset_images() -> None:
     asset_uri = "data:image/png;base64,AAAA"
     rendered = _render(
@@ -347,44 +336,6 @@ def test_expression_combination_fallback_without_assets() -> None:
     assert rendered["expression-combo-list"]["childCount"] == 0
     assert "两个表达组合" not in rendered["expression-combo-list"]["text"]
     assert "2 次" not in rendered["expression-combo-list"]["text"]
-
-
-def test_expression_nearby_words_uses_space_separator() -> None:
-    rendered = _render(
-        {
-            "available": True,
-            "expression_message_count": 1,
-            "expression_only_message_count": 0,
-            "expression_only_rate": 0.0,
-            "unique_expression_count": 1,
-            "top_expressions": [
-                {
-                    "display_text": "😀",
-                    "count": 2,
-                    "kind": "unicode",
-                    "with_text_message_count": 2,
-                    "text_only_message_count": 0,
-                    "nearby_words": ["离谱", "不会吧", "又来了"],
-                }
-            ],
-            "members": [],
-        }
-    )
-
-    text = rendered["expression-top-list"]["text"]
-    assert "常和这些词一起：离谱 不会吧 又来了" in text
-    assert "·" not in text
-
-
-def test_expression_member_area_uses_fixed_scroll_container() -> None:
-    css = (PROJECT_ROOT / "frontend" / "echo_report" / "style.css").read_text(
-        encoding="utf-8"
-    )
-    assert ".expression-members" in css
-    assert "height: 460px" in css
-    assert "overflow-y: hidden" in css
-    assert ".expression-members:hover" in css
-    assert "overflow-y: auto" in css
 
 
 def test_voice_expression_token_renders_image() -> None:

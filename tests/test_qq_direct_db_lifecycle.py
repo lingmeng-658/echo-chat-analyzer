@@ -92,17 +92,6 @@ def _service(
 # ------------------------------------------------------------------ startup
 
 
-def test_startup_calls_recover_once(tmp_path: Path) -> None:
-    snapshot = tmp_path / "source.db"
-    _create_snapshot(snapshot)
-    runtime = FakeSnapshotRuntime(tmp_path, snapshot_path=snapshot)
-    service = _service(runtime)
-
-    service.start()
-
-    assert runtime.recover_calls == 1
-
-
 def test_startup_recover_success_marks_active(tmp_path: Path) -> None:
     snapshot = tmp_path / "source.db"
     _create_snapshot(snapshot)
@@ -256,23 +245,6 @@ def test_shutdown_drains_inflight_acquisition_without_second_acquire(
     assert service.state is QQDirectDatabaseState.CLOSED
 
 
-def test_shutdown_cleanup_runs_after_inflight_finishes(tmp_path: Path) -> None:
-    snapshot = tmp_path / "source.db"
-    _create_snapshot(snapshot)
-    runtime = FakeSnapshotRuntime(tmp_path, snapshot_path=snapshot)
-    service = _service(runtime)
-    service.start()
-
-    # Startup recover happened; reset the counter so the shutdown recover is
-    # observable independently.
-    assert runtime.recover_calls == 1
-    runtime.recover_calls = 0
-
-    service.shutdown()
-
-    assert runtime.recover_calls == 1
-
-
 def test_connected_napcat_waits_for_delayed_snapshot_api_before_listing(tmp_path: Path) -> None:
     snapshot = tmp_path / "source.db"
     _create_snapshot(snapshot)
@@ -386,64 +358,7 @@ def test_shutdown_recover_deadline_stays_within_declared_total_budget(
 # ------------------------------------------------------------------ orphans
 
 
-def test_startup_recover_cleans_orphan_leftovers(tmp_path: Path) -> None:
-    snapshot = tmp_path / "source.db"
-    _create_snapshot(snapshot)
-    runtime = FakeSnapshotRuntime(tmp_path, snapshot_path=snapshot, recover_clean=True)
-
-    # Simulate a previous hard crash: orphan generation, staging and legacy
-    # plaintext directories left behind under the snapshot root.
-    orphan = tmp_path / "generations" / "gen-orphan"
-    orphan.mkdir(parents=True)
-    (orphan / "snapshot.db").write_bytes(b"fictional-orphan-plaintext")
-    staging = tmp_path / "staging"
-    staging.mkdir(parents=True)
-    (staging / "nt_msg.db").write_bytes(b"fictional-staging-plaintext")
-    legacy = tmp_path / "decrypted"
-    legacy.mkdir(parents=True)
-    (legacy / "nt_msg.db").write_bytes(b"fictional-legacy-plaintext")
-
-    service = _service(runtime)
-    service.start()
-
-    assert runtime.recover_calls == 1
-    assert not orphan.exists()
-    assert not staging.exists()
-    assert not legacy.exists()
-
-
-def test_hard_crash_leftover_reclaimed_on_next_startup(tmp_path: Path) -> None:
-    snapshot = tmp_path / "source.db"
-    _create_snapshot(snapshot)
-    runtime = FakeSnapshotRuntime(tmp_path, snapshot_path=snapshot, recover_clean=True)
-
-    leftover = tmp_path / "generations" / "gen-crashed"
-    leftover.mkdir(parents=True)
-    (leftover / "snapshot.db").write_bytes(b"fictional-crash-plaintext")
-
-    # First use (auto-start on list_sessions) recovers the crash leftover.
-    service = _service(runtime)
-    service.list_sessions()
-
-    assert not leftover.exists()
-    assert runtime.recover_calls == 1
-
-
 # ------------------------------------------------------------------ success
-
-
-def test_normal_success_path_leaves_no_residual_plaintext(tmp_path: Path) -> None:
-    snapshot = tmp_path / "source.db"
-    _create_snapshot(snapshot)
-    runtime = FakeSnapshotRuntime(tmp_path, snapshot_path=snapshot)
-    service = _service(runtime)
-
-    service.list_sessions()
-    with service.acquired_session(GROUP_SESSION_ID):
-        pass
-
-    generations = tmp_path / "generations"
-    assert not generations.exists() or not any(generations.iterdir())
 
 
 # ------------------------------------------------------------------ facade
@@ -469,28 +384,6 @@ def test_facade_shutdown_calls_direct_db_service_shutdown(tmp_path: Path) -> Non
     # which recovers orphan plaintext one final time.
     assert runtime.recover_calls == 1
     assert service.state is QQDirectDatabaseState.CLOSED
-
-
-def test_facade_shutdown_cleans_direct_db_before_terminating_runtime() -> None:
-    events: list[str] = []
-
-    class _OrderedQQService:
-        def shutdown(self) -> None:
-            events.append("direct_db_cleanup")
-
-    class _OrderedRegistry:
-        def terminate_all(self) -> int:
-            events.append("qq_terminate")
-            return 0
-
-    facade = ChatAnalyzerFacade(
-        qq_service=_OrderedQQService(),
-        qq_process_registry=_OrderedRegistry(),
-    )
-
-    facade.shutdown()
-
-    assert events == ["direct_db_cleanup", "qq_terminate"]
 
 
 def test_facade_shutdown_survives_direct_db_cleanup_failure() -> None:

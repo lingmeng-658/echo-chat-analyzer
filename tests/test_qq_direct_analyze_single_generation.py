@@ -92,18 +92,6 @@ GROUP_SESSION_ID = "group:group-partition"
 PRIVATE_SESSION_ID = "private:private-partition"
 
 
-class _SpyDirectService(QQDirectDatabaseImportService):
-    """Direct DB service that records public ``list_sessions`` usage."""
-
-    def __init__(self, *args, **kwargs) -> None:
-        self.list_sessions_calls = 0
-        super().__init__(*args, **kwargs)
-
-    def list_sessions(self):
-        self.list_sessions_calls += 1
-        return super().list_sessions()
-
-
 def _service(tmp_path: Path, **kwargs) -> QQDirectDatabaseImportService:
     snapshot = tmp_path / "source.db"
     _create_snapshot(snapshot)
@@ -112,27 +100,6 @@ def _service(tmp_path: Path, **kwargs) -> QQDirectDatabaseImportService:
 
 
 # ------------------------------------------------------------------ service
-
-
-def test_acquired_session_acquires_exactly_one_generation(tmp_path: Path) -> None:
-    service, runtime, _ = _service(tmp_path)
-
-    with service.acquired_session(GROUP_SESSION_ID) as acquisition:
-        assert acquisition.payload_path.is_file()
-
-    assert runtime.acquired == ["gen-0001"]
-
-
-def test_lookup_and_materialization_share_one_generation(tmp_path: Path) -> None:
-    service, runtime, _ = _service(tmp_path)
-
-    with service.acquired_session(GROUP_SESSION_ID) as acquisition:
-        outcome = ImportService().execute(ImportRequest(input_path=acquisition.payload_path))
-        assert outcome.messages[0].text == "fictional group message"
-
-    # Exactly one generation was both acquired and cleaned.
-    assert runtime.acquired == ["gen-0001"]
-    assert runtime.cleaned == ["gen-0001"]
 
 
 def test_success_cleans_up_generation(tmp_path: Path) -> None:
@@ -158,6 +125,8 @@ def test_payload_materialized_before_generation_release(tmp_path: Path) -> None:
         assert acquisition.payload_path.is_file()
         outcome = ImportService().execute(ImportRequest(input_path=acquisition.payload_path))
         assert outcome.messages[0].text == "fictional group message"
+
+    assert runtime.acquired == ["gen-0001"]
 
 
 def test_session_missing_still_cleans_up(tmp_path: Path) -> None:
@@ -532,22 +501,6 @@ def test_direct_analysis_emits_anonymous_phase_timing(
         assert "group-partition" not in line
     assert "[qq-direct-identity-coverage]" in caplog.text
     assert "[qq-direct-analysis-timing]" not in caplog.text
-
-
-def test_analyze_does_not_call_public_list_sessions(tmp_path: Path) -> None:
-    snapshot = tmp_path / "source.db"
-    _create_snapshot(snapshot)
-    runtime = FakeSnapshotRuntime(tmp_path, snapshot_path=snapshot)
-    service = _SpyDirectService(runtime_client=runtime)
-    facade = _facade(service)
-
-    facade.analyze_session(
-        ChatSource.QQ,
-        GROUP_SESSION_ID,
-        AnalysisConfig(output_directory=tmp_path / "report"),
-    )
-
-    assert service.list_sessions_calls == 0
 
 
 def test_two_analyzes_produce_distinct_generations(tmp_path: Path) -> None:

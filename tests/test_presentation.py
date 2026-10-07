@@ -201,28 +201,6 @@ def _metric_by_key(view, key: str):
     raise AssertionError(f"metric {key} not found")
 
 
-def test_presentation_models_are_immutable_dataclasses() -> None:
-    presentation = _presentation()
-
-    for model_type in (
-        presentation.DashboardView,
-        presentation.MetricCard,
-        presentation.ChartData,
-        presentation.ChartPoint,
-        presentation.ChartSeries,
-        presentation.UserCard,
-        presentation.ConversationCard,
-        presentation.EchoReportView,
-        presentation.EchoMemberCard,
-        presentation.EchoLanguageMember,
-        presentation.EchoLanguageProfile,
-    ):
-        assert dataclasses.is_dataclass(model_type)
-
-    card = presentation.MetricCard(key="k", title="t", value="1")
-    assert not hasattr(card, "__dict__")
-
-
 def test_echo_report_builder_reuses_reports_and_highlights_explicit_viewer() -> None:
     presentation = _presentation()
 

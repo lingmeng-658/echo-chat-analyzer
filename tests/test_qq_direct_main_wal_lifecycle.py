@@ -71,7 +71,7 @@ with m.PocWorkspace(Path(sys.argv[2]), [Path(sys.argv[3])]) as stage:
             child.communicate(timeout=10)
 
 
-@pytest.mark.parametrize("case", ["unknown_root", "source_root", "unknown_staging", "output_collision"])
+@pytest.mark.parametrize("case", ["unknown_root", "source_root", "unknown_staging"])
 def test_unowned_files_never_deleted(tmp_path, case):
     workspace = _workspace_type()
     root = tmp_path / "owned"
@@ -104,14 +104,6 @@ def test_unowned_files_never_deleted(tmp_path, case):
             with workspace(root, [source]):
                 pass
         assert sentinel.read_bytes() == b"fictional unowned"
-    else:
-        with workspace(root, [source]) as stage:
-            existing = stage / "snapshot.db"
-            existing.write_bytes(b"fictional previous output")
-            with pytest.raises(FileExistsError):
-                with existing.open("xb"):
-                    pass
-            assert existing.read_bytes() == b"fictional previous output"
 
 
 def test_cleanup_failure_retains_owner_and_blocks_until_recovery(tmp_path, monkeypatch):

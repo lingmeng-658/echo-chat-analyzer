@@ -39,17 +39,6 @@ def _counts(report) -> dict[str, int]:
     return {item.category: item.count for item in report.categories}
 
 
-def test_message_composition_models_are_immutable_dataclasses() -> None:
-    models = _models()
-
-    assert dataclasses.is_dataclass(models.MessageCompositionCategory)
-    assert dataclasses.is_dataclass(models.MessageCompositionReport)
-
-
-def test_analyzer_is_exported() -> None:
-    assert hasattr(_analyzers(), "MessageCompositionAnalyzer")
-
-
 def test_maps_message_types_to_display_categories() -> None:
     report = _analyzers().MessageCompositionAnalyzer().analyze(
         [

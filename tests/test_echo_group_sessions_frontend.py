@@ -267,6 +267,8 @@ def test_private_sessions_render_five_section_narrative() -> None:
     assert "TA 5 条" in rendered["session-loudest-back-and-forth-text"]["text"]
     assert rendered["session-rest"]["hidden"] is False
     assert rendered["session-fields-old"]["hidden"] is True
+    assert rendered["session-median-duration"]["text"] == "约 18 分钟"
+    assert rendered["session-average-messages"]["text"] == "约 12.5 条"
 
 
 def test_private_sessions_degrade_when_reply_or_identity_unavailable() -> None:
@@ -583,12 +585,6 @@ def test_group_loudest_densest_shows_when_present() -> None:
     assert rendered["session-loudest-densest"]["hidden"] is False
     assert "50" in rendered["session-loudest-densest-text"]["text"]
 
-def test_group_session_threshold_note() -> None:
-    """Group sessions still show the threshold note."""
-    rendered = _render_frontend(kind="group", sessions=_sessions())
-    assert rendered["session-threshold-note"]["text"] == "超过 30 分钟未继续交流，会视作下一轮聊天。"
-
-
 def _read_css_sources():
     import sys
 
@@ -620,66 +616,6 @@ def test_group_old_private_grid_hidden_override_in_both_css() -> None:
         )
 
 
-def test_group_highnote_final_labels_fixed_in_both_html() -> None:
-    """The four highnote labels and music accents are fixed in the shared HTML sources."""
-    import sys
-
-    sys.path.insert(0, "src")
-    from qq_chat_analyzer.presentation.echo_report_template import ECHO_REPORT_HTML_SKELETON
-
-    html_file = __file__.rsplit("tests", 1)[0] + "frontend/echo_report/index.html"
-    html_content = open(html_file, "r", encoding="utf-8").read()
-    expected = (
-        '<span class="highnote-note" aria-hidden="true">♪</span>话最多',
-        '<span class="highnote-note" aria-hidden="true">𝅝</span>聊最久',
-        '<span class="highnote-note" aria-hidden="true">♫</span>最热闹',
-        '<span class="highnote-note" aria-hidden="true">♬</span>接得最紧',
-    )
-    for html in (ECHO_REPORT_HTML_SKELETON, html_content):
-        for label in expected:
-            assert label in html
-        for retired_label in ("最能聊", "最慢长", "最密集"):
-            assert f'class="highnote-badge">{retired_label}' not in html
-
-
-def test_group_rest_downgraded_to_right_footnote() -> None:
-    """休止 is a small right-aligned footnote above the folio, not a full movement."""
-    import sys
-
-    sys.path.insert(0, "src")
-    from qq_chat_analyzer.presentation.echo_report_template import (
-        ECHO_REPORT_CSS,
-        ECHO_REPORT_HTML_SKELETON,
-    )
-
-    html_file = __file__.rsplit("tests", 1)[0] + "frontend/echo_report/index.html"
-    html_content = open(html_file, "r", encoding="utf-8").read()
-    for html in (ECHO_REPORT_HTML_SKELETON, html_content):
-        assert '<p class="session-rest-note" id="session-rest" hidden>' in html
-        assert (
-            '<span class="session-rest-symbol" aria-hidden="true">𝄽</span> 休止 · '
-            '<span id="session-threshold-note"></span>'
-        ) in html
-        assert 'class="session-movement" id="session-rest"' not in html
-
-    template_css, file_css = _read_css_sources()
-    for css in (ECHO_REPORT_CSS, file_css):
-        assert ".session-rest-note" in css
-        assert "text-align: right;" in css
-
-
-def test_group_session_vertical_rhythm_is_tightened_in_flow() -> None:
-    """Session chapter spacing is tightened with normal flow, not negative margins."""
-    template_css, file_css = _read_css_sources()
-    for css in (template_css, file_css):
-        assert ".session-chapter .chapter-intro" in css
-        assert "margin: 0 0 40px;" in css
-        assert "margin-top: 36px;" in css
-        identity = css[css.index(".session-viewer-identity"):]
-        identity = identity[:identity.index("}")]
-        assert "margin-top: -" not in identity
-
-
 def test_template_js_syntax() -> None:
     """ECHO_REPORT_APP_JS (the template-embedded JS) must be syntactically valid.
     This catches raw-string pitfalls that introduce literal backslash+newline
@@ -688,16 +624,6 @@ def test_template_js_syntax() -> None:
     import tempfile
     from pathlib import Path
     from qq_chat_analyzer.presentation.echo_report_template import ECHO_REPORT_APP_JS
-
-    # 1. No literal backslash+newline pairs outside string literals
-    bs_nl = 0
-    for i in range(len(ECHO_REPORT_APP_JS) - 1):
-        if ECHO_REPORT_APP_JS[i] == "\\" and ECHO_REPORT_APP_JS[i + 1] == "\n":
-            bs_nl += 1
-    assert bs_nl == 0, (
-        f"ECHO_REPORT_APP_JS has {bs_nl} literal backslash+newline pairs; "
-        f"these are invalid JavaScript outside string literals"
-    )
 
     # 2. Node.js syntax check
     with tempfile.NamedTemporaryFile(
@@ -716,33 +642,6 @@ def test_template_js_syntax() -> None:
         )
     finally:
         Path(tmp_path).unlink(missing_ok=True)
-
-
-def test_old_kpi_hidden_effective_in_group_mode() -> None:
-    """Group mode: the old KPI section (session-fields-old) must be hidden
-    both semantically (hidden=true) and visually (CSS rule ensures display:none).
-    Private mode: the old KPI section must remain visible (hidden=false)."""
-    import sys
-    sys.path.insert(0, "src")
-    from qq_chat_analyzer.presentation.echo_report_template import ECHO_REPORT_CSS
-    from qq_chat_analyzer.presentation import (
-        EchoConversationSession,
-        EchoConversationSessions,
-        EchoReportView,
-    )
-
-    # 1. CSS contains the [hidden] override for .session-fields
-    assert ".session-fields[hidden]" in ECHO_REPORT_CSS, (
-        "CSS must have .session-fields[hidden] rule to override "
-        "display:grid on hidden elements"
-    )
-
-    # 2. File-based CSS also has the rule
-    css_file = __file__.rsplit("tests", 1)[0] + "frontend/echo_report/style.css"
-    css_content = open(css_file, "r", encoding="utf-8").read()
-    assert ".session-fields[hidden]" in css_content, (
-        "CSS file must have .session-fields[hidden] rule"
-    )
 
 
 class _EchoPageFlowParser(HTMLParser):

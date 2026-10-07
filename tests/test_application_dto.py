@@ -51,10 +51,6 @@ def test_application_package_exports_the_stable_dto_contract() -> None:
     assert application.AnalysisStatus.NO_VALID_TEXT.value == "no_valid_text"
     assert application.AnalysisStatus.NO_TOKENS.value == "no_tokens"
     assert application.AnalysisStatus.EXPRESSION_ONLY.value == "expression_only"
-    assert application.AnalysisRequestDTO is not None
-    assert application.AnalysisResultDTO is not None
-    assert application.WordFrequencyDTO is not None
-    assert application.ArtifactDTO is not None
 
 
 def test_analysis_request_is_immutable_and_hides_local_paths() -> None:

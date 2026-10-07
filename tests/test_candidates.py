@@ -13,28 +13,6 @@ sys.path.insert(0, str(SRC_ROOT))
 from qq_chat_analyzer.candidates import Candidate
 
 
-def test_candidate_preserves_all_discovery_fields() -> None:
-    candidate = Candidate(
-        target="虚构警卫犬",
-        candidate_type="robot_sender",
-        score=0.95,
-        reasons=["high_message_ratio", "high_repeat_rate"],
-        metadata={"message_count": 120, "source": "synthetic_fixture"},
-    )
-
-    assert candidate.target == "虚构警卫犬"
-    assert candidate.candidate_type == "robot_sender"
-    assert candidate.score == 0.95
-    assert candidate.reasons == [
-        "high_message_ratio",
-        "high_repeat_rate",
-    ]
-    assert candidate.metadata == {
-        "message_count": 120,
-        "source": "synthetic_fixture",
-    }
-
-
 def test_candidate_defaults_do_not_share_mutable_state() -> None:
     sender_candidate = Candidate(
         target="虚构助手",
