@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import re
 import subprocess
 from pathlib import Path
 
@@ -83,6 +84,28 @@ def test_render_without_chromium_raises(tmp_path: Path, monkeypatch) -> None:
             "<html>share</html>",
             tmp_path / "echo-share.png",
         )
+
+
+def test_render_unspawnable_chromium_raises_render_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _renderer()
+
+    def _raise_missing(*args, **kwargs):
+        raise FileNotFoundError(2, "系统找不到指定的文件。")
+
+    monkeypatch.setattr(module, "find_chromium", lambda: "C:/missing/chrome.exe")
+    monkeypatch.setattr(module.subprocess, "Popen", _raise_missing)
+
+    with pytest.raises(module.ShareImageRenderError):
+        module.render_share_html_to_png(
+            "<html>share</html>",
+            tmp_path / "echo-share.png",
+        )
+
+    assert not (tmp_path / "echo-share.png").exists()
+    assert list(tmp_path.glob("echo-share-*")) == []
 
 
 def test_render_failed_load_includes_stderr(
@@ -205,7 +228,7 @@ def test_run_chromium_timeout_kills_process_tree(monkeypatch) -> None:
     is None,
     reason="no local Chromium available",
 )
-def test_real_chromium_renders_a_png(tmp_path: Path) -> None:
+def test_real_chromium_renders_a_png(tmp_path: Path, monkeypatch) -> None:
     module = _renderer()
     share = importlib.import_module("qq_chat_analyzer.presentation.share")
     html = share.build_share_card_html(
@@ -215,10 +238,36 @@ def test_real_chromium_renders_a_png(tmp_path: Path) -> None:
             time_span_display="302 天",
         )
     )
+    # Probe computed visibility after the real application script has run.
+    html = html.replace(
+        "</body>",
+        """<script>
+document.body.dataset.hiddenVisibleCount = String(
+  Array.from(document.querySelectorAll('[hidden]')).filter(function (node) {
+    return node.getClientRects().length > 0;
+  }).length
+);
+</script></body>""",
+    )
+    dumped_dom: list[str] = []
+    run_chromium = module._run_chromium
+
+    def _record_real_chromium(command, **kwargs):
+        result = run_chromium(command, **kwargs)
+        if "--dump-dom" in command:
+            dumped_dom.append(result.stdout.decode("utf-8"))
+        return result
+
+    monkeypatch.setattr(module, "_run_chromium", _record_real_chromium)
     output_path = tmp_path / "echo-share.png"
 
     result = module.render_share_html_to_png(html, output_path)
 
+    assert len(dumped_dom) == 1
+    dom = dumped_dom[0]
+    assert re.search(r'<span\b[^>]*id="message-count"[^>]*>8,438</span>', dom)
+    assert re.search(r'<strong\b[^>]*id="time-span"[^>]*>302 天</strong>', dom)
+    assert 'data-hidden-visible-count="0"' in dom
     assert result.is_file()
     assert result.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
     assert result.stat().st_size > 1000

@@ -438,12 +438,6 @@ class MainWindow(QMainWindow):
             self._current_share_image_path,
         )
         self._status_label.setText(_SHARE_READY)
-        share_image_exists = (
-            self._current_share_image_path is not None
-            and _is_file(self._current_share_image_path)
-        )
-        print(f"[share-open] path={self._current_share_image_path}")
-        print(f"[share-open] exists={share_image_exists}")
         if self._current_share_image_path is None:
             return
         if not _is_file(self._current_share_image_path):
@@ -505,7 +499,7 @@ class MainWindow(QMainWindow):
         self._open_report_directory_button.setEnabled(directory_available)
         self._open_report_directory_button.setVisible(directory_available)
         self._generate_share_button.setEnabled(available)
-        self._generate_share_button.setVisible(False)
+        self._generate_share_button.setVisible(available)
 
     def _clear_echo_report_entry(self) -> None:
         self._current_report_path = None
@@ -608,7 +602,6 @@ def _open_image_path(path: Path) -> bool:
             resolved_path,
         )
         return False
-    print(f"[share-open] opening={resolved_path}")
     if os.name == "nt":
         os.startfile(str(resolved_path))
         return True

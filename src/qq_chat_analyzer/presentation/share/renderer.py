@@ -228,12 +228,17 @@ def _run_chromium(
             subprocess.CREATE_NO_WINDOW
             | subprocess.CREATE_NEW_PROCESS_GROUP
         )
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE if capture_stdout else subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        creationflags=creationflags,
-    )
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE if capture_stdout else subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            creationflags=creationflags,
+        )
+    except OSError as error:
+        raise ShareImageRenderError(
+            f"Chromium could not be started: {error}"
+        ) from error
     try:
         stdout, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:

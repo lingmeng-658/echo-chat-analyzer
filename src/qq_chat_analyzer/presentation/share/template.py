@@ -113,7 +113,7 @@ SHARE_CARD_HTML_SKELETON = r"""<!doctype html>
   </main>
 
   <script>
-window.__SHARE_DATA__ = __SHARE_DATA__;
+window.__SHARE_DATA__ = __SHARE_PAYLOAD_JSON__;
   </script>
   <script>__SHARE_APP_JS__</script>
 </body>
@@ -138,6 +138,7 @@ SHARE_CARD_CSS = r"""
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { width: 1200px; height: 2000px; margin: 0; }
 body {
   color: var(--ink);
@@ -581,7 +582,7 @@ def build_share_card_html(
     )
     return (
         SHARE_CARD_HTML_SKELETON.replace("__SHARE_CSS__", SHARE_CARD_CSS)
-        .replace("__SHARE_DATA__", encoded_payload)
+        .replace("__SHARE_PAYLOAD_JSON__", encoded_payload)
         .replace("__SHARE_APP_JS__", SHARE_CARD_APP_JS)
     )
 

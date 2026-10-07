@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib
+import json
+import re
 
 
 def _models():
@@ -241,3 +243,20 @@ def test_share_html_template_embeds_payload_and_assets() -> None:
     assert "每一句聊天，都会留下余音。" in html
     assert "data:image/png;base64,ZmFrZQ==" in html
     assert "ECHO" in html
+
+
+def test_share_html_payload_assignment_preserves_window_property() -> None:
+    html = _share().build_share_card_html(
+        _share().ShareCardData(
+            has_data=True,
+            message_count_display="8,438",
+            time_span_display="302 天",
+        )
+    )
+
+    assignment = re.search(r"window\.__SHARE_DATA__ = (.+);", html)
+
+    assert assignment is not None, "payload replacement corrupted the window property"
+    payload = json.loads(assignment.group(1))
+    assert payload["data"]["message_count_display"] == "8,438"
+    assert payload["data"]["time_span_display"] == "302 天"
