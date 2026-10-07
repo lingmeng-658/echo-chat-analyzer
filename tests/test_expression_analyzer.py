@@ -301,7 +301,29 @@ def test_unicode_only_emoji_counts_as_text_only() -> None:
     assert report.top_expressions[0].with_text_message_count == 0
 
 
-def test_nearby_words_aggregate_from_message_text_top5() -> None:
+def test_nearby_words_require_repeated_occurrences() -> None:
+    report = ExpressionAnalyzer().analyze([
+        _chat("garden comet 😀", message_id="nearby-1"),
+        _chat("garden 😀", message_id="nearby-2"),
+    ])
+
+    assert [(word.word, word.count) for word in report.top_expressions[0].nearby_words] == [
+        ("garden", 2),
+    ]
+    assert report.members[0].top_expressions[0].nearby_words == report.top_expressions[0].nearby_words
+
+
+def test_nearby_words_are_empty_when_each_word_occurs_once() -> None:
+    report = ExpressionAnalyzer().analyze([
+        _chat("garden 😀", message_id="nearby-1"),
+        _chat("comet 😀", message_id="nearby-2"),
+    ])
+
+    assert report.top_expressions[0].nearby_words == ()
+    assert report.members[0].top_expressions[0].nearby_words == ()
+
+
+def test_nearby_words_aggregate_repeated_platform_face_context() -> None:
     messages = [
         _chat("今天又挂科了[捂脸]", sender_id="fictional-a", message_id="m-near-1"),
         _chat("挂科太难了[捂脸]", sender_id="fictional-a", message_id="m-near-2"),
@@ -310,7 +332,7 @@ def test_nearby_words_aggregate_from_message_text_top5() -> None:
     rich_messages = [
         _rich(
             "m-near-1",
-            text="今天又挂科了[捂脸]",
+            text="今天 又 挂科 了[捂脸]",
             faces=(
                 ExpressionContent(
                     expression_kind=EXPRESSION_KIND_PLATFORM_FACE,
@@ -321,7 +343,7 @@ def test_nearby_words_aggregate_from_message_text_top5() -> None:
         ),
         _rich(
             "m-near-2",
-            text="挂科太难了[捂脸]",
+            text="挂科 太难 了[捂脸]",
             faces=(
                 ExpressionContent(
                     expression_kind=EXPRESSION_KIND_PLATFORM_FACE,
@@ -352,8 +374,8 @@ def test_nearby_words_aggregate_from_message_text_top5() -> None:
     nearby = by_key["捂脸"].nearby_words
     assert len(nearby) <= 3
     assert any(word.word == "挂科" for word in nearby)
-    assert any(word.word == "今天" for word in nearby)
-    assert all(word.count >= 1 for word in nearby)
+    assert not any(word.word == "今天" for word in nearby)
+    assert all(word.count >= 2 for word in nearby)
 
 
 def test_same_message_expression_combinations_are_counted() -> None:
@@ -439,7 +461,7 @@ def test_nearby_words_filter_single_chars_digits_and_stopwords() -> None:
     rich_messages = [
         _rich(
             "m-clean",
-            text="1 2 好 数字 2024 哈哈 来了 了[捂脸]",
+            text="1 2 好 数字 2024 哈哈 来了 了 " * 2 + "[捂脸]",
             faces=(
                 ExpressionContent(
                     expression_kind=EXPRESSION_KIND_PLATFORM_FACE,
@@ -475,8 +497,8 @@ def test_nearby_words_filter_wxid_and_english_stopwords() -> None:
             "m-wxid",
             text=(
                 "the wxid_abc i23op8icohil22 h8n91rnx7l22 furious "
-                "12345678901234567890 哈哈 ok[捂脸]"
-            ),
+                "12345678901234567890 哈哈 ok "
+            ) * 2 + "[捂脸]",
             faces=(
                 ExpressionContent(
                     expression_kind=EXPRESSION_KIND_PLATFORM_FACE,

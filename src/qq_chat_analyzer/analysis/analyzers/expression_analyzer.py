@@ -34,6 +34,7 @@ from ..models import (
 EXPRESSION_GLOBAL_TOP_LIMIT = 10
 EXPRESSION_MEMBER_TOP_LIMIT = 3
 EXPRESSION_NEARBY_WORD_LIMIT = 3
+EXPRESSION_NEARBY_WORD_MIN_COUNT = 2
 EXPRESSION_COMBINATION_TOP_LIMIT = 3
 EXPRESSION_COMBINATION_MESSAGE_LIMIT = 5
 
@@ -480,6 +481,7 @@ def _nearby_words(counts: Counter[str]) -> tuple[ExpressionNearbyWord, ...]:
         for word, count in _sorted_counts(counts)[
             :EXPRESSION_NEARBY_WORD_LIMIT
         ]
+        if count >= EXPRESSION_NEARBY_WORD_MIN_COUNT
     )
 
 

@@ -252,7 +252,7 @@ def test_group_language_profile_uses_finished_distinctive_words() -> None:
     assert language_member.speaker_key == "Fictional-Alice"
     assert language_member.heading == "Fictional-Alice"
     assert language_member.primary_words == ("distinctive-only",)
-    assert language_member.context_words == ("deck", "talk")
+    assert language_member.context_words == ("deck",)
 
 
 def test_group_language_profile_exposes_insufficient_sample() -> None:
@@ -288,10 +288,77 @@ def test_private_language_profile_reuses_each_user_top_words() -> None:
     assert view.language_profile.available is True
     voices = {member.speaker_key: member for member in view.language_profile.members}
     assert voices["Fictional-Alice"].heading == "TA 常说"
-    assert voices["Fictional-Alice"].primary_words == ("deck", "talk")
+    assert voices["Fictional-Alice"].primary_words == ("deck",)
     assert voices["Fictional-Bob"].heading == "你常说"
     assert voices["Fictional-Bob"].primary_words == ()
     assert all(member.context_words == () for member in voices.values())
+
+
+def test_echo_member_word_support_is_inherited_by_language_and_share() -> None:
+    models = _analysis_models()
+    presentation = _presentation()
+    share = importlib.import_module("qq_chat_analyzer.presentation.share")
+    reports = _full_reports()
+    words = (
+        models.ProfileWord(word="one-time", count=1),
+        *(models.ProfileWord(word=f"repeated-{i}", count=2 + i) for i in range(6)),
+    )
+    profiles = reports.user_profiles.profiles
+    reports = dataclasses.replace(
+        reports,
+        user_profiles=dataclasses.replace(
+            reports.user_profiles,
+            profiles=(dataclasses.replace(profiles[0], top_words=words), profiles[1]),
+        ),
+        distinctive_words=_distinctive_group_report(),
+    )
+
+    private = presentation.build_echo_report_view(
+        reports, conversation_kind="private", viewer_speaker_key="Fictional-Alice",
+    )
+    group = presentation.build_echo_report_view(reports, conversation_kind="group")
+    card = share.build_share_card_data(private)
+
+    assert private.members[0].top_words == (
+        "repeated-0", "repeated-1", "repeated-2", "repeated-3", "repeated-4", "repeated-5",
+    )
+    assert private.language_profile.members[0].primary_words == (
+        "repeated-0", "repeated-1", "repeated-2", "repeated-3", "repeated-4",
+    )
+    assert group.language_profile.members[0].context_words == (
+        "repeated-0", "repeated-1", "repeated-2",
+    )
+    assert card.language.self_words == (
+        "repeated-0", "repeated-1", "repeated-2", "repeated-3", "repeated-4",
+    )
+    assert card.language.peer_words == ()
+    assert reports.user_profiles.profiles[0].top_words[0].count == 1
+
+
+def test_private_shared_words_require_support_from_both_sides() -> None:
+    analyzer = importlib.import_module(
+        "qq_chat_analyzer.analysis.analyzers.private_language_analyzer"
+    )
+    private = analyzer.PrivateLanguageAnalyzer().analyze(
+        [
+            ("Fictional-Alice", ("singleton", "asymmetric", "asymmetric", "asymmetric", "repeated", "repeated")),
+            ("Fictional-Bob", ("singleton", "asymmetric", "repeated", "repeated")),
+        ],
+        conversation_type="private",
+    )
+    reports = dataclasses.replace(_full_reports(), private_language=private)
+
+    view = _presentation().build_echo_report_view(
+        reports, conversation_kind="private", viewer_speaker_key="Fictional-Alice",
+    )
+
+    assert {word.word: word.occurrence_support for word in private.shared_words} == {
+        "singleton": 1, "asymmetric": 1, "repeated": 2,
+    }
+    assert [(word.word, word.self_count, word.peer_count) for word in view.language_profile.shared_words] == [
+        ("repeated", 2, 2),
+    ]
+    assert [word.word for word in view.language_profile.side_preference_words] == ["repeated"]
 
 
 def test_private_language_profile_does_not_generate_distinctive_words() -> None:
@@ -717,6 +784,50 @@ def test_expression_combination_common_members_filters_share_and_limits() -> Non
     assert len(combo.common_members) == 4
     assert all(member.share_percent >= 20.0 for member in combo.common_members)
     assert combo.common_members[0].display_name == "member-a"
+
+    # A single occurrence at 20% must not qualify; two at 20% must qualify.
+    boundary_combo = dataclasses.replace(
+        report.top_combinations[0],
+        count=10,
+        member_counts=(
+            models.ExpressionCombinationMemberCount(speaker_key="member-a", count=1),
+            models.ExpressionCombinationMemberCount(speaker_key="member-b", count=2),
+            models.ExpressionCombinationMemberCount(speaker_key="member-c", count=7),
+        ),
+    )
+    single_at_twenty = dataclasses.replace(
+        boundary_combo,
+        count=5,
+        member_counts=(
+            models.ExpressionCombinationMemberCount(speaker_key="member-a", count=1),
+            models.ExpressionCombinationMemberCount(speaker_key="member-b", count=2),
+            models.ExpressionCombinationMemberCount(speaker_key="member-c", count=2),
+        ),
+    )
+    under_twenty = dataclasses.replace(
+        boundary_combo,
+        count=11,
+        member_counts=(
+            models.ExpressionCombinationMemberCount(speaker_key="member-b", count=2),
+            models.ExpressionCombinationMemberCount(speaker_key="member-c", count=9),
+        ),
+    )
+    boundary_view = presentation.build_echo_report_view(
+        models.AnalysisReports(
+            expression=dataclasses.replace(
+                report, top_combinations=(single_at_twenty, boundary_combo, under_twenty),
+            ),
+            user_profiles=models.UserProfileReport(
+                total_message_count=5, speaker_count=5, profiles=profiles,
+            ),
+        ),
+        conversation_kind="group",
+        expression_source="wechat",
+    )
+    assert [
+        [member.display_name for member in item.common_members]
+        for item in boundary_view.expression_culture.top_combinations
+    ] == [["member-b", "member-c"], ["member-b", "member-c"], ["member-c"]]
 
 
 def test_expression_without_asset_uses_friendly_fallback() -> None:
