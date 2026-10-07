@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from ..analysis.revision import ANALYSIS_REVISION
+from ..presentation.echo_serializer import ECHO_REPORT_SCHEMA_VERSION
+from ..version import APP_VERSION
 from .dto import AnalysisResultDTO
 from .scope_filter import AnalysisScope, AnalysisScopeMode
 
@@ -30,6 +33,9 @@ def build_report_metadata(
     bounded = scope.mode is not AnalysisScopeMode.ALL
     return {
         "schema_version": "echo-report-meta.v1",
+        "app_version": APP_VERSION,
+        "report_schema_version": ECHO_REPORT_SCHEMA_VERSION,
+        "analysis_revision": ANALYSIS_REVISION,
         "generated_at": generated_at.isoformat(),
         "source": source,
         "conversation_name": view.conversation_name,

@@ -17,6 +17,7 @@ from typing import Any, Callable
 
 from ..application.facade import ChatAnalyzerFacade, ChatSource
 from ..resources import resources_dir
+from ..version import APP_VERSION
 from .desktop_runtime import (
     STARTUP_FAILED_MESSAGE,
     configure_logging,
@@ -26,8 +27,6 @@ from .desktop_runtime import (
 from .shutdown import DEFAULT_SHUTDOWN_WAIT_SECONDS
 from .theme import BASE_QSS
 
-
-APP_VERSION = "0.8.0"
 
 _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.app")
 

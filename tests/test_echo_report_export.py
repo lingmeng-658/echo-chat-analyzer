@@ -217,6 +217,8 @@ def test_metadata_serialization_failure_does_not_leave_a_package(tmp_path):
 
 @pytest.mark.parametrize("source", ["qq", "wechat"])
 def test_metadata_projects_existing_results_without_input_io(source, monkeypatch):
+    from importlib.metadata import version
+    from qq_chat_analyzer.presentation.echo_serializer import ECHO_REPORT_SCHEMA_VERSION
     from qq_chat_analyzer.application.dto import AnalysisResultDTO, AnalysisStatus
     from qq_chat_analyzer.application.report_package_metadata import build_report_metadata
     from qq_chat_analyzer.application.scope_filter import AnalysisScope
@@ -241,13 +243,19 @@ def test_metadata_projects_existing_results_without_input_io(source, monkeypatch
     def forbid_input_io(*args, **kwargs):
         raise AssertionError("metadata must use existing results without file IO")
 
+    expected_app_version = version("qq-chat-analyzer")
     monkeypatch.setattr(Path, "open", forbid_input_io)
     metadata = build_report_metadata(
         result=result, source=source,
         scope=AnalysisScope.custom(date(2024, 1, 1), date(2024, 1, 31)),
         generated_at=datetime(2026, 8, 15, 14, 30, 12, tzinfo=timezone.utc),
     )
-    assert metadata == {**_metadata(), "source": source}
+    assert metadata == {
+        **_metadata(), "source": source,
+        "app_version": expected_app_version,
+        "report_schema_version": ECHO_REPORT_SCHEMA_VERSION,
+        "analysis_revision": "echo-analysis.v1",
+    }
 
 
 def test_metadata_all_scope_and_unknown_coverage_are_null():

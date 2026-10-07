@@ -10,6 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 import hashlib
 import json
+import importlib.metadata
+import tomllib
 
 import pytest
 
@@ -70,6 +72,18 @@ def test_frozen_package_uses_pinned_echo_napcat_without_qce() -> None:
 
 def test_frozen_import_graph_contains_napcat_provider() -> None:
     assert 'qq_chat_analyzer.providers.napcat_qq_provider' in _frozen_modules()
+
+
+def test_frozen_release_version_is_available_without_source_checkout() -> None:
+    modules = _frozen_modules()
+    assert "qq_chat_analyzer.version" in modules
+    project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    distributions = [
+        distribution for distribution in importlib.metadata.distributions(path=[str(INTERNAL)])
+        if distribution.metadata["Name"] == "qq-chat-analyzer"
+    ]
+    assert len(distributions) == 1
+    assert distributions[0].version == project["project"]["version"]
 
 
 def test_frozen_package_has_no_retired_qq_python_modules() -> None:
