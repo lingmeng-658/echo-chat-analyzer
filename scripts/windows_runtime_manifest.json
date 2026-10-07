@@ -1,5 +1,10 @@
 {
   "qqPins": "qq_napcat_runtime_pins.json",
+  "wechatPinnedAssets": {
+    "wechat/WCDB.dll": "c4108e53dbe6749eb4ec2881f6d322eb160a1c5020ac959fb8ffaeac5498ecab",
+    "wechat/wcdb_cli.exe": "1c2f81fa19a85052aba76662b88eaf671d89345a1c7ad1802f9074fbf3915698",
+    "wechat/wx_key.dll": "aacf335bf5313133914d1ebc3789242970498b5df16237ba598550a70b1a9f36"
+  },
   "requirements": [
     {
       "path": "qq-napcat-candidate/NapCatWinBootHook.dll",
@@ -401,5 +406,9 @@
     "qq-napcat-candidate/qce-server.exe",
     "qq-napcat-candidate/plugins/napcat-plugin-qce",
     "qq-napcat-candidate/static/qce"
+  ],
+  "releaseTreePrivatePaths": [
+    "logs",
+    "scripts/wcdb-diagnostic.txt"
   ]
 }

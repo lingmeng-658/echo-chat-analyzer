@@ -26,6 +26,15 @@ dev = [
 gui = [
     "PySide6>=6.6,<7",
 ]
+# Windows release build toolchain. `scripts/build_windows_exe.ps1` runs the
+# project .venv PyInstaller and fails closed when it is missing, so the exact
+# tool that produced the released frozen artifact is pinned here.
+# `pyinstaller-hooks-contrib` is pinned explicitly because its hooks decide which
+# package data files (for example jieba's) the frozen package carries.
+build = [
+    "pyinstaller==6.22.3",
+    "pyinstaller-hooks-contrib==2026.8",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

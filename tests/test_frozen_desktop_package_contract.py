@@ -172,3 +172,33 @@ def test_frozen_package_keeps_retained_runtime_libraries(relative: str) -> None:
     _require_frozen_build()
 
     assert (INTERNAL / relative).is_dir()
+
+
+def _manifest() -> dict:
+    return json.loads(
+        (PROJECT_ROOT / "scripts/windows_runtime_manifest.json").read_text()
+    )
+
+
+def test_frozen_release_tree_has_no_run_residue() -> None:
+    """A smoke run must never reach the release tree the user receives."""
+    _require_frozen_build()
+
+    residue = [
+        relative
+        for relative in _manifest()["releaseTreePrivatePaths"]
+        if (DIST_APP / relative).exists()
+    ]
+
+    assert residue == []
+
+
+def test_frozen_package_ships_the_pinned_wechat_native_assets() -> None:
+    """Only the pinned WeChat native binaries may be shipped."""
+    _require_frozen_build()
+    runtime = DIST_APP / "runtime"
+
+    for relative, expected in _manifest()["wechatPinnedAssets"].items():
+        artifact = runtime / relative
+        assert artifact.is_file(), relative
+        assert hashlib.sha256(artifact.read_bytes()).hexdigest() == expected, relative

@@ -72,6 +72,20 @@ Windows PyInstaller build requires Python 3.11+ to read TOML, rejects stale inst
 version metadata, and copies the verified metadata into the frozen application.
 It does not require the source checkout to read its version at runtime.
 
+### 3.1.1 Windows Release Build Toolchain
+
+The Windows release build needs the pinned build toolchain, which is not part of
+the runtime dependencies. Install it from the same `pyproject.toml` extras:
+
+``` powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,gui,build]"
+```
+
+`scripts/build_windows_exe.ps1` runs `<project>\.venv\Scripts\pyinstaller.exe` and
+fails closed when it is missing. The versions pinned in the `build` extra are the
+toolchain the released frozen artifact is built with, so a release must not be
+produced with a different interpreter or an unpinned PyInstaller.
+
 ### 3.2 AI Existing Workspace
 
 An AI agent entering an existing working tree must first verify the environment:

@@ -44,7 +44,9 @@ function Get-RuntimeContract {
     $Contract = (
         Get-Content -LiteralPath $RuntimeContractPath -Raw -Encoding UTF8
     ) | ConvertFrom-Json
-    if (-not $Contract.requirements -or -not $Contract.privatePaths -or -not $Contract.packageDirectories) {
+    if (-not $Contract.requirements -or -not $Contract.privatePaths -or
+        -not $Contract.packageDirectories -or -not $Contract.releaseTreePrivatePaths -or
+        -not $Contract.wechatPinnedAssets) {
         throw "Runtime contract manifest is incomplete: scripts\windows_runtime_manifest.json"
     }
     $script:RuntimeContract = $Contract
@@ -87,6 +89,48 @@ function Assert-NapCatArtifactPins([string]$Root) {
         Assert-ProgramPathNotLinked $Target
         if ((Get-FileHash -LiteralPath $Target -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Hashes[$Name]) {
             throw ('NapCat artifact pin mismatch: ' + $Name)
+        }
+    }
+}
+
+function Assert-WeChatArtifactPins([string]$Root) {
+    # Record the identity of the exact native WeChat binaries that ship. This is
+    # deliberately not build attestation: the WCDB library and its helper are
+    # local builds whose PE timestamps make bit-for-bit rebuilds impossible, so
+    # the hash freezes which build is released, and a swap or a partial copy
+    # fails instead of silently shipping a different binary.
+    $Pins = (Get-RuntimeContract).wechatPinnedAssets
+    foreach ($Property in $Pins.PSObject.Properties) {
+        $Name = [string]$Property.Name
+        $Hash = ([string]$Property.Value).ToLowerInvariant()
+        if ($Name -match '(^/|\\|:|(^|/)\.\.(/|$))' -or $Hash -notmatch '^[0-9a-f]{64}$') {
+            throw 'Invalid WeChat artifact pin.'
+        }
+        $Target = Join-Path $Root ($Name -replace '/', '\')
+        if (-not (Test-Path -LiteralPath $Target -PathType Leaf)) {
+            throw ('Pinned WeChat asset is missing: ' + $Name)
+        }
+        Assert-ProgramPathNotLinked $Target
+        if ((Get-FileHash -LiteralPath $Target -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Hash) {
+            throw ('WeChat artifact pin mismatch: ' + $Name)
+        }
+    }
+}
+
+function Assert-ReleaseTreeStateAbsent([string]$Root) {
+    # The app writes ``logs`` beside its own executable, and the bundled WeChat
+    # diagnostic runner writes its report next to itself. A fresh build produces
+    # neither, so their presence means a previous local run leaked into the tree
+    # that is about to be handed to users.
+    foreach ($Relative in (Get-RuntimeContract).releaseTreePrivatePaths) {
+        $RelativePath = ([string]$Relative) -replace '/', '\'
+        if (Test-Path -LiteralPath (Join-Path $Root $RelativePath)) {
+            throw (
+                'Release tree contains state that must never ship: ' +
+                [string]$Relative +
+                '. Run a full build (not -RuntimeOnly) and do not launch the ' +
+                'packaged app before packaging.'
+            )
         }
     }
 }
@@ -139,6 +183,7 @@ function Assert-RuntimeContract {
         }
     }
     Assert-NapCatArtifactPins $Root
+    Assert-WeChatArtifactPins $Root
     if ($Phase -eq 'portable') {
         foreach ($Relative in (Get-RuntimeContract).forbiddenPaths) {
             if (Test-Path -LiteralPath (Join-Path $Root $Relative)) {
@@ -357,6 +402,10 @@ try {
     Copy-Item -LiteralPath $DiagnosticRunnerSource -Destination (
         Join-Path $PortableScripts "run_wechat_wcdb_diagnostic.ps1"
     )
+
+    # The release tree is now complete, so this is the last point where a local
+    # run residue could still be caught before the tree is packaged.
+    Assert-ReleaseTreeStateAbsent -Root $PortableDirectory
 
     Write-Output "Build complete: $PortableDirectory"
 }

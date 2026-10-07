@@ -40,13 +40,13 @@ WeChat 当前能力不变；架构细节以 `ARCHITECTURE.md` 为准。
 | GOV-04 权威版本号 | CLOSED：pyproject.toml 为唯一发布版本事实源；runtime / GUI / metadata 共用，frozen build 核对并携带安装元数据 |
 | QA-03 / QA-04 GitHub Release / 检查更新 | 未完成；Update Check Core 已实现，GUI 异步提示/打开下载页待接线；仍需核对 tag、发布说明和最终 fresh build；不自动下载、替换或静默更新 |
 | QA-05 0.1 → 0.2 本地数据兼容审计 | CLOSED：metadata provenance additive 收口；固定旧 0.1 包的 list / reopen / retention 与不改写回归；演进边界见 ARCHITECTURE.md |
-| GOV-05 发布构建可复现性 | 待按实际风险收口构建环境与重建验证 |
-| QA-02 定点 release / privacy / build audit | 未完成；针对最终发布资产、隐私与构建风险核验 |
+| GOV-05 发布构建可复现性 | CLOSED：build toolchain 已 tracked 声明并精确 pin；文档与合同齐备；fresh build 重建验证通过 |
+| QA-02 定点 release / privacy / build audit | CLOSED：发布树残留防线、构建依赖声明、WeChat native DLL pin 三项收口；fresh build + frozen 合同验收通过 |
 | QA-06 跨机器 Direct DB RC | 待真实验收；本机 checkpoint 不能替代 |
 | QA-01 最终真实验收 | 未完成；覆盖主链、大小数据、报告、Local Data、分享和最终发布包 |
 
 Architecture & Complexity Audit v1 已 COMPLETE / CLOSED，0.1 不再重复开展泛化全仓架构审计；
-发布前仅保留 QA-02 定点 release / privacy / build audit。
+发布前定点收口的 GOV-05 与 QA-02 已于 2026-10-07 关闭（证据见「0.1 发布治理」）。
 测试治理当前阶段已完成，非 Release Blocker。BUG-01 和旧 QCE Desktop 任务已退休；
 BUG-02 随 QCE 输入移除标记 RETIRED，BUG-03 / 05 / 06 / 07 / 08 保持 CLOSED。REL-05 大数据性能 / UX 与
 REL-09 语言画像优化均为非阻塞后续工作。完整历史证据保留在本文后半部。
@@ -137,27 +137,37 @@ frozen build 校验安装版本与 pyproject 一致并携带元数据，无需�
 
 ### GOV-05 Windows build 可复现性
 
-当前 `scripts/build_windows_exe.ps1` 使用项目 `.venv\Scripts\pyinstaller.exe`，缺失时直接失败
+`scripts/build_windows_exe.ps1` 使用项目 `.venv\Scripts\pyinstaller.exe`，缺失时直接失败
 （fail closed），不会在构建时动态下载或安装 PyInstaller；原“可能动态安装”的记录已过期。
-但 `pyproject.toml` 尚未声明或 pin PyInstaller，PyInstaller / release build environment 的版本
-固定、版本来源与可重建性仍未形成完整的 tracked reproducibility contract，待进一步审计。
-本轮不实现 dependency pinning。
 
-0.1 按实际发布风险收口构建环境、依赖版本与重建验证，不预设必须新增完整构建框架。
-旧 stale artifact 风险通过正式 fresh build 验收控制，见 GOV-05.2。
+2026-10-07 收口：构建工具链已在 tracked 位置声明并精确 pin —— `pyproject.toml` 的 `build`
+extra（`pyinstaller==6.22.3`、`pyinstaller-hooks-contrib==2026.8`）；`DEVELOPMENT.md` §3.1.1
+给出 `pip install -e ".[dev,gui,build]"`，新 clone 不再依赖本机口头知识。
+`pyinstaller-hooks-contrib` 单独 pin 的原因：它的 hook 决定 frozen 包携带哪些 package data
+（例如 jieba 的 `lac_small/model_baseline`，由 frozen 合同固定）。
+合同：`tests/test_windows_runtime_contract.py::test_pyproject_declares_the_pinned_windows_build_toolchain`、
+`::test_development_guide_documents_the_build_toolchain`（均在 Fast）。
+重建验证：2026-10-07 正式 fresh build 成功；main `eb36bc5` 源码产出
+`dist/Echo/Echo.exe` 3,418,956 bytes、SHA-256
+`39B61806EC4F62165D6894E61FB43688FD5981D23F665F36B9E1BB4EE5ECD0D8`，随后
+frozen / portable / Windows runtime 合同 144 passed。
 
-状态：未审计。
+状态：COMPLETE / CLOSED。dependency lockfile、CI 与 bit-for-bit reproducibility
+经人工确认不在 0.1 范围，本轮不实现。
 
 ### GOV-05.2 Frozen artifact provenance
 
 `tests/test_frozen_desktop_package_contract.py` 检查磁盘上已有的 `dist/Echo`，测试本身不会构建
 fresh artifact。目前没有把已有 frozen artifact 与当前 Git HEAD 绑定的可验证 provenance；
 旧 EXE 可被新 contract tests 检查并产生误导性的 RED；2026-10-04 checkpoint 的两个
-packaging failures 即属于此类。本轮旧包中的退休模块也必须在 fresh build 后重新核验。
+packaging failures 即属于此类。2026-10-07 audit 再次观察同类现象：磁盘上的 `dist/Echo`
+不含当时 HEAD 新增的 `application.update_check_service`（PYZ 309 模块 vs fresh 310 模块），
+且带有一份 smoke 产生的 `logs/echo.log`。
 
 当前处理原则：Final Release / packaging acceptance 必须先执行正式完整 fresh build，
-不允许用历史 `dist/Echo` 代表当前源码。后续可考虑 build provenance / commit identity，
-本轮不实现。
+不允许用历史 `dist/Echo` 代表当前源码。2026-10-07 已增加两项机械防线降低该风险：
+发布树运行残留断言（`releaseTreePrivatePaths`，见 QA-02）与 WeChat native DLL pin。
+commit marker / build provenance framework 经人工确认不在 0.1 范围，本轮不实现。
 
 状态：已记录 / 未实施。Release Blocker：No（不是当前 Release Packaging blocker）。
 
@@ -170,7 +180,47 @@ packaging failures 即属于此类。本轮旧包中的退休模块也必须在 
 Architecture & Complexity Audit v1 已完成（见 GOV-06），本项不重复泛化全仓架构审计，
 也不提前扩展新的结构调整。
 
-状态：未完成，0.1 发布前必做。
+2026-10-07 只读审计结论：**未发现新增 build / privacy / frozen artifact Release Blocker。**
+QQ / WeChat runtime 51/51 requirement 齐备、NapCat 39 项 SHA256 pin（32 个 requiredFiles，
+其中 `napcat.mjs` 用 patched hash，6 个 template，1 个 `config/plugins.json`）全命中、
+QCE 与 numpy / `jieba.lac_small` 全缺席、发行树零
+config / account / 明文库 / JSONL / transient 残留（用户数据位于 `%LOCALAPPDATA%`，
+不在 exe 同级），fresh 产物可正常冷启动。收口的三项：
+
+1. **发布树残留防线**：`scripts/windows_runtime_manifest.json` 新增
+   `releaseTreePrivatePaths`（`logs`、`scripts/wcdb-diagnostic.txt`），作为 build 与 tests
+   共用的唯一清单；构建脚本新增 `Assert-ReleaseTreeStateAbsent`，在发布树完成后断言
+   （覆盖 smoke 后 `-RuntimeOnly` 重打包与手工塞入）；frozen 合同对 `dist/Echo` 断言同一清单
+   （覆盖 smoke 后直接打包的窗口）。证据：
+   `tests/test_portable_runtime_copy.py::test_runtime_build_rejects_previous_run_residue`、
+   `::test_runtime_build_leaves_no_release_tree_residue`、
+   `tests/test_frozen_desktop_package_contract.py::test_frozen_release_tree_has_no_run_residue`
+   与 `tests/test_windows_runtime_contract.py` 的残留结构合同。
+2. **构建依赖声明**：见 GOV-05。
+3. **WeChat native DLL pin**：manifest 新增 `wechatPinnedAssets`，pin 当前实际发布依赖的
+   `wechat/WCDB.dll`、`wechat/wcdb_cli.exe`、`wechat/wx_key.dll` 的 SHA256；
+   `Assert-WeChatArtifactPins` 在 source 与 portable 两个 phase 校验（路径安全、小写 64-hex、
+   存在性、拒绝 reparse、hash 命中）；frozen 合同校验随包文件。证据：
+   `tests/test_portable_runtime_copy.py::test_modified_wechat_native_asset_cannot_ship`、
+   `tests/test_frozen_desktop_package_contract.py::test_frozen_package_ships_the_pinned_wechat_native_assets`
+   与 `tests/test_windows_runtime_contract.py` 的 pin 合同。
+   pin 值取自本机 `runtime/wechat/` 中被复制进发布树的那一份（`WCDB.dll` / `wcdb_cli.exe`
+   由 `scripts/bootstrap_wechat_native.ps1` 从 Tencent/wcdb v2.1.15 本地构建，
+   `wx_key.dll` 无 tracked bootstrap）。这是冻结“随包发布的那一份身份”，
+   明确不是 bit-for-bit 复现（本地编译产物 PE 带时间戳）。
+
+验收快照（只记录本次，不是固定测试数量要求）：Fast 2676 passed / 291 deselected；
+Full 2964 passed、1 skipped、2 failed —— 1 个为已有 `known_failure`
+（REL-08 分享按钮），另 1 个为与本项无关的环境性失败
+（`tests/test_test_user_data_isolation.py` 的伪造 `LOCALAPPDATA` 被 Windows 物化出
+`Microsoft\Windows\Caches`，守卫只拦 `Path.mkdir`）；skip 为未设置
+`ECHO_NATIVE_WCDB_CLI_PATH` 的 native CLI 测试。fresh build 的 frozen / portable /
+Windows runtime 合同 144 passed。
+
+明确不在本次范围（人工确认）：EXE VersionInfo、commit marker / provenance framework、
+code signing、CI/CD、bit-for-bit reproducibility。
+
+状态：COMPLETE / CLOSED。本项关闭不代表 QA-01 / QA-03 / QA-06 完成。
 
 ### QA-03 版本号 / GitHub Release
 
@@ -817,7 +867,7 @@ runtime/wechat
   已具备满足正式 runtime contract 的 source assets，正式完整 fresh build 成功；Focused / Fast /
   Full 中此前这组 runtime-asset environment failures 不再存在（验收结果见 REL-06 checkpoint）。
 - 此关闭不表示新机器天然拥有完整 runtime，也不表示 fresh checkout 可跳过 bootstrap 构建；
-  Windows build reproducibility 仍属于开放的 GOV-05 / 后续发布治理范围。
+  Windows build reproducibility 当时属于开放的 GOV-05 / 后续发布治理范围（2026-10-07 已随 GOV-05 收口）。
 
 ## 状态词
 

@@ -140,12 +140,22 @@ def _fictional_runtime(
     # Run a temporary build-script copy with fictional, pinned artifacts.
     scripts = project_root / "scripts"
     shutil.copy2(BUILD_SCRIPT, scripts / BUILD_SCRIPT.name)
-    (scripts / "windows_runtime_manifest.json").write_text(json.dumps(RUNTIME_CONTRACT))
-    pins = json.loads((PROJECT_ROOT / "scripts/qq_napcat_runtime_pins.json").read_text())
     import hashlib
+
     def digest(relative):
         path = runtime / "qq-napcat-candidate" / relative
         return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else "0" * 64
+
+    def wechat_digest(relative):
+        path = runtime / relative
+        return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else "0" * 64
+
+    contract = json.loads(json.dumps(RUNTIME_CONTRACT))
+    contract["wechatPinnedAssets"] = {
+        name: wechat_digest(name) for name in contract["wechatPinnedAssets"]
+    }
+    (scripts / "windows_runtime_manifest.json").write_text(json.dumps(contract))
+    pins = json.loads((PROJECT_ROOT / "scripts/qq_napcat_runtime_pins.json").read_text())
     pins["requiredFiles"] = {name: digest(name) for name in pins["requiredFiles"]}
     pins["napcatPatch"]["patchedSha256"] = digest("napcat.mjs")
     pins["pluginConfigSha256"] = digest("config/plugins.json")
@@ -306,8 +316,11 @@ def test_runtime_build_rejects_missing_koffi_windows_addon(
     completed = _copy_runtime(tmp_path)
 
     assert completed.returncode != 0
-    assert "koffi\\build\\koffi\\win32_x64\\koffi.node" in (
-        completed.stderr + completed.stdout
+    # PowerShell wraps long error text at the host width, which can split this
+    # path across a line break (and insert the wrap indent), so the path is only
+    # matched after all whitespace is removed.
+    assert "koffi\\build\\koffi\\win32_x64\\koffi.node" in "".join(
+        (completed.stderr + completed.stdout).split()
     )
 
 
@@ -551,3 +564,50 @@ def test_modified_echo_artifact_cannot_ship(tmp_path, artifact):
     assert result.returncode != 0
     assert 'pin mismatch' in result.stderr + result.stdout
     assert not (tmp_path / 'dist/Echo/runtime').exists()
+
+
+@pytest.mark.parametrize('asset', sorted(('wechat/WCDB.dll', 'wechat/wcdb_cli.exe', 'wechat/wx_key.dll')))
+def test_modified_wechat_native_asset_cannot_ship(tmp_path, asset):
+    runtime = _fictional_runtime(tmp_path)
+    (runtime / asset).write_bytes(b'modified fictional native asset')
+
+    result = _copy_runtime(tmp_path)
+
+    assert result.returncode != 0
+    assert 'WeChat artifact pin mismatch' in result.stderr + result.stdout
+    assert not (tmp_path / 'dist/Echo/runtime').exists()
+
+
+def test_runtime_build_leaves_no_release_tree_residue(tmp_path):
+    """A clean packaging run must not invent release-tree run residue."""
+    _fictional_runtime(tmp_path)
+
+    result = _copy_runtime(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    portable = tmp_path / 'dist/Echo'
+    assert not (portable / 'logs').exists()
+    assert not (portable / 'scripts/wcdb-diagnostic.txt').exists()
+    assert (portable / 'scripts/run_wechat_wcdb_diagnostic.ps1').is_file()
+
+
+@pytest.mark.parametrize(
+    'residue, marker',
+    [
+        ('logs/echo.log', 'logs'),
+        ('scripts/wcdb-diagnostic.txt', 'scripts/wcdb-diagnostic.txt'),
+    ],
+)
+def test_runtime_build_rejects_previous_run_residue(tmp_path, residue, marker):
+    """Launching the packaged app, then repackaging, must fail loudly."""
+    _fictional_runtime(tmp_path)
+    leftover = tmp_path / 'dist/Echo' / residue
+    leftover.parent.mkdir(parents=True, exist_ok=True)
+    leftover.write_text('fictional local run residue', encoding='utf-8')
+
+    result = _copy_runtime(tmp_path)
+
+    assert result.returncode != 0
+    combined = (result.stderr + result.stdout).replace('\\', '/')
+    assert marker in combined
+    assert 'must never ship' in combined
