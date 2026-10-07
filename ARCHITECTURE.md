@@ -373,6 +373,20 @@ LocalChatAnalyzer/
 - `ReportPackageCatalog` 只读 `metadata.json` 构建 summary（包括 `conversation_kind`）；
   检查 package 完整性时不读取 report JSON 或聊天正文。损坏或不完整 package
   作为 issue 对用户可见，不因 metadata 不可读而脱离 package ownership 枚举。
+- 正式报告的分析结果是 immutable historical snapshot。app upgrade 不自动 migration 或
+  re-analysis；Local Data 重开使用包内原 HTML。新算法或新数据库字段需要新版重新
+  acquisition / analysis，生成新包；旧报告不伪造缺失数据。既有删除、retention 与
+  可选分享产物的生命周期不改变这一分析快照约束。
+- `echo-report-meta.v1` 是包摘要契约，允许 additive 可选字段；reader 忽略未知字段，
+  新 reader 必须继续读取旧包。新包追加 `app_version`、`report_schema_version` 和
+  `analysis_revision`；旧包缺这些字段仍正常 list / reopen / retention，不补写当前版本。
+  `echo-report.v0.7` 是展示 JSON 契约，不是原始消息或可重新分析的完整中间结果；
+  当前不承诺用新版 presentation 重新渲染旧 JSON。
+- app release version 唯一事实源为 `pyproject.toml`；`version.py` 从安装元数据读取，
+  GUI 与 metadata writer 共用。frozen build 核对安装版本与发布版本一致并携带元数据。
+  `analysis/revision.py` 单独记录分析语义修订；影响结果的数据解释、identity、过滤、
+  分词或统计规则变化时递增，纯 presentation 改动不递增。report schema 使用 serializer
+  的既有常量，三个版本不绑定递增。
 - listing、retention 与 delete 共用正式 package 候选边界：reports root 的直属真实目录，
   且名称严格符合 ownership naming。合法名称的普通文件不是 Report Package，忽略并保留；
   reparse / symlink / junction 仍进入安全拒绝流程，不跟随外部目标。

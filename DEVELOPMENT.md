@@ -65,6 +65,13 @@ After installation, developers can launch them without activating the shell:
 The Python package remains `qq_chat_analyzer`; the distribution name used by
 `pip show` remains `qq-chat-analyzer`. No `qqchat` / `qqchat-gui` aliases are registered.
 
+Release version is defined only in `pyproject.toml`. Runtime consumers read the
+installed distribution metadata through `qq_chat_analyzer.version`; after a version
+change, refresh the editable installation using the setup command above. The
+Windows PyInstaller build requires Python 3.11+ to read TOML, rejects stale installed
+version metadata, and copies the verified metadata into the frozen application.
+It does not require the source checkout to read its version at runtime.
+
 ### 3.2 AI Existing Workspace
 
 An AI agent entering an existing working tree must first verify the environment:

@@ -37,9 +37,9 @@ WeChat 当前能力不变；架构细节以 `ARCHITECTURE.md` 为准。
 | REL-06 Windows 普通用户发布 / 分发体验 | 未完成；已有 portable build 不等于最终分发完成 |
 | REL-07 GUI 最终 polish | 未完成；只处理明显视觉 / 交互问题 |
 | REL-08 分享闭环 | **Release Blocker：Yes**；未完成，按钮隐藏只是临时雪藏 |
-| GOV-04 权威版本号 | 未完成；统一 package、GUI 与发布版本来源 |
+| GOV-04 权威版本号 | CLOSED：pyproject.toml 为唯一发布版本事实源；runtime / GUI / metadata 共用，frozen build 核对并携带安装元数据 |
 | QA-03 / QA-04 GitHub Release / 检查更新 | 未完成；核对 tag、发布说明和最终 fresh build；内置版本 → GitHub 最新正式 Release → 提示新版 → 打开下载页；不自动下载、替换或静默更新 |
-| QA-05 0.1 → 0.2 本地数据兼容审计 | 未完成；核对 Report Package、catalog 与持久配置的升级边界 |
+| QA-05 0.1 → 0.2 本地数据兼容审计 | CLOSED：metadata provenance additive 收口；固定旧 0.1 包的 list / reopen / retention 与不改写回归；演进边界见 ARCHITECTURE.md |
 | GOV-05 发布构建可复现性 | 待按实际风险收口构建环境与重建验证 |
 | QA-02 定点 release / privacy / build audit | 未完成；针对最终发布资产、隐私与构建风险核验 |
 | QA-06 跨机器 Direct DB RC | 待真实验收；本机 checkpoint 不能替代 |
@@ -127,15 +127,13 @@ Release Blocker：Yes。
 
 ### GOV-04 版本号权威统一
 
-当前核对到：
+`pyproject.toml` 的 `0.1.0` 是唯一发布版本事实源；`version.py` 读取安装元数据，
+GUI 启动日志与新报告 metadata 共用，不再保留 GUI 的 `0.8.0` 定义。
+frozen build 校验安装版本与 pyproject 一致并携带元数据，无需源码目录读取版本。
+测试：`tests/test_app_version.py`、`tests/test_frozen_desktop_package_contract.py`。
+历史 docs version、report schema 与 NapCat runtime version 不作为 app version。
 
-- `pyproject.toml` package version 为 `0.1.0`；
-- `gui/app.py` 的 `APP_VERSION` 为 `0.8.0`；
-- 历史 docs version 不作为当前版本依据。
-
-版本来源尚未统一，不能因 package 已写 0.1.0 就视为发布准备完成。
-
-状态：未实施。0.1 发布前必做；与 QA-03 版本号 / GitHub Release 一起收口。
+状态：COMPLETE / CLOSED。QA-03 的 tag / GitHub Release / 最终发布资产仍独立待验收。
 
 ### GOV-05 Windows build 可复现性
 
@@ -191,10 +189,23 @@ Architecture & Complexity Audit v1 已完成（见 GOV-06），本项不重复�
 
 ### QA-05 0.1 → 0.2 本地数据兼容检查
 
-发布前检查现有 Report Package metadata / schema、Local Data catalog 与持久配置的升级兼容边界，
-明确 0.2 读取 0.1 本地数据的约束。现有 package 校验不等于跨版本兼容已经验收。
+已完成 Version / Data Evolution Contract 最小收口：新包在 `echo-report-meta.v1` 内
+追加 app version、report schema version、analysis revision；旧包缺字段仍可读取，不补写。
+固定虚构旧 0.1 metadata 回归覆盖 list / reopen / 超限 retention，并检查保留旧包的
+文件内容与 mtime 未改变。证据：`tests/test_report_package_catalog.py`、
+`tests/test_echo_report_export.py`；现有配置缺字段、portable 路径修复与 QCE 隔离覆盖沿用。
 
-状态：未完成，0.1 发布前必做。
+演进约束以 `ARCHITECTURE.md` 为准：历史分析快照不随 app upgrade 自动迁移或重算；
+新算法 / 新数据库字段由新版重新 acquisition / analysis 生成新包。
+0.2 reader 需保留 meta.v1 支持并对新增字段提供缺失语义；配置 loader 允许缺字段及
+未知 key，但 writer 不保留未知 key，不承诺降级往返无损。
+旧 JSON 新模板重渲染、自动重新分析 identity、migration framework 均不在本次范围。
+
+验证：focused / Fast、正式 fresh Windows build、frozen package contract 与隔离用户数据的
+EXE 启动版本 smoke 通过。Full 唯一失败为既有 REL-08 分享按钮 `known_failure`，
+本次无新增失败；native WCDB CLI 测试因未设置专用路径跳过。
+
+状态：COMPLETE / CLOSED。该合同不代表尚未实现的 0.2 软件已通过真人兼容验收。
 
 ### QA-06 跨机器 Direct DB RC
 

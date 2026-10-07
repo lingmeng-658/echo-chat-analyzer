@@ -48,6 +48,45 @@ def test_lists_only_metadata_in_stable_generated_time_order(tmp_path, monkeypatc
     assert not listing.issues
 
 
+def test_fixed_01_metadata_survives_list_reopen_and_retention_without_rewrite(tmp_path):
+    # Literal historical fixture: never generate this via the current writer.
+    old = _package(tmp_path)
+    (old / "metadata.json").write_text('''{
+      "schema_version": "echo-report-meta.v1",
+      "generated_at": "2026-10-04T12:00:00+00:00",
+      "source": "qq", "conversation_name": "Fictional 0.1 Conversation",
+      "conversation_kind": "group", "message_count": 120,
+      "active_days": 8, "participant_count": 5,
+      "message_start_timestamp": null, "message_end_timestamp": null,
+      "analysis_scope": {"mode": "all", "start_date": null, "end_date": null}
+    }''', encoding="utf-8")
+    before = {path.name: (path.read_bytes(), path.stat().st_mtime_ns) for path in old.iterdir()}
+    # 51 packages exercise eviction, with the old readable fixture in the middle.
+    for index in range(50):
+        package = _package(
+            tmp_path, f"Echo_Report_20261004_120000_{index + 2}",
+            "2026-10-03T12:00:00+00:00" if index == 0 else "2026-10-05T12:00:00+00:00",
+        )
+        path = package / "metadata.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data.update(app_version="0.2.0", report_schema_version="echo-report.v0.7",
+                    analysis_revision="echo-analysis.v2", future_optional_field=True)
+        path.write_text(json.dumps(data), encoding="utf-8")
+    catalog = _catalog(tmp_path)
+    listing = catalog.list_reports()
+    assert len(listing.reports) == 51 and not listing.issues
+    summary = next(report for report in listing.reports if report.package_name == old.name)
+    assert summary.conversation_name == "Fictional 0.1 Conversation"
+    assert summary.conversation_kind == "group"
+    assert catalog.resolve_html_path(old.name) == old / "echo-report.html"
+    retention = catalog.enforce_retention()
+    assert retention.complete and retention.total_after == 50
+    assert retention.deleted == ("Echo_Report_20261004_120000_2",)
+    assert old.name in {report.package_name for report in catalog.list_reports().reports}
+    assert catalog.resolve_html_path(old.name) == old / "echo-report.html"
+    assert {path.name: (path.read_bytes(), path.stat().st_mtime_ns) for path in old.iterdir()} == before
+
+
 @pytest.mark.parametrize("content", [None, "broken", '{}'])
 def test_damaged_metadata_remains_visible_and_can_be_deleted(tmp_path, content):
     package = _package(tmp_path)

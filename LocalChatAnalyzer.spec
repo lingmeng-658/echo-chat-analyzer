@@ -8,9 +8,21 @@ Output: dist/Echo/Echo.exe
 """
 
 from pathlib import Path
+from importlib.metadata import version
+import tomllib
+
+from PyInstaller.utils.hooks import copy_metadata
 
 
 project_root = Path(SPEC).resolve().parent
+release_version = tomllib.loads(
+    (project_root / "pyproject.toml").read_text(encoding="utf-8")
+)["project"]["version"]
+if version("qq-chat-analyzer") != release_version:
+    raise RuntimeError(
+        "Installed Echo version differs from pyproject.toml; "
+        "refresh the project installation before building."
+    )
 resources = (
     project_root / "stopwords.txt",
     project_root / "stopwords_topic.txt",
@@ -24,6 +36,7 @@ echo_report_logo = project_root / "assets/branding/echo/echo_wordmark_with_sloga
 echo_expression_assets = project_root / "frontend/echo_report/wechat-emojis"
 echo_qq_expression_assets = project_root / "frontend/echo_report/qq-emojis"
 datas = [(str(path), ".") for path in resources]
+datas += copy_metadata("qq-chat-analyzer")
 datas.append((str(echo_icon), "assets/branding/echo"))
 datas.append((str(echo_favicon), "assets/branding/echo"))
 datas.append((str(echo_report_logo), "assets/branding/echo"))
