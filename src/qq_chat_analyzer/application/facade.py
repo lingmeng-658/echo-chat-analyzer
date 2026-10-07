@@ -70,6 +70,7 @@ from .echo_report_export import (
 )
 from .report_package_catalog import ReportPackageCatalog, ReportPackageListing
 from .report_package_metadata import build_report_metadata
+from .update_check_service import UpdateChecker, UpdateCheckResult, UpdateCheckService
 from .wechat.wechat_connection_service import WeChatConnectionStatus
 from .wechat.wechat_connection_progress import WeChatConnectionProgress
 from .wechat.wechat_environment_config import WeChatEnvironmentConfig
@@ -351,6 +352,7 @@ class ChatAnalyzerFacade:
         analysis_service: Any = None,
         presentation_builder: Any = None,
         report_package_catalog: Any = None,
+        update_check_service: UpdateChecker | None = None,
         stopwords_directory: Path | None = None,
         shutdown_step_seconds: float = DEFAULT_SHUTDOWN_STEP_SECONDS,
     ) -> None:
@@ -370,10 +372,23 @@ class ChatAnalyzerFacade:
         self._analysis_service = analysis_service
         self._presentation_builder = presentation_builder
         self._report_package_catalog = report_package_catalog or ReportPackageCatalog()
+        self._update_check_service = (
+            update_check_service if update_check_service is not None else UpdateCheckService()
+        )
         self._stopwords_directory = stopwords_directory or resources_dir()
         self._retained_output_directory: _RetainedReportDirectory | None = None
         self._scratch_recovery_done = False
         self._shutdown_step_seconds = shutdown_step_seconds
+
+    def check_for_updates(self, *, manual: bool = False) -> UpdateCheckResult:
+        """Check on a worker; construction/startup never initiates a request."""
+        try:
+            return self._update_check_service.check(manual=manual)
+        except Exception as exc:
+            raise FacadeError(
+                code="update_check_failed",
+                public_message="暂时无法检查更新，请稍后手动重试。",
+            ) from exc
 
     @property
     def _wechat_connection_service(self) -> Any:

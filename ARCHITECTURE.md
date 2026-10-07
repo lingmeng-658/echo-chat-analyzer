@@ -342,6 +342,27 @@ QCE Python provider/service、`qce_compat`、文件 adapter 与旧 `parser` 均�
 过滤发生在 ImportService 之后、现有智能过滤和 Analyzer 之前；Analyzer 不感知范围配置。
 “全部”模式直接保留原消息，指定范围过滤为空时在进入 Analyzer 前返回应用错误。
 
+**Update Check Core（QA-04）** —— `application/update_check_service.py` 提供
+Qt 无关、聊天来源无关的 `UpdateCheckResult`、`UpdateChecker.check(manual=False)`
+与默认 `UpdateCheckService`。当前版本只读取 `version.APP_VERSION`，标准库 HTTP
+查询 GitHub `/repos/lingmeng-658/echo-chat-analyzer/releases/latest`，仅接受正式 Release。
+严格校验 SemVer；可去掉 tag 的 `v` 前缀，build metadata 不影响优先级，远端
+prerelease tag 也不接受。正式版本按 major/minor/patch 比较，同号正式版高于本地 prerelease。
+
+GUI 的唯一入口为 `ChatAnalyzerFacade.check_for_updates(manual=False)`，以后在
+worker 中调用并在 GUI 线程展示结果。当前没有启动请求或 GUI 更新展示接线；构造时
+无网络/磁盘 I/O。返回状态为 `update_available`、`up_to_date`、`no_release`、
+`skipped`、`unavailable`，另带当前/最新版本、校验后的 Release 页面 URL、检查时间、
+安全错误代码与 `public_message`。网络或响应失败不冒充“已是最新”；异常响应正文不外泄。
+请求无重试，socket timeout 为 5 秒，响应最多 256 KiB；该 timeout 不是总时限，
+不得在 GUI 主线程或同步启动流程中调用。不会下载或替换程序。
+
+自动检查使用 `<user_data_dir>/update-check.json`，只保存 Unix 时间字段
+`last_check_time`，按所有检查尝试（含失败和手动检查）去重 24h；恰好 24h 可再检查。
+手动检查绕过去重，但同一 service 实例的并发调用立即返回 `skipped/in_progress`。
+状态缺失、损坏或时钟回拨产生的未来时间不抑制检查；原子写入失败不影响结果，
+同一实例仍保留内存去重。该最小策略不承诺跨进程互斥或状态不可写时的跨重启去重。
+
 **Report Package 生命周期（BUG-03）** —— Report Package 是 Echo 唯一持久分析对象，
 也是 Local Data 历史列表的事实来源。`ReportHistoryManager`、`analysis_history.jsonl`
 及其读写 API 已退休，不再维护与报告目录分离的元数据历史。
@@ -666,6 +687,7 @@ GUI 只装配控件、转发事件、展示状态。
 | `application/wechat/wechat_key_service.py` | 微信读取授权 |
 | `application/wechat_connection_service.py` / `application/wechat_environment_config.py` | 保留的公共旧模块路径，仅重导出微信实现对象 |
 | `application/analysis_service.py` | 应用服务 |
+| `application/update_check_service.py` | 正式 Release 更新检查、来源无关结果契约与最小本地去重 |
 | `application/scope_filter.py` | 单次分析时间范围过滤 |
 | `application/echo_report_export.py` | 四文件 Report Package staging 与正式发布 |
 | `application/report_staging.py` | Report staging ownership、发布锁与安全恢复清理 |

@@ -38,7 +38,7 @@ WeChat 当前能力不变；架构细节以 `ARCHITECTURE.md` 为准。
 | REL-07 GUI 最终 polish | 未完成；只处理明显视觉 / 交互问题 |
 | REL-08 分享闭环 | **Release Blocker：Yes**；未完成，按钮隐藏只是临时雪藏 |
 | GOV-04 权威版本号 | CLOSED：pyproject.toml 为唯一发布版本事实源；runtime / GUI / metadata 共用，frozen build 核对并携带安装元数据 |
-| QA-03 / QA-04 GitHub Release / 检查更新 | 未完成；核对 tag、发布说明和最终 fresh build；内置版本 → GitHub 最新正式 Release → 提示新版 → 打开下载页；不自动下载、替换或静默更新 |
+| QA-03 / QA-04 GitHub Release / 检查更新 | 未完成；Update Check Core 已实现，GUI 异步提示/打开下载页待接线；仍需核对 tag、发布说明和最终 fresh build；不自动下载、替换或静默更新 |
 | QA-05 0.1 → 0.2 本地数据兼容审计 | CLOSED：metadata provenance additive 收口；固定旧 0.1 包的 list / reopen / retention 与不改写回归；演进边界见 ARCHITECTURE.md |
 | GOV-05 发布构建可复现性 | 待按实际风险收口构建环境与重建验证 |
 | QA-02 定点 release / privacy / build audit | 未完成；针对最终发布资产、隐私与构建风险核验 |
@@ -183,9 +183,20 @@ Architecture & Complexity Audit v1 已完成（见 GOV-06），本项不重复�
 
 0.1 内置权威版本号 → 检查 GitHub 最新正式 Release → 提示新版 → 打开下载页，
 由用户自行下载；不做自动下载、自动替换或静默更新。
-当前 GUI / Application 未发现该能力的实现。
+Update Check Core 已实现：权威 `APP_VERSION` → GitHub latest formal Release →
+严格 SemVer 比较 → Qt 无关 `UpdateCheckResult`。自动检查按所有尝试去重 24h，
+手动检查复用核心并绕过去重；网络超时、离线、限流和非法响应返回安全结果。
+仅在现有用户数据目录保存 `update-check.json` 的 `last_check_time`。
+Facade 已提供 `check_for_updates(manual=False)`，构造/启动不访问网络。
+GUI 主线后续需要 worker 异步调用、结果展示及用户点击后打开校验后的 Release 页面。
+当前未实现 GUI 接线、最终视觉与实际下载页交互验收；核心合同见 `ARCHITECTURE.md`。
 
-状态：未实现，0.1 发布前必做。
+自动化证据：`tests/test_update_check_service.py` 覆盖正式 Release、SemVer、异常响应、
+网络失败、自动/手动检查、24h 边界、持久状态容错与同实例并发。
+focused / Fast 通过；Full 唯一失败为既有 REL-08 分享按钮 `known_failure`。
+Fast 验证过程中曾出现微信 GUI worker native access violation，重跑通过，原因尚未确认。
+
+状态：Update Check Core 已实现；QA-04 整体待 GUI 接线与交互验收，0.1 发布前必做。
 
 ### QA-05 0.1 → 0.2 本地数据兼容检查
 
