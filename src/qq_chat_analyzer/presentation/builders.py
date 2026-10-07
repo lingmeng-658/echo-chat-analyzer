@@ -74,10 +74,12 @@ DEFAULT_PROFILE_WORD_LIMIT = 5
 ECHO_REPORT_TITLE = "Echo Report"
 ECHO_LANGUAGE_PRIMARY_WORD_LIMIT = 5
 ECHO_LANGUAGE_CONTEXT_WORD_LIMIT = 3
+ECHO_MEMBER_WORD_MIN_COUNT = 2
 ECHO_GROUP_INSUFFICIENT_REASON = "样本不足，暂时无法比较成员特色词。"
 ECHO_PRIVATE_INSUFFICIENT_REASON = "需要双方都有可用资料，才能展示两种声音。"
 ECHO_UNKNOWN_CONVERSATION_REASON = "当前会话类型无法确定，暂不展示语言画像。"
 ECHO_PRIVATE_SHARED_TOP_LIMIT = 8
+ECHO_PRIVATE_SHARED_MIN_OCCURRENCE = 2
 ECHO_PRIVATE_SIDE_TOP_LIMIT = 6
 ECHO_PRIVATE_SIDE_MIN_OCCURRENCE = 2
 ECHO_EXPRESSION_TOP_LIMIT = 5
@@ -86,6 +88,7 @@ ECHO_EXPRESSION_MIN_COUNT = 2
 ECHO_EXPRESSION_COMBINATION_TOP_LIMIT = 3
 ECHO_EXPRESSION_COMBINATION_MIN_COUNT = 2
 ECHO_EXPRESSION_COMBINATION_MEMBER_LIMIT = 4
+ECHO_EXPRESSION_COMBINATION_MEMBER_MIN_COUNT = 2
 ECHO_EXPRESSION_COMBINATION_MEMBER_SHARE_MIN = 20.0
 
 
@@ -422,8 +425,9 @@ def _private_shared_word_layers(
     ]
     shared_words = tuple(
         _to_echo_shared_word(item, viewer_key, emphasis="shared")
-        for item in shared_items[:ECHO_PRIVATE_SHARED_TOP_LIMIT]
-    )
+        for item in shared_items
+        if item.occurrence_support >= ECHO_PRIVATE_SHARED_MIN_OCCURRENCE
+    )[:ECHO_PRIVATE_SHARED_TOP_LIMIT]
 
     side_items = [
         item
@@ -715,7 +719,10 @@ def _to_echo_expression_combination(
     common_members = []
     for member_count in item.member_counts:
         member = member_by_key.get(member_count.speaker_key)
-        if member is None:
+        if (
+            member is None
+            or member_count.count < ECHO_EXPRESSION_COMBINATION_MEMBER_MIN_COUNT
+        ):
             continue
         share_percent = (
             round(member_count.count * 100.0 / total, 1)
@@ -836,7 +843,10 @@ def _build_echo_member(
             )
             for entry in profile.weekday_counts
         ),
-        top_words=tuple(word.word for word in profile.top_words),
+        top_words=tuple(
+            word.word for word in profile.top_words
+            if word.count >= ECHO_MEMBER_WORD_MIN_COUNT
+        ),
     )
 
 

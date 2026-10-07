@@ -337,7 +337,40 @@ def test_expression_combination_fallback_without_assets() -> None:
     assert "两个表达组合" not in rendered["expression-combo-list"]["text"]
     assert "2 次" not in rendered["expression-combo-list"]["text"]
 
+def test_expression_with_no_repeated_nearby_words_hides_hint() -> None:
+    from qq_chat_analyzer.analysis.analyzers.expression_analyzer import ExpressionAnalyzer
+    from qq_chat_analyzer.analysis.models import AnalysisReports
+    from qq_chat_analyzer.message import ChatMessage
+    from qq_chat_analyzer.presentation.builders import EchoReportBuilder
+    from qq_chat_analyzer.presentation.echo_serializer import echo_report_to_dict
 
+    messages = [
+        ChatMessage(
+            timestamp=1,
+            sender="Fictional Alice",
+            message_type="text",
+            text="garden 😀",
+        ),
+        ChatMessage(
+            timestamp=2,
+            sender="Fictional Alice",
+            message_type="text",
+            text="comet 😀",
+        ),
+    ]
+
+    view = EchoReportBuilder().build(
+        AnalysisReports(
+            expression=ExpressionAnalyzer().analyze(messages),
+        ),
+    )
+    culture = echo_report_to_dict(view)["expression_culture"]
+
+    rendered = _render(culture)
+
+    assert "😀" in rendered["expression-top-list"]["text"]
+    assert "常和这些词一起" not in rendered["expression-top-list"]["text"]
+    
 def test_voice_expression_token_renders_image() -> None:
     asset_uri = "data:image/png;base64,AAAA"
     rendered = _render(
