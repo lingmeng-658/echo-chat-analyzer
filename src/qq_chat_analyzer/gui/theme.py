@@ -30,6 +30,12 @@ COLOR_ERROR = "#c2410c"
 FONT_FAMILY = '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif'
 SERIF_FAMILY = '"Noto Serif SC", "Songti SC", SimSun, serif'
 
+# The refreshed surfaces (Home, the WeChat guided setup, the QQ connection
+# surface) carry their own stack. Microsoft YaHei UI has to lead it on Windows:
+# a locally installed "Noto Sans SC" otherwise wins the match, and its unhinted
+# outlines draw small CJK horizontals grey and uneven at 12-13px.
+REFRESH_SANS_FAMILY = '"Microsoft YaHei UI", "Noto Sans SC", "PingFang SC", sans-serif'
+
 FONT_SIZE_BODY = "13px"
 FONT_SIZE_SMALL = "12px"
 FONT_SIZE_TITLE = "18px"
@@ -70,7 +76,7 @@ HOME_COLOR_MUTED = "#69625d"
 HOME_COLOR_ACCENT = "#a75e41"
 HOME_QSS = f"""
 QWidget#echoHome, QWidget#echoHome QWidget {{
-    font-family: "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+    font-family: {REFRESH_SANS_FAMILY};
     font-size: 13px;
     font-weight: 400;
     color: {HOME_COLOR_TEXT};
@@ -173,7 +179,7 @@ WECHAT_SETUP_QSS = f"""
 QWidget#wechatWorkspace, QDialog#wechatSetupDialog {{ background: {HOME_COLOR_PAPER}; }}
 QWidget#wechatSessionPanel, QFrame#wechatConnectionSurface {{ background: transparent; }}
 QFrame#wechatConnectionSurface QWidget, QDialog#wechatSetupDialog QWidget {{
-    font-family: "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+    font-family: {REFRESH_SANS_FAMILY};
     color: {HOME_COLOR_TEXT}; background: transparent;
 }}
 QFrame#wechatConnectionSurface QPushButton, QDialog#wechatSetupDialog QPushButton {{
@@ -415,6 +421,7 @@ __all__ = [
     "HOME_COLOR_TEXT",
     "HOME_QSS",
     "METRIC_CARD_STYLE",
+    "REFRESH_SANS_FAMILY",
     "SERIF_FAMILY",
     "SESSION_LIST_STYLE",
     "STATUS_STYLE_BASE",
