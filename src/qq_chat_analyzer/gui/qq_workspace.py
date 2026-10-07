@@ -4,27 +4,36 @@ from __future__ import annotations
 
 import logging
 import time
+from math import ceil, cos, pi, sin
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFontMetricsF, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
+    QFrame,
+    QHBoxLayout,
     QLabel,
-    QProgressBar,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
 from ..application.facade import ChatSource
 from ..resources import default_qq_runtime_directory
+from .progress_track import ConnectionProgressTrack
 from .session_analysis_panel import SessionAnalysisPanel
 from .theme import (
-    GUIDE_STYLE,
-    STATUS_STYLE_BASE,
-    STATUS_STYLE_ERROR,
+    HOME_COLOR_ACCENT,
+    HOME_COLOR_MUTED,
+    HOME_COLOR_PAPER,
+    QQ_GUIDE_STYLE,
+    QQ_SESSION_LOADING_STYLE,
+    QQ_SETUP_QSS,
+    QQ_STATUS_STYLE,
+    QQ_STATUS_STYLE_ERROR,
 )
 from .workers import submit
 
@@ -54,15 +63,35 @@ _QQ_AUTH_TIMEOUT_TITLE = "QQ登录等待超时"
 _QQ_AUTH_TIMEOUT_HINT = "扫码时间过长，请取消后重新连接。"
 _QQ_QRCODE_SIZE = 240
 _QQ_QRCODE_RELATIVE_PATH = Path("cache") / "qrcode.png"
-_QQ_LOGIN_GUIDE = (
-    "等待QQ登录\n\n请扫码登录QQ。\n"
-    "QQ主窗口可能不会正常显示，这是正常现象。"
-)
-_QQ_STARTING_GUIDE = (
-    "首次连接 QQ 时，系统可能弹出权限确认窗口。\n\n"
-    "这是 Echo 内置的 QQ 数据读取组件，用于分析你的聊天记录，"
-    "请允许它运行。"
-)
+# The connection journey the trail walks: 准备 → 启动 QQ → 扫码 → 连接.
+_QQ_STAGE_PREPARING = 0
+_QQ_STAGE_STARTING_QQ = 1
+_QQ_STAGE_SCANNING = 2
+_QQ_STAGE_CONNECTING = 3
+_QQ_CONNECT_STAGES = ("准备", "启动 QQ", "扫码", "连接")
+# One short current action plus one short note per stage. The QR is the visual
+# subject of the scan stage, so the copy around it stays out of the way.
+_QQ_STAGE_COPY = {
+    _QQ_STAGE_PREPARING: (
+        "正在准备连接环境",
+        "Echo 正在检查本机的 QQ 环境。",
+    ),
+    _QQ_STAGE_STARTING_QQ: (
+        "正在启动 QQ",
+        "首次连接时，系统可能弹出权限确认窗口。"
+        "这是 Echo 内置的 QQ 数据读取组件，请允许它运行。",
+    ),
+    _QQ_STAGE_SCANNING: (
+        "请扫码登录 QQ",
+        "QQ 主窗口可能不会显示，这是正常现象。扫码后 Echo 会自动继续。",
+    ),
+    _QQ_STAGE_CONNECTING: (
+        "正在准备聊天记录",
+        "首次连接可能需要一点时间，Echo 正在整理可读取的会话内容。",
+    ),
+}
+_QQ_IDLE_ACTION = _QQ_CONNECT_LABEL
+_QQ_IDLE_NOTE = "点击后 Echo 会自动启动 QQ，并等待你扫码登录。"
 _QQ_STATE_DISCONNECTED = "disconnected"
 _QQ_STATE_INITIALIZING = "initializing"
 _QQ_STATE_STARTING = "starting"
@@ -76,6 +105,12 @@ _QQ_PROGRESS_STATES = (
     _QQ_STATE_INITIALIZING,
     _QQ_STATE_STARTING,
 )
+# Snapshot lifecycle → trail stage. States outside this map carry no trail.
+_QQ_STATE_STAGE = {
+    _QQ_STATE_INITIALIZING: _QQ_STAGE_PREPARING,
+    _QQ_STATE_STARTING: _QQ_STAGE_STARTING_QQ,
+    _QQ_STATE_WAITING_AUTH: _QQ_STAGE_SCANNING,
+}
 _QQ_STATE_MESSAGES = {
     _QQ_STATE_DISCONNECTED: "QQ 尚未连接。",
     _QQ_STATE_INITIALIZING: "正在初始化 QQ 连接，请稍候...",
@@ -87,6 +122,145 @@ _QQ_STATE_MESSAGES = {
 _CONNECTION_STATUS_UNKNOWN = "无法确认连接状态。"
 _QQ_STATUS_CHECKING = "正在检测 QQ 连接状态..."
 _LOADING_SESSIONS = "正在加载会话列表..."
+# The waiting copy the session read keeps while the first list is read.
+_QQ_SESSION_LOADING_ACTION = "正在准备聊天记录"
+_QQ_SESSION_LOADING_NOTE = "首次连接可能需要一点时间，Echo 正在整理可读取的会话内容。"
+
+
+def _current_action_height(metrics: Any, text: str) -> int:
+    """Return the height one current-action line really needs, from its font.
+
+    ``font-size`` is a request, not a promise: the resolved font's ink can reach
+    past the ascent and descent it declares - the Latin "Q" tail is the usual
+    offender - and a box sized from the declared line height then cuts it. The
+    reserve therefore comes from the metrics themselves: the line the layout
+    needs plus whatever ink reaches outside it, never a hand-tuned offset.
+    """
+    ink = metrics.tightBoundingRect(text or "QQ")
+    above = max(0.0, -ink.top() - metrics.ascent())
+    below = max(0.0, ink.bottom() - metrics.descent())
+    return int(
+        ceil(
+            metrics.ascent()
+            + metrics.descent()
+            + metrics.leading()
+            + above
+            + below
+        )
+    )
+
+
+class _CurrentActionLabel(QLabel):
+    """The 26px stage action, reserved from its font instead of its font-size.
+
+    Qt sizes a word-wrapped label from the line box the font declares, so a
+    glyph whose ink sits deeper than the declared descent - the Latin "Q" - is
+    painted outside the box and cut by it. The label re-reserves its height from
+    its own metrics whenever the font or the text it draws changes, which covers
+    the style sheet's font taking effect and a moving current action.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("qqCurrentAction")
+        self.setWordWrap(True)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        self.setStyleSheet(QQ_GUIDE_STYLE)
+
+    def setText(self, text: str) -> None:
+        super().setText(text)
+        self._reserve_font_height()
+
+    def changeEvent(self, event: Any) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.FontChange:
+            self._reserve_font_height()
+
+    def _reserve_font_height(self) -> None:
+        self.setMinimumHeight(
+            _current_action_height(QFontMetricsF(self.font()), self.text())
+        )
+
+
+class _QqProgressTrack(ConnectionProgressTrack):
+    """QQ's own four-stage connection journey: 准备 → 启动 QQ → 扫码 → 连接."""
+
+    STAGES = _QQ_CONNECT_STAGES
+
+    def paintEvent(self, event: Any) -> None:
+        super().paintEvent(event)
+        if self.stage != _QQ_STAGE_CONNECTING:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        font = painter.font()
+        font.setPixelSize(11)
+        painter.setFont(font)
+        counter_width = painter.fontMetrics().horizontalAdvance("4 / 4") + 12
+        slot = max(1.0, self.width() - 12 - counter_width) / 4
+        center = QPointF(6 + slot * 3.5, 15)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(HOME_COLOR_PAPER))
+        painter.drawRect(QRectF(center.x() - 10, 0, 20, 26))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(HOME_COLOR_ACCENT), 1.8))
+        painter.drawArc(QRectF(center.x() - 5, 10, 10, 10), 40 * 16, 280 * 16)
+
+
+class _PageTurningBook(QWidget):
+    """A quiet line-drawn book; hidden pages never keep an animation timer."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(60, 60)
+        self.setAccessibleName("正在整理聊天记录")
+        self._phase = 0.0
+        self._timer = QTimer(self)
+        self._timer.setInterval(40)
+        self._timer.timeout.connect(self._advance)
+
+    def showEvent(self, event: Any) -> None:
+        super().showEvent(event)
+        self._phase = 0.0
+        self._timer.start()
+
+    def hideEvent(self, event: Any) -> None:
+        self._timer.stop()
+        super().hideEvent(event)
+
+    def _advance(self) -> None:
+        self._phase = (self._phase + 0.025) % 1.0
+        self.update()
+
+    def paintEvent(self, event: Any) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor(HOME_COLOR_MUTED), 1.5))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        book = QPainterPath()
+        book.moveTo(30, 20)
+        book.quadTo(19, 14, 7, 18)
+        book.lineTo(7, 43)
+        book.quadTo(19, 39, 30, 45)
+        book.quadTo(41, 39, 53, 43)
+        book.lineTo(53, 18)
+        book.quadTo(41, 14, 30, 20)
+        book.lineTo(30, 45)
+        painter.drawPath(book)
+        turn = cos(self._phase * pi)
+        lift = sin(self._phase * pi) * 6
+        page = QPainterPath()
+        page.moveTo(30, 20)
+        page.quadTo(30 + 12 * turn, 14 - lift, 30 + 23 * turn, 18 - lift)
+        page.lineTo(30 + 23 * turn, 43 - lift)
+        page.quadTo(30 + 12 * turn, 39 - lift, 30, 45)
+        page.closeSubpath()
+        painter.setBrush(QColor(HOME_COLOR_PAPER))
+        painter.setPen(QPen(QColor(HOME_COLOR_ACCENT), 1.5))
+        painter.drawPath(page)
 
 
 class QQWorkspace(QWidget):
@@ -110,6 +284,9 @@ class QQWorkspace(QWidget):
         executor: Any = None,
     ) -> None:
         super().__init__(parent)
+        self.setObjectName("qqWorkspace")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(QQ_SETUP_QSS)
         self._facade = facade
         self._executor = executor or submit
         self._qq_connect_in_flight = False
@@ -122,25 +299,47 @@ class QQWorkspace(QWidget):
         self._session_request: object | None = None
 
         main_layout = QVBoxLayout(self)
-        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        self._connection_surface = QFrame()
+        self._connection_surface.setObjectName("qqConnectionSurface")
+        self._connection_layout = QVBoxLayout(self._connection_surface)
+        self._connection_layout.setSpacing(24)
+        main_layout.addWidget(self._connection_surface)
+
+        # The trail replaces the top status line while the connection journey
+        # runs; the status label keeps owning every other state.
+        self._progress_track = _QqProgressTrack()
+        self._progress_track.setVisible(False)
+        self._connection_layout.addWidget(self._progress_track)
 
         self._status_label = QLabel("")
         self._status_label.setWordWrap(True)
         self._status_label.setVisible(False)
-        self._status_label.setStyleSheet(STATUS_STYLE_BASE)
-        main_layout.addWidget(self._status_label)
+        self._status_label.setStyleSheet(QQ_STATUS_STYLE)
+        self._connection_layout.addWidget(self._status_label)
 
         self._qq_connect_button = QPushButton(_QQ_CONNECT_LABEL)
         self._qq_connect_button.setVisible(False)
-        self._qq_connect_button.clicked.connect(self.connect_qq)
+        self._qq_connect_button.clicked.connect(self._on_qq_connect_clicked)
         self._qq_connect_button.setMinimumHeight(34)
-        main_layout.addWidget(self._qq_connect_button)
 
         self._qq_disconnect_button = QPushButton(_QQ_DISCONNECT_LABEL)
         self._qq_disconnect_button.setVisible(False)
         self._qq_disconnect_button.clicked.connect(self.disconnect_qq)
         self._qq_disconnect_button.setMinimumHeight(34)
-        main_layout.addWidget(self._qq_disconnect_button)
+
+        self._qq_guide_label = _CurrentActionLabel()
+        self._qq_guide_label.setVisible(False)
+
+        self._qq_login_guide_label = QLabel("")
+        self._qq_login_guide_label.setWordWrap(True)
+        self._qq_login_guide_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        self._qq_login_guide_label.setVisible(False)
+        self._qq_login_guide_label.setStyleSheet(QQ_GUIDE_STYLE)
 
         self._qq_qrcode_label = QLabel("")
         self._qq_qrcode_label.setAlignment(
@@ -148,24 +347,66 @@ class QQWorkspace(QWidget):
         )
         self._qq_qrcode_label.setFixedSize(_QQ_QRCODE_SIZE, _QQ_QRCODE_SIZE)
         self._qq_qrcode_label.setVisible(False)
-        main_layout.addWidget(self._qq_qrcode_label)
 
-        self._qq_login_guide_label = QLabel("")
-        self._qq_login_guide_label.setWordWrap(True)
-        self._qq_login_guide_label.setVisible(False)
-        self._qq_login_guide_label.setStyleSheet(GUIDE_STYLE)
-        main_layout.addWidget(self._qq_login_guide_label)
+        # While scanning, the QR is the subject: short copy on the left, the
+        # code itself on the right, exactly like the guided setup's picture.
+        guide_text_column = QVBoxLayout()
+        guide_text_column.setSpacing(20)
+        guide_text_column.addWidget(self._qq_guide_label)
+        guide_text_column.addWidget(self._qq_login_guide_label)
+        guide_text_column.addStretch(1)
+
+        self._qq_guide_row = QHBoxLayout()
+        self._qq_guide_row.setSpacing(32)
+        self._qq_guide_row.addLayout(guide_text_column, stretch=1)
+        self._qq_guide_row.addWidget(
+            self._qq_qrcode_label,
+            stretch=0,
+            alignment=Qt.AlignmentFlag.AlignTop,
+        )
+        self._connection_layout.addLayout(self._qq_guide_row)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(16)
+        for button in (self._qq_connect_button, self._qq_disconnect_button):
+            actions.addWidget(button)
+        actions.addStretch(1)
+        self._connection_layout.addLayout(actions)
+        for button in (self._qq_connect_button, self._qq_disconnect_button):
+            button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
 
         self.session_panel = SessionAnalysisPanel()
+        self.session_panel.setObjectName("qqSessionPanel")
         self.session_panel.configure(facade, ChatSource.QQ, executor=self._executor)
+        # Stage four keeps the trail above and centers a quiet loading group.
         self._session_loading = QWidget(self.session_panel)
+        self._session_loading.setObjectName("qqSessionLoading")
+        self._session_loading.setStyleSheet(QQ_SESSION_LOADING_STYLE)
         loading_layout = QVBoxLayout(self._session_loading)
-        loading_layout.addWidget(QLabel("正在读取聊天列表…"))
-        loading_layout.addWidget(QLabel("首次读取可能需要一点时间"))
-        self._session_loading_indicator = QProgressBar()
-        self._session_loading_indicator.setRange(0, 0)
-        self._session_loading_indicator.setTextVisible(False)
-        loading_layout.addWidget(self._session_loading_indicator)
+        loading_layout.setContentsMargins(24, 0, 24, 0)
+        loading_layout.setSpacing(14)
+        loading_layout.addStretch(1)
+        self._session_loading_book = _PageTurningBook()
+        loading_layout.addWidget(self._session_loading_book, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self._session_loading_action = QLabel(_QQ_SESSION_LOADING_ACTION)
+        self._session_loading_action.setObjectName("qqSessionLoadingAction")
+        self._session_loading_note = QLabel(_QQ_SESSION_LOADING_NOTE)
+        for label in (self._session_loading_action, self._session_loading_note):
+            label.setWordWrap(True)
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            label.setMaximumWidth(520)
+            label.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Fixed,
+            )
+            loading_layout.addWidget(label, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self._session_loading_exit = QPushButton(_QQ_DISCONNECT_LABEL)
+        self._session_loading_exit.setObjectName("qqSessionLoadingExit")
+        self._session_loading_exit.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._session_loading_exit.clicked.connect(self.disconnect_qq)
+        loading_layout.addWidget(self._session_loading_exit, alignment=Qt.AlignmentFlag.AlignHCenter)
+        loading_layout.addStretch(1)
         self.session_panel.layout().insertWidget(0, self._session_loading)
         self._session_loading.hide()
         main_layout.addWidget(self.session_panel, stretch=1)
@@ -181,6 +422,28 @@ class QQWorkspace(QWidget):
 
         self.session_panel.show_unconnected_placeholder()
 
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_setup_spacing()
+
+    def _update_setup_spacing(self) -> None:
+        # Contract the paper gutters at the minimum window size; leave the
+        # shared session panel's layout and sizing untouched.
+        horizontal = max(24, min(96, round(self.width() * 0.08)))
+        vertical = max(20, min(48, round(self.height() * 0.06)))
+        self._connection_layout.setContentsMargins(
+            horizontal, vertical, horizontal, 20,
+        )
+        # Wrapped loading copy needs its real font height at the available width.
+        for label in (self._session_loading_action, self._session_loading_note):
+            label.setFixedWidth(max(1, min(520, self.width() - 48)))
+            metrics = QFontMetricsF(label.font())
+            text_height = metrics.boundingRect(
+                QRectF(0, 0, label.width(), 1000),
+                int(Qt.TextFlag.TextWordWrap), label.text(),
+            ).height()
+            label.setFixedHeight(ceil(max(text_height, _current_action_height(metrics, label.text()))) + 4)
+
     # ---------------------------------------------------------------- public API
 
     def select_source(self, source: Any) -> None:
@@ -190,7 +453,8 @@ class QQWorkspace(QWidget):
         self._sessions_loaded = False
         self._stop_qq_status_polling()
         self._hide_qq_qrcode()
-        self._hide_qq_login_guide()
+        self._set_stage(None)
+        self._hide_qq_guide()
         self._qq_disconnect_button.setVisible(False)
         self.session_panel.clear()
 
@@ -204,8 +468,10 @@ class QQWorkspace(QWidget):
 
     def refresh_qq_status(self, *, load_sessions_on_ready: bool = False) -> None:
         """Ask the connection manager, through the facade, for QQ state."""
+        self._set_stage(None)
+        self._hide_qq_guide()
         self._status_label.setVisible(True)
-        self._status_label.setStyleSheet(STATUS_STYLE_BASE)
+        self._status_label.setStyleSheet(QQ_STATUS_STYLE)
         self._status_label.setText(_QQ_STATUS_CHECKING)
         self._status_label.setToolTip("")
         self.session_panel.show_connecting_placeholder()
@@ -230,8 +496,11 @@ class QQWorkspace(QWidget):
     def _handle_connection_status_error(self, code: str, message: str) -> None:
         if self._qq_connect_in_flight:
             return
+        self._set_stage(None)
+        self._hide_qq_guide()
         self._status_label.setText(_CONNECTION_STATUS_UNKNOWN)
         self._status_label.setToolTip(message)
+        self._status_label.setStyleSheet(QQ_STATUS_STYLE)
         self._status_label.setVisible(True)
         self.session_panel.show_disconnected_placeholder()
         self._set_restart_action()
@@ -257,17 +526,22 @@ class QQWorkspace(QWidget):
             self._qq_waiting_auth_since = None
         self._last_qq_status_message = message
         self._status_label.setStyleSheet(
-            STATUS_STYLE_ERROR
+            QQ_STATUS_STYLE_ERROR
             if state == _QQ_STATE_ERROR
-            else STATUS_STYLE_BASE
+            else QQ_STATUS_STYLE
         )
 
         self._status_label.setText(f"{_snapshot_prefix(snapshot)}{message}")
         self._status_label.setToolTip(action_hint)
         self._status_label.setVisible(True)
-        self._qq_connect_button.setText(
-            _RESTART_CONNECTION_LABEL if state == _QQ_STATE_ERROR else _QQ_CONNECT_LABEL
-        )
+        # While the journey advances by itself the button must not read like a
+        # second invitation to connect: it is the way out of the journey.
+        if _snapshot_in_progress(snapshot):
+            self._qq_connect_button.setText(_CANCEL_CONNECTION_LABEL)
+        elif state == _QQ_STATE_ERROR:
+            self._qq_connect_button.setText(_RESTART_CONNECTION_LABEL)
+        else:
+            self._qq_connect_button.setText(_QQ_CONNECT_LABEL)
         self._qq_connect_button.setVisible(not connected)
         self._qq_connect_button.setEnabled(not _snapshot_in_progress(snapshot))
         self._qq_connect_button.setToolTip("")
@@ -287,7 +561,7 @@ class QQWorkspace(QWidget):
 
         if waiting_auth:
             self.session_panel.show_connecting_placeholder()
-            self._show_qq_login_guide()
+            self._show_qq_stage(_QQ_STAGE_SCANNING)
             self._start_qq_status_polling()
             self._refresh_qq_qrcode()
             self._qq_connect_button.setEnabled(
@@ -295,16 +569,23 @@ class QQWorkspace(QWidget):
             )
         elif state in _QQ_PROGRESS_STATES:
             self.session_panel.show_connecting_placeholder()
-            self._show_qq_starting_guide()
+            self._show_qq_stage(_QQ_STATE_STAGE[state])
             self._stop_qq_status_polling()
             self._hide_qq_qrcode()
         else:
             if connected:
                 if load_sessions_on_ready and not self._sessions_loaded:
+                    # The trail's last stage covers the session read that
+                    # follows the login; loading hands the page over on arrival.
+                    self._show_qq_stage(_QQ_STAGE_CONNECTING)
                     self._load_sessions()
+                else:
+                    self._leave_qq_journey()
             else:
+                self._leave_qq_journey()
                 self.session_panel.show_disconnected_placeholder()
-            self._hide_qq_login_guide()
+                if state == _QQ_STATE_DISCONNECTED:
+                    self._show_qq_guide(_QQ_IDLE_ACTION, _QQ_IDLE_NOTE)
             self._stop_qq_status_polling()
             self._hide_qq_qrcode()
 
@@ -323,8 +604,10 @@ class QQWorkspace(QWidget):
             on_success=lambda snapshot: self._show_qq_status(
                 snapshot,
                 load_sessions_on_ready=True,
-            ),
-            on_error=self._handle_connection_status_error,
+            ) if self._qq_status_timer.isActive() else None,
+            on_error=lambda code, message: self._handle_connection_status_error(
+                code, message,
+            ) if self._qq_status_timer.isActive() else None,
         )
 
     def _start_qq_status_polling(self) -> None:
@@ -344,8 +627,9 @@ class QQWorkspace(QWidget):
         """Stop polling and show a reconnectable error after a long wait."""
         self._stop_qq_status_polling()
         self._hide_qq_qrcode()
-        self._hide_qq_login_guide()
-        self._status_label.setStyleSheet(STATUS_STYLE_ERROR)
+        self._set_stage(None)
+        self._hide_qq_guide()
+        self._status_label.setStyleSheet(QQ_STATUS_STYLE_ERROR)
         self._status_label.setText(_DISCONNECTED_PREFIX + _QQ_AUTH_TIMEOUT_TITLE)
         self._status_label.setToolTip(_QQ_AUTH_TIMEOUT_HINT)
         self._status_label.setVisible(True)
@@ -387,22 +671,61 @@ class QQWorkspace(QWidget):
         self._qq_qrcode_label.clear()
         self._qq_qrcode_label.setVisible(False)
 
-    def _show_qq_login_guide(self) -> None:
-        """Show the first-time QR login instructions while waiting for auth."""
-        self._qq_login_guide_label.setText(_QQ_LOGIN_GUIDE)
+    def _set_stage(self, stage: int | None) -> None:
+        """Move the connection trail, or hand the top line back to the status.
+
+        ``None`` leaves the guided journey: the trail hides and the status
+        label (owned by the caller) speaks again.
+        """
+        if stage is None:
+            self._progress_track.setVisible(False)
+            return
+        self._progress_track.set_stage(stage)
+        self._progress_track.setVisible(True)
+        self._status_label.setVisible(False)
+
+    def _show_qq_stage(self, stage: int) -> None:
+        """Move the trail and its short action line onto one stage."""
+        self._set_stage(stage)
+        self._show_qq_guide(*_QQ_STAGE_COPY[stage])
+        self._session_loading.setVisible(stage == _QQ_STAGE_CONNECTING)
+        if stage == _QQ_STAGE_CONNECTING:
+            self._qq_guide_label.hide()
+            self._qq_login_guide_label.hide()
+            self._qq_connect_button.hide()
+            self._qq_disconnect_button.hide()
+
+    def _show_qq_guide(self, action: str, note: str) -> None:
+        """Speak one short action line plus one short note under the trail."""
+        self._qq_guide_label.setText(action)
+        self._qq_guide_label.setVisible(True)
+        self._qq_login_guide_label.setText(note)
         self._qq_login_guide_label.setVisible(True)
 
-    def _show_qq_starting_guide(self) -> None:
-        """Explain the expected Windows prompt before QQ login begins."""
-        self._qq_login_guide_label.setText(_QQ_STARTING_GUIDE)
-        self._qq_login_guide_label.setVisible(True)
-
-    def _hide_qq_login_guide(self) -> None:
-        """Hide QR login instructions once the QQ state moves on."""
+    def _hide_qq_guide(self) -> None:
+        """Hide the journey copy once the page speaks for itself again."""
+        self._qq_guide_label.clear()
+        self._qq_guide_label.setVisible(False)
         self._qq_login_guide_label.clear()
         self._qq_login_guide_label.setVisible(False)
 
+    def _leave_qq_journey(self) -> None:
+        """Leave the journey: no stage copy is left and the status line speaks."""
+        self._set_stage(None)
+        self._hide_qq_guide()
+        self._session_loading.hide()
+        if self._sessions_loaded:
+            self._qq_disconnect_button.show()
+        self._status_label.setVisible(True)
+
     # ---------------------------------------------------------------- connect
+
+    def _on_qq_connect_clicked(self) -> None:
+        """The waiting action exits even after the authorization worker ends."""
+        if self._qq_connect_button.text() == _CANCEL_CONNECTION_LABEL:
+            self.disconnect_qq()
+        else:
+            self.connect_qq()
 
     def connect_qq(self) -> None:
         """Start the QQ authorization flow in one click."""
@@ -414,12 +737,12 @@ class QQWorkspace(QWidget):
         started_at = time.monotonic()
         self._qq_waiting_auth_since = None
         self._qq_connect_in_flight = True
-        self._qq_connect_button.setText(_QQ_CONNECT_LABEL)
+        self._qq_connect_button.setText(_CANCEL_CONNECTION_LABEL)
         self._qq_connect_button.setEnabled(False)
         self._status_label.setVisible(True)
         self._status_label.setText(_QQ_CONNECTING)
         self._status_label.setToolTip("")
-        self._show_qq_starting_guide()
+        self._show_qq_stage(_QQ_STAGE_PREPARING)
         self._hide_qq_qrcode()
         self.session_panel.show_connecting_placeholder()
         self.status_changed.emit(_QQ_CONNECTING)
@@ -442,15 +765,13 @@ class QQWorkspace(QWidget):
         """Translate backend progress into one of the user-facing stages."""
         if not message:
             return
-        stage, hint = _qq_progress_copy(message)
-        self._status_label.setText(_QQ_PENDING_PREFIX + stage)
+        stage = _qq_progress_stage(message)
+        action = _QQ_STAGE_COPY[stage][0]
+        self._status_label.setText(_QQ_PENDING_PREFIX + action)
         self._status_label.setToolTip("")
         self._status_label.setVisible(True)
-        if stage == "等待QQ登录":
-            self._show_qq_login_guide()
-        else:
-            self._show_qq_starting_guide()
-        self.status_changed.emit(stage)
+        self._show_qq_stage(stage)
+        self.status_changed.emit(action)
 
     def _after_qq_connect(self, snapshot: Any) -> None:
         self._show_qq_status(snapshot, load_sessions_on_ready=True)
@@ -518,7 +839,8 @@ class QQWorkspace(QWidget):
     def _save_qq_install_path(self, path: Path) -> None:
         """Persist the chosen QQ.exe through the facade, then retry."""
         _LOGGER.info("[qq gui] saving user-selected QQ path path=%s", path)
-        self._status_label.setStyleSheet(STATUS_STYLE_BASE)
+        self._leave_qq_journey()
+        self._status_label.setStyleSheet(QQ_STATUS_STYLE)
         self._status_label.setText(_QQ_PATH_SAVING)
         self._status_label.setToolTip("")
         self._status_label.setVisible(True)
@@ -530,7 +852,8 @@ class QQWorkspace(QWidget):
 
     def _after_qq_install_path_saved(self) -> None:
         """Reconnect immediately after the user-selected path is saved."""
-        self._status_label.setStyleSheet(STATUS_STYLE_BASE)
+        self._leave_qq_journey()
+        self._status_label.setStyleSheet(QQ_STATUS_STYLE)
         self._status_label.setText(_QQ_PATH_SAVED)
         self._status_label.setToolTip("")
         self._status_label.setVisible(True)
@@ -548,7 +871,8 @@ class QQWorkspace(QWidget):
         self._show_qq_error(_QQ_PATH_SAVE_FAILED, message)
 
     def _show_qq_error(self, title: str, message: str) -> None:
-        self._status_label.setStyleSheet(STATUS_STYLE_ERROR)
+        self._leave_qq_journey()
+        self._status_label.setStyleSheet(QQ_STATUS_STYLE_ERROR)
         self._status_label.setText(_DISCONNECTED_PREFIX + title)
         self._status_label.setToolTip(message)
         self._status_label.setVisible(True)
@@ -571,7 +895,7 @@ class QQWorkspace(QWidget):
         self._invalidate_session_request()
         self._stop_qq_status_polling()
         self._hide_qq_qrcode()
-        self._hide_qq_login_guide()
+        self._leave_qq_journey()
         self._qq_disconnect_button.setEnabled(False)
         self._status_label.setVisible(True)
         self._status_label.setText(_QQ_DISCONNECTING)
@@ -608,10 +932,12 @@ class QQWorkspace(QWidget):
         self._invalidate_session_request()
         self._stop_qq_status_polling()
         self._hide_qq_qrcode()
-        self._hide_qq_login_guide()
+        self._leave_qq_journey()
         self._qq_connect_button.setText(_QQ_CONNECT_LABEL)
         self._qq_connect_button.setEnabled(True)
+        self._qq_connect_button.setVisible(True)
         self._qq_disconnect_button.setVisible(False)
+        self.session_panel.show_disconnected_placeholder()
         self._status_label.setText(_CONNECTION_CANCELLED)
         self._status_label.setVisible(True)
         self.status_changed.emit(_CONNECTION_CANCELLED)
@@ -670,6 +996,9 @@ class QQWorkspace(QWidget):
         self._sessions_loaded = True
         self.session_panel.populate_sessions(sessions)
         self._session_loading.hide()
+        # The journey is over: the session panel owns the page from here.
+        self._leave_qq_journey()
+        self._hide_qq_qrcode()
         self.status_changed.emit(
             self._last_qq_status_message
             or _QQ_STATE_MESSAGES[_QQ_STATE_CONNECTED]
@@ -677,8 +1006,9 @@ class QQWorkspace(QWidget):
 
     def _handle_session_error(self, code: str, message: str) -> None:
         self._sessions_loaded = False
-        self._session_loading.hide()
-        self.session_panel.show_disconnected_placeholder()
+        self._stop_qq_status_polling()
+        self._hide_qq_qrcode()
+        self._show_qq_error(_qq_error_title(code), message)
         self.analysis_failed.emit(code, message)
 
     # ---------------------------------------------------------------- signals
@@ -732,11 +1062,12 @@ def _snapshot_in_progress(snapshot: Any) -> bool:
     )
 
 
-def _qq_progress_copy(message: str) -> tuple[str, str]:
+def _qq_progress_stage(message: str) -> int:
+    """Map one backend progress message onto the connection trail."""
     lowered = message.lower()
     if any(term in lowered for term in ("扫码", "登录", "auth", "qrcode")):
-        return "等待QQ登录", _QQ_LOGIN_GUIDE
-    return "正在启动QQ连接环境", _QQ_STARTING_GUIDE
+        return _QQ_STAGE_SCANNING
+    return _QQ_STAGE_STARTING_QQ
 
 
 def _qq_error_title(code: str) -> str:

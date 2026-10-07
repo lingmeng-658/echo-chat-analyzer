@@ -6,8 +6,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -24,19 +24,13 @@ from ..application.facade import (
     WeChatEnvironmentConfig,
 )
 from ..resources import default_wechat_login_guide_path
+from .progress_track import ConnectionProgressTrack
 from .session_analysis_panel import SessionAnalysisPanel
 from .theme import (
     WECHAT_GUIDE_STYLE as GUIDE_STYLE,
     WECHAT_GUIDE_STYLE_EMPHASIS as GUIDE_STYLE_EMPHASIS,
     WECHAT_STATUS_STYLE,
     WECHAT_SETUP_QSS,
-    WECHAT_TRACK_COUNTER,
-    WECHAT_TRACK_DONE,
-    WECHAT_TRACK_LABEL,
-    WECHAT_TRACK_LABEL_CURRENT,
-    WECHAT_TRACK_LINE,
-    WECHAT_TRACK_PENDING,
-    paint_echo_note,
 )
 from .wechat_setup_dialog import WeChatSetupDialog
 from .workers import submit
@@ -109,7 +103,6 @@ _WECHAT_PROGRESS_STAGE = {
     WeChatConnectionProgress.READY_FOR_LOGIN: 3,
     WeChatConnectionProgress.CREDENTIAL_RECEIVED: 4,
 }
-_WECHAT_TRACK_HEIGHT = 40
 _WECHAT_GUIDE_NOTE = (
     "聊天数据仅在本机读取，不上传、不保存额外副本。"
 )
@@ -165,94 +158,10 @@ _SESSION_CONNECTING_TITLE = "正在连接数据源..."
 _SESSION_READING_TITLE = "正在读取聊天数据..."
 
 
-class _WeChatProgressTrack(QWidget):
-    """Five-stage trail for the guided setup, drawn in device-independent units.
-
-    A hairline threads the stages together: finished stages carry a small
-    filled dot, the current stage carries Home's terracotta note, and the
-    stages still ahead stay as soft hollow rings. A restrained ``x / 5`` sits
-    on the right, and the names stay small so the step title keeps the
-    hierarchy.
-    """
+class _WeChatProgressTrack(ConnectionProgressTrack):
+    """The guided setup's own five-stage trail, in the shared Echo language."""
 
     STAGES = _WECHAT_STAGES
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._stage = 0
-        self.setFixedHeight(_WECHAT_TRACK_HEIGHT)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setAccessibleName("连接进度")
-
-    @property
-    def stage(self) -> int:
-        return self._stage
-
-    def set_stage(self, stage: int) -> None:
-        self._stage = max(0, min(len(self.STAGES) - 1, int(stage)))
-        self.update()
-
-    def paintEvent(self, event) -> None:
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        font = painter.font()
-        font.setPixelSize(11)
-        painter.setFont(font)
-        metrics = painter.fontMetrics()
-
-        count = len(self.STAGES)
-        counter = f"{self._stage + 1} / {count}"
-        counter_width = metrics.horizontalAdvance(counter) + 12
-        left = 6.0
-        track_width = max(1.0, self.width() - left * 2 - counter_width)
-        slot = track_width / count
-        dot_y = 15.0
-        centers = [left + slot * (index + 0.5) for index in range(count)]
-
-        painter.setPen(QPen(QColor(WECHAT_TRACK_LINE), 1))
-        painter.drawLine(QPointF(centers[0], dot_y), QPointF(centers[-1], dot_y))
-
-        for index, center in enumerate(centers):
-            if index < self._stage:
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(QColor(WECHAT_TRACK_DONE))
-                painter.drawEllipse(QPointF(center, dot_y), 3.0, 3.0)
-            elif index == self._stage:
-                painter.save()
-                painter.translate(center, dot_y)
-                painter.scale(0.72, 0.72)
-                painter.translate(-4.6, -19.4)
-                paint_echo_note(painter)
-                painter.restore()
-            else:
-                painter.setPen(QPen(QColor(WECHAT_TRACK_PENDING), 1))
-                painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.drawEllipse(QPointF(center, dot_y), 3.0, 3.0)
-
-        for index, center in enumerate(centers):
-            reached = index <= self._stage
-            painter.setPen(
-                QColor(
-                    WECHAT_TRACK_LABEL_CURRENT if reached else WECHAT_TRACK_LABEL
-                )
-            )
-            painter.drawText(
-                QRectF(center - slot / 2, 27.0, slot, 13.0),
-                int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop),
-                self.STAGES[index],
-            )
-
-        painter.setPen(QColor(WECHAT_TRACK_COUNTER))
-        painter.drawText(
-            QRectF(
-                self.width() - counter_width,
-                dot_y - 9.0,
-                counter_width - 6.0,
-                18.0,
-            ),
-            int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
-            counter,
-        )
 
 
 class WeChatWorkspace(QWidget):

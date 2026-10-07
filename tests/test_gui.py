@@ -2306,28 +2306,174 @@ def test_qq_session_loading_reconnect_starts_a_fresh_load(qt_app, instant_qq_con
     assert not workspace._sessions_loaded
 
 
-def test_qq_session_loading_indicator_starts_immediately_and_success_replaces_it(qt_app):
+def test_qq_waiting_cancel_button_disconnects_instead_of_authorizing(qt_app):
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+
+    facade = StubFacade()
+    executor = _IndependentDeferredExecutor()
+    workspace = QQWorkspace(facade, executor=executor)
+    workspace._show_qq_status(_qq_snapshot("waiting_auth"), False)
+    # A usable QR enables this action; no real QR or account is needed here.
+    workspace._qq_connect_button.setEnabled(True)
+    workspace._qq_connect_button.click()
+
+    assert not workspace._qq_status_timer.isActive()
+    assert workspace._progress_track.isHidden()
+    assert workspace._qq_qrcode_label.isHidden()
+    assert len(executor.tasks) == 1
+    task = executor.tasks[0]
+    task.succeed(task.operation())
+    assert facade.disconnect_qq_calls == [1]
+    assert facade.start_qq_auth_flow_calls == []
+    assert not workspace._qq_connect_in_flight
+    assert workspace._qq_connect_button.isEnabled()
+    assert workspace._qq_connect_button.isVisibleTo(workspace)
+
+
+def test_qq_sessions_failure_exits_journey_and_preserves_error(qt_app):
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+
+    executor = _IndependentDeferredExecutor()
+    workspace = QQWorkspace(StubFacade(), executor=executor)
+    errors = []
+    workspace.analysis_failed.connect(lambda *args: errors.append(args))
+    workspace.show()
+    try:
+        workspace._show_qq_status(_qq_snapshot("connected"), True)
+        assert workspace._session_loading_book._timer.isActive()
+        executor.tasks[0].fail("qq_direct_snapshot_acquire_failed", "Fictional safe error")
+
+        assert workspace._progress_track.isHidden()
+        assert workspace._session_loading.isHidden()
+        assert not workspace._session_loading_book._timer.isActive()
+        assert not workspace._qq_status_timer.isActive()
+        assert workspace._status_label.isVisibleTo(workspace)
+        assert workspace._status_label.toolTip() == "Fictional safe error"
+        assert workspace._qq_connect_button.isVisibleTo(workspace)
+        assert workspace._qq_connect_button.isEnabled()
+        assert workspace._qq_connect_button.text() == "重新开始"
+        assert workspace._qq_disconnect_button.isHidden()
+        assert errors == [("qq_direct_snapshot_acquire_failed", "Fictional safe error")]
+    finally:
+        workspace.hide()
+
+
+def test_qq_cancel_ignores_already_submitted_status_poll(qt_app):
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+
+    facade = StubFacade()
+    executor = _IndependentDeferredExecutor()
+    workspace = QQWorkspace(facade, executor=executor)
+    workspace._show_qq_status(_qq_snapshot("waiting_auth"), False)
+    workspace._poll_qq_status()
+    poll = executor.tasks[0]
+    workspace._qq_connect_button.setEnabled(True)
+    workspace._qq_connect_button.click()
+    disconnect = executor.tasks[1]
+    disconnect.succeed(disconnect.operation())
+    poll.succeed(_qq_snapshot("connected"))
+
+    assert len(executor.tasks) == 2
+    assert workspace._progress_track.isHidden()
+    assert workspace._session_loading.isHidden()
+    assert workspace._session_request is None
+    assert not workspace._qq_status_timer.isActive()
+
+
+def test_qq_session_loading_keeps_a_lightweight_echo_waiting_state(qt_app):
+    """The session read keeps its waiting copy, as the connection page's quiet
+    status - not as the old grey card with an infinite blue bar."""
+    from PySide6.QtWidgets import QLabel, QProgressBar
+    from qq_chat_analyzer.gui import theme
     from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
 
     executor = _DeferredExecutor()
     workspace = QQWorkspace(StubFacade(), executor=executor)
-    workspace._show_qq_status(_qq_snapshot("connected", "Connected"), True)
-    assert workspace._session_loading.isVisibleTo(workspace)
-    assert workspace._session_loading_indicator.minimum() == 0
-    assert workspace._session_loading_indicator.maximum() == 0
-    assert not workspace._session_loading_indicator.isTextVisible()
+    workspace._show_qq_status(
+        _qq_snapshot("connected", "Connected"), True,
+    )
+
+    loading = workspace._session_loading
+    assert loading.isVisibleTo(workspace)
+    assert loading.objectName() == "qqSessionLoading"
+    assert "QWidget#qqSessionLoading" in theme.QQ_SETUP_QSS
+    assert [label.text() for label in loading.findChildren(QLabel)] == [
+        "正在准备聊天记录",
+        "首次连接可能需要一点时间，Echo 正在整理可读取的会话内容。",
+    ]
+    assert loading.findChildren(QProgressBar) == []
     assert workspace._status_label.text().endswith("Connected")
     sessions = [_session(_facade_module().ChatSource.QQ, "fictional", "Fictional group")]
     executor.succeed(sessions)
     assert not workspace._session_loading.isVisibleTo(workspace)
     assert workspace.session_panel._session_box.isVisibleTo(workspace)
     assert workspace.session_panel._sessions_data == sessions
-    workspace._show_qq_status(_qq_snapshot("connected", "Connected"), True)
+    workspace._show_qq_status(
+        _qq_snapshot("connected", "Connected"), True,
+    )
     assert not workspace._session_loading.isVisibleTo(workspace)
     assert executor.submission_count == 1
 
 
-def test_qq_session_loading_indicator_ends_before_final_error_and_returns_on_retry(qt_app):
+@pytest.mark.parametrize("size", [(1200, 760), (800, 600)])
+def test_qq_session_loading_block_paints_no_card_and_stays_compact(
+    qt_app, sources, size
+) -> None:
+    """The fourth-stage loading group stays centered on transparent paper."""
+    from PySide6.QtGui import QColor, QPixmap
+    from qq_chat_analyzer.gui.main_window import QQ_WORKSPACE_INDEX
+    from qq_chat_analyzer.gui.theme import BASE_QSS
+
+    facade = _GatedQRFacade(
+        _qq_snapshot("waiting_auth"),
+        _qq_snapshot("waiting_auth"),
+        sources=sources,
+    )
+    window = _main_window(qt_app, facade, executor=_IndependentDeferredExecutor())
+    window.setStyleSheet(BASE_QSS)
+    window.stack.setCurrentIndex(QQ_WORKSPACE_INDEX)
+    page = window.qq_workspace
+    window.resize(*size)
+    window.show()
+    page._show_qq_stage(3)
+    page._session_loading.show()
+    _drain(window)
+    try:
+        loading = page._session_loading
+        assert loading.isVisibleTo(page)
+        action = page._session_loading_action
+        note = page._session_loading_note
+        assert action.isVisibleTo(page)
+        assert note.isVisibleTo(page)
+        # The animation and copy form one centered group in the loading region.
+        book = page._session_loading_book
+        assert book.size().width() == book.size().height() == 60
+        assert abs(book.geometry().center().x() - loading.width() / 2) < 3
+        assert book.geometry().bottom() < action.y()
+        assert action.geometry().bottom() < note.y()
+        assert note.geometry().bottom() < page._session_loading_exit.y()
+        assert abs((book.y() + page._session_loading_exit.geometry().bottom()) / 2 - loading.height() / 2) < 25
+        assert book._timer.isActive()
+        page._show_qq_stage(2)
+        assert not book._timer.isActive()
+        page._show_qq_stage(3)
+        assert book._timer.isActive()
+        page._leave_qq_journey()
+        assert not book._timer.isActive()
+        page._show_qq_stage(3)
+        # Nothing of the block's own is painted: the page's paper stays visible.
+        probe = QPixmap(loading.size())
+        probe.fill(QColor("#ff00ff"))
+        loading.render(probe)
+        assert (
+            probe.toImage().pixelColor(loading.width() - 2, loading.height() - 2)
+            == QColor("#ff00ff")
+        )
+    finally:
+        window.hide()
+
+
+def test_qq_session_loading_state_ends_before_final_error_and_returns_on_retry(qt_app):
     from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
 
     executor = _DeferredExecutor()
@@ -2905,7 +3051,8 @@ def test_qq_status_leaves_auth_wait_and_preserves_session_load_timing(
 
     facade.list_sessions = observe_session_load
     workspace._show_qq_status(
-        _qq_snapshot(next_state), load_sessions_on_ready=True
+        _qq_snapshot(next_state),
+        load_sessions_on_ready=True,
     )
 
     assert not workspace._qq_status_timer.isActive()
@@ -2958,6 +3105,304 @@ def test_qq_workspace_offers_qq_exe_selection_when_install_path_missing(
     assert dialog_calls == [
         (module._QQ_PATH_PROMPT_TITLE, module._QQ_PATH_PROMPT_FILTER)
     ]
+
+
+# ---------------------------------------------------------------------------
+# QQ connection journey in the shared Echo visual language
+# ---------------------------------------------------------------------------
+
+
+def test_qq_connection_trail_walks_prepare_start_scan_connect(
+    qt_app, sources
+) -> None:
+    """The QQ journey draws the shared trail, stage by stage, without a
+    second invitation to connect while it advances by itself."""
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+
+    module = importlib.import_module("qq_chat_analyzer.gui.qq_workspace")
+    facade = _SnapshotFacade(_qq_snapshot("waiting_auth"), sources=sources)
+    executor = _DeferredExecutor()
+    workspace = QQWorkspace(facade, executor=executor)
+
+    assert module._QQ_CONNECT_STAGES == ("准备", "启动 QQ", "扫码", "连接")
+    assert workspace._progress_track.isHidden() is True
+
+    workspace.connect_qq()
+    assert workspace._progress_track.isVisibleTo(workspace) is True
+    assert workspace._progress_track.stage == 0
+    assert workspace._qq_guide_label.isVisibleTo(workspace) is True
+    assert workspace._status_label.isVisibleTo(workspace) is False
+    assert workspace._qq_connect_button.text() == "取消连接"
+
+    workspace._handle_qq_connect_progress("正在启动 QQ 连接环境")
+    assert workspace._progress_track.stage == 1
+    assert workspace._qq_connect_button.text() != "连接QQ"
+
+    workspace._handle_qq_connect_progress("等待QQ登录")
+    assert workspace._progress_track.stage == 2
+    assert workspace._qq_login_guide_label.isVisibleTo(workspace) is True
+    assert workspace._qq_connect_button.text() != "连接QQ"
+
+
+def test_qq_scan_stage_makes_the_qr_the_subject_then_hands_over_to_sessions(
+    qt_app, sources, tmp_path: Path
+) -> None:
+    """The QR owns the scan stage; a loaded session list ends the journey."""
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+
+    qr_path = tmp_path / "fictional-qq-qr.png"
+    _write_qrcode_png(qr_path)
+    facade = _GatedQRFacade(
+        _qq_snapshot("waiting_auth"),
+        _qq_snapshot("waiting_auth"),
+        sources=sources,
+        sessions=[_session(_facade_module().ChatSource.QQ, "q1", "虚构群")],
+    )
+    facade.qr_ready = True
+    workspace = QQWorkspace(facade, executor=_inline_executor())
+    workspace._qq_qrcode_path = qr_path
+
+    workspace._show_qq_status(
+        _qq_snapshot("waiting_auth"), load_sessions_on_ready=False
+    )
+
+    assert workspace._progress_track.stage == 2
+    assert workspace._qq_qrcode_label.isVisibleTo(workspace) is True
+    assert "扫码" in workspace._qq_guide_label.text()
+    # The QR sits beside the copy, exactly like the guided setup's picture.
+    assert workspace._qq_guide_row.itemAt(0).layout().count() >= 2
+    assert workspace._qq_guide_row.itemAt(1).widget() is workspace._qq_qrcode_label
+
+    workspace._show_qq_status(
+        _qq_snapshot("connected"), load_sessions_on_ready=True,
+    )
+
+    assert workspace.session_panel._sessions_ready is True
+    assert workspace._progress_track.isHidden() is True
+    assert workspace._qq_qrcode_label.isVisibleTo(workspace) is False
+    assert workspace._qq_guide_label.isVisibleTo(workspace) is False
+    assert workspace._qq_login_guide_label.isVisibleTo(workspace) is False
+    assert workspace._status_label.isVisibleTo(workspace) is True
+
+
+def test_qq_connected_stage_covers_the_session_read(
+    qt_app, sources
+) -> None:
+    """The trail's last stage stays up while the session list is still read."""
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+
+    facade = _SnapshotFacade(
+        _qq_snapshot("connected"), sources=sources,
+    )
+    executor = _DeferredExecutor()
+    workspace = QQWorkspace(facade, executor=executor)
+
+    workspace._show_qq_status(
+        _qq_snapshot("connected"), load_sessions_on_ready=True,
+    )
+
+    assert workspace._progress_track.isVisibleTo(workspace) is True
+    assert workspace._progress_track.stage == 3
+
+    executor.succeed([_session(_facade_module().ChatSource.QQ, "q1", "虚构群")])
+    assert workspace._progress_track.isHidden() is True
+
+
+def test_qq_status_line_returns_for_idle_and_error_states(qt_app, sources) -> None:
+    """Leaving the journey hands the top line back to the status label."""
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+
+    facade = StubFacade(sources=sources)
+    workspace = QQWorkspace(facade, executor=_DeferredExecutor())
+
+    workspace._show_qq_status(
+        _qq_snapshot("disconnected"), load_sessions_on_ready=False
+    )
+
+    assert workspace._progress_track.isHidden() is True
+    assert workspace._qq_guide_label.isVisibleTo(workspace) is True
+    assert workspace._qq_connect_button.text() == "连接QQ"
+
+    workspace._show_qq_status(
+        _qq_snapshot("initializing"), load_sessions_on_ready=False
+    )
+    assert workspace._progress_track.isVisibleTo(workspace) is True
+    assert workspace._progress_track.stage == 0
+
+    workspace._show_qq_status(_qq_snapshot("starting"), load_sessions_on_ready=False)
+    assert workspace._progress_track.stage == 1
+
+    workspace._show_qq_status(_qq_snapshot("error"), load_sessions_on_ready=False)
+    assert workspace._progress_track.isHidden() is True
+    assert workspace._qq_guide_label.isVisibleTo(workspace) is False
+    assert workspace._qq_connect_button.text() == "重新开始"
+    assert workspace._status_label.isVisibleTo(workspace) is True
+
+
+def test_qq_connection_surface_uses_the_shared_echo_language(
+    qt_app, sources
+) -> None:
+    """QQ's surface must reuse Home/WeChat's tokens, never a hand-tuned copy."""
+    from qq_chat_analyzer.gui import theme
+    from qq_chat_analyzer.gui.progress_track import ConnectionProgressTrack
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+
+    module = importlib.import_module("qq_chat_analyzer.gui.qq_workspace")
+    workspace = QQWorkspace(StubFacade(sources=sources), executor=_DeferredExecutor())
+
+    assert workspace.objectName() == "qqWorkspace"
+    assert workspace._connection_surface.objectName() == "qqConnectionSurface"
+    assert workspace.styleSheet() == theme.QQ_SETUP_QSS
+
+    for token in (theme.HOME_COLOR_PAPER, theme.HOME_COLOR_ACCENT, theme.HOME_COLOR_TEXT):
+        assert token in theme.QQ_SETUP_QSS
+        assert token in theme.WECHAT_SETUP_QSS
+    assert "font-size: 26px" in theme.QQ_GUIDE_STYLE
+    assert "font-size: 26px" in theme.WECHAT_GUIDE_STYLE
+    assert theme.QQ_STATUS_STYLE == theme.WECHAT_STATUS_STYLE
+
+    assert isinstance(workspace._progress_track, ConnectionProgressTrack)
+    assert workspace._progress_track.STAGES == module._QQ_CONNECT_STAGES
+    assert workspace._progress_track.accessibleName() == "连接进度"
+
+
+def test_qq_current_action_height_follows_the_font_ink_not_the_line_box() -> None:
+    """A font may declare a descent its glyphs do not obey - the Latin "Q" tail
+    is the usual offender - and a box sized from font-size alone then cuts it.
+    The reserve has to come from the ink the font really draws, never from a
+    hand-tuned pixel offset."""
+    from PySide6.QtCore import QRectF
+    from qq_chat_analyzer.gui.qq_workspace import _current_action_height
+
+    class _TightDescent:
+        """26px font whose "Q" ink reaches 4px below its declared descent."""
+
+        @staticmethod
+        def ascent():
+            return 26.0
+
+        @staticmethod
+        def descent():
+            return 0.0
+
+        @staticmethod
+        def leading():
+            return 0.0
+
+        @staticmethod
+        def tightBoundingRect(_text):
+            return QRectF(0.0, -26.0, 22.0, 30.0)
+
+    class _ObeyingDescent:
+        """Same ink, but the declared descent already covers it."""
+
+        @staticmethod
+        def ascent():
+            return 26.0
+
+        @staticmethod
+        def descent():
+            return 6.0
+
+        @staticmethod
+        def leading():
+            return 0.0
+
+        @staticmethod
+        def tightBoundingRect(_text):
+            return QRectF(0.0, -26.0, 22.0, 30.0)
+
+    assert _TightDescent.ascent() + _TightDescent.descent() == 26.0
+    assert _current_action_height(_TightDescent(), "正在连接 QQ") == 30
+    assert _current_action_height(_ObeyingDescent(), "正在连接 QQ") == 32
+
+
+def test_qq_connection_stage_copy_stays_short(qt_app) -> None:
+    """One short action and one short note per stage, never a paragraph."""
+    module = importlib.import_module("qq_chat_analyzer.gui.qq_workspace")
+
+    assert set(module._QQ_STAGE_COPY) == {0, 1, 2, 3}
+    for stage, (action, note) in module._QQ_STAGE_COPY.items():
+        assert action and "\n" not in action and len(action) <= 12
+        assert note and "\n" not in note and len(note) <= 60
+    assert len(module._QQ_IDLE_NOTE) <= 60
+
+
+@pytest.mark.parametrize("size", [(1200, 760), (800, 600)])
+@pytest.mark.parametrize("state", ["idle", "starting", "scanning", "error"])
+def test_qq_connection_journey_fits_window(
+    qt_app, sources, tmp_path: Path, size, state
+) -> None:
+    """The trail, the QR and the actions must stay inside the QQ page."""
+    from PySide6.QtCore import QPoint, QRect
+    from PySide6.QtGui import QFontMetricsF
+    from qq_chat_analyzer.gui.main_window import QQ_WORKSPACE_INDEX
+    from qq_chat_analyzer.gui.qq_workspace import _current_action_height
+    from qq_chat_analyzer.gui.theme import BASE_QSS
+
+    qr_path = tmp_path / "fictional-qq-qr.png"
+    _write_qrcode_png(qr_path)
+    facade = _GatedQRFacade(
+        _qq_snapshot("waiting_auth"),
+        _qq_snapshot("waiting_auth"),
+        sources=sources,
+    )
+    facade.qr_ready = True
+    window = _main_window(qt_app, facade, executor=_IndependentDeferredExecutor())
+    window.setStyleSheet(BASE_QSS)
+    window.stack.setCurrentIndex(QQ_WORKSPACE_INDEX)
+    page = window.qq_workspace
+    page._qq_qrcode_path = qr_path
+
+    if state == "idle":
+        page._show_qq_status(_qq_snapshot("disconnected"), load_sessions_on_ready=False)
+    elif state == "starting":
+        page._show_qq_status(_qq_snapshot("starting"), load_sessions_on_ready=False)
+    elif state == "scanning":
+        page._show_qq_status(_qq_snapshot("waiting_auth"), load_sessions_on_ready=False)
+    else:
+        page._show_qq_status(_qq_snapshot("error"), load_sessions_on_ready=False)
+
+    window.resize(*size)
+    window.show()
+    _drain(window)
+    try:
+        assert window.size().toTuple() == size
+        labels = (page._status_label, page._qq_guide_label, page._qq_login_guide_label)
+        for widget in (
+            *labels,
+            page._qq_qrcode_label,
+            page._qq_connect_button,
+            page._qq_disconnect_button,
+        ):
+            if widget.isVisibleTo(page):
+                bounds = QRect(widget.mapTo(page, QPoint()), widget.size())
+                assert page.rect().contains(bounds), widget.text()
+                if widget in labels:
+                    assert widget.height() >= widget.heightForWidth(widget.width())
+        if page._progress_track.isVisibleTo(page):
+            track_bounds = QRect(
+                page._progress_track.mapTo(page, QPoint()),
+                page._progress_track.size(),
+            )
+            assert page.rect().contains(track_bounds)
+        if page._qq_guide_label.isVisibleTo(page):
+            assert (
+                page._qq_guide_label.font().pixelSize()
+                > page._qq_login_guide_label.font().pixelSize()
+            )
+            metrics = QFontMetricsF(page._qq_guide_label.font())
+            assert page._qq_guide_label.height() >= _current_action_height(
+                metrics,
+                page._qq_guide_label.text(),
+            )
+            assert (
+                page._qq_guide_label.minimumHeight()
+                >= _current_action_height(metrics, page._qq_guide_label.text())
+            )
+        assert page._qq_connect_button.width() < page.width() / 2
+    finally:
+        window.hide()
 
 
 def test_wechat_workspace_shows_connect_button_when_disconnected(

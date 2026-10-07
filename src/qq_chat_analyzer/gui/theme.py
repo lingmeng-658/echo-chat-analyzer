@@ -166,15 +166,16 @@ border: none; border-bottom: 1px solid {COLOR_RULE_SOFT};
 border-radius: 0; padding: 0 0 16px 0;
 """
 
-# Guided setup's five-stage trail: a hairline connecting a filled dot per
-# finished stage, Home's terracotta note for the current stage, and a soft
-# hollow ring for the stages still ahead.
-WECHAT_TRACK_DONE = HOME_COLOR_MUTED
-WECHAT_TRACK_PENDING = "#c7c0b4"
-WECHAT_TRACK_LINE = COLOR_RULE_SOFT
-WECHAT_TRACK_LABEL = COLOR_FAINT
-WECHAT_TRACK_LABEL_CURRENT = HOME_COLOR_MUTED
-WECHAT_TRACK_COUNTER = COLOR_FAINT
+# The connection trail every source's guided journey draws: a hairline
+# connecting a filled dot per finished stage, Home's terracotta note for the
+# current stage, and a soft hollow ring for the stages still ahead. Shared by
+# the WeChat guided setup and the QQ connection flow.
+CONNECTION_TRACK_DONE = HOME_COLOR_MUTED
+CONNECTION_TRACK_PENDING = "#c7c0b4"
+CONNECTION_TRACK_LINE = COLOR_RULE_SOFT
+CONNECTION_TRACK_LABEL = COLOR_FAINT
+CONNECTION_TRACK_LABEL_CURRENT = HOME_COLOR_MUTED
+CONNECTION_TRACK_COUNTER = COLOR_FAINT
 WECHAT_SETUP_QSS = f"""
 QWidget#wechatWorkspace, QDialog#wechatSetupDialog {{ background: {HOME_COLOR_PAPER}; }}
 QWidget#wechatSessionPanel, QFrame#wechatConnectionSurface {{ background: transparent; }}
@@ -210,6 +211,73 @@ QDialog#wechatSetupDialog QLineEdit:focus, QDialog#wechatSetupDialog QComboBox:f
 }}
 QDialog#wechatSetupDialog QPushButton#wechatSave {{
     color: {HOME_COLOR_ACCENT}; border-color: {HOME_COLOR_ACCENT};
+}}
+"""
+
+# The QQ connection surface speaks the same guided-setup language as WeChat's:
+# the same paper page, the same square accent-hover buttons, the same hairline
+# status rule, and the same 26px current action. Only the object names differ,
+# so neither surface can bleed into the other's scope.
+QQ_GUIDE_STYLE = f"""
+QLabel {{
+    background: transparent; border: none; padding: 0;
+    color: {HOME_COLOR_MUTED}; font-size: 13px; font-weight: 400;
+}}
+QLabel#qqCurrentAction {{
+    color: {HOME_COLOR_TEXT}; font-size: 26px; font-weight: 500;
+}}
+"""
+QQ_STATUS_STYLE = f"""
+color: {HOME_COLOR_MUTED}; background: transparent;
+border: none; border-bottom: 1px solid {COLOR_RULE_SOFT};
+border-radius: 0; padding: 0 0 16px 0;
+"""
+QQ_STATUS_STYLE_ERROR = f"""
+color: {HOME_COLOR_ACCENT}; background: transparent;
+border: none; border-bottom: 1px solid {COLOR_RULE_SOFT};
+border-radius: 0; padding: 0 0 16px 0; font-weight: 600;
+"""
+# Reading the session list is a wait, not a destination: it speaks the same
+# quiet status language as the connection page - muted copy on the paper page -
+# instead of the old grey card with an infinite blue bar that used to fill the
+# whole session region.
+QQ_SESSION_LOADING_STYLE = f"""
+QLabel {{
+    font-family: {REFRESH_SANS_FAMILY};
+    background: transparent; border: none; padding: 0;
+    color: {HOME_COLOR_MUTED}; font-size: 13px; font-weight: 400;
+}}
+QLabel#qqSessionLoadingAction {{
+    color: {HOME_COLOR_TEXT}; font-size: 24px; font-weight: 500;
+}}
+QPushButton#qqSessionLoadingExit {{
+    color: {HOME_COLOR_MUTED}; background: transparent;
+    border: none; padding: 8px 16px; font-size: 13px;
+}}
+QPushButton#qqSessionLoadingExit:hover, QPushButton#qqSessionLoadingExit:focus {{
+    color: {HOME_COLOR_ACCENT}; background: transparent; text-decoration: underline;
+}}
+"""
+QQ_SETUP_QSS = f"""
+QWidget#qqWorkspace {{ background: {HOME_COLOR_PAPER}; }}
+QWidget#qqSessionPanel, QWidget#qqSessionLoading, QFrame#qqConnectionSurface {{
+    background: transparent;
+}}
+QFrame#qqConnectionSurface QWidget {{
+    font-family: {REFRESH_SANS_FAMILY};
+    color: {HOME_COLOR_TEXT}; background: transparent;
+}}
+QFrame#qqConnectionSurface QPushButton {{
+    border: 1px solid {COLOR_BORDER}; border-radius: 0;
+    background: transparent; padding: 8px 20px;
+}}
+QFrame#qqConnectionSurface QPushButton:hover,
+QFrame#qqConnectionSurface QPushButton:focus {{
+    border-color: {HOME_COLOR_ACCENT}; color: {HOME_COLOR_ACCENT};
+    background: {HOME_COLOR_LEAF};
+}}
+QFrame#qqConnectionSurface QPushButton:disabled {{
+    color: {COLOR_FAINT}; border-color: {COLOR_RULE_SOFT}; background: transparent;
 }}
 """
 
@@ -402,6 +470,12 @@ __all__ = [
     "COLOR_TEXT",
     "COLOR_VIEWER",
     "COLOR_VIEWER_SOFT",
+    "CONNECTION_TRACK_COUNTER",
+    "CONNECTION_TRACK_DONE",
+    "CONNECTION_TRACK_LABEL",
+    "CONNECTION_TRACK_LABEL_CURRENT",
+    "CONNECTION_TRACK_LINE",
+    "CONNECTION_TRACK_PENDING",
     "DASHBOARD_TITLE_STYLE",
     "EMPTY_TEXT_STYLE",
     "FONT_FAMILY",
@@ -421,6 +495,11 @@ __all__ = [
     "HOME_COLOR_TEXT",
     "HOME_QSS",
     "METRIC_CARD_STYLE",
+    "QQ_GUIDE_STYLE",
+    "QQ_SESSION_LOADING_STYLE",
+    "QQ_SETUP_QSS",
+    "QQ_STATUS_STYLE",
+    "QQ_STATUS_STYLE_ERROR",
     "REFRESH_SANS_FAMILY",
     "SERIF_FAMILY",
     "SESSION_LIST_STYLE",
@@ -432,11 +511,5 @@ __all__ = [
     "WECHAT_GUIDE_STYLE_EMPHASIS",
     "WECHAT_STATUS_STYLE",
     "WECHAT_SETUP_QSS",
-    "WECHAT_TRACK_COUNTER",
-    "WECHAT_TRACK_DONE",
-    "WECHAT_TRACK_LABEL",
-    "WECHAT_TRACK_LABEL_CURRENT",
-    "WECHAT_TRACK_LINE",
-    "WECHAT_TRACK_PENDING",
     "paint_echo_note",
 ]
