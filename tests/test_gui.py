@@ -4886,7 +4886,7 @@ def test_wechat_polish_initial_waits_for_user(qt_app, data_found, monkeypatch):
     assert workspace._connection_task is None
     visible = "\n".join(label.text() for label in workspace.findChildren(QLabel)
                         if label.isVisibleTo(workspace))
-    for forbidden in ("等待微信登录", "准备微信连接", "请完全退出微信",
+    for forbidden in ("等待微信登录", "准备微信连接", "请完全关闭微信",
                       "现在请打开微信", "现在可以登录微信", "等待 Echo 提示"):
         assert forbidden not in visible
     workspace._wechat_setup_button.click()
@@ -4901,17 +4901,17 @@ def test_wechat_polish_initial_waits_for_user(qt_app, data_found, monkeypatch):
 @pytest.mark.parametrize("state, status, action, explanation", [
     ("PREPARING", "正在准备微信连接", "正在检查微信连接状态，请稍候。",
      "暂时不需要操作微信，Echo 检查完成后会告诉你下一步怎么做。"),
-    ("WAITING_FOR_WECHAT_EXIT", "请先退出微信", "请完全退出微信。",
-     "关闭微信窗口后，如果微信仍在后台运行，\n请在任务栏右下角找到微信图标并退出微信。\n\n退出后不用点击 Echo 中的任何按钮，Echo 会自动继续。"),
+    ("WAITING_FOR_WECHAT_EXIT", "请完全关闭微信", "请完全关闭微信。",
+     "关闭微信窗口后，如果微信仍在后台运行，\n请在任务栏右下角找到微信图标并完全关闭微信。\n\n完全关闭后不用点击 Echo 中的任何按钮，Echo 会自动继续。"),
     ("WAITING_FOR_WECHAT_START", "现在请打开微信", "现在请打开微信，但先不要登录。",
      "打开微信后，请停留在登录界面。\n如果看到“进入微信”或登录按钮，先不要点击。\n\nEcho 检测到微信后，会自动告诉你什么时候可以登录。\n不需要返回 Echo 点击下一步。"),
     ("READY_FOR_LOGIN", "现在可以登录微信了", "现在可以登录微信。",
-     "请回到微信，点击“进入微信”或正常完成登录。\n\n登录成功后不用操作 Echo，Echo 会自动继续连接。"),
+     "请按照右侧示意图，在微信中点击“进入微信”完成登录。"),
     ("CREDENTIAL_RECEIVED", "正在连接微信", "已获取微信连接信息，正在继续连接……",
      "请稍候，无需操作。"),
 ])
 def test_wechat_polish_current_action(qt_app, monkeypatch, state, status, action, explanation):
-    from qq_chat_analyzer.gui.theme import GUIDE_STYLE
+    from qq_chat_analyzer.gui.theme import WECHAT_GUIDE_STYLE as GUIDE_STYLE
 
     executor = _IndependentDeferredExecutor()
     workspace = _wechat_guide_module().WeChatWorkspace(StubFacade(), executor=executor)
@@ -4927,12 +4927,14 @@ def test_wechat_polish_current_action(qt_app, monkeypatch, state, status, action
     assert workspace._status_label.text() == status
     assert workspace._wechat_guide_label.text() == action
     assert workspace._wechat_guide_note_label.text() == explanation
-    assert workspace._wechat_guide_key_label.text() == "聊天数据仅在本机读取，不上传、不保存额外副本。"
-    assert workspace._wechat_guide_key_label.styleSheet() == GUIDE_STYLE
+    assert workspace._wechat_guide_note_label.styleSheet() == GUIDE_STYLE
+    # The guided stages carry progress on the five-stage trail instead of
+    # repeating the privacy line under every step.
+    assert workspace._wechat_guide_key_label.isHidden()
+    assert workspace._progress_track.isVisibleTo(workspace)
     assert workspace._wechat_guide_image_label.isHidden() == (state != "READY_FOR_LOGIN")
     assert workspace._wechat_connect_button.text() == "取消连接"
-    for label in (workspace._wechat_guide_label, workspace._wechat_guide_note_label,
-                  workspace._wechat_guide_key_label):
+    for label in (workspace._wechat_guide_label, workspace._wechat_guide_note_label):
         assert label.isVisibleTo(workspace)
     workspace.close()
     workspace.deleteLater()
@@ -4940,9 +4942,70 @@ def test_wechat_polish_current_action(qt_app, monkeypatch, state, status, action
     qt_app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
+def test_wechat_setup_track_moves_through_five_stages(qt_app):
+    """The two states trade places: trail during a stage, status otherwise."""
+    from PySide6.QtWidgets import QProgressBar
+
+    module = _wechat_guide_module()
+    progress = _facade_module().WeChatConnectionProgress
+    executor = _IndependentDeferredExecutor()
+    workspace = module.WeChatWorkspace(StubFacade(), executor=executor)
+    workspace.show()
+    try:
+        assert module._WECHAT_STAGES == ("准备", "关闭微信", "打开微信", "登录", "连接")
+        assert workspace._progress_track.isHidden()
+        assert workspace._status_label.isVisibleTo(workspace)
+
+        workspace._start_wechat_connect(_wechat_connection_config())
+        task = executor.tasks[0]
+        for state, stage in (
+            (progress.PREPARING, 0),
+            (progress.WAITING_FOR_WECHAT_EXIT, 1),
+            (progress.WAITING_FOR_WECHAT_START, 2),
+            (progress.READY_FOR_LOGIN, 3),
+            (progress.CREDENTIAL_RECEIVED, 4),
+        ):
+            task.progress(state)
+            assert workspace._progress_track.isVisibleTo(workspace)
+            assert workspace._progress_track.stage == stage
+            assert workspace._status_label.isHidden()
+
+        # Reading the database is still the final stage, not a status line.
+        task.progress(module._WECHAT_READING_DATABASE)
+        assert workspace._progress_track.isVisibleTo(workspace)
+        assert workspace._progress_track.stage == 4
+        assert module._WECHAT_READING_DATABASE == workspace._status_label.text()
+
+        # No traditional progress bar: this is a five-step trail.
+        assert workspace.findChild(QProgressBar) is None
+    finally:
+        workspace.close()
+
+
+def test_wechat_login_stage_points_at_the_guide_image(qt_app, monkeypatch):
+    module = _wechat_guide_module()
+    progress = _facade_module().WeChatConnectionProgress
+    executor = _IndependentDeferredExecutor()
+    workspace = module.WeChatWorkspace(StubFacade(), executor=executor)
+    monkeypatch.setattr(workspace, "_refresh_wechat_guide_image",
+                        lambda: workspace._wechat_guide_image_label.show())
+    workspace.show()
+    try:
+        workspace._handle_wechat_connect_progress(progress.READY_FOR_LOGIN)
+
+        assert workspace._wechat_guide_label.text() == "现在可以登录微信。"
+        assert workspace._wechat_guide_note_label.text() == (
+            "请按照右侧示意图，在微信中点击“进入微信”完成登录。"
+        )
+        assert workspace._wechat_guide_image_label.isVisibleTo(workspace) is True
+        assert workspace._progress_track.stage == 3
+    finally:
+        workspace.close()
+
+
 @pytest.mark.parametrize("state, instruction", [
     ("PREPARING", "正在检查微信连接状态，请稍候。"),
-    ("WAITING_FOR_WECHAT_EXIT", "请完全退出微信。"),
+    ("WAITING_FOR_WECHAT_EXIT", "请完全关闭微信。"),
     ("WAITING_FOR_WECHAT_START", "现在请打开微信，但先不要登录。"),
     ("READY_FOR_LOGIN", "现在可以登录微信。"),
 ])
@@ -4962,7 +5025,8 @@ def test_wechat_happy_path_shows_only_current_step(qt_app, monkeypatch, state, i
     assert not hasattr(workspace, "_wechat_setup_dialog")
     task = executor.tasks[0]
     # The initial presentation must already be a single step before callbacks.
-    assert not workspace._wechat_guide_key_label.isHidden()
+    assert not workspace._progress_track.isHidden()
+    assert workspace._wechat_guide_key_label.isHidden()
     task.progress(getattr(_facade_module().WeChatConnectionProgress, state))
 
     progress = getattr(_facade_module().WeChatConnectionProgress, state)
@@ -4973,7 +5037,8 @@ def test_wechat_happy_path_shows_only_current_step(qt_app, monkeypatch, state, i
         module._WECHAT_PROGRESS_EXPLANATIONS[progress]
     )
     assert not workspace._wechat_guide_label.isHidden()
-    assert not workspace._wechat_guide_key_label.isHidden()
+    assert workspace._wechat_guide_key_label.isHidden()
+    assert workspace._progress_track.isVisibleTo(workspace)
     assert workspace._wechat_guide_image_label.isHidden() == (state != "READY_FOR_LOGIN")
     visible_text = "\n".join(
         label.text() for label in workspace.findChildren(QLabel)
@@ -5009,7 +5074,8 @@ def test_wechat_happy_path_error_keeps_retry_and_setup(qt_app, code):
     workspace._wechat_connect_button.click()
     assert len(executor.tasks) == 2
     assert workspace._status_label.text() == module._WECHAT_CONNECTING
-    assert workspace._wechat_guide_key_label.text() == module._WECHAT_GUIDE_NOTE
+    assert workspace._progress_track.isVisibleTo(workspace)
+    assert workspace._wechat_guide_key_label.isHidden()
 
 
 def test_wechat_happy_path_directory_fallback_remains_reachable(qt_app, monkeypatch):
@@ -5038,7 +5104,7 @@ def test_wechat_happy_path_directory_fallback_remains_reachable(qt_app, monkeypa
 
 @pytest.mark.parametrize("state, instruction", [
     ("PREPARING", "正在准备微信连接"),
-    ("WAITING_FOR_WECHAT_EXIT", "请完全退出微信"),
+    ("WAITING_FOR_WECHAT_EXIT", "请完全关闭微信"),
     ("WAITING_FOR_WECHAT_START", "现在请打开微信，先不要登录"),
     ("READY_FOR_LOGIN", "现在可以登录微信"),
 ])
@@ -5064,7 +5130,7 @@ def test_wechat_guided_setup_exit_start_ready_sequence(qt_app):
     progress = _facade_module().WeChatConnectionProgress
 
     for state, instruction in (
-        (progress.WAITING_FOR_WECHAT_EXIT, "请完全退出微信"),
+        (progress.WAITING_FOR_WECHAT_EXIT, "请完全关闭微信"),
         (progress.WAITING_FOR_WECHAT_START, "现在请打开微信，但先不要登录"),
         (progress.READY_FOR_LOGIN, "现在可以登录微信"),
     ):
@@ -5380,10 +5446,11 @@ def test_wechat_workspace_guide_shows_status_confirmation(qt_app) -> None:
     assert workspace._wechat_guide_label.text() == module._WECHAT_GUIDE_STATUS
     assert workspace._wechat_guide_key_label.text() == module._WECHAT_GUIDE_WARNING
     assert workspace._wechat_guide_note_label.text() == (
-        f"{module._WECHAT_PROGRESS_INSTRUCTIONS[module.WeChatConnectionProgress.PREPARING]}\n\n{module._WECHAT_GUIDE_NOTE}"
+        module._WECHAT_PROGRESS_INSTRUCTIONS[module.WeChatConnectionProgress.PREPARING]
     )
-    assert "\u4e0d\u4e0a\u4f20" in workspace._wechat_guide_note_label.text()
-    assert "\u4e0d\u4fdd\u5b58" in workspace._wechat_guide_note_label.text()
+    # The privacy line is never repeated in this guide; Home already owns it.
+    assert "\u4e0d\u4e0a\u4f20" not in workspace._wechat_guide_note_label.text()
+    assert "\u4e0d\u4fdd\u5b58" not in workspace._wechat_guide_note_label.text()
     assert "\u4e0d\u4e0a\u4f20" not in workspace._wechat_guide_key_label.text()
     assert "\u4e0d\u4fdd\u5b58" not in workspace._wechat_guide_key_label.text()
 
@@ -5503,4 +5570,137 @@ def test_wechat_workspace_guide_uses_horizontal_layout(qt_app) -> None:
     assert workspace._wechat_guide_row.indexOf(
         workspace._wechat_guide_image_label
     ) >= 0
-    assert workspace._wechat_guide_image_label.maximumWidth() <= 160
+    assert workspace._wechat_guide_image_label.maximumWidth() < workspace.width() / 3
+
+
+@pytest.mark.parametrize("size", [(1200, 760), (800, 600)])
+@pytest.mark.parametrize("state", [
+    "idle", "PREPARING", "WAITING_FOR_WECHAT_EXIT", "WAITING_FOR_WECHAT_START",
+    "READY_FOR_LOGIN", "CREDENTIAL_RECEIVED", "directory", "error", "cancelled",
+])
+def test_wechat_setup_current_action_fits_window(qt_app, size, state):
+    """Large action type must wrap without pushing controls outside the window."""
+    from PySide6.QtCore import QPoint, QRect
+    from qq_chat_analyzer.gui.theme import BASE_QSS
+    from qq_chat_analyzer.gui.main_window import WECHAT_WORKSPACE_INDEX
+
+    window = _main_window(qt_app, StubFacade(), executor=_IndependentDeferredExecutor())
+    window.setStyleSheet(BASE_QSS)
+    window.stack.setCurrentIndex(WECHAT_WORKSPACE_INDEX)
+    page = window.wechat_workspace
+    if state == "directory":
+        page._show_wechat_guide(include_directory_help=True)
+    elif state == "error":
+        page._handle_wechat_connect_error("wechat_key_timeout", "等待超时，请重试。")
+    elif state == "cancelled":
+        page._start_wechat_connect(_wechat_connection_config())
+        page.cancel_connection()
+    elif state != "idle":
+        page._handle_wechat_connect_progress(getattr(_facade_module().WeChatConnectionProgress, state))
+    window.resize(*size)
+    window.show()
+    _drain(window)
+    try:
+        assert window.size().toTuple() == size
+        labels = (page._status_label, page._wechat_guide_label,
+                  page._wechat_guide_note_label, page._wechat_guide_key_label)
+        for widget in (*labels, page._wechat_connect_button, page._wechat_setup_button,
+                       page._wechat_guide_image_label):
+            if widget.isVisibleTo(page):
+                bounds = QRect(widget.mapTo(page, QPoint()), widget.size())
+                assert page.rect().contains(bounds), widget.text()
+                if widget in labels:
+                    assert widget.height() >= widget.heightForWidth(widget.width()), widget.text()
+        if page._progress_track.isVisibleTo(page):
+            track_bounds = QRect(page._progress_track.mapTo(page, QPoint()),
+                                 page._progress_track.size())
+            assert page.rect().contains(track_bounds)
+        if page._wechat_guide_label.isVisibleTo(page):
+            assert page._wechat_guide_label.font().pixelSize() > page._wechat_guide_note_label.font().pixelSize()
+        assert page._wechat_connect_button.width() < page.width() / 2
+    finally:
+        window.hide()
+
+
+@pytest.mark.parametrize("data_roots", [None, ["D:/" + "fictional_directory/" * 12]])
+def test_wechat_setup_dialog_keeps_path_and_actions_reachable(qt_app, data_roots):
+    """Long detected paths and fallback instructions must fit a small dialog."""
+    from PySide6.QtCore import QPoint, QRect
+    from PySide6.QtWidgets import QDialogButtonBox, QScrollArea
+    from qq_chat_analyzer.gui.theme import BASE_QSS
+    from qq_chat_analyzer.gui.wechat_setup_dialog import WeChatSetupDialog
+
+    parent = _main_window(qt_app, StubFacade())
+    parent.setStyleSheet(BASE_QSS)
+    dialog = WeChatSetupDialog(parent, data_roots=data_roots)
+    dialog.resize(520, 480)
+    dialog.show()
+    _drain(dialog)
+    try:
+        assert dialog.width() == 520
+        assert dialog.height() <= 480
+        scroll = dialog.findChild(QScrollArea)
+        assert scroll.widget().width() <= scroll.viewport().width()
+        buttons = dialog.findChild(QDialogButtonBox)
+        for role in (QDialogButtonBox.Save, QDialogButtonBox.Cancel):
+            button = buttons.button(role)
+            assert dialog.rect().contains(QRect(button.mapTo(dialog, QPoint()), button.size()))
+        scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
+        buttons.button(QDialogButtonBox.Cancel).click()
+        assert not dialog.isVisible()
+    finally:
+        dialog.close()
+        parent.hide()
+
+
+def test_wechat_setup_action_tracks_environment_repair(qt_app):
+    executor = _IndependentDeferredExecutor()
+    facade = StubFacade(
+        setup_status=SimpleNamespace(configured=True),
+        data_roots=["D:/fictional_wechat"],
+    )
+    page = _wechat_guide_module().WeChatWorkspace(facade, executor=executor)
+    page.show()
+    try:
+        assert page._wechat_setup_button.isHidden()
+        page._start_wechat_connect(_wechat_connection_config())
+        task = executor.tasks[0]
+        for progress in _facade_module().WeChatConnectionProgress:
+            task.progress(progress)
+            assert page._wechat_setup_button.isHidden()
+        task.fail("wechat_environment_missing", "虚构环境错误")
+        task.finish()
+        assert page._wechat_setup_button.isVisibleTo(page)
+        page._wechat_connect_button.click()
+        assert page._wechat_setup_button.isHidden()
+        executor.tasks[1].fail("wechat_key_timeout", "虚构等待超时")
+        assert page._wechat_setup_button.isHidden()
+    finally:
+        page.close()
+
+
+@pytest.mark.parametrize("session_error", [False, True])
+def test_wechat_connection_finish_keeps_connect_hidden_while_loading_sessions(qt_app, session_error):
+    executor = _IndependentDeferredExecutor()
+    page = _wechat_guide_module().WeChatWorkspace(StubFacade(), executor=executor)
+    page.show()
+    try:
+        page._start_wechat_connect(_wechat_connection_config())
+        connection = executor.tasks[0]
+        connection.succeed(_wechat_connected_status())
+        assert page._status_label.text() == "正在加载微信会话..."
+        assert page._wechat_connect_button.isHidden()
+        connection.finish()
+        assert page._wechat_connect_button.isHidden()
+        assert page._wechat_setup_button.isHidden()
+        if session_error:
+            executor.tasks[1].fail("wechat_database_error", "虚构数据库错误")
+            assert page._wechat_connect_button.isVisibleTo(page)
+            assert page._wechat_connect_button.text() == "重新开始"
+            assert page._wechat_setup_button.isVisibleTo(page)
+        else:
+            executor.tasks[1].succeed([])
+            assert page._wechat_connect_button.isHidden()
+            assert page._wechat_disconnect_button.isVisibleTo(page)
+    finally:
+        page.close()

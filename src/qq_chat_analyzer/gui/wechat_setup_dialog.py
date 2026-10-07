@@ -12,20 +12,25 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
+    QFrame,
     QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
+    QWidget,
 )
 
 from ..application.facade import WeChatEnvironmentConfig
+from .theme import WECHAT_SETUP_QSS, WECHAT_STATUS_STYLE
 
 DATA_ROOT_LABEL = "微信数据位置"
 DATA_ROOT_PLACEHOLDER = "请粘贴微信数据目录路径（xwechat_files）"
@@ -33,7 +38,7 @@ DATA_ROOT_HINT = (
     "如未在常用位置找到微信数据位置，请按以下步骤获取微信数据目录：\n"
     "1. 进入微信：设置 → 存储位置 → 更改；\n"
     "2. 右键 xwechat_files，选择 复制地址；\n"
-    "3. 彻底退出微信，并重新打开微信，使微信回到登录界面（如图片所示）；\n"
+    "3. 完全关闭微信，并重新打开微信，使微信回到登录界面（如图片所示）；\n"
     "4. 返回 Echo，将复制的地址直接粘贴到上方输入框；\n"
     "5. 点击 Save；\n"
     "6. Save 后 Echo 会开始准备连接，请暂时不要登录；\n"
@@ -54,8 +59,11 @@ class WeChatSetupDialog(QDialog):
         data_roots: Any = None,
     ) -> None:
         super().__init__(parent)
+        self.setObjectName("wechatSetupDialog")
+        self.setStyleSheet(WECHAT_SETUP_QSS)
         self.setWindowTitle("微信连接设置")
         self.setMinimumWidth(520)
+        self.resize(640, 520)
 
         self._data_root_edit = QLineEdit()
         self._data_root_edit.setPlaceholderText(DATA_ROOT_PLACEHOLDER)
@@ -64,19 +72,25 @@ class WeChatSetupDialog(QDialog):
         self._use_data_roots = bool(data_roots)
         if self._use_data_roots:
             self._data_root_combo = QComboBox()
+            self._data_root_combo.setSizeAdjustPolicy(
+                QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+            )
+            self._data_root_combo.setMinimumContentsLength(20)
             for root in data_roots:
                 self._data_root_combo.addItem(str(root))
 
         form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
+        form.setVerticalSpacing(10)
         control = self._data_root_combo or self._data_root_edit
         form.addRow(DATA_ROOT_LABEL, self._path_row(control, self._browse_directory))
 
         self._hint_label = QLabel(DATA_ROOT_HINT)
         self._hint_label.setWordWrap(True)
-        self._hint_label.setStyleSheet("color: #b42318; font-weight: 600;")
 
         self._status_label = QLabel(self._status_text(setup_status))
         self._status_label.setWordWrap(True)
+        self._status_label.setStyleSheet(WECHAT_STATUS_STYLE)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save
@@ -84,11 +98,27 @@ class WeChatSetupDialog(QDialog):
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
+        buttons.button(QDialogButtonBox.StandardButton.Save).setObjectName("wechatSave")
 
         layout = QVBoxLayout(self)
-        layout.addWidget(self._status_label)
-        layout.addLayout(form)
-        layout.addWidget(self._hint_label)
+        layout.setContentsMargins(28, 28, 28, 24)
+        layout.setSpacing(24)
+        # The existing fallback copy can be long. Keep Save/Cancel reachable
+        # on a 600px-high window while allowing the instructions to scroll.
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 12, 0)
+        content_layout.setSpacing(24)
+        content_layout.addWidget(self._status_label)
+        content_layout.addLayout(form)
+        content_layout.addWidget(self._hint_label)
+        content_layout.addStretch(1)
+        scroll = QScrollArea()
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(content)
+        layout.addWidget(scroll, stretch=1)
         layout.addWidget(buttons)
 
         if data_root is not None:

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFont, QPainter
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .theme import HOME_COLOR_ACCENT, HOME_QSS
+from .theme import HOME_QSS, paint_echo_note
 
 
 class _EchoNote(QWidget):
@@ -26,23 +26,8 @@ class _EchoNote(QWidget):
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        color = QColor(HOME_COLOR_ACCENT)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(color)
-        painter.save()
-        painter.translate(4.6, 19.4)
-        painter.rotate(-20)
-        painter.drawEllipse(QRectF(-3.6, -2.6, 7.2, 5.2))
-        painter.restore()
-        painter.setBrush(Qt.NoBrush)
-        painter.setPen(QPen(color, 1.4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
-        path = QPainterPath()
-        path.moveTo(7.9, 18.4)
-        path.lineTo(7.9, 2.5)
-        path.cubicTo(8.5, 4.9, 10.3, 6.1, 12.1, 7.3)
-        path.cubicTo(13.5, 8.3, 13.7, 10.1, 12.9, 11.7)
-        painter.drawPath(path)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        paint_echo_note(painter)
 
 
 class HomePage(QWidget):

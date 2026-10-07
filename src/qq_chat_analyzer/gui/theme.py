@@ -111,6 +111,102 @@ QWidget#echoHome QPushButton#homeReports:hover {{ color: {HOME_COLOR_TEXT}; text
 QWidget#echoHome QPushButton#homeReports:focus {{ color: {HOME_COLOR_ACCENT}; text-decoration: underline; }}
 """
 
+def paint_echo_note(painter) -> None:
+    """Draw Home's terracotta note mark inside a 16 x 24 local box.
+
+    Shared so the guided setup's current-stage mark is literally the same
+    musical mark Home draws, instead of a second hand-tuned copy.
+    """
+    from PySide6.QtCore import QRectF, Qt
+    from PySide6.QtGui import QColor, QPainterPath, QPen
+
+    color = QColor(HOME_COLOR_ACCENT)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(color)
+    painter.save()
+    painter.translate(4.6, 19.4)
+    painter.rotate(-20)
+    painter.drawEllipse(QRectF(-3.6, -2.6, 7.2, 5.2))
+    painter.restore()
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.setPen(QPen(color, 1.4, Qt.PenStyle.SolidLine,
+                        Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+    path = QPainterPath()
+    path.moveTo(7.9, 18.4)
+    path.lineTo(7.9, 2.5)
+    path.cubicTo(8.5, 4.9, 10.3, 6.1, 12.1, 7.3)
+    path.cubicTo(13.5, 8.3, 13.7, 10.1, 12.9, 11.7)
+    painter.drawPath(path)
+
+
+# Guided setup shares Home's paper, ink and link colors. Keep these scoped
+# so session controls and other workspaces retain their existing presentation.
+WECHAT_GUIDE_STYLE = f"""
+QLabel {{
+    background: transparent; border: none; padding: 0;
+    color: {HOME_COLOR_MUTED}; font-size: 13px; font-weight: 400;
+}}
+QLabel#wechatCurrentAction {{
+    color: {HOME_COLOR_TEXT}; font-size: 26px; font-weight: 500;
+}}
+QLabel#wechatPrivacy {{ font-size: 12px; }}
+"""
+WECHAT_GUIDE_STYLE_EMPHASIS = WECHAT_GUIDE_STYLE + f"""
+QLabel {{ color: {HOME_COLOR_ACCENT}; }}
+"""
+WECHAT_STATUS_STYLE = f"""
+color: {HOME_COLOR_MUTED}; background: transparent;
+border: none; border-bottom: 1px solid {COLOR_RULE_SOFT};
+border-radius: 0; padding: 0 0 16px 0;
+"""
+
+# Guided setup's five-stage trail: a hairline connecting a filled dot per
+# finished stage, Home's terracotta note for the current stage, and a soft
+# hollow ring for the stages still ahead.
+WECHAT_TRACK_DONE = HOME_COLOR_MUTED
+WECHAT_TRACK_PENDING = "#c7c0b4"
+WECHAT_TRACK_LINE = COLOR_RULE_SOFT
+WECHAT_TRACK_LABEL = COLOR_FAINT
+WECHAT_TRACK_LABEL_CURRENT = HOME_COLOR_MUTED
+WECHAT_TRACK_COUNTER = COLOR_FAINT
+WECHAT_SETUP_QSS = f"""
+QWidget#wechatWorkspace, QDialog#wechatSetupDialog {{ background: {HOME_COLOR_PAPER}; }}
+QWidget#wechatSessionPanel, QFrame#wechatConnectionSurface {{ background: transparent; }}
+QFrame#wechatConnectionSurface QWidget, QDialog#wechatSetupDialog QWidget {{
+    font-family: "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+    color: {HOME_COLOR_TEXT}; background: transparent;
+}}
+QFrame#wechatConnectionSurface QPushButton, QDialog#wechatSetupDialog QPushButton {{
+    border: 1px solid {COLOR_BORDER}; border-radius: 0;
+    background: transparent; padding: 8px 20px;
+}}
+QFrame#wechatConnectionSurface QPushButton:hover,
+QFrame#wechatConnectionSurface QPushButton:focus,
+QDialog#wechatSetupDialog QPushButton:hover,
+QDialog#wechatSetupDialog QPushButton:focus {{
+    border-color: {HOME_COLOR_ACCENT}; color: {HOME_COLOR_ACCENT};
+    background: {HOME_COLOR_LEAF};
+}}
+QFrame#wechatConnectionSurface QPushButton#wechatSettings {{
+    color: {HOME_COLOR_MUTED}; border: none; padding: 8px 0;
+}}
+QFrame#wechatConnectionSurface QPushButton#wechatSettings:hover,
+QFrame#wechatConnectionSurface QPushButton#wechatSettings:focus {{
+    color: {HOME_COLOR_ACCENT}; background: transparent; text-decoration: underline;
+}}
+QDialog#wechatSetupDialog QLabel {{ color: {HOME_COLOR_MUTED}; }}
+QDialog#wechatSetupDialog QLineEdit, QDialog#wechatSetupDialog QComboBox {{
+    background: {HOME_COLOR_LEAF}; border: 1px solid {COLOR_BORDER};
+    border-radius: 0; padding: 8px;
+}}
+QDialog#wechatSetupDialog QLineEdit:focus, QDialog#wechatSetupDialog QComboBox:focus {{
+    border-color: {HOME_COLOR_ACCENT};
+}}
+QDialog#wechatSetupDialog QPushButton#wechatSave {{
+    color: {HOME_COLOR_ACCENT}; border-color: {HOME_COLOR_ACCENT};
+}}
+"""
+
 WINDOW_CLIENT_SEPARATOR_STYLE = (
     f"QFrame#echoClientSeparator {{ background: {COLOR_RULE_SOFT}; border: none; }}"
 )
@@ -325,4 +421,15 @@ __all__ = [
     "STATUS_STYLE_ERROR",
     "WINDOW_TITLE_STYLE",
     "WINDOW_CLIENT_SEPARATOR_STYLE",
+    "WECHAT_GUIDE_STYLE",
+    "WECHAT_GUIDE_STYLE_EMPHASIS",
+    "WECHAT_STATUS_STYLE",
+    "WECHAT_SETUP_QSS",
+    "WECHAT_TRACK_COUNTER",
+    "WECHAT_TRACK_DONE",
+    "WECHAT_TRACK_LABEL",
+    "WECHAT_TRACK_LABEL_CURRENT",
+    "WECHAT_TRACK_LINE",
+    "WECHAT_TRACK_PENDING",
+    "paint_echo_note",
 ]
