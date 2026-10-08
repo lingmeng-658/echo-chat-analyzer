@@ -21,8 +21,12 @@ Echo 已经过了「先证明有没有人愿意用」的阶段。
 默认不新增大型功能或新数据来源。
 新能力需要人工确认。
 
-2026-10-07 状态校准：以 Stage 4 main `76d7476`、近期 Git 历史、当前实现和已确认的
-0.1 / 0.2 产品范围为依据。下文旧 checkpoint 是当时验收记录，不代表当前发布已就绪。
+2026-10-08 状态校准：以 fetch 后的远程 `origin/main`（`baaad4e`）、可访问的开发分支
+和工作树、当前实现及人工提供的发布待办为依据。本地 `main` 仍在 `342eff6`，本次不更新它。
+`feat/session-workspace-refresh` 的 `baaad4e` 已进入远程 main；
+`release/portable-distribution` 基于 `b09e83b`，REL-06B 改动仍未提交、未合并。
+分支工作成果、虚构数据测试和真人验收分别记录；下文旧 checkpoint 保留当时事实，
+不代表当前发布已就绪。本阶段只同步本文，ARCHITECTURE.md 等文档待发布工程合并后另行同步。
 
 ## 0.1 当前待办总览
 
@@ -34,14 +38,18 @@ WeChat 当前能力不变；架构细节以 `ARCHITECTURE.md` 为准。
 | 当前待办 | 状态 / 收口边界 |
 | --- | --- |
 | REL-04 用户错误提示 | CLOSED：现役错误安全边界已收口；分享与最终真人验收仍各归原条目 |
-| REL-06 Windows 普通用户发布 / 分发体验 | 未完成；已有 portable build 不等于最终分发完成 |
-| REL-07 GUI 最终 polish | 未完成；只处理明显视觉 / 交互问题 |
-| REL-08 分享闭环 | **Release Blocker：Yes**；未完成，按钮隐藏只是临时雪藏 |
+| REL-06 Windows 普通用户发布 / 分发体验 | 未完成；REL-06B ZIP / 运行目录分离在发布工作树，Frozen / 异常恢复待验收；Setup 待收口 |
+| REL-06C NapCat 升级与兼容性 | **Release Blocker：Yes**；尚未完成升级及兼容性验收，现有 pin 为 4.18.18 |
+| QQ Guided Setup 启动前退出引导 | 待实现 / 验收；已有 QQ 后台进程可能阻碍登录，不能只提示关闭主窗口 |
+| REL-07 GUI 最终 polish | 首页、QQ 引导、会话工作台与琴键回响阶段性验收通过且已合入 main；Processing 仍在设计验证，加载动画 / 完成反馈与最终 Frozen 验收待收口 |
+| REL-08 分享闭环 | **Release Blocker：Yes**；`d67f51e` 已恢复入口及生成，完整真人闭环尚未确认 |
 | GOV-04 权威版本号 | CLOSED：pyproject.toml 为唯一发布版本事实源；runtime / GUI / metadata 共用，frozen build 核对并携带安装元数据 |
 | QA-03 / QA-04 GitHub Release / 检查更新 | 未完成；Update Check Core 已实现，GUI 异步提示/打开下载页待接线；仍需核对 tag、发布说明和最终 fresh build；不自动下载、替换或静默更新 |
 | QA-05 0.1 → 0.2 本地数据兼容审计 | CLOSED：metadata provenance additive 收口；固定旧 0.1 包的 list / reopen / retention 与不改写回归；演进边界见 ARCHITECTURE.md |
 | GOV-05 发布构建可复现性 | CLOSED：build toolchain 已 tracked 声明并精确 pin；文档与合同齐备；fresh build 重建验证通过 |
 | QA-02 定点 release / privacy / build audit | CLOSED：发布树残留防线、构建依赖声明、WeChat native DLL pin 三项收口；fresh build + frozen 合同验收通过 |
+| 版权 / 第三方分发合规 | 待核对最终随包资产、许可 / 声明及官方表情 PNG 处理；不以 QA-02 工程审计代替 |
+| GUI native access violation | 已观察、待定位风险；重跑通过不能作为已修复证据，最终验收需关注 |
 | QA-06 跨机器 Direct DB RC | 待真实验收；本机 checkpoint 不能替代 |
 | QA-01 最终真实验收 | 未完成；覆盖主链、大小数据、报告、Local Data、分享和最终发布包 |
 
@@ -55,8 +63,17 @@ REL-09 语言画像优化均为非阻塞后续工作。完整历史证据保留�
 
 ## Active Bugs
 
-当前没有已确认的 Active Bug。BUG-01 / BUG-02 已退休，BUG-03 / 05 / 06 / 07 / 08
-保持 CLOSED。REL-08 是未完成的发布能力，仍为 Release Blocker；新的真实 regression 按当前链路另行记录。
+BUG-01 / BUG-02 已退休，BUG-03 / 05 / 06 / 07 / 08 保持 CLOSED。
+当前另有待收口的 QQ 登录引导缺口和待定位的 GUI native crash 风险；不因旧 Bug
+已关闭而忽略它们。REL-08 的实现已恢复，完整真人闭环仍为 Release Blocker。
+
+- **QQ 启动前引导**：已有 QQ 后台进程可能阻碍 Echo / NapCat 登录。启动前需明确
+  引导用户自行完整退出 QQ（包括托盘 / 后台），再继续连接；不能以关闭窗口代替退出。
+  当前远程 main 的连接引导尚未包含这一前置步骤。验收需覆盖已有 QQ 运行与完整退出后重试；
+  不改变只清理 Echo 自有进程的 ownership 边界。归 REL-06 首次运行与 REL-07 引导体验收口。
+- **GUI native access violation**：QA-04 历史 Fast 验证曾在微信 GUI worker 出现，
+  重跑通过但根因未确认。状态为待定位风险，不声称已修复或已证明是环境问题；
+  按现象 / 最小复现 / worker 生命周期诊断推进，并纳入 QA-01 最终稳定性验收。
 
 ## 0.1 产品交付条目
 
@@ -73,7 +90,7 @@ REL-09 语言画像优化均为非阻塞后续工作。完整历史证据保留�
 GUI 不展示 traceback。
 真实诊断写 privacy-safe diagnostics。
 
-状态：CLOSED（当前已确认缺口已修复，无确认 Active Bug）。
+状态：CLOSED（现役用户安全错误提示的已确认缺口已修复；登录引导与 native crash 另行追踪）。
 
 证据：`9ef734e` 不向用户透传未知异常正文；`633249d` 避免日志失败阻断启动；
 `1b4da6e` 让 content-only 报告生成失败进入正式错误生命周期；`cbdf85b` 让微信
@@ -82,19 +99,116 @@ regression 保留。此关闭不代表 REL-08 Share、最终真实验收或跨�
 
 ### REL-06 Windows 普通用户发布 / 安装体验
 
-Portable build 已存在。
-安装器、分发方式、普通用户首次运行体验仍需收口。
+历史 portable build 与 frozen 合同已有验证记录；最终普通用户分发仍未完成。
+当前分为 Setup 安装交付、REL-06B Portable ZIP / 运行目录分离及 REL-06C 升级兼容性。
 
-状态：未审计（installer / 最终普通用户分发体验仍未完成，不标 CLOSED）。
+#### REL-06B Portable ZIP 与运行目录分离
+
+2026-10-08 可见进度位于 `release/portable-distribution` 未提交工作树，尚不属于 main：
+
+- `scripts/package_windows_portable.py` 已有 ZIP + SHA-256 包装实现，读取权威版本，
+  检查发行树状态、拒绝链接与已有输出覆盖，并验证归档和源文件一致性。
+  它包装已有 build，不执行 fresh build，也不替代 native 资产 pin 与 Frozen 验收。
+- QQ managed runtime 已有程序目录、用户运行目录、Direct DB transient 目录分离实现；
+  QR / 启动 / snapshot 消费端正在使用同一套路径合同，GUI 经 Facade 获取 QR 路径。
+  旧配置归属不明时拒绝猜测；custom runtime 保留独立边界。
+- ZIP、路径和 workspace 测试代码使用虚构样本，含拒绝污染、并发、只读 / 不可写、
+  中断准备和恢复等场景。测试存在不等于本次已运行，也不等于真实包验收通过。
+
+本轮源码环境真人验收（2026-10-08，用户确认；不等同于 Frozen 包验收）：
+
+| 验收项目 | 状态 | 实际结果 / 边界 |
+| --- | --- | --- |
+| QQ 首次启动与扫码登录 | 通过 | 退出原有后台 QQ 后，正常启动、扫码并连接；启动前退出引导仍待产品收口 |
+| QQ 会话列表加载 | 通过 | 成功加载会话列表 |
+| Direct DB 分析 | 通过 | 正常读取和分析聊天数据 |
+| HTML 报告生成 | 通过 | 成功生成，人工检查未发现明显问题 |
+| 第二次启动与连接 | 通过 | 重新启动后正常连接，未发现明显异常 |
+| 程序与用户数据目录分离 | 初步通过 | 程序目录五项可变状态检查均为 False，用户工作区及快照根均存在 |
+| 正常退出后的快照清理 | 通过 | staging、generations 剩余项目数及数据库残留文件数均为 0 |
+| 完整退出生命周期 | 部分验证 | 正常关闭后快照清理符合预期；未逐项验证全部进程终止和恢复日志 |
+| Frozen 可执行程序 | 未验收 | 尚未完成本分支完整 Frozen 构建及只读安装目录测试 |
+| 异常退出与恢复 | 未真实验收 | 已有自动化测试，尚未进行真实 Frozen 异常退出与恢复测试 |
+| 跨机器运行 | 未验收 | 尚未在其他 Windows 机器验证 |
+
+以上只记录验收结论，不记录个人路径、账号或敏感日志；不将历史 Direct DB E2E
+当成本轮目录分离验收，也不从快照清理通过推断全部进程终止或异常恢复已通过。
+
+仍需：分支提交 / 合并后正式 fresh Frozen build、实际 Portable ZIP 解压运行、
+只读安装目录与发行目录不承载运行状态的验证、完整退出生命周期，
+以及实际中断 / 崩溃后的异常恢复与清理验收。
+不得用源码环境通过或虚构恢复测试关闭上述待办。
+
+状态：进行中（发布工作树成果未提交 / 未合并）；Frozen / 异常恢复真实验收未完成。
+
+#### REL-06C NapCat 版本升级与兼容性验收
+
+现有 tracked pins 与 build 校验仍固定 NapCat 4.18.18；截至本次可见分支尚无版本升级成果。
+发布前需确认目标版本，升级正式资产及 pin，核对 Echo patch / plugin、启动登录、
+QR freshness、会话读取、main + WAL snapshot / decrypt、分析、退出清理和异常恢复，
+并在最终 Frozen / ZIP 包上验收。现有版本的历史通过记录不能替代升级验收。
+
+状态：未完成。Release Blocker：Yes。
+
+#### Setup 与首次运行
+
+Setup 安装器的交付与普通用户首次运行仍待收口；Portable ZIP 完成不等于 Setup 完成。
+QQ 启动前退出引导归本项与 REL-07 共同验收；最终分发资产归 QA-03，跨机器归 QA-06。
 
 ### REL-07 GUI 上线前最终 polish
 
 只处理明显影响用户体验的视觉 / 交互问题。
 不重新设计整个 GUI。
 
-状态：未审计。
+远程 main 已包含微信 Guided Setup（`eb36bc5`）、QQ 连接体验（`b09e83b`）、
+共享字体整理（`fbeea4b`）和 QQ / 微信会话分析工作区（`baaad4e`）；
+长群成员列表滚动修复（`342eff6`）也已合并。不再把这些写成未合并的 GUI 分支成果。
 
-0.1 发布前必做，尚未完成。
+#### GUI 改版阶段性人工验收（2026-10-08）
+
+以下依据已知 GitHub 代码状态、此前审计结果及本轮人工反馈，区分已合并实现、
+阶段性视觉验收与尚未集成的设计方案；不代表最终 Frozen 程序整体验收。
+
+| 验收项目 | 状态 | 实际结果 / 边界 |
+| --- | --- | --- |
+| Home 首页视觉改版 | 阶段性通过 | 新版布局、配色与视觉语言已完成并合入 main，作为当前 GUI 设计基准 |
+| QQ 连接引导界面 | 阶段性通过 | 连接流程视觉改版已合入 main；启动前完整退出已有 QQ 的引导仍待收口 |
+| QQ 会话列表加载界面 | 已实现，待调整 | 当前为翻书动画；设计复盘决定改为「会话目录整理」意象，表达正在准备可选择的聊天 |
+| 微信连接引导界面 | 部分验证 | 连接状态与引导文案设计已完成，需结合最终发布版本完整真实验收 |
+| QQ / 微信会话工作台 | 阶段性通过 | 会话选择与分析配置界面视觉改版已合入 main |
+| 会话选中琴键回响 | 通过 | 轻量交互动画已实现并合入 main，阶段性视觉验收通过，决定保留 |
+| Processing 页面现状 | 已审计，待改版 | 当前主要为状态文字和取消按钮，尚无正式书写动画 |
+| Processing 动画意象设计 | 方案已确定，待验收 | 采用「书页汇集成册 → 音符尾缀笔书写」双阶段设计；旧 HTML 原型未达预期，待 Astra 重新制作独立动态原型 |
+| 书页汇集动画 | 待重新设计 | 纸页须逐渐汇入书本、沿书脊接合并成为书页；旧原型未正确实现动作 |
+| 音符尾缀笔动画 | 待重新设计 | 正常笔杆从中后段自然过渡为音符尾缀；旧原型笔尾不自然，未通过视觉验收 |
+| 分析进度与动效切换 | 已审计，未实施 | Facade 进度文案不完全等于真实耗时阶段；须以真实处理边界驱动动画，不设置虚假进度 |
+| 微信真实分析耗时 | 已实测 | 16,852 条群聊消息：约 7 秒读取、2 秒生成结果，总计约 9 秒 |
+| QQ 真实分析耗时 | 已实测 | 约 93,000 条消息：18 秒读取、9 秒生成结果，总计约 28 秒，约 1 秒未细分 |
+| 分析完成反馈 | 待调整 | 已支持自动打开 HTML 报告并返回工作台；完成提示及结果操作入口视觉反馈待完善 |
+| 本地报告管理页视觉统一 | 待验收 | 已有本地报告管理功能，尚未完成本轮视觉一致性验收 |
+| 检查更新 GUI 入口 | 未实施 | 已列入后续 GUI 路线，本轮未开展；仍归 QA-04 发布前收口 |
+| Echo Logo | 暂时冻结 | 已有候选设计，尚未最终定稿；决定不再阻塞 GUI 主线 |
+| 新版 GUI Frozen 程序整体验收 | 未验收 | 尚未完成最终 Frozen 构建及端到端视觉、交互回归验收 |
+
+真实耗时仅是此次人工实测，不作为固定性能合同或动画计时依据；本次未读取真实聊天数据。
+Processing 动画仍处于设计验证阶段，不记为已完成产品功能。
+
+#### 当前后续顺序
+
+1. 由 Astra 重新制作 Processing 双阶段独立动态原型，先完成视觉验收。
+2. 审核真实进度事件与动画状态映射，再进行 PySide6 集成。
+3. 将 QQ 会话列表加载动画调整为「整理会话目录」。
+4. 完善分析完成反馈，核对本地报告管理页视觉一致性，最后进行整套 GUI Frozen 真实验收。
+
+最终验收仍需覆盖 QQ / 微信连接与登录引导、会话选择、时间范围、分析 / 取消 /
+失败后的状态恢复，以及 Frozen 包中的视觉、布局与可操作性。本阶段仅记录上述路线，
+不开展原型制作、进度事件改造或 GUI 实现。
+
+本次校准 focused：`tests/test_gui.py` 的 workspace full-chain、取消后选择 / 日期保留、
+分析失败回到工作区共 5 passed；使用虚构 Facade / 数据，不代表真人 QQ / 微信验收。
+
+状态：主要 GUI 更新已进入 main 并有阶段性人工验收；剩余 polish、Processing 设计验证 /
+集成及最终 Frozen 真人验收未完成，REL-07 整体尚未 CLOSED，0.1 发布前必做。
 
 ### REL-08 分析结果导出 / 分享闭环
 
@@ -112,18 +226,30 @@ Portable build 已存在。
 → 接收方无需安装 Echo 即可理解结果
 ```
 
-0.1 必须交付分享能力，目前整条链路尚未做好。`gui/main_window.py` 在初始化和报告状态更新时
-显式隐藏 share button，这是临时雪藏措施，不是最终产品合同，也不代表本项完成。
+`d67f51e` 已进入远程 main：有可用分析结果时显示 / 启用分享按钮，经 Facade 生成图片，
+展示生成 / 成功 / 失败状态并尝试打开图片；renderer / template 同步修复。
+初始化或无结果时隐藏按钮仍是状态控制，不再是整个分享能力雪藏。
+`test_generate_share_button_creates_and_opens_share_image` 已移除 `known_failure` 标记；
+本次 `tests/test_gui.py -k generate_share` 为 5 passed，使用虚构数据和 stub，未验证实际 renderer。
 
-已有 renderer / Facade 和 GUI known_failure 不能替代用户链验收；
-`test_generate_share_button_creates_and_opens_share_image` 仍期望入口可见 / 可用。
-本项属于产品交付缺口，不属于测试治理遗留，不以隐藏按钮或修改测试预期关闭它。
+仍待确认整条真人链：入口发现、实际图片生成与可读性、找到文件、发送、接收方无需 Echo
+即可理解结果，并在最终发布包复验。保留历史 known_failure 记录，不将它作为当前测试状态。
 
-状态：未完成（待收口实现与真实验收）。
+状态：入口 / 生成实现已恢复并合并；完整真人闭环待验收。
 
 Release Blocker：Yes。
 
 ## 0.1 发布治理
+
+### 最终随包版权 / 第三方分发合规
+
+发布前核对最终资产清单、第三方许可与所需声明，覆盖 NapCat、微信 native 工具、
+字体 / 图形及官方表情 PNG。NapCat pins 已记录其 Limited Redistribution License，
+但 hash 命中不是分发合规结论。`fix/echo-0.1-remove-official-emoji-png` 目前仍指向
+`b09e83b`，未见独立移除提交；不能凭分支名记为完成。
+本项只记录待核对状态，不作法律结论，不重开已完成的全仓架构审计。
+
+状态：待核对 / 收口；最终 Release 前确认。QA-02 的历史工程审计保持 CLOSED。
 
 ### GOV-04 版本号权威统一
 
@@ -221,11 +347,16 @@ Windows runtime 合同 144 passed。
 code signing、CI/CD、bit-for-bit reproducibility。
 
 状态：COMPLETE / CLOSED。本项关闭不代表 QA-01 / QA-03 / QA-06 完成。
+REL-06B / REL-06C 合并后，最终候选包仍需重核资产 pin、隐私残留与 fresh build 来源；
+历史 QA-02 通过不自动覆盖后续包变化。
 
 ### QA-03 版本号 / GitHub Release
 
 统一版本权威（见 GOV-04），核对最终版本、tag、发布说明与 fresh build 资产后完成 GitHub Release。
 历史 portable build 验收不等于正式 Release 已完成。
+最终发布前需收口 Setup / Portable ZIP 资产、校验和、发布说明、第三方声明与已知限制；
+以包含最终合并成果的 fresh build 为准。当前尚未完成最终 GitHub Release，
+本次文档校准不执行 tag、上传或发布。
 
 状态：未完成，0.1 发布前必做。
 
@@ -238,13 +369,16 @@ Update Check Core 已实现：权威 `APP_VERSION` → GitHub latest formal Rele
 手动检查复用核心并绕过去重；网络超时、离线、限流和非法响应返回安全结果。
 仅在现有用户数据目录保存 `update-check.json` 的 `last_check_time`。
 Facade 已提供 `check_for_updates(manual=False)`，构造/启动不访问网络。
-GUI 主线后续需要 worker 异步调用、结果展示及用户点击后打开校验后的 Release 页面。
+截至 `baaad4e`，GUI 仍未接入 `check_for_updates`；后续需要 worker 异步调用、结果展示
+及用户点击后打开校验后的 Release 页面。
 当前未实现 GUI 接线、最终视觉与实际下载页交互验收；核心合同见 `ARCHITECTURE.md`。
 
 自动化证据：`tests/test_update_check_service.py` 覆盖正式 Release、SemVer、异常响应、
 网络失败、自动/手动检查、24h 边界、持久状态容错与同实例并发。
 focused / Fast 通过；Full 唯一失败为既有 REL-08 分享按钮 `known_failure`。
 Fast 验证过程中曾出现微信 GUI worker native access violation，重跑通过，原因尚未确认。
+这是当时的验证快照；其中 REL-08 known_failure 已被 `d67f51e` 修复并移除标记，
+native crash 风险仍见 Active Bugs，本次未重跑 Fast / Full，不能更新为当前整套通过。
 
 状态：Update Check Core 已实现；QA-04 整体待 GUI 接线与交互验收，0.1 发布前必做。
 
@@ -266,12 +400,16 @@ Fast 验证过程中曾出现微信 GUI worker native access violation，重跑�
 EXE 启动版本 smoke 通过。Full 唯一失败为既有 REL-08 分享按钮 `known_failure`，
 本次无新增失败；native WCDB CLI 测试因未设置专用路径跳过。
 
+以上为该次收口的历史验证结果；分享测试的当前状态见 REL-08，不覆盖原有失败记录。
+
 状态：COMPLETE / CLOSED。该合同不代表尚未实现的 0.2 软件已通过真人兼容验收。
 
 ### QA-06 跨机器 Direct DB RC
 
 在其他 Windows 机器上验证 NapCat 启动 / 登录、Direct DB snapshot / decrypt、
 分析报告及退出清理；本机已通过的 checkpoint 不替代此项。
+使用包含 REL-06B / REL-06C 与 GUI 最终成果的候选包，覆盖首次运行、已有 QQ 后台进程、
+升级后的 runtime、运行目录分离与异常恢复；不能用旧版本跨机器或源码运行替代。
 
 状态：待真实验收，0.1 发布前必做，并纳入 QA-01 最终验收。
 
