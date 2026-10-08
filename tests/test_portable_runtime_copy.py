@@ -40,7 +40,6 @@ FOREIGN_NATIVE_SEGMENT = re.compile(
 
 WINDOWS_X64_NATIVE_ASSETS = (
     "dpapi/win32-x64/@primno+dpapi.node",
-    "ffmpeg/ffmpegAddon.win32.x64.node",
     "napi2native/ffmpeg.dll",
     "napi2native/napi2native.win32.x64.node",
     "packet/MoeHoo.win32.x64.node",
@@ -66,6 +65,23 @@ FOREIGN_NATIVE_ASSETS = (
     "pty/linux.x64/pty.node",
 )
 
+EXCLUDED_NATIVE_ASSETS = FOREIGN_NATIVE_ASSETS + (
+    "ffmpeg/ffmpegAddon.win32.x64.node",
+)
+EXCLUDED_FONT = "static/fonts/AaCute.woff"
+
+COPYRIGHT_FILES = (
+    "LICENSE",
+    "NOTICE.md",
+    "third_party/napcat/LICENSE",
+    "third_party/napcat/NOTICE.md",
+    "third_party/napcat/DPAPI-LICENSE.txt",
+    "third_party/napcat/PTY-LICENSE.txt",
+    "third_party/napcat/WINPTY-LICENSE.txt",
+    "third_party/napcat/JETBRAINS-MONO-OFL.txt",
+    "third_party/napcat/NPM-LICENSES.txt",
+)
+
 # Full-only: build/packaging smoke that runs build_windows_exe.ps1 and loads
 # the bundled Node runtime. Excluded from the Fast Suite (see pyproject.toml).
 pytestmark = pytest.mark.slow_integration
@@ -79,7 +95,7 @@ def _write(path: Path, content: str = "fictional") -> None:
 def _fictional_native_tree(runtime: Path) -> None:
     """Mirror the upstream NapCat native addon layout for every platform."""
     native = runtime / "qq-napcat-candidate" / "native"
-    for relative in WINDOWS_X64_NATIVE_ASSETS + FOREIGN_NATIVE_ASSETS:
+    for relative in WINDOWS_X64_NATIVE_ASSETS + EXCLUDED_NATIVE_ASSETS:
         _write(native / relative)
 
 
@@ -137,6 +153,8 @@ def _fictional_runtime(
         "# fictional diagnostic runner\n",
     )
     _fictional_native_tree(runtime)
+    for relative in COPYRIGHT_FILES:
+        _write(project_root / relative, "fictional copyright material: " + relative)
     # Run a temporary build-script copy with fictional, pinned artifacts.
     scripts = project_root / "scripts"
     shutil.copy2(BUILD_SCRIPT, scripts / BUILD_SCRIPT.name)
@@ -213,6 +231,32 @@ def test_runtime_only_build_copies_complete_wechat_node_module(
     assert shipped_runner.read_text(encoding="utf-8").startswith(
         "# fictional diagnostic runner"
     )
+
+
+def test_build_ships_complete_copyright_materials(tmp_path: Path) -> None:
+    _fictional_runtime(tmp_path)
+    completed = _copy_runtime(tmp_path)
+    assert completed.returncode == 0, completed.stderr
+    for relative in COPYRIGHT_FILES:
+        target = tmp_path / "dist/Echo" / relative
+        assert target.is_file(), relative
+        assert target.read_bytes() == (tmp_path / relative).read_bytes()
+
+
+@pytest.mark.parametrize("relative", COPYRIGHT_FILES)
+@pytest.mark.parametrize("damage", ["missing", "empty"])
+def test_build_rejects_incomplete_copyright_materials(tmp_path: Path, relative: str, damage: str) -> None:
+    _fictional_runtime(tmp_path)
+    source = tmp_path / relative
+    if damage == "missing":
+        source.unlink()
+    else:
+        source.write_bytes(b"")
+    completed = _copy_runtime(tmp_path)
+    assert completed.returncode != 0
+    assert "Required release copyright file is missing or empty" in completed.stderr + completed.stdout
+    assert relative in (completed.stderr + completed.stdout).replace("\\", "/")
+    assert not (tmp_path / "dist/Echo").exists()
 
 
 def test_runtime_build_ships_wx_key_msvc_runtime_dependencies(
@@ -407,16 +451,95 @@ def _foreign_native_entries(native: Path) -> list[str]:
     return sorted(foreign)
 
 
-def test_runtime_build_preserves_official_native_addons(tmp_path: Path) -> None:
-    """De-QCE migration preserves the verified upstream dependency layout."""
-    _fictional_runtime(tmp_path)
+def test_runtime_build_excludes_only_selected_assets(tmp_path: Path) -> None:
+    """Portable pruning must leave the complete source and lookalikes intact."""
+    runtime = _fictional_runtime(tmp_path)
+    source = runtime / "qq-napcat-candidate"
+    lookalikes = (
+        "native/ffmpeg/ffmpegAddon.win32.x64.node.keep",
+        "native/packet/MoeHoo.linux.x64.node.keep",
+        "native/other/ffmpeg.dll",
+        "static/fonts/AaCute.woff2",
+        "static/fonts/Other.woff",
+    )
+    for relative in (EXCLUDED_FONT,) + lookalikes:
+        _write(source / relative)
+    before = {p.relative_to(source): p.read_bytes() for p in source.rglob("*") if p.is_file()}
 
     completed = _copy_runtime(tmp_path)
 
     assert completed.returncode == 0, completed.stderr
-    native = tmp_path / "dist/Echo/runtime/qq-napcat-candidate/native"
-    assert native.is_dir()
-    assert all((native / relative).is_file() for relative in FOREIGN_NATIVE_ASSETS)
+    portable = tmp_path / "dist/Echo/runtime/qq-napcat-candidate"
+    excluded = tuple("native/" + name for name in EXCLUDED_NATIVE_ASSETS) + (EXCLUDED_FONT,)
+    assert all(not (portable / name).exists() for name in excluded)
+    assert all((portable / name).read_bytes() == before[Path(name)] for name in lookalikes)
+    assert before == {p.relative_to(source): p.read_bytes() for p in source.rglob("*") if p.is_file()}
+    assert sum(p.is_file() for p in (source / "native").rglob("*")) == 25
+    assert sum(p.is_file() for p in (portable / "native").rglob("*")) == 12
+
+
+def _validate_portable_runtime(project_root: Path) -> subprocess.CompletedProcess[str]:
+    """Exercise the real validator without copying or rebuilding the fixture."""
+    scripts = project_root / "scripts"
+    script = (scripts / BUILD_SCRIPT.name).read_text(encoding="utf-8-sig")
+    definitions = script.split(
+        'if (-not (Test-Path -LiteralPath $RuntimeSource -PathType Container)) {', 1
+    )[0]
+    probe = scripts / "validate-portable.ps1"
+    probe.write_text(
+        definitions + '\nAssert-RuntimeContract -Root $PortableRuntime -Phase "portable"\n',
+        encoding="utf-8",
+    )
+    return subprocess.run(
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+         str(probe), "-ProjectRootOverride", str(project_root)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+    )
+
+
+@pytest.mark.parametrize("relative", [
+    "native/ffmpeg/ffmpegAddon.win32.x64.node", EXCLUDED_FONT,
+])
+def test_portable_validation_rejects_reintroduced_exclusion(tmp_path: Path, relative: str) -> None:
+    runtime = _fictional_runtime(tmp_path)
+    _write(runtime / "qq-napcat-candidate" / EXCLUDED_FONT)
+    completed = _copy_runtime(tmp_path)
+    assert completed.returncode == 0, completed.stderr
+    portable = tmp_path / "dist/Echo/runtime/qq-napcat-candidate"
+    target = portable / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(runtime / "qq-napcat-candidate" / relative, target)
+    result = _validate_portable_runtime(tmp_path)
+    assert result.returncode != 0
+    assert "Excluded portable runtime asset" in result.stderr + result.stdout
+
+
+@pytest.mark.parametrize("change", ["missing", "tampered"])
+def test_source_still_validates_excluded_addon(tmp_path: Path, change: str) -> None:
+    runtime = _fictional_runtime(tmp_path)
+    addon = runtime / "qq-napcat-candidate/native/ffmpeg/ffmpegAddon.win32.x64.node"
+    if change == "missing":
+        addon.unlink()
+    else:
+        addon.write_text("tampered fictional addon")
+    result = _copy_runtime(tmp_path)
+    assert result.returncode != 0
+    assert "ffmpegAddon.win32.x64.node" in result.stderr + result.stdout
+
+
+@pytest.mark.parametrize("change", ["missing", "tampered"])
+def test_portable_still_validates_retained_native_pin(tmp_path: Path, change: str) -> None:
+    _fictional_runtime(tmp_path)
+    completed = _copy_runtime(tmp_path)
+    assert completed.returncode == 0, completed.stderr
+    addon = tmp_path / "dist/Echo/runtime/qq-napcat-candidate/native/napi2native/ffmpeg.dll"
+    if change == "missing":
+        addon.unlink()
+    else:
+        addon.write_text("tampered fictional library")
+    result = _validate_portable_runtime(tmp_path)
+    assert result.returncode != 0
+    assert "ffmpeg.dll" in result.stderr + result.stdout
 
 
 def test_runtime_build_ships_windows_x64_native_addons(tmp_path: Path) -> None:
@@ -515,7 +638,11 @@ def test_runtime_copy_ships_program_assets_without_mutable_state(tmp_path: Path)
     assert not any((portable / relative).exists() for relative in private_paths)
     for requirement in RUNTIME_CONTRACT["requirements"]:
         if requirement["type"] == "file":
-            assert (portable / requirement["path"]).is_file()
+            target = portable / requirement["path"]
+            if requirement["path"] in RUNTIME_CONTRACT["portableExcludedFiles"]:
+                assert not target.exists()
+            else:
+                assert target.is_file()
     for filename in ("snapshot.mjs", "main_wal.mjs", "workspace.mjs"):
         assert (portable / "qq-napcat-candidate/plugins/napcat-plugin-echo/snapshot" / filename).is_file()
     for source in ("qq-napcat-candidate", "wechat"):

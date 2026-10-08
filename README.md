@@ -22,6 +22,15 @@
 Echo 0.1 正在发布前 Hardening，尚未正式发布稳定版。
 当前发布状态见 [Hardening 工作地图](docs/HARDENING.md)。
 
+## 开源许可
+
+Echo 自有且有权授权的源代码采用 [Mozilla Public License 2.0](LICENSE)，
+许可范围与源码获取方式见 [Echo 许可声明](NOTICE.md)。
+官方 Echo 免费、非商业运营；MPL 2.0 本身允许商业使用，这一运营方式不构成对 MPL 权利的额外限制。
+NapCat 和其他第三方组件仍受各自许可证约束，见 [第三方版权声明](third_party/napcat/NOTICE.md)
+及 [NapCat Issue #2096](https://github.com/NapNeko/NapCatQQ/issues/2096)。
+公开源码仓库：[lingmeng-658/echo-chat-analyzer](https://github.com/lingmeng-658/echo-chat-analyzer)。
+
 ## 隐私优先
 
 Echo 的设计前提是：真实聊天数据属于用户自己。

@@ -229,6 +229,26 @@ def _started_runtime(tmp_path: Path, **runtime_kwargs):
 # ---------------------------------------------------------------- starting
 
 
+@pytest.mark.parametrize("parent_value", [None, ""])
+def test_start_disables_ffmpeg_download_only_in_child(tmp_path, monkeypatch, parent_value):
+    module = _runtime_module()
+    variable = "NAPCAT_DISABLE_FFMPEG_DOWNLOAD"
+    if parent_value is None:
+        monkeypatch.delenv(variable, raising=False)
+    else:
+        monkeypatch.setenv(variable, parent_value)
+    executable = tmp_path / "NapCatWinBootMain.exe"
+    executable.write_text("fictional")
+    runtime = _make_runtime(executable=executable, working_directory=tmp_path)
+    fake, patcher = _popen_patch(module)
+    try:
+        runtime.start()
+    finally:
+        patcher.stop()
+    assert fake.env.get(variable) == "1"
+    assert module.os.environ.get(variable) == parent_value
+
+
 def test_start_spawns_the_process_and_returns_info(tmp_path: Path) -> None:
     module = _runtime_module()
     executable = tmp_path / "NapCatWinBootMain.exe"

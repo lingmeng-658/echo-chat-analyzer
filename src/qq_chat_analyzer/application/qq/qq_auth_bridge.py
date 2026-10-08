@@ -777,6 +777,7 @@ def _launch_auth_window(
         "NAPCAT_INJECT_PATH": str(runtime_directory / "NapCatWinBootHook.dll"),
         "NAPCAT_MAIN_PATH": str(runtime_directory / "napcat.mjs"),
         "ECHO_BRIDGE_PORT": "40655",
+        "NAPCAT_DISABLE_FFMPEG_DOWNLOAD": "1",
     })
     command = [str(launcher), str(qq_path), environment["NAPCAT_INJECT_PATH"]]
     _LOGGER.info(

@@ -1,1 +1,10 @@
 * text=auto eol=lf
+
+# Preserve upstream license bytes, including their original whitespace.
+LICENSE -text whitespace=-blank-at-eol,-blank-at-eof
+third_party/napcat/LICENSE -text whitespace=-blank-at-eol,-blank-at-eof
+third_party/napcat/DPAPI-LICENSE.txt -text whitespace=-blank-at-eol,-blank-at-eof
+third_party/napcat/PTY-LICENSE.txt -text whitespace=-blank-at-eol,-blank-at-eof
+third_party/napcat/WINPTY-LICENSE.txt -text whitespace=-blank-at-eol,-blank-at-eof
+third_party/napcat/JETBRAINS-MONO-OFL.txt -text whitespace=-blank-at-eol,-blank-at-eof
+third_party/napcat/NPM-LICENSES.txt -text whitespace=-blank-at-eol,-blank-at-eof

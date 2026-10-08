@@ -116,8 +116,14 @@ def test_connection_state_machine_reuses_retries_and_relogin(candidate,monkeypat
     assert auth.get_snapshot().state is ConnectionState.CONNECTED
 
 
-def test_native_launcher_uses_detected_qq_and_never_qce(candidate,tmp_path,monkeypatch):
+@pytest.mark.parametrize("parent_value", [None, ""])
+def test_native_launcher_uses_detected_qq_and_never_qce(candidate,tmp_path,monkeypatch,parent_value):
     from qq_chat_analyzer.application.qq import qq_auth_bridge as auth
+    variable = "NAPCAT_DISABLE_FFMPEG_DOWNLOAD"
+    if parent_value is None:
+        monkeypatch.delenv(variable, raising=False)
+    else:
+        monkeypatch.setenv(variable, parent_value)
     qq=tmp_path/'QQ.exe';qq.write_bytes(b'fictional')
     package=tmp_path/'resources/app/package.json';package.parent.mkdir(parents=True);package.write_text('{"name":"QQ","main":"index.js"}')
     seen=[]
@@ -130,6 +136,8 @@ def test_native_launcher_uses_detected_qq_and_never_qce(candidate,tmp_path,monke
     assert 'qce-server' not in ' '.join(command)
     assert options['env']['NAPCAT_MAIN_PATH']==str(candidate/'napcat.mjs')
     assert options['env']['ECHO_BRIDGE_PORT']=='40655'
+    assert options['env'].get(variable) == '1'
+    assert auth.os.environ.get(variable) == parent_value
 
 
 def test_napcat_setup_waiting_status_does_not_claim_qce(candidate):

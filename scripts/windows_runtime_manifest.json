@@ -407,6 +407,33 @@
     "qq-napcat-candidate/plugins/napcat-plugin-qce",
     "qq-napcat-candidate/static/qce"
   ],
+  "portableExcludedFiles": [
+    "qq-napcat-candidate/native/ffmpeg/ffmpegAddon.darwin.arm64.node",
+    "qq-napcat-candidate/native/ffmpeg/ffmpegAddon.linux.arm64.node",
+    "qq-napcat-candidate/native/ffmpeg/ffmpegAddon.linux.x64.node",
+    "qq-napcat-candidate/native/ffmpeg/ffmpegAddon.win32.x64.node",
+    "qq-napcat-candidate/native/dpapi/win32-arm64/@primno+dpapi.node",
+    "qq-napcat-candidate/native/napi2native/napi2native.darwin.arm64.node",
+    "qq-napcat-candidate/native/napi2native/napi2native.linux.arm64.node",
+    "qq-napcat-candidate/native/napi2native/napi2native.linux.x64.node",
+    "qq-napcat-candidate/native/packet/MoeHoo.darwin.arm64.node",
+    "qq-napcat-candidate/native/packet/MoeHoo.linux.arm64.node",
+    "qq-napcat-candidate/native/packet/MoeHoo.linux.x64.node",
+    "qq-napcat-candidate/native/pty/linux.arm64/pty.node",
+    "qq-napcat-candidate/native/pty/linux.x64/pty.node",
+    "qq-napcat-candidate/static/fonts/AaCute.woff"
+  ],
+  "releaseCopyrightFiles": [
+    "LICENSE",
+    "NOTICE.md",
+    "third_party/napcat/LICENSE",
+    "third_party/napcat/NOTICE.md",
+    "third_party/napcat/DPAPI-LICENSE.txt",
+    "third_party/napcat/PTY-LICENSE.txt",
+    "third_party/napcat/WINPTY-LICENSE.txt",
+    "third_party/napcat/JETBRAINS-MONO-OFL.txt",
+    "third_party/napcat/NPM-LICENSES.txt"
+  ],
   "releaseTreePrivatePaths": [
     "logs",
     "scripts/wcdb-diagnostic.txt"
