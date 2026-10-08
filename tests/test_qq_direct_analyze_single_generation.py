@@ -236,6 +236,37 @@ def test_analyze_acquires_exactly_one_generation(tmp_path: Path) -> None:
     assert runtime.cleaned == ["gen-0001"]
 
 
+def test_analyze_publishes_phases_around_the_generation_acquisition(
+    tmp_path: Path,
+) -> None:
+    """READING precedes the single acquisition; the report phase follows it."""
+    snapshot = tmp_path / "source.db"
+    _create_snapshot(snapshot)
+    runtime = FakeSnapshotRuntime(tmp_path, snapshot_path=snapshot)
+    service = QQDirectDatabaseImportService(runtime_client=runtime)
+    facade = _facade(service)
+    phases: list[str] = []
+    acquired_at_phase: list[list[str]] = []
+
+    def _on_phase(phase) -> None:
+        phases.append(phase.name)
+        acquired_at_phase.append(list(runtime.acquired))
+
+    outcome = facade.analyze_session(
+        ChatSource.QQ,
+        GROUP_SESSION_ID,
+        AnalysisConfig(output_directory=tmp_path / "report"),
+        on_phase=_on_phase,
+    )
+
+    assert phases == ["READING", "ANALYZING_REPORT"]
+    assert acquired_at_phase == [[], ["gen-0001"]]
+    assert runtime.acquired == ["gen-0001"]
+    assert runtime.cleaned == ["gen-0001"]
+    assert outcome.session is not None
+    assert outcome.session.session_id == GROUP_SESSION_ID
+
+
 def test_malformed_staging_database_is_rejected_and_cleaned(tmp_path: Path) -> None:
     snapshot = tmp_path / "source.db"
     snapshot.write_bytes(b"fictional malformed sqlite image")

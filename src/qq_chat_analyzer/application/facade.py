@@ -53,6 +53,7 @@ from ..presentation.share.renderer import (
     render_share_html_to_png,
 )
 from ..presentation.share.template import build_share_card_html
+from .analysis_phase import AnalysisPhase, PhaseCallback
 from .dto import AnalysisRequestDTO, AnalysisResultDTO
 from .errors import ApplicationServiceError
 from .connection_models import ConnectionSnapshot
@@ -158,6 +159,21 @@ def _report_progress(
     """Publish a facade-owned analysis stage when a caller is listening."""
     if progress is not None:
         progress(message)
+
+
+def _publish_phase(
+    on_phase: PhaseCallback | None,
+    phase: AnalysisPhase,
+) -> None:
+    """Publish one structured phase when a caller is listening.
+
+    This is additive next to :func:`_report_progress`: the Chinese status text
+    stays the human-facing channel, the phase enum is the machine-facing one.
+    Any exception the callback raises propagates unchanged, so the caller that
+    injected it owns that failure and the resources around it still unwind.
+    """
+    if on_phase is not None:
+        on_phase(phase)
 
 
 DEFAULT_TOP = 50
@@ -751,16 +767,23 @@ class ChatAnalyzerFacade:
         *,
         speaker_names: Mapping[str, str] | None = None,
         viewer_speaker_key: str | None = None,
+        on_phase: PhaseCallback | None = None,
     ) -> AnalysisOutcome:
         """Export one conversation, analyze it, and return a view.
 
         QQ Direct DB acquisition owns its payload until analysis completes.
         WeChat exports use the facade scratch directory.
+
+        ``progress`` keeps carrying the human-facing Chinese status text;
+        ``on_phase`` additionally receives :class:`AnalysisPhase.READING`
+        before the source is acquired and
+        :class:`AnalysisPhase.ANALYZING_REPORT` once acquisition succeeded.
         """
         chat_source = _coerce_source(source)
         resolved_config = config or AnalysisConfig()
         resolved_scope = self._resolve_scope(resolved_config, chat_source)
         _report_progress(progress, "正在准备分析...")
+        _publish_phase(on_phase, AnalysisPhase.READING)
         _report_progress(progress, "正在读取聊天记录...")
         service = self._require_service(chat_source)
         if chat_source is ChatSource.QQ:
@@ -775,6 +798,7 @@ class ChatAnalyzerFacade:
                 speaker_names=speaker_names,
                 viewer_speaker_key=viewer_speaker_key,
                 progress=progress,
+                on_phase=on_phase,
             )
         if chat_source in (ChatSource.QQ, ChatSource.WECHAT):
             raw_session = next(
@@ -822,6 +846,7 @@ class ChatAnalyzerFacade:
                 ),
                 scope=resolved_scope,
                 progress=progress,
+                on_phase=on_phase,
             ) as session_export:
                 return self._analyze_path(
                     session_export.payload_path,
@@ -846,6 +871,7 @@ class ChatAnalyzerFacade:
         speaker_names: Mapping[str, str] | None = None,
         viewer_speaker_key: str | None = None,
         progress: Callable[[str], None] | None = None,
+        on_phase: PhaseCallback | None = None,
     ) -> AnalysisOutcome:
         """Run one Direct DB QQ analysis from a single generation acquisition.
 
@@ -865,6 +891,7 @@ class ChatAnalyzerFacade:
                 raw_session=None,
                 scope=scope,
                 progress=progress,
+                on_phase=on_phase,
             ) as session_export:
                 acquired_at = _perf_counter()
                 _LOGGER.info(
@@ -1271,12 +1298,19 @@ class ChatAnalyzerFacade:
         raw_session: Any = None,
         scope: AnalysisScope | None = None,
         progress: Callable[[str], None] | None = None,
+        on_phase: PhaseCallback | None = None,
     ) -> Iterator[_SessionExport]:
         """Yield an export while preserving source-specific ownership.
 
         Acquisition receives inclusive epoch-second scope bounds. The final
         scope filter re-checks every imported message. QQ payload ownership
         spans the consumer, and acquisition failures become FacadeError.
+
+        ``ANALYZING_REPORT`` is published here, not by the caller, because only
+        this context knows that the source acquisition really succeeded: for QQ
+        while the acquisition context is still open, for WeChat once
+        ``export_only`` has returned a payload. A failed acquisition therefore
+        never publishes it.
         """
         if source is ChatSource.QQ:
             start_seconds, end_seconds = _scope_export_window_seconds(scope)
@@ -1289,6 +1323,7 @@ class ChatAnalyzerFacade:
                             end_time=end_seconds,
                         )
                     )
+                _publish_phase(on_phase, AnalysisPhase.ANALYZING_REPORT)
                 raw_session = getattr(acquisition, "session", None)
                 yield _SessionExport(
                     payload_path=Path(acquisition.payload_path),
@@ -1302,20 +1337,24 @@ class ChatAnalyzerFacade:
             return
 
         with _translated_errors(source):
-            yield _SessionExport(
-                payload_path=Path(
-                    service.export_only(
-                        WeChatExportImportRequest(
-                            session_id=session_id,
-                            output_path=(
-                                scratch_directory / "wechat_export.json"
-                            ),
-                            start_time=_scope_export_window_seconds(scope)[0],
-                            end_time=_scope_export_window_seconds(scope)[1],
-                        )
+            payload_path = Path(
+                service.export_only(
+                    WeChatExportImportRequest(
+                        session_id=session_id,
+                        output_path=(
+                            scratch_directory / "wechat_export.json"
+                        ),
+                        start_time=_scope_export_window_seconds(scope)[0],
+                        end_time=_scope_export_window_seconds(scope)[1],
                     )
                 )
             )
+        # The phase callback belongs to the caller, not to the source, so a
+        # failure in it stays a caller failure instead of becoming a source
+        # error. No source resource is held at this point.
+        _publish_phase(on_phase, AnalysisPhase.ANALYZING_REPORT)
+        with _translated_errors(source):
+            yield _SessionExport(payload_path=payload_path)
 
     @staticmethod
     def _resolve_scope(
