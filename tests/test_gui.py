@@ -3561,9 +3561,18 @@ def test_session_panel_empty_source_shows_real_empty_state(
     panel.populate_sessions([])
 
     assert panel._sessions_ready is True
-    assert panel._session_list.count() == 1
-    assert "没有找到" in panel._session_list.item(0).text()
+    assert panel._session_list.count() == 0
+    from PySide6.QtWidgets import QLabel
+    title = panel.findChild(QLabel, "sessionEmptyTitle")
+    detail = panel.findChild(QLabel, "sessionEmptyDetail")
+    panel.resize(800, 600)
+    panel.show()
+    qt_app.processEvents()
+    assert title is not None and title.isVisible() and "没有找到" in title.text()
+    assert detail is not None and detail.isVisible() and detail.text()
+    assert panel._session_box.isVisible()
     assert panel._analyze_button.isEnabled() is False
+    panel.close()
 
 
 def test_session_panel_disables_sessions_without_messages(
@@ -3648,6 +3657,900 @@ def test_qq_session_panel_selection_skips_range_probe(qt_app) -> None:
 
     assert facade.get_session_message_range_calls == []
     assert panel._message_range is None
+
+
+def test_session_panel_scope_blocks_accept_clicks_across_the_whole_option(qt_app, sources):
+    """The full option surface selects a scope, including outside its text."""
+    from PySide6.QtCore import QPoint
+    from qq_chat_analyzer.gui.session_analysis_panel import SessionAnalysisPanel
+
+    module = _facade_module()
+    panel = SessionAnalysisPanel()
+    panel.configure(StubFacade(sources=sources), module.ChatSource.QQ)
+    panel.populate_sessions([_session(module.ChatSource.QQ, "fictional", "测试会话", 10)])
+    panel.resize(780, 560)
+    panel.show()
+    qt_app.processEvents()
+    for control, mode in (
+        (panel._scope_custom, module.AnalysisScopeMode.CUSTOM),
+        (panel._scope_last_year, module.AnalysisScopeMode.LAST_YEAR),
+        (panel._scope_last_six_months, module.AnalysisScopeMode.LAST_SIX_MONTHS),
+        (panel._scope_all, module.AnalysisScopeMode.ALL),
+    ):
+        QTest.mouseClick(control, Qt.MouseButton.LeftButton,
+                         pos=QPoint(control.width() - 5, control.height() - 5))
+        assert panel.build_config().scope_mode is mode
+        assert panel._custom_range_widget.isVisible() is (mode is module.AnalysisScopeMode.CUSTOM)
+        assert panel._analyze_button.isEnabled() is False
+    panel.close()
+
+
+@pytest.mark.parametrize("source", ["QQ", "WECHAT"])
+def test_session_workspace_ready_header_is_one_compact_row(qt_app, sources, source):
+    """A ready connection leaves the vertical space to the session list."""
+    module = _facade_module()
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+    from qq_chat_analyzer.gui.wechat_workspace import WeChatWorkspace
+
+    workspace_type = QQWorkspace if source == "QQ" else WeChatWorkspace
+    workspace = workspace_type(StubFacade(sources=sources), executor=_inline_executor())
+    workspace.resize(900, 700)
+    workspace._handle_sessions_loaded([
+        _session(getattr(module.ChatSource, source), "fictional", "测试会话", 10)
+    ])
+    workspace._status_label.show()
+    button = getattr(workspace, f"_{source.lower()}_disconnect_button")
+    button.show()
+    workspace.show()
+    qt_app.processEvents()
+    status_y = workspace._status_label.mapTo(workspace, workspace._status_label.rect().center()).y()
+    button_y = button.mapTo(workspace, button.rect().center()).y()
+    assert abs(status_y - button_y) <= 2
+    assert workspace._connection_surface.height() <= 90
+    workspace.close()
+
+
+def test_session_panel_selected_name_tracks_selection_and_search(qt_app, sources):
+    """Configuration names the selected chat and clears when search removes it."""
+    from qq_chat_analyzer.gui.session_analysis_panel import SessionAnalysisPanel
+
+    module = _facade_module()
+    panel = SessionAnalysisPanel()
+    panel.configure(StubFacade(sources=sources), module.ChatSource.QQ)
+    panel.populate_sessions([
+        _session(module.ChatSource.QQ, "fictional1", "周末读书会", 10),
+        _session(module.ChatSource.QQ, "fictional2", "旧日朋友", 5),
+    ])
+    panel._session_list.setCurrentRow(0)
+    # Assert the user-facing label, not the facade's identity fields.
+    from PySide6.QtWidgets import QLabel
+    label = panel.findChild(QLabel, "selectedSessionName")
+    assert label is not None
+    assert label.text() == "周末读书会"
+    panel._session_list.setCurrentRow(1)
+    assert label.text() == "旧日朋友"
+    panel._session_search.setText("读书")
+    assert label.text() == "尚未选择会话"
+    assert not panel._analyze_button.isEnabled()
+
+
+@pytest.mark.parametrize("size", [(1500, 850), (800, 600), (640, 560), (500, 560)])
+def test_session_panel_layout_keeps_custom_controls_reachable(qt_app, sources, size):
+    """Wide pages stay bounded; smaller pages keep selection and CTA reachable."""
+    from PySide6.QtCore import QPoint
+    from qq_chat_analyzer.gui.session_analysis_panel import SessionAnalysisPanel
+
+    module = _facade_module()
+    panel = SessionAnalysisPanel()
+    panel.configure(StubFacade(sources=sources), module.ChatSource.QQ)
+    panel.populate_sessions([
+        _session(module.ChatSource.QQ, f"fictional{i}", "很长的虚构会话名称" * 15, 10)
+        for i in range(30)
+    ])
+    panel.resize(*size)
+    panel.show()
+    panel._session_list.setCurrentRow(0)
+    panel._scope_custom.setChecked(True)
+    qt_app.processEvents()
+    assert panel.size().toTuple() == size
+    assert panel._session_list.horizontalScrollBar().maximum() == 0
+    assert 50 <= panel._session_list.visualItemRect(panel._session_list.item(0)).height() <= 56
+    button = panel._analyze_button
+    button_rect = button.rect().translated(button.mapTo(panel, QPoint(0, 0)))
+    assert panel.rect().contains(button_rect)
+    assert button.isVisible() and button.isEnabled()
+    assert panel._selected_session_label.toolTip() == "很长的虚构会话名称" * 15
+    assert "…" in panel._selected_session_label.text()
+    viewport = panel._configuration_scroll.viewport()
+    for control in (panel._scope_all, panel._scope_custom, panel._start_date, panel._end_date):
+        panel._configuration_scroll.ensureWidgetVisible(control)
+        qt_app.processEvents()
+        rect = control.rect().translated(control.mapTo(viewport, QPoint(0, 0)))
+        assert viewport.rect().contains(rect)
+    if size[0] == 1500:
+        list_rect = panel._session_list.rect().translated(panel._session_list.mapTo(panel, QPoint(0, 0)))
+        range_rect = panel._analysis_range_box.rect().translated(panel._analysis_range_box.mapTo(panel, QPoint(0, 0)))
+        assert list_rect.right() < range_rect.left()
+        assert list_rect.left() >= 150
+        assert range_rect.right() <= 1350
+    panel.close()
+
+
+@pytest.mark.parametrize("count", [None, 42])
+def test_session_panel_list_tooltip_keeps_complete_name(custom_date_panel, count):
+    panel = custom_date_panel()
+    module = _facade_module()
+    name = "虚构的很长会话名称" * 20
+    panel.populate_sessions([_session(module.ChatSource.QQ, "fiction-long", name, count)])
+    item = panel._session_list.item(0)
+    assert name in item.toolTip()
+    if count is not None:
+        assert "42" in item.toolTip()
+    assert item.text() == name
+
+
+def test_session_panel_selection_echo_retargets_without_moving_rows(qt_app, custom_date_panel):
+    from PySide6.QtCore import QVariantAnimation
+    from qq_chat_analyzer.gui.theme import HOME_COLOR_ACCENT
+
+    panel = custom_date_panel()
+    view = panel._session_list
+    animation = view.findChild(QVariantAnimation, "sessionSelectionEcho")
+    assert animation is not None, "选中标记需要一次性的展开反馈"
+    assert 360 <= animation.duration() <= 440
+    rects = [view.visualItemRect(view.item(i)) for i in range(2)]
+
+    def marker_pixels(row):
+        rect = view.visualItemRect(view.item(row))
+        pixels = view.viewport().grab().toImage()
+        ratio = pixels.devicePixelRatio()
+        return sum(pixels.pixelColor(round((rect.left() + 1) * ratio), round(y * ratio)).name() == HOME_COLOR_ACCENT
+                   for y in range(rect.top() + 1, rect.bottom()))
+
+    animation.setCurrentTime(0)
+    initial = marker_pixels(0)
+    animation.setCurrentTime(animation.duration() // 2)
+    middle = marker_pixels(0)
+    animation.setCurrentTime(animation.duration())
+    complete = marker_pixels(0)
+    assert initial == middle == complete and complete > 0
+    # Rapid keyboard changes must immediately clear the old row's marker.
+    view.setFocus()
+    QTest.keyClick(view, Qt.Key.Key_Down)
+    animation.setCurrentTime(animation.duration() // 2)
+    assert marker_pixels(0) == 0
+    assert marker_pixels(1) > 0
+    animation.setCurrentTime(animation.duration())
+    pixels = view.viewport().grab().toImage()
+    ratio = pixels.devicePixelRatio()
+    previous_row_edge = pixels.pixelColor(round(ratio), round((rects[1].top() - 1) * ratio))
+    assert previous_row_edge.name() != HOME_COLOR_ACCENT
+    QTest.keyClick(view, Qt.Key.Key_Up)
+    animation.setCurrentTime(animation.duration())
+    assert marker_pixels(1) == 0
+    assert marker_pixels(0) > 0
+    assert [view.visualItemRect(view.item(i)) for i in range(2)] == rects
+    # Refresh clears selection; old animation frames cannot mark replacement rows.
+    panel._session_search.setText("会话 B")
+    qt_app.processEvents()
+    assert not view.selectedItems()
+    assert animation.state() == QVariantAnimation.State.Stopped
+    assert marker_pixels(0) == 0
+    assert not panel._analyze_button.isEnabled()
+
+
+def _session_echo_frame(panel, row, milliseconds):
+    """Capture the real viewport at a deterministic time, without advancing timers."""
+    animation = panel._selection_delegate._animation
+    animation.setCurrentTime(milliseconds)
+    return panel._session_list.viewport().grab().toImage().copy()
+
+
+def _session_echo_samples(panel, image, row):
+    rect = panel._session_list.visualItemRect(panel._session_list.item(row))
+    ratio = image.devicePixelRatio()
+    # Below the text, above the separator: measure painted background only.
+    return [image.pixelColor(round((rect.left() + rect.width() * x) * ratio),
+                             round((rect.bottom() - 9) * ratio))
+            for x in (0.15, 0.50, 0.85)]
+
+
+def test_session_piano_echo_light_press_is_visible_across_the_selected_row(custom_date_panel):
+    panel = custom_date_panel()
+    start = _session_echo_samples(panel, _session_echo_frame(panel, 0, 0), 0)
+    pressed = _session_echo_samples(panel, _session_echo_frame(panel, 0, 45), 0)
+    assert all(s.red() - p.red() >= 4 for s, p in zip(start, pressed)), "轻按需要可见的整行明暗变化"
+
+
+def test_session_piano_echo_releases_into_a_visible_travelling_front(custom_date_panel):
+    panel = custom_date_panel()
+    animation = panel._selection_delegate._animation
+    start_frame = _session_echo_frame(panel, 0, 0)
+    start = _session_echo_samples(panel, start_frame, 0)
+    peaks = []
+    rect = panel._session_list.visualItemRect(panel._session_list.item(0))
+    for ms in (150, 200, 250):
+        frame = _session_echo_frame(panel, 0, ms)
+        ratio = frame.devicePixelRatio()
+        y = round((rect.bottom() - 9) * ratio)
+        # A substantial light crest, not just a one-channel pixel difference.
+        profile = [frame.pixelColor(round((rect.left() + rect.width() * x / 100) * ratio), y).red()
+                   - start_frame.pixelColor(round((rect.left() + rect.width() * x / 100) * ratio), y).red()
+                   for x in range(5, 96)]
+        assert max(profile) >= 14, "正常速度可见的浅色波峰需要足够对比"
+        peaks.append((profile.index(max(profile)) + 5) / 100)
+    assert 0.05 <= peaks[0] < 0.30
+    assert 0.40 <= peaks[1] <= 0.60
+    assert 0.70 < peaks[2] <= 0.95
+    complete_frame = _session_echo_frame(panel, 0, animation.duration())
+    complete = _session_echo_samples(panel, complete_frame, 0)
+    assert start == complete
+    assert animation.state() == animation.State.Stopped
+    assert _session_echo_frame(panel, 0, animation.duration()) == complete_frame
+    panel.close()
+
+
+def test_session_piano_echo_tail_fades_without_changing_foreground_or_other_rows(custom_date_panel):
+    from qq_chat_analyzer.gui.theme import HOME_COLOR_TEXT
+    panel = custom_date_panel()
+    view = panel._session_list
+    view.setFocus()
+    frames = [_session_echo_frame(panel, 0, ms) for ms in (0, 45, 200, 300, 360, 400)]
+    rect = view.visualItemRect(view.item(0))
+    ratio = frames[0].devicePixelRatio()
+    # Compare the whole surrounding viewport to catch clipping regressions.
+    below = view.viewport().rect().adjusted(0, rect.bottom() + 1, 0, 0)
+    from PySide6.QtCore import QRect
+    pixels_below = QRect(round(below.x() * ratio), round(below.y() * ratio),
+                         round(below.width() * ratio), round(below.height() * ratio))
+    assert all(frame.copy(pixels_below) == frames[0].copy(pixels_below) for frame in frames)
+    # Solid ink must stay put. Antialiased edges blend with the animated paper,
+    # so a darkness threshold would wrongly include partially covered pixels.
+    def ink_positions(frame):
+        return {(x, y) for y in range(round(rect.top() * ratio), round(rect.bottom() * ratio))
+                for x in range(round((rect.left() + 16) * ratio), round(rect.right() * ratio))
+                if frame.pixelColor(x, y).name() == HOME_COLOR_TEXT}
+    ink = ink_positions(frames[0])
+    assert ink
+    assert all(ink_positions(frame) == ink for frame in frames)
+    def difference(frame):
+        return sum(abs(a.red() - b.red()) for a, b in zip(
+            _session_echo_samples(panel, frame, 0), _session_echo_samples(panel, frames[0], 0)))
+    assert difference(frames[3]) > difference(frames[4]) > difference(frames[5]) == 0
+    assert frames[0] == frames[-1]
+
+
+@pytest.mark.parametrize("action", ["search", "sort", "clear"])
+def test_session_piano_echo_view_changes_cancel_without_restarting_stale_frames(custom_date_panel, action):
+    panel = custom_date_panel()
+    view = panel._session_list
+    animation = panel._selection_delegate._animation
+    animation.setCurrentTime(45)
+    if action == "search":
+        panel._session_search.setText("会话 B")
+    elif action == "sort":
+        panel._session_sort.setCurrentIndex(_sort_index(panel, "message_count"))
+    else:
+        view.clearSelection()
+    assert animation.state() == animation.State.Stopped
+    assert not panel._selection_delegate._current.isValid()
+    clean = view.viewport().grab().toImage().copy()
+    animation.setCurrentTime(200)
+    assert view.viewport().grab().toImage() == clean
+    QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton,
+                     pos=view.visualItemRect(view.item(0)).center())
+    assert view.selectedItems() == [view.item(0)]
+    assert animation.state() == animation.State.Running
+    assert animation.currentTime() < 70
+    from PySide6.QtCore import QVariantAnimation
+    assert view.findChildren(QVariantAnimation) == [animation]
+
+
+def test_session_piano_echo_rapid_keyboard_switch_does_not_leave_old_row_tint(qt_app, custom_date_panel):
+    panel = custom_date_panel()
+    view = panel._session_list
+    view.setFocus()
+    # Save unselected rendering of row 0, with the same keyboard focus state.
+    view.setCurrentRow(1)
+    animation = panel._selection_delegate._animation
+    animation.setCurrentTime(animation.duration())
+    unselected = _session_echo_samples(panel, view.viewport().grab().toImage(), 0)
+    for _ in range(3):
+        QTest.keyClick(view, Qt.Key.Key_Up)
+        tinted = _session_echo_samples(panel, _session_echo_frame(panel, 0, 200), 0)
+        QTest.keyClick(view, Qt.Key.Key_Down)
+        new_frame = _session_echo_frame(panel, 1, 200)
+        assert _session_echo_samples(panel, new_frame, 0) == unselected
+        assert tinted[1] != _session_echo_samples(panel, _session_echo_frame(panel, 1, animation.duration()), 1)[1]
+        assert _session_echo_samples(panel, new_frame, 1)[1] != tinted[2]
+    panel.close()
+
+
+def test_session_piano_echo_filter_cancels_timer_and_cannot_tint_replacement_row(qt_app, custom_date_panel):
+    panel = custom_date_panel()
+    animation = panel._selection_delegate._animation
+    before = _session_echo_samples(panel, _session_echo_frame(panel, 0, 200), 0)
+    static = _session_echo_samples(panel, _session_echo_frame(panel, 0, animation.duration()), 0)
+    assert before != static, "过滤前应有正在运行的背景扩散"
+    panel._session_list.setCurrentRow(1)
+    panel._selection_delegate._animation.setCurrentTime(90)
+    panel._session_search.setText("会话 A")
+    qt_app.processEvents()
+    assert panel._selection_delegate._animation.state() == panel._selection_delegate._animation.State.Stopped
+    assert not panel._session_list.selectedItems()
+    replacement = panel._session_list.viewport().grab().toImage().copy()
+    panel._selection_delegate._animation.setCurrentTime(150)
+    assert panel._session_list.viewport().grab().toImage() == replacement
+    panel.close()
+
+
+def test_session_piano_echo_scroll_and_resize_use_current_row_geometry(qt_app, custom_date_panel):
+    panel = custom_date_panel()
+    module = _facade_module()
+    panel.populate_sessions([_session(module.ChatSource.QQ, f"fiction-{i}", f"虚构会话 {i:02}", 1)
+                             for i in range(40)])
+    view = panel._session_list
+    view.setCurrentRow(0)
+    animation = panel._selection_delegate._animation
+    active = _session_echo_frame(panel, 0, 200)
+    assert _session_echo_samples(panel, active, 0) != _session_echo_samples(panel, _session_echo_frame(panel, 0, animation.duration()), 0)
+    view.setCurrentRow(1)
+    animation.pause()
+    animation.setCurrentTime(200)
+    view.verticalScrollBar().setValue(view.verticalScrollBar().maximum())
+    qt_app.processEvents()
+    scrolled = view.viewport().grab().toImage().copy()
+    animation.setCurrentTime(animation.duration())
+    assert view.viewport().grab().toImage() == scrolled
+    view.scrollToItem(view.item(1))
+    view.setCurrentRow(0)
+    animation.pause()
+    animation.setCurrentTime(200)
+    panel.resize(1150, 700)
+    qt_app.processEvents()
+    view.scrollToItem(view.item(0))
+    resized = _session_echo_samples(panel, view.viewport().grab().toImage(), 0)
+    restored = _session_echo_samples(panel, _session_echo_frame(panel, 0, animation.duration()), 0)
+    assert resized[1] != restored[1]
+    panel.close()
+
+
+@pytest.mark.parametrize("source_name,source_text", [("QQ", "QQ"), ("WECHAT", "微信")])
+@pytest.mark.parametrize("count,number_text", [(None, None), (0, "0 条消息"), (1234, "1,234 条消息")])
+def test_session_panel_summary_tracks_selection_without_extra_requests(
+    custom_date_panel, source_name, source_text, count, number_text,
+):
+    from PySide6.QtWidgets import QLabel
+
+    panel = custom_date_panel(source_name)
+    module = _facade_module()
+    source = getattr(module.ChatSource, source_name)
+    panel.populate_sessions([
+        _session(source, "fiction-A", "虚构会话 A", count),
+        _session(source, "fiction-B", "虚构会话 B", 9),
+    ])
+    panel._session_list.setCurrentRow(0)
+    meta = panel.findChild(QLabel, "selectedSessionMeta")
+    assert meta is not None, "右侧应展示已提供的会话信息"
+    assert meta.isVisible() and source_text in meta.text()
+    if number_text:
+        assert number_text in meta.text()
+    else:
+        assert "条消息" not in meta.text()
+    requests = list(panel._facade.get_session_message_range_calls)
+    panel._start_date.setDate(QDate(2024, 1, 1))
+    panel._end_date.setDate(QDate(2024, 2, 1))
+    panel._scope_all.setChecked(True)
+    assert panel._facade.get_session_message_range_calls == requests
+    assert not panel._facade.list_sessions_calls
+    panel._session_list.setCurrentRow(1)
+    assert panel._selected_session_label.text() == "虚构会话 B"
+    assert "9 条消息" in meta.text()
+    panel._session_search.setText("会话 A")
+    assert not meta.isVisible() and meta.text() == ""
+    assert not panel._analyze_button.isEnabled()
+
+
+def test_session_panel_report_action_keeps_bottom_anchor(qt_app, custom_date_panel):
+    from PySide6.QtCore import QPoint
+
+    panel = custom_date_panel()
+    assert panel._analyze_button.text() == "生成回顾报告"
+    for mode in (panel._scope_all, panel._scope_custom):
+        mode.setChecked(True)
+        qt_app.processEvents()
+        button = panel._analyze_button
+        bottom = button.mapTo(panel._configuration_panel, QPoint(0, button.height())).y()
+        assert panel._configuration_panel.height() - bottom <= 1
+        settings = panel._configuration_scroll.widget()
+        name = panel._selected_session_label
+        name_bottom = name.mapTo(settings, QPoint(0, name.height())).y()
+        range_top = panel._analysis_range_box.mapTo(settings, QPoint(0, 0)).y()
+        assert name_bottom < range_top
+
+
+def test_session_panel_empty_search_has_independent_copy_and_no_restored_selection(
+    qt_app, custom_date_panel,
+):
+    from PySide6.QtWidgets import QLabel
+
+    panel = custom_date_panel()
+    hint = panel.findChild(QLabel, "sessionSelectionHint")
+    assert hint is not None and hint.isHidden()
+    panel._session_search.setText("不存在的虚构会话")
+    qt_app.processEvents()
+    assert panel._session_list.count() == 0
+    assert panel.selected_session_id() is None
+    title = panel.findChild(QLabel, "sessionEmptyTitle")
+    detail = panel.findChild(QLabel, "sessionEmptyDetail")
+    assert title is not None and title.isVisible() and title.text() == "没有匹配的会话"
+    assert detail is not None and detail.isVisible()
+    assert "清空搜索" in detail.text()
+    assert hint.isVisible() and hint.text() == "选择一段聊天，看看时间留下了什么。"
+    assert panel._selected_session_meta.isHidden()
+    assert not panel._analyze_button.isEnabled()
+    panel._session_search.clear()
+    qt_app.processEvents()
+    assert panel._session_list.isVisible() and panel._session_list.count() == 2
+    assert title.isHidden() or not title.isVisible()
+    assert not panel._session_list.selectedItems()
+    assert panel.selected_session_id() is None
+    assert hint.isVisible() and not panel._analyze_button.isEnabled()
+    panel._session_list.setCurrentRow(1)
+    assert hint.isHidden() and panel._analyze_button.isEnabled()
+    assert panel._selected_session_label.text() == "虚构会话 B"
+
+
+def test_session_panel_cleared_selection_cannot_analyze(custom_date_panel):
+    panel = custom_date_panel()
+    panel._session_list.clearSelection()
+    # Qt retains a current item after deselection; it is no longer a selection.
+    assert panel._session_list.currentItem() is not None
+    assert panel.selected_session_id() is None
+    assert not panel._analyze_button.isEnabled()
+
+
+def test_session_panel_unselected_guide_survives_resize_and_blocks_analysis(
+    qt_app, custom_date_panel,
+):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QLabel
+
+    panel = custom_date_panel()
+    panel._session_list.clearSelection()
+    hint = panel.findChild(QLabel, "sessionSelectionHint")
+    assert hint is not None and hint.isVisible()
+    assert not panel._selected_session_meta.isVisible()
+    assert not panel._analyze_button.isEnabled()
+    started = []
+    panel.analysis_started.connect(lambda: started.append(True))
+    panel.start_analysis()
+    _drain(panel)
+    assert started == []
+    panel.resize(500, 560)
+    qt_app.processEvents()
+    panel._configuration_scroll.ensureWidgetVisible(hint)
+    qt_app.processEvents()
+    viewport = panel._configuration_scroll.viewport()
+    rect = hint.rect().translated(hint.mapTo(viewport, QPoint(0, 0)))
+    assert viewport.rect().contains(rect)
+
+
+@pytest.fixture
+def session_layout_window(qt_app, sources):
+    """Real window states with a controlled logical size on Qt offscreen."""
+    from PySide6.QtWidgets import QVBoxLayout, QWidget
+    from qq_chat_analyzer.gui.session_analysis_panel import SessionAnalysisPanel
+
+    windows = []
+
+    def make(size, maximized=False):
+        module = _facade_module()
+        window = QWidget()
+        # Prevent the offscreen platform's 800px virtual screen from replacing
+        # the requested size; Qt still sends real window-state and resize events.
+        window.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
+        layout = QVBoxLayout(window)
+        layout.setContentsMargins(0, 0, 0, 0)
+        panel = SessionAnalysisPanel(window)
+        panel.configure(StubFacade(sources=sources), module.ChatSource.QQ,
+                        executor=_inline_executor())
+        panel.populate_sessions([
+            _session(module.ChatSource.QQ, f"fiction-{i}", "虚构会话名称" * 15, 10)
+            for i in range(30)
+        ])
+        layout.addWidget(panel)
+        panel._session_list.setCurrentRow(0)
+        panel._scope_custom.setChecked(True)
+        panel._start_date.setDate(QDate(2024, 1, 31))
+        panel._end_date.setDate(QDate(2024, 3, 1))
+        window.resize(*size)
+        if maximized:
+            window.setWindowState(Qt.WindowState.WindowMaximized)
+        window.show()
+        qt_app.processEvents()
+        windows.append(window)
+        return window, panel
+
+    yield make
+    for window in windows:
+        window.close()
+        window.deleteLater()
+    qt_app.processEvents()
+
+
+@pytest.mark.parametrize("size", [(800, 600), (1200, 760), (1600, 900), (1920, 1080)])
+def test_session_panel_maximized_space_goes_to_list_without_scaling_controls(
+    qt_app, session_layout_window, size,
+):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QPushButton
+
+    window, panel = session_layout_window(size)
+    content = panel._workspace_content
+    normal_width = content.width()
+    normal_list_width = panel._session_box.width()
+    normal_configuration_width = panel._configuration_panel.width()
+    assert normal_width <= 1120
+    assert abs(normal_configuration_width / (normal_width - 28) - 0.37) < 0.03
+    font = panel._session_list.font()
+    button_height = panel._analyze_button.height()
+    config = panel.build_config()
+    window.setWindowState(Qt.WindowState.WindowMaximized)
+    qt_app.processEvents()
+    assert window.isMaximized() and window.size().toTuple() == size
+    assert panel.build_config() == config
+    if size[0] >= 1600:
+        assert 1400 <= content.width() <= 1520
+        growth = content.width() - normal_width
+        assert panel._session_box.width() - normal_list_width >= growth - 8
+        assert abs(panel._configuration_panel.width() - normal_configuration_width) <= 8
+    assert 240 <= panel._configuration_panel.width() <= 420
+    left_gutter = content.mapTo(panel, QPoint(0, 0)).x()
+    right_gutter = panel.width() - left_gutter - content.width()
+    assert abs(left_gutter - right_gutter) <= 1
+    assert left_gutter >= 24
+    assert panel._session_list.font() == font
+    assert panel._analyze_button.height() == button_height
+    assert 50 <= panel._session_list.visualItemRect(panel._session_list.item(0)).height() <= 56
+    assert panel._session_list.horizontalScrollBar().maximum() == 0
+    viewport = panel._configuration_scroll.viewport()
+    controls = [panel._start_date, panel._end_date, panel._date_adjust_target,
+                panel._date_adjust_unit, *panel._date_adjust_tools.findChildren(QPushButton)]
+    # Error feedback must remain reachable as well as the date adjustment tools.
+    panel._start_date.setDate(QDate(2024, 3, 2))
+    controls.append(panel._date_range_error)
+    for control in controls:
+        panel._configuration_scroll.ensureWidgetVisible(control)
+        qt_app.processEvents()
+        rect = control.rect().translated(control.mapTo(viewport, QPoint(0, 0)))
+        assert control.isVisible() and viewport.rect().contains(rect)
+    button_rect = panel._analyze_button.rect().translated(
+        panel._analyze_button.mapTo(panel, QPoint(0, 0)))
+    assert panel.rect().contains(button_rect)
+
+
+def test_session_panel_maximized_first_show_and_restore_reapply_width_rules(
+    qt_app, session_layout_window,
+):
+    window, panel = session_layout_window((1920, 1080), maximized=True)
+    assert 1400 <= panel._workspace_content.width() <= 1520
+    assert panel._configuration_panel.width() <= 420
+    config = panel.build_config()
+    window.setWindowState(Qt.WindowState.WindowNoState)
+    qt_app.processEvents()
+    assert window.size().toTuple() == (1920, 1080)
+    assert panel._workspace_content.width() <= 1120
+    # Repeated state changes at the same size must not need a resize event.
+    for state, minimum_width in ((Qt.WindowState.WindowMaximized, 1400),
+                                 (Qt.WindowState.WindowNoState, 1100)):
+        window.setWindowState(state)
+        qt_app.processEvents()
+        assert panel._workspace_content.width() >= minimum_width
+    assert panel._workspace_content.width() <= 1120
+    assert panel.build_config() == config
+
+
+def test_session_panel_maximized_narrow_reflow_releases_configuration_width(
+    qt_app, session_layout_window,
+):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QBoxLayout, QPushButton
+
+    window, panel = session_layout_window((1920, 1080), maximized=True)
+    window.setWindowState(Qt.WindowState.WindowNoState)
+    # Cross the reflow breakpoint first, as a resize drag does, so Qt can
+    # recompute the containing window's minimum size for the stacked layout.
+    window.resize(560, 560)
+    for _ in range(3):
+        qt_app.processEvents()
+    window.resize(500, 560)
+    qt_app.processEvents()
+    assert window.size().toTuple() == (500, 560)
+    assert panel._columns.direction() is QBoxLayout.Direction.TopToBottom
+    assert panel._configuration_panel.width() >= 440
+    viewport = panel._configuration_scroll.viewport()
+    for control in [panel._start_date, panel._end_date, panel._date_adjust_target,
+                    panel._date_adjust_unit, *panel._date_adjust_tools.findChildren(QPushButton)]:
+        panel._configuration_scroll.ensureWidgetVisible(control)
+        qt_app.processEvents()
+        rect = control.rect().translated(control.mapTo(viewport, QPoint(0, 0)))
+        assert viewport.rect().contains(rect)
+
+
+@pytest.mark.parametrize("source_name", ["QQ", "WECHAT"])
+def test_session_workspace_maximized_ready_row_aligns_with_shared_content(
+    qt_app, sources, source_name,
+):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QVBoxLayout, QWidget
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+    from qq_chat_analyzer.gui.wechat_workspace import WeChatWorkspace
+
+    module = _facade_module()
+    window = QWidget()
+    window.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
+    layout = QVBoxLayout(window)
+    layout.setContentsMargins(0, 0, 0, 0)
+    workspace_type = QQWorkspace if source_name == "QQ" else WeChatWorkspace
+    workspace = workspace_type(StubFacade(sources=sources), executor=_inline_executor())
+    layout.addWidget(workspace)
+    workspace._handle_sessions_loaded([
+        _session(getattr(module.ChatSource, source_name), "fiction-A", "虚构会话", 10)
+    ])
+    workspace._status_label.show()
+    window.resize(1920, 1080)
+    window.show()
+    qt_app.processEvents()
+    try:
+        for state in (Qt.WindowState.WindowMaximized, Qt.WindowState.WindowNoState):
+            window.setWindowState(state)
+            qt_app.processEvents()
+            content = workspace.session_panel._workspace_content
+            if state is Qt.WindowState.WindowMaximized:
+                assert content.width() >= 1400
+            left = content.mapTo(workspace, QPoint(0, 0)).x()
+            status_left = workspace._status_label.mapTo(workspace, QPoint(0, 0)).x()
+            assert abs(left - status_left) <= 1
+            margins = workspace._connection_layout.contentsMargins()
+            assert margins.left() == margins.right()
+    finally:
+        window.close()
+        window.deleteLater()
+        qt_app.processEvents()
+
+
+@pytest.fixture
+def custom_date_panel(qt_app, sources):
+    """Real widgets with fictional sessions and controllable facade callbacks."""
+    from qq_chat_analyzer.gui.session_analysis_panel import SessionAnalysisPanel
+
+    panels = []
+
+    def make(source_name="QQ", executor=None):
+        module = _facade_module()
+        source = getattr(module.ChatSource, source_name)
+        panel = SessionAnalysisPanel()
+        panel.configure(StubFacade(sources=sources), source,
+                        executor=executor or _inline_executor())
+        panel.populate_sessions([
+            _session(source, "fiction-A", "虚构会话 A", 10),
+            _session(source, "fiction-B", "虚构会话 B", 5),
+        ])
+        panel.resize(780, 620)
+        panel.show()
+        panel._session_list.setCurrentRow(0)
+        panel._scope_custom.setChecked(True)
+        qt_app.processEvents()
+        panels.append(panel)
+        return panel
+
+    yield make
+    for panel in panels:
+        panel.cancel_analysis()
+        panel.close()
+        panel.deleteLater()
+    qt_app.processEvents()
+
+
+def _date_adjust_controls(panel):
+    from PySide6.QtWidgets import QComboBox, QPushButton, QWidget
+
+    tools = panel.findChild(QWidget, "dateAdjustmentTools")
+    target = panel.findChild(QComboBox, "dateAdjustTarget")
+    unit = panel.findChild(QComboBox, "dateAdjustUnit")
+    assert tools is not None, "自定义日期需要微调工具"
+    assert target is not None and unit is not None
+    steps = {}
+    for button in tools.findChildren(QPushButton):
+        steps[int(button.text())] = button
+    assert set(steps) == {-5, -1, 1, 5}
+    return tools, target, unit, steps
+
+
+@pytest.mark.parametrize("section,text,expected", [
+    ("YearSection", "2023", "2023-01-15"),
+    ("MonthSection", "12", "2024-12-15"),
+    ("DaySection", "28", "2024-01-28"),
+])
+def test_session_panel_date_native_input_commits_without_intermediate_updates(
+    custom_date_panel, section, text, expected,
+):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QDateEdit
+
+    panel = custom_date_panel()
+    edit = panel._start_date
+    edit.setDate(QDate(2024, 1, 15))
+    panel._end_date.setDate(QDate(2025, 12, 31))
+    assert not edit.calendarPopup()
+    assert not edit.keyboardTracking()
+    assert not panel._end_date.calendarPopup()
+    assert not panel._end_date.keyboardTracking()
+    # Click each native section, then replace its selected text with the keyboard.
+    prefix = {"YearSection": "", "MonthSection": "2024-", "DaySection": "2024-01-"}[section]
+    line = edit.lineEdit()
+    QTest.mouseClick(line, Qt.MouseButton.LeftButton,
+                     pos=QPoint(line.fontMetrics().horizontalAdvance(prefix) + 6,
+                                line.height() // 2))
+    assert edit.currentSection() == getattr(QDateEdit, section)
+    edit.setSelectedSection(edit.currentSection())
+    changes = []
+    edit.dateChanged.connect(changes.append)
+    QTest.keyClicks(edit, text)
+    assert changes == []
+    QTest.keyClick(edit, Qt.Key.Key_Return)
+    assert panel.build_config().start_time == expected
+    assert panel.build_config().end_time == "2025-12-31"
+    assert len(changes) == 1
+
+
+def test_session_panel_date_adjustment_has_clear_defaults_and_scope_visibility(custom_date_panel):
+    panel = custom_date_panel()
+    tools, target, unit, _ = _date_adjust_controls(panel)
+    assert tools.isVisible()
+    assert target.currentText() == "开始日期"
+    assert unit.currentText() == "日"
+    assert panel._start_date.property("adjustmentTarget") is True
+    assert panel._end_date.property("adjustmentTarget") is False
+    target.setCurrentIndex(1)
+    assert panel._end_date.property("adjustmentTarget") is True
+    assert panel._start_date.property("adjustmentTarget") is False
+    panel._scope_all.setChecked(True)
+    assert not tools.isVisible()
+    panel._scope_custom.setChecked(True)
+    assert tools.isVisible()
+
+
+@pytest.mark.parametrize("target_index", [0, 1])
+@pytest.mark.parametrize("unit_text,step,before,expected", [
+    ("日", -5, (2024, 3, 3), (2024, 2, 27)),
+    ("日", -1, (2024, 3, 1), (2024, 2, 29)),
+    ("日", 1, (2024, 12, 31), (2025, 1, 1)),
+    ("日", 5, (2024, 1, 29), (2024, 2, 3)),
+    ("月", -5, (2024, 7, 31), (2024, 2, 29)),
+    ("月", -1, (2023, 3, 31), (2023, 2, 28)),
+    ("月", 1, (2024, 1, 31), (2024, 2, 29)),
+    ("月", 5, (2024, 8, 31), (2025, 1, 31)),
+    ("年", -5, (2024, 2, 29), (2019, 2, 28)),
+    ("年", -1, (2024, 2, 29), (2023, 2, 28)),
+    ("年", 1, (2024, 2, 29), (2025, 2, 28)),
+    ("年", 5, (2024, 2, 29), (2029, 2, 28)),
+])
+def test_session_panel_date_steps_change_only_selected_endpoint(
+    custom_date_panel, target_index, unit_text, step, before, expected,
+):
+    panel = custom_date_panel()
+    _, target, unit, steps = _date_adjust_controls(panel)
+    edits = (panel._start_date, panel._end_date)
+    edit, other = edits[target_index], edits[1 - target_index]
+    edit.setDate(QDate(*before))
+    other.setDate(QDate(2030, 6, 15))
+    target.setCurrentIndex(target_index)
+    unit.setCurrentText(unit_text)
+    QTest.mouseClick(steps[step], Qt.MouseButton.LeftButton)
+    assert edit.date() == QDate(*expected)
+    assert other.date() == QDate(2030, 6, 15)
+
+
+@pytest.mark.parametrize("unit_text", ["年", "月", "日"])
+@pytest.mark.parametrize("step,before,expected", [
+    (-5, (1, 1, 2), (1, 1, 1)),
+    (-1, (1, 1, 1), (1, 1, 1)),
+    (1, (9999, 12, 31), (9999, 12, 31)),
+    (5, (9999, 12, 30), (9999, 12, 31)),
+])
+def test_session_panel_date_steps_clamp_to_editor_bounds(
+    custom_date_panel, unit_text, step, before, expected,
+):
+    panel = custom_date_panel()
+    _, _, unit, steps = _date_adjust_controls(panel)
+    panel._start_date.setDate(QDate(*before))
+    unit.setCurrentText(unit_text)
+    steps[step].click()
+    assert panel._start_date.date() == QDate(*expected)
+
+
+def test_session_panel_date_reverse_range_blocks_analysis_and_recovers(custom_date_panel):
+    from PySide6.QtWidgets import QLabel
+
+    executor = _IndependentDeferredExecutor()
+    panel = custom_date_panel(executor=executor)
+    started = []
+    panel.analysis_started.connect(lambda: started.append(True))
+    panel._start_date.setDate(QDate(2024, 3, 2))
+    panel._end_date.setDate(QDate(2024, 3, 1))
+    error = panel.findChild(QLabel, "dateRangeError")
+    assert error is not None and error.isVisible()
+    assert "开始日期" in error.text() and "结束日期" in error.text()
+    assert not panel._analyze_button.isEnabled()
+    panel.start_analysis()  # The callable entry must enforce the same guard.
+    _drain(panel)
+    assert started == [] and executor.tasks == []
+    # A single-endpoint step fixes the range without moving the start date.
+    _, target, unit, steps = _date_adjust_controls(panel)
+    target.setCurrentIndex(1)
+    unit.setCurrentText("日")
+    steps[1].click()
+    assert panel._start_date.date() == QDate(2024, 3, 2)
+    assert panel._end_date.date() == QDate(2024, 3, 2)
+    assert error.isHidden() and panel._analyze_button.isEnabled()
+    panel._end_date.setDate(QDate(2024, 3, 1))
+    panel._scope_all.setChecked(True)
+    assert error.isHidden() and panel._analyze_button.isEnabled()
+
+
+@pytest.mark.parametrize("endpoint", ["start", "end"])
+@pytest.mark.parametrize("pending", [False, True])
+def test_session_panel_date_wechat_defaults_preserve_manual_input(
+    custom_date_panel, endpoint, pending,
+):
+    from PySide6.QtWidgets import QDateEdit
+
+    executor = _IndependentDeferredExecutor()
+    panel = custom_date_panel("WECHAT", executor)
+    edit = getattr(panel, f"_{endpoint}_date")
+    edit.setFocus()
+    edit.setSelectedSection(QDateEdit.Section.YearSection)
+    QTest.keyClicks(edit, "2023")
+    typed = edit.lineEdit().text()
+    if not pending:
+        QTest.keyClick(edit, Qt.Key.Key_Return)
+    executor.tasks[0].succeed((1704067200, 1704153600))
+    assert edit.lineEdit().text() == typed
+    if pending:
+        QTest.keyClick(edit, Qt.Key.Key_Return)
+    assert edit.date().year() == 2023
+    other = panel._end_date if endpoint == "start" else panel._start_date
+    timestamp = 1704153600 if endpoint == "start" else 1704067200
+    assert other.date().toPython() == datetime.fromtimestamp(timestamp).date()
+
+
+def test_session_panel_date_wechat_defaults_preserve_microadjustment(custom_date_panel):
+    executor = _IndependentDeferredExecutor()
+    panel = custom_date_panel("WECHAT", executor)
+    _, _, _, steps = _date_adjust_controls(panel)
+    steps[-5].click()
+    adjusted = panel._start_date.date()
+    executor.tasks[0].succeed((1704067200, 1704153600))
+    assert panel._start_date.date() == adjusted
+
+
+def test_session_panel_date_wechat_stale_requests_cannot_pollute_reselected_session(custom_date_panel):
+    executor = _IndependentDeferredExecutor()
+    panel = custom_date_panel("WECHAT", executor)
+    # A -> B -> A needs request identity as well as session identity.
+    panel._start_date.setDate(QDate(2023, 5, 6))
+    panel._session_list.setCurrentRow(1)
+    assert panel._start_date.date() == QDate.currentDate()
+    panel._session_list.setCurrentRow(0)
+    executor.tasks[2].succeed((1704067200, 1704153600))
+    expected = panel.build_config()
+    executor.tasks[0].succeed((1609459200, 1609545600))
+    executor.tasks[1].succeed((1640995200, 1641081600))
+    assert panel.build_config() == expected
+    assert panel._start_date.date().toPython() == datetime.fromtimestamp(1704067200).date()
+    assert panel._end_date.date().toPython() == datetime.fromtimestamp(1704153600).date()
 
 
 def test_session_panel_scope_defaults_to_all(qt_app, sources) -> None:
@@ -3739,7 +4642,7 @@ def test_session_panel_search_filters_display_names(qt_app) -> None:
         "Alice",
         "Alice's Study Room",
     ]
-    assert "\u4f1a\u8bdd\u5217\u8868\uff082\uff09" in panel._session_box.title()
+    assert "聊天会话（2）" in panel._session_box.title()
 
     panel._session_search.setText("board")
 

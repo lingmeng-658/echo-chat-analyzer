@@ -25,7 +25,7 @@ from ..application.facade import (
 )
 from ..resources import default_wechat_login_guide_path
 from .progress_track import ConnectionProgressTrack
-from .session_analysis_panel import SessionAnalysisPanel
+from .session_analysis_panel import SessionAnalysisPanel, SessionConnectionBar
 from .theme import (
     WECHAT_GUIDE_STYLE as GUIDE_STYLE,
     WECHAT_GUIDE_STYLE_EMPHASIS as GUIDE_STYLE_EMPHASIS,
@@ -219,7 +219,6 @@ class WeChatWorkspace(QWidget):
         self._status_label.setWordWrap(True)
         self._status_label.setVisible(False)
         self._status_label.setStyleSheet(WECHAT_STATUS_STYLE)
-        self._connection_layout.addWidget(self._status_label)
 
         self._wechat_connect_button = QPushButton(_WECHAT_CONNECT_LABEL)
         self._wechat_connect_button.setVisible(False)
@@ -230,6 +229,10 @@ class WeChatWorkspace(QWidget):
         self._wechat_disconnect_button.setVisible(False)
         self._wechat_disconnect_button.clicked.connect(self.disconnect_wechat)
         self._wechat_disconnect_button.setMinimumHeight(34)
+        self._connection_bar = SessionConnectionBar(
+            self._status_label, self._wechat_disconnect_button,
+        )
+        self._connection_layout.addWidget(self._connection_bar)
 
         self._wechat_setup_button = QPushButton(_WECHAT_SETUP_LABEL)
         self._wechat_setup_button.setObjectName("wechatSettings")
@@ -302,8 +305,7 @@ class WeChatWorkspace(QWidget):
         self._connection_layout.addLayout(self._wechat_guide_row)
         actions = QHBoxLayout()
         actions.setSpacing(16)
-        for button in (self._wechat_connect_button, self._wechat_disconnect_button):
-            actions.addWidget(button)
+        actions.addWidget(self._wechat_connect_button)
         actions.addStretch(1)
         actions.addWidget(self._wechat_setup_button)
         self._connection_layout.addLayout(actions)
@@ -325,6 +327,7 @@ class WeChatWorkspace(QWidget):
         self.session_panel.analysis_succeeded.connect(self.analysis_succeeded.emit)
         self.session_panel.analysis_failed.connect(self.analysis_failed.emit)
         self.session_panel.status_changed.connect(self._on_panel_status)
+        self.session_panel.workspace_width_changed.connect(self._update_setup_spacing)
 
         self.session_panel.show_unconnected_placeholder()
         self._show_wechat_idle()
@@ -335,12 +338,14 @@ class WeChatWorkspace(QWidget):
         self._update_setup_spacing()
 
     def _update_setup_spacing(self) -> None:
-        # Contract the paper gutters at the minimum window size; leave the
-        # existing session panel's layout and sizing untouched.
-        horizontal = max(24, min(96, round(self.width() * 0.08)))
-        vertical = max(20, min(48, round(self.height() * 0.06)))
+        # Ready workspaces align the compact status row with the session panel.
+        ready = self._sessions_loaded
+        horizontal = max(24, (self.width() - self.session_panel.workspace_width_limit()) // 2) if ready else max(24, min(96, round(self.width() * 0.08)))
+        vertical = 12 if ready else max(20, min(48, round(self.height() * 0.06)))
+        self._connection_bar.set_compact(ready)
+        self._connection_layout.setSpacing(0 if ready else 24)
         self._connection_layout.setContentsMargins(
-            horizontal, vertical, horizontal, 20,
+            horizontal, vertical, horizontal, 0 if ready else 20,
         )
 
     # ---------------------------------------------------------------- public API
@@ -454,6 +459,7 @@ class WeChatWorkspace(QWidget):
         ``None`` leaves the guided setup: the trail hides and the status label
         (owned by the caller) speaks again.
         """
+        self._update_setup_spacing()
         if stage is None:
             self._progress_track.setVisible(False)
             return
@@ -892,6 +898,7 @@ class WeChatWorkspace(QWidget):
         self._hide_wechat_guide()
         self._wechat_connect_button.setVisible(False)
         self._wechat_disconnect_button.setVisible(True)
+        self._update_setup_spacing()
 
     def _handle_session_error(self, code: str, message: str) -> None:
         self._sessions_loaded = False

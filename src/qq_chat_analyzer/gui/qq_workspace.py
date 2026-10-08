@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 from ..application.facade import ChatSource
 from ..resources import default_qq_runtime_directory
 from .progress_track import ConnectionProgressTrack
-from .session_analysis_panel import SessionAnalysisPanel
+from .session_analysis_panel import SessionAnalysisPanel, SessionConnectionBar
 from .theme import (
     HOME_COLOR_ACCENT,
     HOME_COLOR_MUTED,
@@ -317,7 +317,6 @@ class QQWorkspace(QWidget):
         self._status_label.setWordWrap(True)
         self._status_label.setVisible(False)
         self._status_label.setStyleSheet(QQ_STATUS_STYLE)
-        self._connection_layout.addWidget(self._status_label)
 
         self._qq_connect_button = QPushButton(_QQ_CONNECT_LABEL)
         self._qq_connect_button.setVisible(False)
@@ -328,6 +327,10 @@ class QQWorkspace(QWidget):
         self._qq_disconnect_button.setVisible(False)
         self._qq_disconnect_button.clicked.connect(self.disconnect_qq)
         self._qq_disconnect_button.setMinimumHeight(34)
+        self._connection_bar = SessionConnectionBar(
+            self._status_label, self._qq_disconnect_button,
+        )
+        self._connection_layout.addWidget(self._connection_bar)
 
         self._qq_guide_label = _CurrentActionLabel()
         self._qq_guide_label.setVisible(False)
@@ -368,8 +371,7 @@ class QQWorkspace(QWidget):
 
         actions = QHBoxLayout()
         actions.setSpacing(16)
-        for button in (self._qq_connect_button, self._qq_disconnect_button):
-            actions.addWidget(button)
+        actions.addWidget(self._qq_connect_button)
         actions.addStretch(1)
         self._connection_layout.addLayout(actions)
         for button in (self._qq_connect_button, self._qq_disconnect_button):
@@ -415,6 +417,7 @@ class QQWorkspace(QWidget):
         self.session_panel.analysis_succeeded.connect(self.analysis_succeeded.emit)
         self.session_panel.analysis_failed.connect(self.analysis_failed.emit)
         self.session_panel.status_changed.connect(self._on_panel_status)
+        self.session_panel.workspace_width_changed.connect(self._update_setup_spacing)
 
         self._qq_status_timer = QTimer(self)
         self._qq_status_timer.setInterval(_QQ_STATUS_POLL_INTERVAL_MS)
@@ -427,12 +430,14 @@ class QQWorkspace(QWidget):
         self._update_setup_spacing()
 
     def _update_setup_spacing(self) -> None:
-        # Contract the paper gutters at the minimum window size; leave the
-        # shared session panel's layout and sizing untouched.
-        horizontal = max(24, min(96, round(self.width() * 0.08)))
-        vertical = max(20, min(48, round(self.height() * 0.06)))
+        # Ready workspaces align the compact status row with the session panel.
+        ready = self._sessions_loaded
+        horizontal = max(24, (self.width() - self.session_panel.workspace_width_limit()) // 2) if ready else max(24, min(96, round(self.width() * 0.08)))
+        vertical = 12 if ready else max(20, min(48, round(self.height() * 0.06)))
+        self._connection_bar.set_compact(ready)
+        self._connection_layout.setSpacing(0 if ready else 24)
         self._connection_layout.setContentsMargins(
-            horizontal, vertical, horizontal, 20,
+            horizontal, vertical, horizontal, 0 if ready else 20,
         )
         # Wrapped loading copy needs its real font height at the available width.
         for label in (self._session_loading_action, self._session_loading_note):
@@ -677,6 +682,7 @@ class QQWorkspace(QWidget):
         ``None`` leaves the guided journey: the trail hides and the status
         label (owned by the caller) speaks again.
         """
+        self._update_setup_spacing()
         if stage is None:
             self._progress_track.setVisible(False)
             return
@@ -999,6 +1005,7 @@ class QQWorkspace(QWidget):
         # The journey is over: the session panel owns the page from here.
         self._leave_qq_journey()
         self._hide_qq_qrcode()
+        self._update_setup_spacing()
         self.status_changed.emit(
             self._last_qq_status_message
             or _QQ_STATE_MESSAGES[_QQ_STATE_CONNECTED]

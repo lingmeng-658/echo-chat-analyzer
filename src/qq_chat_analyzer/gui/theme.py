@@ -160,11 +160,16 @@ QLabel#wechatPrivacy {{ font-size: 12px; }}
 WECHAT_GUIDE_STYLE_EMPHASIS = WECHAT_GUIDE_STYLE + f"""
 QLabel {{ color: {HOME_COLOR_ACCENT}; }}
 """
+SESSION_READY_STATUS_RULE = """
+QLabel[sessionReady="true"] { border: none; padding: 0; }
+"""
 WECHAT_STATUS_STYLE = f"""
+QLabel {{
 color: {HOME_COLOR_MUTED}; background: transparent;
 border: none; border-bottom: 1px solid {COLOR_RULE_SOFT};
 border-radius: 0; padding: 0 0 16px 0;
-"""
+}}
+""" + SESSION_READY_STATUS_RULE
 
 # The connection trail every source's guided journey draws: a hairline
 # connecting a filled dot per finished stage, Home's terracotta note for the
@@ -228,15 +233,19 @@ QLabel#qqCurrentAction {{
 }}
 """
 QQ_STATUS_STYLE = f"""
+QLabel {{
 color: {HOME_COLOR_MUTED}; background: transparent;
 border: none; border-bottom: 1px solid {COLOR_RULE_SOFT};
 border-radius: 0; padding: 0 0 16px 0;
-"""
+}}
+""" + SESSION_READY_STATUS_RULE
 QQ_STATUS_STYLE_ERROR = f"""
+QLabel {{
 color: {HOME_COLOR_ACCENT}; background: transparent;
 border: none; border-bottom: 1px solid {COLOR_RULE_SOFT};
 border-radius: 0; padding: 0 0 16px 0; font-weight: 600;
-"""
+}}
+""" + SESSION_READY_STATUS_RULE
 # Reading the session list is a wait, not a destination: it speaks the same
 # quiet status language as the connection page - muted copy on the paper page -
 # instead of the old grey card with an infinite blue bar that used to fill the
@@ -299,6 +308,97 @@ SESSION_LIST_STYLE = (
     f"color: {COLOR_TEXT}; }}"
 )
 
+SESSION_CONNECTION_STYLE = f"""
+QFrame#sessionConnectionBar {{ background: transparent; border: none; }}
+QFrame#sessionConnectionBar QPushButton#sessionDisconnect {{
+    font-family: {REFRESH_SANS_FAMILY};
+    color: {HOME_COLOR_MUTED}; background: transparent;
+    border: none; border-radius: 0; padding: 4px 0 4px 16px;
+}}
+QFrame#sessionConnectionBar QPushButton#sessionDisconnect:hover,
+QFrame#sessionConnectionBar QPushButton#sessionDisconnect:focus {{
+    color: {HOME_COLOR_ACCENT}; background: transparent; text-decoration: underline;
+}}
+"""
+
+SESSION_WORKSPACE_MAX_WIDTH = 1120
+SESSION_WORKSPACE_QSS = f"""
+QWidget {{
+    font-family: {REFRESH_SANS_FAMILY}; font-size: 13px;
+    color: {HOME_COLOR_TEXT}; background: transparent;
+}}
+QGroupBox#sessionListSection, QGroupBox#analysisRangeSection {{
+    border: none; border-radius: 0; background: transparent;
+    margin-top: 20px; padding-top: 4px; font-weight: 500;
+}}
+QLabel#sessionWorkspaceTitle {{ font-family: {SERIF_FAMILY}; font-size: 28px; font-weight: 500; }}
+QLabel#sessionWorkspaceDescription, QLabel#selectedSessionCaption {{ color: {HOME_COLOR_MUTED}; }}
+QLabel#selectedSessionCaption, QLabel#selectedSessionMeta {{ font-size: 12px; color: {HOME_COLOR_MUTED}; }}
+QLabel#selectedSessionName {{ font-size: 22px; font-weight: 500; }}
+QLabel#selectedSessionName[hasSelection="false"] {{ font-size: 16px; font-weight: 400; }}
+QLabel#sessionSelectionHint, QLabel#sessionEmptyDetail {{ color: {HOME_COLOR_MUTED}; }}
+QLabel#sessionEmptyTitle {{ font-size: 16px; font-weight: 500; }}
+QFrame#sessionConfiguration {{ border: none; border-left: 1px solid {COLOR_RULE_SOFT}; }}
+QFrame#sessionConfiguration[stacked="true"] {{ border: none; }}
+QGroupBox#sessionListSection {{ font-size: 14px; }}
+QGroupBox#analysisRangeSection {{ font-size: 14px; }}
+QGroupBox::title {{ subcontrol-origin: margin; left: 0; padding: 0; }}
+QLineEdit, QComboBox, QDateEdit {{
+    background: {HOME_COLOR_PAPER}; border: 1px solid {COLOR_RULE_SOFT};
+    border-radius: 2px; padding: 8px 10px;
+    selection-background-color: {COLOR_ACCENT_SOFT};
+}}
+QLineEdit:focus, QComboBox:focus, QDateEdit:focus {{ border-color: {HOME_COLOR_ACCENT}; }}
+QDateEdit[adjustmentTarget="true"] {{ border-color: {HOME_COLOR_ACCENT}; }}
+QComboBox#dateAdjustTarget, QComboBox#dateAdjustUnit {{ padding: 4px 6px; }}
+QPushButton#dateAdjustStep {{
+    background: {HOME_COLOR_PAPER}; color: {HOME_COLOR_TEXT};
+    border: 1px solid {COLOR_RULE_SOFT}; border-radius: 2px;
+    padding: 5px 6px; min-height: 20px;
+}}
+QPushButton#dateAdjustStep:hover, QPushButton#dateAdjustStep:focus {{
+    background: {HOME_COLOR_LEAF}; border-color: {HOME_COLOR_ACCENT};
+}}
+QPushButton#dateAdjustStep:pressed {{ background: {COLOR_ACCENT_SOFT}; }}
+QLabel#dateRangeError {{ color: {COLOR_ERROR}; }}
+QListWidget#sessionList {{
+    font-size: 14px;
+    background: {HOME_COLOR_PAPER}; border: 1px solid {COLOR_RULE_SOFT};
+    border-radius: 2px; outline: 0;
+}}
+QListWidget#sessionList:focus {{ border-color: {HOME_COLOR_ACCENT}; }}
+QListWidget#sessionList::item {{
+    padding: 0 14px; border-left: 2px solid transparent;
+    border-bottom: 1px solid {COLOR_RULE_SOFT};
+}}
+QListWidget#sessionList::item:hover {{ background: {HOME_COLOR_LEAF}; }}
+QListWidget#sessionList::item:selected, QListWidget#sessionList::item:selected:hover {{
+    background: transparent; color: {HOME_COLOR_TEXT}; font-weight: 500;
+}}
+QListWidget#sessionList::item:disabled {{ color: {COLOR_FAINT}; }}
+QPushButton#analysisScopeOption {{
+    background: {HOME_COLOR_PAPER}; color: {HOME_COLOR_MUTED};
+    border: 1px solid {COLOR_RULE_SOFT}; border-radius: 0; padding: 8px 12px;
+}}
+QPushButton#analysisScopeOption:hover, QPushButton#analysisScopeOption:focus {{
+    background: {HOME_COLOR_LEAF}; border-color: {HOME_COLOR_ACCENT};
+}}
+QPushButton#analysisScopeOption:checked {{
+    background: {COLOR_ACCENT_SOFT}; border-color: {HOME_COLOR_ACCENT};
+    color: {COLOR_ACCENT_DARK}; font-weight: 500;
+}}
+QPushButton#sessionAnalyze {{
+    background: {HOME_COLOR_ACCENT}; color: {HOME_COLOR_PAPER};
+    border: 1px solid {HOME_COLOR_ACCENT}; border-radius: 2px;
+    padding: 10px 24px; font-size: 14px; font-weight: 500;
+}}
+QPushButton#sessionAnalyze:hover, QPushButton#sessionAnalyze:focus {{
+    background: {COLOR_ACCENT_DARK}; border-color: {COLOR_ACCENT_DARK};
+}}
+QPushButton#sessionAnalyze:disabled {{
+    background: {HOME_COLOR_LEAF}; border-color: {COLOR_RULE_SOFT}; color: {COLOR_FAINT};
+}}
+"""
 
 # ---- application-wide stylesheet --------------------------------------------
 
@@ -503,6 +603,9 @@ __all__ = [
     "REFRESH_SANS_FAMILY",
     "SERIF_FAMILY",
     "SESSION_LIST_STYLE",
+    "SESSION_CONNECTION_STYLE",
+    "SESSION_WORKSPACE_QSS",
+    "SESSION_WORKSPACE_MAX_WIDTH",
     "STATUS_STYLE_BASE",
     "STATUS_STYLE_ERROR",
     "WINDOW_TITLE_STYLE",
