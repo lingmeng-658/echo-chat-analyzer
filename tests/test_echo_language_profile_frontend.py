@@ -60,6 +60,7 @@ eval(fs.readFileSync(process.env.ECHO_APP_PATH, "utf8"));
 process.stdout.write(JSON.stringify({
   intro: allText(nodes["voices-intro"]),
   body: allText(nodes["member-list"]),
+  bodyClass: nodes["member-list"].className,
   childCount: nodes["member-list"].children.length,
   sharedHidden: nodes["private-shared-words"].hidden,
   shared: allText(nodes["private-shared-words"]) + " " + allText(nodes["private-shared-words-list"]),
@@ -257,3 +258,109 @@ def test_frontend_contains_no_log_odds_eligibility_or_identity_implementation() 
         "rate_b",
     ):
         assert forbidden not in source
+
+
+# ---------------------------------------------------------------------------
+# Group length control: many members scroll inside the chapter
+# ---------------------------------------------------------------------------
+
+
+STYLE_PATH = PROJECT_ROOT / "frontend" / "echo_report" / "style.css"
+
+
+def _read_css_sources() -> tuple[str, str]:
+    """Both copies of the report stylesheet must stay in sync."""
+    import sys
+
+    sys.path.insert(0, str(PROJECT_ROOT / "src"))
+    from qq_chat_analyzer.presentation.echo_report_template import ECHO_REPORT_CSS
+
+    return ECHO_REPORT_CSS, STYLE_PATH.read_text(encoding="utf-8")
+
+
+def test_group_member_list_scrolls_within_a_bounded_section() -> None:
+    """A big group must not stretch the chapter: the portraits scroll inside."""
+    template_css, file_css = _read_css_sources()
+
+    for css in (template_css, file_css):
+        assert ".member-list.mode-group {" in css
+        assert "max-height: min(560px, 72vh);" in css
+        assert "overflow-y: auto;" in css
+        assert "overscroll-behavior: contain;" in css
+        # On paper every portrait unfolds instead of scrolling.
+        assert ".member-list.mode-group { max-height: none; overflow: visible; }" in css
+
+
+def test_private_member_list_keeps_its_original_layout() -> None:
+    """Private chats are untouched: no cap, no scroll, same two-column grid."""
+    template_css, file_css = _read_css_sources()
+
+    for css in (template_css, file_css):
+        assert ".member-list { border-top: 1px solid var(--ink); }" in css
+        assert (
+            ".member-list.mode-private { display: grid; "
+            "grid-template-columns: 1fr 1fr; }" in css
+        )
+        for line in css.splitlines():
+            if ".mode-private" in line:
+                assert "overflow" not in line, line
+                assert "max-height" not in line, line
+
+
+def test_group_member_list_renders_every_member_without_slicing() -> None:
+    """Length control is CSS only: the DOM keeps all members and portraits."""
+    members = [
+        {
+            "speaker_key": f"fictional-key-{index}",
+            "display_name": f"虚构成员{index:02d}",
+            "heading": f"虚构成员{index:02d}",
+            "primary_words": ["风格词", "回声"],
+            "context_words": ["项目"],
+        }
+        for index in range(60)
+    ]
+
+    rendered = _render(
+        {
+            "mode": "group_distinctive",
+            "available": True,
+            "unavailable_reason": "",
+            "members": members,
+        }
+    )
+
+    assert rendered["childCount"] == 60
+    assert rendered["bodyClass"] == "member-list mode-group"
+    assert "虚构成员00" in rendered["body"]
+    assert "虚构成员59" in rendered["body"]
+    assert "fictional-key-59" not in rendered["body"]
+
+
+def test_private_member_list_still_renders_the_two_prepared_voices() -> None:
+    """The private branch keeps its own class and both prepared portraits."""
+    rendered = _render(
+        {
+            "mode": "private_common",
+            "available": True,
+            "unavailable_reason": "",
+            "members": [
+                {
+                    "speaker_key": "a",
+                    "display_name": "虚构甲",
+                    "heading": "你常说",
+                    "primary_words": ["散步"],
+                    "context_words": [],
+                },
+                {
+                    "speaker_key": "b",
+                    "display_name": "虚构乙",
+                    "heading": "TA 常说",
+                    "primary_words": ["到家"],
+                    "context_words": [],
+                },
+            ],
+        }
+    )
+
+    assert rendered["bodyClass"] == "member-list mode-private"
+    assert rendered["childCount"] == 2

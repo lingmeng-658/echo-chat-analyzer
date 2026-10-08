@@ -419,6 +419,23 @@ h1, h2, h3, p { margin-top: 0; }
 
 .member-list { border-top: 1px solid var(--ink); }
 .member-list.mode-private { display: grid; grid-template-columns: 1fr 1fr; }
+/* A big group lists every member in full. The section keeps the report's
+   book-page height and lets the portraits continue below it, so one group's
+   list can never push the rest of the chapter off the page. */
+.member-list.mode-group {
+  max-height: min(560px, 72vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-soft) transparent;
+}
+.member-list.mode-group::-webkit-scrollbar { width: 8px; }
+.member-list.mode-group::-webkit-scrollbar-track { background: transparent; }
+.member-list.mode-group::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: var(--accent-soft);
+}
+.member-list.mode-group::-webkit-scrollbar-thumb:hover { background: var(--accent); }
 .voice-entry { position: relative; padding: 34px 0 42px; border-bottom: 1px solid var(--rule); }
 .mode-private .voice-entry { min-height: 340px; padding-right: 34px; }
 .mode-private .voice-entry + .voice-entry { padding-right: 0; padding-left: 34px; border-left: 1px solid var(--rule); }
@@ -842,6 +859,8 @@ h1, h2, h3, p { margin-top: 0; }
   .report { width: auto; margin: 0; }
   .page { min-height: 100vh; margin: 0; box-shadow: none; break-after: page; }
   .cover-footer a, .end-mark a { display: none; }
+  /* On paper the group list unfolds completely instead of scrolling. */
+  .member-list.mode-group { max-height: none; overflow: visible; }
 }
 
 """
