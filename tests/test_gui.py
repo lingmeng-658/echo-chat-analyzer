@@ -30,7 +30,7 @@ pytest.importorskip("PySide6", reason="PySide6 is required for the GUI layer")
 
 from PySide6.QtCore import QDate, QThreadPool, Qt  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QApplication, QSizePolicy  # noqa: E402
+from PySide6.QtWidgets import QApplication, QMessageBox, QSizePolicy  # noqa: E402
 
 
 def _facade_module():
@@ -484,8 +484,12 @@ class StubFacade:
             action_hint="",
         )
 
-    def analyze_session(self, source, session_id, config=None, progress=None):
+    def analyze_session(self, source, session_id, config=None, progress=None, on_phase=None):
         self.analyze_session_calls.append((source, session_id, config))
+        if on_phase is not None:
+            from qq_chat_analyzer.application.analysis_phase import AnalysisPhase
+            on_phase(AnalysisPhase.READING)
+            on_phase(AnalysisPhase.ANALYZING_REPORT)
         if progress is not None:
             progress("正在分析聊天内容...")
         if self._error is not None:
@@ -2085,6 +2089,8 @@ def test_gui_pages_only_import_the_facade_from_application() -> None:
         "dashboard_page.py",
         "main_window.py",
         "wechat_setup_dialog.py",
+        "processing_page.py",
+        "processing_animation_model.py",
     ):
         source = (gui_directory / name).read_text(encoding="utf-8")
         for line in source.splitlines():
@@ -4986,6 +4992,221 @@ def _window_with_running_fictional_analysis(qt_app, source):
     panel.start_analysis()
     _drain(panel)
     return window, facade, executor, panel
+
+
+@pytest.mark.parametrize("source_name", ["qq", "wechat"])
+def test_processing_structured_phase_chain_ignores_progress_wording(qt_app, source_name):
+    from qq_chat_analyzer.application.analysis_phase import AnalysisPhase
+    source = _facade_module().ChatSource(source_name)
+    window, _, executor, panel = _window_with_running_fictional_analysis(qt_app, source)
+    page = window.processing_page
+    assert page.phase is AnalysisPhase.READING
+    task = executor.tasks[-1]
+    task.progress("正在分析聊天内容...")
+    assert page.phase is AnalysisPhase.READING
+    task.progress(AnalysisPhase.ANALYZING_REPORT)
+    assert page.phase is AnalysisPhase.ANALYZING_REPORT
+    task.progress("正在读取聊天记录...")
+    assert window.processing_status_label.text() == "正在分析与生成报告"
+    assert panel._analysis_running  # analysis is not task completion
+
+
+@pytest.mark.parametrize("size", [(800, 600), (1200, 760)])
+def test_processing_layout_in_the_formal_window(qt_app, size):
+    from PySide6.QtCore import QPoint
+    from qq_chat_analyzer.gui.theme import BASE_QSS
+    window, _, _, _ = _window_with_running_fictional_analysis(qt_app, _facade_module().ChatSource.QQ)
+    window.setStyleSheet(BASE_QSS)
+    window.resize(*size)
+    window.show()
+    _drain(window)
+    page = window.processing_page
+    assert (window.width(), window.height()) == size
+    surface_point = page.mapTo(window, QPoint(5, 5))
+    assert window.grab().toImage().pixelColor(surface_point).name() == "#fbf9f4"
+    children = (page.animation, page.status_label, page.subtitle_label, page.cancel_button)
+    for child in children:
+        assert child.isVisibleTo(window)
+        assert page.rect().contains(child.geometry())
+        assert window.rect().contains(child.mapTo(window, QPoint(0, 0)))
+        assert window.rect().contains(child.mapTo(window, child.rect().bottomRight()))
+    for upper, lower in zip(children, children[1:]):
+        assert upper.geometry().bottom() < lower.geometry().top()
+    window.hide()
+
+
+@pytest.mark.parametrize("source_name", ["qq", "wechat"])
+def test_processing_cancel_returns_while_real_worker_is_still_blocked(qt_app, source_name):
+    from qq_chat_analyzer.application.facade import AnalysisPhase
+    from qq_chat_analyzer.gui.main_window import QQ_WORKSPACE_INDEX, WECHAT_WORKSPACE_INDEX
+    from qq_chat_analyzer.gui.workers import submit
+    window, facade, _, panel = _window_with_running_fictional_analysis(qt_app, _facade_module().ChatSource(source_name))
+    window.cancel_analysis()
+    entered, release, returned = threading.Event(), threading.Event(), threading.Event()
+    def analyze_session(source, session_id, config=None, progress=None, on_phase=None):
+        on_phase(AnalysisPhase.READING)
+        entered.set()
+        release.wait(5)
+        returned.set()
+        on_phase(AnalysisPhase.ANALYZING_REPORT)
+        return _StubOutcome(_dashboard_view())
+    facade.analyze_session = analyze_session
+    panel._executor = submit
+    opened = []
+    window._report_opener = lambda path: opened.append(path)
+    panel.start_analysis()
+    _drain(window)
+    try:
+        assert entered.wait(2)
+        window.cancel_analysis()
+        assert not returned.is_set()  # cancellation does not kill blocking work
+        assert not panel._analysis_running
+        assert not window.processing_page.animation._timer.isActive()
+        assert window.stack.currentIndex() == (QQ_WORKSPACE_INDEX if source_name == "qq" else WECHAT_WORKSPACE_INDEX)
+        assert panel.selected_session_id() == "fiction-B"
+        assert panel.build_config().start_time == "2020-01-02"
+        assert panel.build_config().end_time == "2021-03-04"
+    finally:
+        release.set()
+        _settle_workers()
+    assert returned.is_set()
+    assert opened == []
+
+
+@pytest.mark.parametrize("source_name", ["qq", "wechat"])
+def test_processing_cancel_retry_rejects_old_phase_and_terminal_callbacks(qt_app, source_name, tmp_path, monkeypatch):
+    from qq_chat_analyzer.application.analysis_phase import AnalysisPhase
+    monkeypatch.setattr(QMessageBox, "warning", lambda *_: pytest.fail("stale error displayed"))
+    source = _facade_module().ChatSource(source_name)
+    window, _, executor, panel = _window_with_running_fictional_analysis(qt_app, source)
+    opened = []
+    window._report_opener = lambda path: opened.append(path) or True
+    old = executor.tasks[-1]
+    window.cancel_analysis()
+    assert not window.processing_page.animation.model.active
+    assert not window.processing_page.animation._timer.isActive()
+    panel.start_analysis()
+    _drain(panel)
+    current = executor.tasks[-1]
+    old.progress(AnalysisPhase.ANALYZING_REPORT)
+    old.progress("旧任务进度")
+    report = tmp_path / "fictional-report.html"
+    report.write_text("<html>Fiction</html>", encoding="utf-8")
+    old.succeed(_StubOutcome(_dashboard_view(), report_path=report))
+    old.fail("fiction", "旧任务错误")
+    old.finish()
+    assert window.processing_page.phase is AnalysisPhase.READING
+    assert panel._analysis_task is current
+    assert panel._analysis_running
+    assert opened == []
+
+
+@pytest.mark.parametrize("source_name", ["qq", "wechat"])
+def test_processing_quick_success_stops_before_open_and_opens_once(qt_app, source_name, tmp_path):
+    from qq_chat_analyzer.gui.main_window import QQ_WORKSPACE_INDEX, WECHAT_WORKSPACE_INDEX
+    source = _facade_module().ChatSource(source_name)
+    window, _, executor, panel = _window_with_running_fictional_analysis(qt_app, source)
+    report = tmp_path / "fictional-report.html"
+    report.write_text("<html>Fiction</html>", encoding="utf-8")
+    opened = []
+    def open_report(path):
+        assert not window.processing_page.animation.model.active
+        assert not window.processing_page.animation._timer.isActive()
+        opened.append(path)
+        return True
+    window._report_opener = open_report
+    task = executor.tasks[-1]
+    outcome = _StubOutcome(_dashboard_view(), report_path=report)
+    task.succeed(outcome)
+    task.succeed(outcome)
+    task.progress("迟到进度")
+    task.finish()
+    assert opened == [report.resolve()]
+    assert not panel._analysis_running
+    assert window.stack.currentIndex() == (QQ_WORKSPACE_INDEX if source_name == "qq" else WECHAT_WORKSPACE_INDEX)
+    assert window._status_label.text() != "迟到进度"
+
+
+@pytest.mark.parametrize("source_name", ["qq", "wechat"])
+def test_processing_failure_stops_before_safe_error_dialog(qt_app, source_name, monkeypatch):
+    source = _facade_module().ChatSource(source_name)
+    window, _, executor, panel = _window_with_running_fictional_analysis(qt_app, source)
+    shown = []
+    def warning(_window, _title, message):
+        assert not window.processing_page.animation.model.active
+        assert not window.processing_page.animation._timer.isActive()
+        shown.append(message)
+    monkeypatch.setattr(QMessageBox, "warning", warning)
+    task = executor.tasks[-1]
+    task.fail("fictional_error", "虚构安全错误")
+    task.fail("fictional_error", "重复错误")
+    assert shown == ["虚构安全错误"]
+    assert not panel._analysis_running
+
+
+def test_processing_close_invalidates_task_before_shutdown(qt_app, monkeypatch):
+    source = _facade_module().ChatSource.QQ
+    window, facade, executor, _ = _window_with_running_fictional_analysis(qt_app, source)
+    monkeypatch.setattr("qq_chat_analyzer.gui.main_window._quit_application", lambda: None)
+    called = []
+    window._report_opener = lambda path: called.append(path)
+    task = executor.tasks[-1]
+    window.close()
+    assert not window.processing_page.animation.model.active
+    assert not window.processing_page.animation._timer.isActive()
+    assert task.cancelled
+    task.succeed(_StubOutcome(_dashboard_view()))
+    task.finish()
+    assert called == []
+    assert window._shutdown_protocol.wait(1)
+    assert facade.shutdown_calls == [1]
+
+
+def test_processing_hidden_window_pauses_but_page_departure_stops(qt_app):
+    source = _facade_module().ChatSource.QQ
+    window, _, _, _ = _window_with_running_fictional_analysis(qt_app, source)
+    window.processing_page.set_reduced_motion(False)
+    window.show()
+    _drain(window)
+    animation = window.processing_page.animation
+    assert animation._timer.isActive()
+    window.hide()
+    assert not animation._timer.isActive()
+    assert animation.model.active
+    window.show()
+    assert animation._timer.isActive()
+    assert animation._elapsed.nsecsElapsed()/1_000_000 < 50
+    window.show_home_page()
+    assert not animation._timer.isActive()
+    assert not animation.model.active
+
+
+@pytest.mark.parametrize("source_name", ["qq", "wechat"])
+def test_processing_real_worker_delivers_typed_phases_on_gui_thread(qt_app, source_name):
+    from qq_chat_analyzer.application.analysis_phase import AnalysisPhase
+    from qq_chat_analyzer.gui.workers import submit
+    source = _facade_module().ChatSource(source_name)
+    window, facade, _, panel = _window_with_running_fictional_analysis(qt_app, source)
+    window.cancel_analysis()
+    gui_thread = threading.get_ident()
+    published_from = []
+    received = []
+    def analyze_session(source, session_id, config=None, progress=None, on_phase=None):
+        published_from.append(threading.get_ident())
+        on_phase(AnalysisPhase.READING)
+        progress("旧字符串仍可传递")
+        on_phase(AnalysisPhase.ANALYZING_REPORT)
+        return _StubOutcome(_dashboard_view())
+    facade.analyze_session = analyze_session
+    panel._executor = submit
+    panel.analysis_phase_changed.connect(lambda phase: received.append((phase, threading.get_ident())))
+    panel.start_analysis()
+    _drain(window)
+    _settle_workers()
+    assert published_from and published_from[0] != gui_thread
+    assert received == [(AnalysisPhase.READING, gui_thread), (AnalysisPhase.ANALYZING_REPORT, gui_thread)]
+    assert not panel._analysis_running
+    assert not window.processing_page.animation._timer.isActive()
 
 
 @pytest.mark.parametrize("source_name", ["qq", "wechat"])

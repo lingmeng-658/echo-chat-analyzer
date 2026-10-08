@@ -13,7 +13,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from qq_chat_analyzer.application.facade import ChatSource, FacadeError, SessionInfo
+from qq_chat_analyzer.application.facade import AnalysisPhase, ChatSource, FacadeError, SessionInfo
 from qq_chat_analyzer.gui import workers
 from qq_chat_analyzer.gui.main_window import MainWindow, PROCESSING_PAGE_INDEX
 from qq_chat_analyzer.gui.session_analysis_panel import SessionAnalysisPanel
@@ -106,17 +106,19 @@ def test_old_finished_preserves_retry_task_and_cancellation(app, make_panel, sou
 
 
 @pytest.mark.parametrize("source", [ChatSource.QQ, ChatSource.WECHAT])
-@pytest.mark.parametrize("event", ["progress", "success", "error"])
+@pytest.mark.parametrize("event", ["phase", "progress", "success", "error"])
 def test_queued_old_callbacks_cannot_reach_retry_ui(
     app, make_panel, monkeypatch, source, event,
 ):
     outcome = object()
 
-    def analyze(*args, progress):
+    def analyze(*args, progress, on_phase):
         if event == "error":
             raise FacadeError(code="fiction-old", public_message="fiction-old")
         if event == "progress":
             progress("fiction-old-progress")
+        if event == "phase":
+            on_phase(AnalysisPhase.ANALYZING_REPORT)
         return outcome
 
     panel, executor = make_panel(
@@ -148,6 +150,7 @@ def test_queued_old_callbacks_cannot_reach_retry_ui(
     assert panel._analysis_task is executor.tasks[-1]
     assert window.stack.currentIndex() == PROCESSING_PAGE_INDEX
     assert window._status_label.text() == expected_status
+    assert window.processing_page.phase is AnalysisPhase.READING
     assert dialogs == []
 
     # The current operation must still deliver all normal callbacks.
