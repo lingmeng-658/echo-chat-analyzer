@@ -35,6 +35,9 @@ from .wechat_wcdb_diagnostic import maybe_launch_wcdb_diagnostic
 DEFAULT_TIMEOUT_SECONDS = 180
 DEFAULT_SESSION_LIMIT = 200
 DEFAULT_MESSAGE_LIMIT = 100000
+# Keep compound SELECTs below SQLite's term limit and Windows' command line
+# limit. Each branch contains only a generated Msg_<md5> name and COUNT(*).
+_MESSAGE_COUNT_BATCH_SIZE = 100
 DB_KEY_ENVIRONMENT_VARIABLE = "WX_DB_KEY"
 
 SESSION_DB_NAME = "session.db"
@@ -172,6 +175,7 @@ class WeChatSession:
     message_count: int | None = None
     message_available: bool = True
     unavailable_reason: str | None = None
+    last_timestamp: int | float | str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -357,7 +361,18 @@ class WeChatDatabaseProvider:
             limit=limit,
             query_stage="session_list",
         )
-        available_tables = self._message_table_names()
+        inventory = self._message_table_inventory()
+        available_tables = {
+            name for names in inventory.values() if names is not None for name in names
+        }
+        requested_tables = {
+            message_table_name(row["username"])
+            for row in rows
+            if isinstance(row, Mapping)
+            and isinstance(row.get("username"), str)
+            and _is_conversation_username(row["username"])
+        }
+        message_counts = self._session_message_counts(inventory, requested_tables)
         contact_names = self._contact_display_names()
 
         sessions: list[WeChatSession] = []
@@ -375,6 +390,8 @@ class WeChatDatabaseProvider:
                     session_id=username,
                     display_name=contact_names.get(username) or username,
                     session_type=_session_type(username),
+                    message_count=message_counts.get(message_table_name(username)),
+                    last_timestamp=row.get("last_timestamp"),
                     message_available=message_available,
                     unavailable_reason=(
                         None
@@ -778,13 +795,22 @@ class WeChatDatabaseProvider:
 
     def _message_table_names(self) -> set[str]:
         """Return every ``Msg_<md5>`` table name found in message shards."""
+        return {
+            name
+            for names in self._message_table_inventory().values()
+            if names is not None
+            for name in names
+        }
+
+    def _message_table_inventory(self) -> dict[Path, set[str] | None]:
+        """Discover tables once per shard; None means discovery failed."""
         root = self._resolve_data_root()
         shards = [
             shard
             for directory in _iter_db_directories(root)
             for shard in sorted(directory.glob(MESSAGE_DB_GLOB))
         ]
-        names: set[str] = set()
+        inventory: dict[Path, set[str] | None] = {}
         for shard in shards:
             try:
                 rows = self._query(
@@ -793,18 +819,73 @@ class WeChatDatabaseProvider:
                         "SELECT name FROM sqlite_master "
                         "WHERE type = 'table' AND name LIKE 'Msg_%'"
                     ),
-                    limit=DEFAULT_MESSAGE_LIMIT,
+                    limit=0,
                     query_stage="message_table_inventory",
+                    log_wcdb_error_message=False,
                 )
             except WeChatDatabaseError:
+                inventory[shard] = None
                 continue
+            names: set[str] = set()
             for row in rows:
                 if (
                     isinstance(row, Mapping)
                     and isinstance(row.get("name"), str)
                 ):
                     names.add(row["name"])
-        return names
+            inventory[shard] = names
+        return inventory
+
+    def _session_message_counts(
+        self, inventory: Mapping[Path, set[str] | None], requested: set[str]
+    ) -> dict[str, int]:
+        """Return complete stored-row counts, never partial shard totals.
+
+        Missing tables stay unknown rather than zero. An existing empty table
+        has a known count of zero. If discovery fails on any shard, no total
+        can be proven complete. Failed batches invalidate only their tables.
+        """
+        if any(names is None for names in inventory.values()):
+            return {}
+        totals: dict[str, int] = {}
+        unknown: set[str] = set()
+        for shard, names in inventory.items():
+            tables = sorted(requested.intersection(names or ()))
+            for offset in range(0, len(tables), _MESSAGE_COUNT_BATCH_SIZE):
+                batch = tables[offset:offset + _MESSAGE_COUNT_BATCH_SIZE]
+                # Every name here comes from message_table_name(username),
+                # not raw schema text or a user-supplied SQL identifier.
+                sql = " UNION ALL ".join(
+                    f"SELECT '{table}' AS table_name, COUNT(*) AS message_count "
+                    f'FROM "{table}"'
+                    for table in batch
+                )
+                try:
+                    rows = self._query(
+                        shard, sql, limit=0, query_stage="session_message_counts",
+                        log_wcdb_error_message=False,
+                    )
+                except WeChatDatabaseError:
+                    unknown.update(batch)
+                    continue
+                counts: dict[str, int] = {}
+                seen: set[str] = set()
+                for row in rows:
+                    if not isinstance(row, Mapping):
+                        continue
+                    table = row.get("table_name")
+                    if not isinstance(table, str) or table not in batch:
+                        continue
+                    value = row.get("message_count")
+                    if table in seen or type(value) is not int or value < 0:
+                        unknown.add(table)
+                    else:
+                        counts[table] = value
+                    seen.add(table)
+                unknown.update(set(batch) - counts.keys())
+                for table, count in counts.items():
+                    totals[table] = totals.get(table, 0) + count
+        return {table: count for table, count in totals.items() if table not in unknown}
 
     def _contact_display_names(self) -> dict[str, str]:
         """Return username -> resolved display name from contact.db."""

@@ -4650,33 +4650,34 @@ def test_session_panel_search_filters_display_names(qt_app) -> None:
     assert panel._session_list.item(0).text() == "Board Game"
 
 
-def test_session_panel_sort_modes_reorder_the_list(qt_app) -> None:
+@pytest.mark.parametrize("source_name", ["qq", "wechat"])
+def test_session_panel_sort_modes_reorder_the_list(qt_app, source_name) -> None:
     """The shared panel re-sorts the cached sessions for each mode."""
     from qq_chat_analyzer.gui.session_analysis_panel import SessionAnalysisPanel
     module = _facade_module()
     panel = SessionAnalysisPanel()
     panel.configure(
         StubFacade(sources=_wechat_available_sources()),
-        module.ChatSource.WECHAT,
+        module.ChatSource(source_name),
     )
     panel.populate_sessions(
         [
             _session(
-                module.ChatSource.WECHAT,
+                module.ChatSource(source_name),
                 "wxid_old",
                 "Alpha",
                 count=50,
                 last_message_time=100,
             ),
             _session(
-                module.ChatSource.WECHAT,
+                module.ChatSource(source_name),
                 "wxid_new",
                 "Beta",
                 count=1,
                 last_message_time=300,
             ),
             _session(
-                module.ChatSource.WECHAT,
+                module.ChatSource(source_name),
                 "wxid_mid",
                 "Gamma",
                 count=30,
@@ -4698,6 +4699,100 @@ def test_session_panel_sort_modes_reorder_the_list(qt_app) -> None:
 
     panel._session_sort.setCurrentIndex(_sort_index(panel, "name"))
     assert names() == ["Alpha", "Beta", "Gamma"]
+    from PySide6.QtCore import QEvent
+    panel.close()
+    panel.deleteLater()
+    qt_app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+@pytest.mark.parametrize("source_name", ["qq", "wechat"])
+def test_session_sort_disables_unknown_counts_and_restores_supported_sort(qt_app, source_name):
+    from qq_chat_analyzer.gui.session_analysis_panel import SessionAnalysisPanel
+    module = _facade_module()
+    source = module.ChatSource(source_name)
+    panel = SessionAnalysisPanel()
+    panel.configure(StubFacade(), source)
+    count_index = _sort_index(panel, "message_count")
+    def names():
+        return [panel._session_list.item(i).text() for i in range(panel._session_list.count())]
+    panel.populate_sessions([
+        _session(source, "fiction-b", "Beta", None, last_message_time=100),
+        _session(source, "fiction-a", "Alpha", None, last_message_time=300),
+    ])
+    assert not panel._session_sort.model().item(count_index).isEnabled()
+    assert "消息数量" in panel._session_sort.toolTip()
+    assert names() == ["Alpha", "Beta"]
+    panel._session_sort.setCurrentIndex(_sort_index(panel, "name"))
+    assert names() == ["Alpha", "Beta"]
+    panel.populate_sessions([
+        _session(source, "fiction-b", "Beta", 0, last_message_time=None),
+        _session(source, "fiction-a", "Alpha", 4, last_message_time=300),
+        _session(source, "fiction-c", "Gamma", 4, last_message_time=300),
+        _session(source, "fiction-d", "Delta", None, last_message_time=None),
+    ])
+    assert panel._session_sort.model().item(count_index).isEnabled()
+    panel._session_sort.setCurrentIndex(count_index)
+    assert names() == ["Alpha", "Gamma", "Beta", "Delta"]
+    panel._session_sort.setCurrentIndex(_sort_index(panel, "recent"))
+    assert names() == ["Alpha", "Gamma", "Beta", "Delta"]
+    panel._session_sort.setCurrentIndex(count_index)
+    panel.populate_sessions([
+        _session(source, "fiction-z", "Zulu", None),
+        _session(source, "fiction-a", "Alpha", None),
+    ])
+    assert panel._session_sort.currentData() == "recent"
+    assert names() == ["Zulu", "Alpha"]  # absent timestamps preserve source order
+    panel.close()
+    panel.deleteLater()
+    from PySide6.QtCore import QEvent
+    qt_app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+def test_wechat_database_counts_drive_all_three_gui_sorts(qt_app, tmp_path):
+    from test_wechat_db_source import _counting_session_provider
+    from qq_chat_analyzer.application.facade import ChatAnalyzerFacade, ChatSource
+    from qq_chat_analyzer.application.wechat.wechat_export_import_service import WeChatExportImportService
+    from qq_chat_analyzer.gui.session_analysis_panel import SessionAnalysisPanel
+    from contextlib import closing
+    import sqlite3
+
+    provider, queries = _counting_session_provider(
+        tmp_path,
+        [{"wxid_alpha": 3, "wxid_beta": 1, "wxid_gamma": 0}, {"wxid_alpha": 4}],
+        ["wxid_alpha", "wxid_gamma", "wxid_beta", "wxid_unknown"],
+    )
+    contact = tmp_path / "xwechat_files" / "wxid_owner" / "db_storage" / "message" / "contact.db"
+    with closing(sqlite3.connect(contact)) as connection, connection:
+        connection.execute("CREATE TABLE contact (username TEXT, remark TEXT, nick_name TEXT)")
+        connection.executemany("INSERT INTO contact VALUES (?, ?, '')", [
+            ("wxid_alpha", "Alpha"), ("wxid_beta", "Beta"),
+            ("wxid_gamma", "Gamma"), ("wxid_unknown", "Unknown"),
+        ])
+    facade = ChatAnalyzerFacade(wechat_service=WeChatExportImportService(provider=provider))
+    panel = SessionAnalysisPanel()
+    panel.configure(facade, ChatSource.WECHAT)
+    panel.populate_sessions(facade.list_sessions(ChatSource.WECHAT))
+    query_count = len(queries)
+
+    def names():
+        return [panel._session_list.item(i).text() for i in range(panel._session_list.count())]
+
+    assert names() == ["Unknown", "Beta", "Gamma", "Alpha"]
+    count_index = _sort_index(panel, "message_count")
+    assert panel._session_sort.model().item(count_index).isEnabled()
+    panel._session_sort.setCurrentIndex(count_index)
+    assert names() == ["Alpha", "Beta", "Gamma", "Unknown"]
+    assert "7" in panel._session_list.item(0).toolTip()
+    assert "0" in panel._session_list.item(2).toolTip()
+    panel._session_sort.setCurrentIndex(_sort_index(panel, "name"))
+    assert names() == ["Alpha", "Beta", "Gamma", "Unknown"]
+    panel._session_sort.setCurrentIndex(_sort_index(panel, "recent"))
+    assert names() == ["Unknown", "Beta", "Gamma", "Alpha"]
+    assert len(queries) == query_count  # Sorting the cached DTOs never re-queries.
+    panel.close()
+    panel.deleteLater()
+    from PySide6.QtCore import QEvent
+    qt_app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 def test_session_panel_keeps_session_ids_out_of_display_text(qt_app) -> None:

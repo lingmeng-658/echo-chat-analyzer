@@ -6,8 +6,11 @@ All fixtures are fictional. No real WeChat data, key, or account appears here.
 from __future__ import annotations
 
 import json
+import os
+import sqlite3
 import subprocess
 import sys
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -210,6 +213,139 @@ def _provider(
 
 
 # ------------------------------------------------------------------ adapter
+
+
+def _counting_session_provider(tmp_path, shards, usernames, faults=None, native_cli=None):
+    """Execute provider SQL on fictional SQLite DBs at the helper boundary."""
+    queries = []
+    faults = faults or {}
+
+    def runner(command, timeout, environment):
+        sql = command[command.index("--sql") + 1]
+        database = Path(command[command.index("--db") + 1])
+        queries.append((database.name, sql))
+        assert "message_content" not in sql
+        if native_cli is not None:
+            command = list(command)
+            command[0] = str(native_cli)
+            command[command.index("--wcdb") + 1] = str(native_cli.with_name("WCDB.dll"))
+            command.append("--no-cipher")
+            return subprocess.run(
+                command, timeout=timeout, env=environment, capture_output=True,
+                text=True, encoding="utf-8",
+            )
+        fault = faults.get(database.name)
+        if (fault == "inventory" and "sqlite_master" in sql) or (
+            fault == "count" and "COUNT(*)" in sql
+        ):
+            return _FakeCompleted(stdout=json.dumps({"ok": False}))
+        with closing(sqlite3.connect(database)) as connection, connection:
+            connection.row_factory = sqlite3.Row
+            rows = [dict(row) for row in connection.execute(sql)]
+        if "COUNT(*)" in sql:
+            if fault == "omit":
+                rows = rows[1:]
+            elif fault == "invalid":
+                rows[0]["message_count"] = -1
+            elif fault == "duplicate":
+                rows.append(rows[0])
+        return _FakeCompleted(stdout=_helper_result(rows))
+
+    provider = _provider(tmp_path, runner)
+    directory = tmp_path / "xwechat_files" / "wxid_owner" / "db_storage" / "message"
+    for database in directory.glob("*.db"):
+        database.unlink()  # Only this helper's fictional placeholders.
+    with closing(sqlite3.connect(directory / "session.db")) as connection, connection:
+        connection.execute("CREATE TABLE SessionTable (username TEXT, last_timestamp INTEGER)")
+        connection.executemany(
+            "INSERT INTO SessionTable VALUES (?, ?)",
+            [(username, 100 + index) for index, username in enumerate(usernames)],
+        )
+    for index, tables in enumerate(shards):
+        with closing(sqlite3.connect(directory / f"message_{index}.db")) as connection, connection:
+            for username, count in tables.items():
+                table = message_table_name(username)
+                connection.execute(f'CREATE TABLE "{table}" (local_type INTEGER)')
+                connection.executemany(
+                    f'INSERT INTO "{table}" VALUES (?)',
+                    [(1 if row % 2 else 3,) for row in range(count)],
+                )
+    return provider, queries
+
+
+def test_session_counts_sum_shards_include_all_types_and_reach_facade(tmp_path):
+    from qq_chat_analyzer.application.facade import ChatAnalyzerFacade, ChatSource
+    from qq_chat_analyzer.application.wechat.wechat_export_import_service import WeChatExportImportService
+
+    provider, queries = _counting_session_provider(
+        tmp_path,
+        [{"wxid_alpha": 3, "wxid_empty": 0}, {"wxid_alpha": 4, "wxid_beta": 2}, {}],
+        ["wxid_alpha", "wxid_empty", "wxid_beta", "wxid_missing"],
+    )
+    facade = ChatAnalyzerFacade(wechat_service=WeChatExportImportService(provider=provider))
+    sessions = facade.list_sessions(ChatSource.WECHAT)
+    by_id = {session.session_id: session for session in sessions}
+    assert by_id["wxid_alpha"].message_count == 7
+    assert by_id["wxid_beta"].message_count == 2
+    assert by_id["wxid_empty"].message_count == 0
+    assert by_id["wxid_empty"].message_available is True
+    assert by_id["wxid_missing"].message_count is None
+    assert by_id["wxid_missing"].message_available is False
+    assert by_id["wxid_alpha"].last_message_time == 100
+    assert len([sql for _, sql in queries if "sqlite_master" in sql]) == 3
+    assert len([sql for _, sql in queries if "COUNT(*)" in sql]) == 2
+
+
+@pytest.mark.parametrize("fault", ["inventory", "count", "omit", "invalid", "duplicate"])
+def test_session_counts_never_publish_partial_or_invalid_totals(tmp_path, fault):
+    provider, _ = _counting_session_provider(
+        tmp_path, [{"wxid_alpha": 3}, {"wxid_alpha": 4}], ["wxid_alpha"],
+        faults={"message_1.db": fault},
+    )
+    session = provider.list_sessions()[0]
+    assert session.message_count is None
+    assert session.message_available is True
+
+
+def test_session_counts_batch_many_tables_without_per_session_processes(tmp_path):
+    usernames = [f"wxid_fictional_{index}" for index in range(205)]
+    provider, queries = _counting_session_provider(
+        tmp_path, [dict.fromkeys(usernames, 2), dict.fromkeys(usernames, 3)], usernames,
+    )
+    sessions = provider.list_sessions(limit=300)
+    assert len(sessions) == 205
+    assert all(session.message_count == 5 for session in sessions)
+    count_sql = [sql for _, sql in queries if "COUNT(*)" in sql]
+    assert len(count_sql) <= 6
+    assert all(len(sql) < 20000 for sql in count_sql)
+
+
+def test_session_counts_failure_does_not_discard_unaffected_counts(tmp_path):
+    provider, _ = _counting_session_provider(
+        tmp_path, [{"wxid_alpha": 3}, {"wxid_beta": 4}], ["wxid_alpha", "wxid_beta"],
+        faults={"message_1.db": "count"},
+    )
+    by_id = {session.session_id: session for session in provider.list_sessions()}
+    assert by_id["wxid_alpha"].message_count == 3
+    assert by_id["wxid_beta"].message_count is None
+
+
+@pytest.mark.slow_integration
+def test_session_counts_native_wcdb_batches_and_shards(tmp_path):
+    configured = os.environ.get("ECHO_NATIVE_WCDB_CLI_PATH")
+    if not configured:
+        pytest.skip("ECHO_NATIVE_WCDB_CLI_PATH is required for native counting")
+    native_cli = Path(configured)
+    assert native_cli.is_file() and native_cli.with_name("WCDB.dll").is_file()
+    usernames = [f"wxid_fictional_{index}" for index in range(205)]
+    provider, queries = _counting_session_provider(
+        tmp_path, [dict.fromkeys(usernames, 2), dict.fromkeys(usernames, 3)],
+        usernames, native_cli=native_cli,
+    )
+    sessions = provider.list_sessions(limit=300)
+    assert len(sessions) == 205
+    assert all(session.message_count == 5 for session in sessions)
+    assert len([sql for _, sql in queries if "COUNT(*)" in sql]) <= 6
 
 
 def test_text_row_becomes_rich_message_then_projects_to_legacy(
@@ -708,6 +844,34 @@ def test_list_sessions_returns_privacy_safe_descriptors(tmp_path: Path) -> None:
         "group",
         "private",
     ]
+    assert [getattr(session, "last_timestamp", None) for session in sessions] == [
+        1753412900, 1753412800,
+    ]
+
+
+@pytest.mark.parametrize("timestamp, expected", [
+    (1753412900, 1753412900), ("1753412900000", 1753412900),
+    (None, None), ("invalid", None), (True, None),
+])
+def test_session_metadata_reaches_facade_without_message_queries(tmp_path, timestamp, expected):
+    from qq_chat_analyzer.application.facade import ChatSource, _to_session_info
+
+    def runner(command, timeout, environment):
+        sql = command[command.index("--sql") + 1]
+        if sql.startswith("PRAGMA table_info"):
+            return _FakeCompleted(stdout=_schema_result(["username", "last_timestamp"]))
+        if "FROM SessionTable" in sql:
+            return _FakeCompleted(stdout=_helper_result([
+                {"username": FICTIONAL_SESSION, "last_timestamp": timestamp},
+            ]))
+        if "sqlite_master" in sql:
+            return _FakeCompleted(stdout=_helper_result([]))
+        raise AssertionError(f"Unexpected query (must not scan messages): {sql}")
+
+    raw = _provider(tmp_path, runner).list_sessions()[0]
+    session = _to_session_info(ChatSource.WECHAT, raw)
+    assert session.last_message_time == expected
+    assert session.message_count is None
 
 
 def test_list_sessions_marks_missing_msg_tables_unavailable(

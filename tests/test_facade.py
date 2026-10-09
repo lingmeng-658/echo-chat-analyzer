@@ -47,10 +47,12 @@ class _FakeQQGroup:
         group_name: str,
         member_count: int | None = None,
         last_message_time: int | None = None,
+        message_count: int | None = None,
     ) -> None:
         self.group_code = group_code
         self.group_name = group_name
         self.member_count = member_count
+        self.message_count = message_count
         self.last_message_time = last_message_time
 
 
@@ -832,6 +834,7 @@ def test_list_sessions_converts_qq_groups_into_session_info() -> None:
                 "10001",
                 "Fictional Board Games",
                 member_count=12,
+                message_count=12,
                 last_message_time=1700003600,
             ),
             _FakeQQGroup("10002", "Fictional Study Room"),
@@ -862,6 +865,15 @@ def test_list_sessions_keeps_qq_private_sessions_visible() -> None:
     assert [(item.session_id, item.display_name, item.session_type) for item in sessions] == [
         ("u_fictional_1", "Fictional Alice", "private")
     ]
+
+
+@pytest.mark.parametrize("source_name", ["qq", "wechat"])
+def test_member_count_is_never_presented_as_message_count(source_name):
+    module = _facade_module()
+    session = module._to_session_info(module.ChatSource(source_name), SimpleNamespace(
+        session_id="fictional-room", display_name="Fictional Room", member_count=80,
+    ))
+    assert session.message_count is None
 
 
 def test_list_sessions_hides_unnamed_qq_group_id() -> None:

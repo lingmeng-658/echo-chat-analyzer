@@ -604,6 +604,15 @@ class SessionAnalysisPanel(QWidget):
     def populate_sessions(self, sessions: Any) -> None:
         """Load sessions into the list and make analysis controls ready."""
         self._sessions_data = list(sessions or ())
+        count_index = self._session_sort.findData("message_count")
+        has_counts = any(session.message_count is not None for session in self._sessions_data)
+        hint = "" if has_counts else "当前会话未提供消息数量，消息数量排序不可用。"
+        count_item = self._session_sort.model().item(count_index)
+        count_item.setEnabled(has_counts)
+        count_item.setToolTip(hint)
+        self._session_sort.setToolTip(hint)
+        if not has_counts and self._session_sort.currentData() == "message_count":
+            self._session_sort.setCurrentIndex(self._session_sort.findData("recent"))
         self._set_session_controls_ready(True)
         self._reapply_session_view()
 

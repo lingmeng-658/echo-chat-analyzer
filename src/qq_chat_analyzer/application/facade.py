@@ -1596,7 +1596,7 @@ def _coerce_source(source: Any) -> ChatSource:
 def _to_session_info(source: ChatSource, raw_session: Any) -> SessionInfo:
     """Normalise one provider session or group into :class:`SessionInfo`.
 
-    QQ groups expose ``group_code``/``group_name``/``member_count`` while
+    QQ groups expose ``group_code``/``group_name``/``message_count`` while
     WeChat sessions expose ``session_id``/``display_name``/``message_count``.
     Both collapse into the same shape here so a caller never branches on the
     source when rendering a list.
@@ -1626,7 +1626,7 @@ def _to_session_info(source: ChatSource, raw_session: Any) -> SessionInfo:
             or ("\u672a\u77e5\u7fa4\u804a" if source is ChatSource.QQ else session_id)
         ),
         session_type=session_type,
-        message_count=_first_int(raw_session, "message_count", "member_count"),
+        message_count=_first_int(raw_session, "message_count"),
         last_message_time=_first_epoch(
             raw_session,
             "last_message_time",
