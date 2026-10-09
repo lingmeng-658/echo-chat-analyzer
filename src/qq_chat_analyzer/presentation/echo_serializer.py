@@ -130,6 +130,7 @@ def _expression_combination_to_dict(
 ) -> dict[str, object]:
     return {
         "asset_keys": list(getattr(combination, "asset_keys", ())),
+        "labels": list(getattr(combination, "labels", ())),
         "count": combination.count,
         "common_members": [
             {
