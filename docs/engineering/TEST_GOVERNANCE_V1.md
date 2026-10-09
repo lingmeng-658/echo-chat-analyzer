@@ -93,7 +93,14 @@ focused
 
 即使 Fast 绿，也必须显式跑相关 focused integration。
 
-## 7. 唯一故意保留的 known failure
+## 7. known failure：当时唯一故意保留的项（历史）
+
+> **历史语境**：本节记录 Test Governance v1 完成时（2026-09）唯一故意保留的 known failure。
+> **当前状态**：该测试的 `known_failure` 标记已随分享实现恢复（`d67f51e`）移除；
+> 经核对，当前测试集中**没有**被 `known_failure` 标记的用例。
+> 当前分享交付与验收状态以 `docs/HARDENING.md` 的 REL-08 为准，本节不作为当前测试事实源。
+
+当时保留：
 
 ```text
 tests/test_gui.py::test_generate_share_button_creates_and_opens_share_image
@@ -102,7 +109,7 @@ tests/test_gui.py::test_generate_share_button_creates_and_opens_share_image
 原因：
 
 - 测试期望 share button 可见 / 可用；
-- 当时及当前实现隐藏入口；这是分享尚未完成的临时措施，不是最终产品合同。
+- 当时实现隐藏入口；这是分享尚未完成的临时措施，不是最终产品合同。
 
 已确认 0.1 必须交付分享，REL-08 仍为 Release Blocker。
 这是产品交付缺口，不是 flaky、环境问题或 test-governance 问题。

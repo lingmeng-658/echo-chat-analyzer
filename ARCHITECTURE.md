@@ -349,9 +349,10 @@ Qt 无关、聊天来源无关的 `UpdateCheckResult`、`UpdateChecker.check(man
 严格校验 SemVer；可去掉 tag 的 `v` 前缀，build metadata 不影响优先级，远端
 prerelease tag 也不接受。正式版本按 major/minor/patch 比较，同号正式版高于本地 prerelease。
 
-GUI 的唯一入口为 `ChatAnalyzerFacade.check_for_updates(manual=False)`，以后在
-worker 中调用并在 GUI 线程展示结果。当前没有启动请求或 GUI 更新展示接线；构造时
-无网络/磁盘 I/O。返回状态为 `update_available`、`up_to_date`、`no_release`、
+GUI 的唯一入口为 `ChatAnalyzerFacade.check_for_updates(manual=False)`，由 GUI 在
+worker 中异步调用并在 GUI 线程展示结果；「关于余音」对话框提供手动检查更新入口，
+仅提示并打开校验后的官方 GitHub Release 页面，不自动下载、替换或静默更新。
+构造时无网络/磁盘 I/O。返回状态为 `update_available`、`up_to_date`、`no_release`、
 `skipped`、`unavailable`，另带当前/最新版本、校验后的 Release 页面 URL、检查时间、
 安全错误代码与 `public_message`。网络或响应失败不冒充“已是最新”；异常响应正文不外泄。
 请求无重试，socket timeout 为 5 秒，响应最多 256 KiB；该 timeout 不是总时限，
@@ -613,7 +614,7 @@ Rich 能力阶段允许 `ImportOutcome` 额外携带 `rich_messages` 作为旁�
 
 ### 5.4 展示名称由调用方注入
 
-这是 v0.7.0 的关键决策，单列说明。
+这是 v0.7.0 阶段的关键决策（该版本号后来已统一为 `0.1.0`），单列说明。
 
 问题：分析结果里的 `sender` 可能是 `wxid_xxx`，`conversation_id` 可能是
 `xxx@chatroom`，用户无法理解。但 `ChatMessage` 不可改，
@@ -805,7 +806,6 @@ GUI 只装配控件、转发事件、展示状态。
 | 项目简介与快速上手 | `README.md` |
 | 跨平台字段、identity 与分析语义 | `DATA_SEMANTICS.md` |
 | 已解决且验证的真实工程问题 | `docs/BUG_JOURNAL.md` |
-| `PROJECT_STATUS.md`、`DEVELOPMENT_STATE.md` | 历史快照，正文不再维护 |
 | 历史设计记录 | `docs/design/`、`docs/superpowers/specs/` |
 
 当架构描述与其他文档冲突时，**以本文档为准**。

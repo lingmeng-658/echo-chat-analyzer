@@ -114,7 +114,8 @@ DEC  template / ignore / high_confidence_welcome_template
   一条超长消息可以贡献几十个 token，等价于几十条正常消息；
 - 当前**没有任何重复消息检测**；
 - `AnalysisDiagnosticCounts` 已有 raw / imported / scope / filtered / analyzed
-  五个可选计数，并已持久化到 `ReportHistoryManager`，
+  五个可选计数，并随 Report Package metadata 持久化
+  （原先的 `ReportHistoryManager` / `analysis_history.jsonl` 已退休），
   是"有效消息数 / 重复消息数"的天然落点。
 
 ---
@@ -600,9 +601,10 @@ P0 首要任务是**修正现有正文损失**，而非新增功能。当前
 + 降权消息数  downweighted_message_count（新增）
 ```
 
-三个新计数均为**可选、默认 None**，与现有字段风格一致，
-旧 JSONL 历史记录继续可读（该兼容策略已在
-`docs/superpowers/specs/2026-08-12-analysis-diagnostic-metadata-design.md` 中确立）。
+三个新计数均为**可选、默认 None**，与现有字段风格一致。
+诊断 / 来源元数据现由 Report Package metadata 承载
+（原先的独立 JSONL 历史 `ReportHistoryManager` / `analysis_history.jsonl` 已退休，
+演进边界见 `ARCHITECTURE.md`）。
 
 **隐私约束**：计数只保存数字。重复消息的**正文绝不进入**历史记录、
 日志或 metadata——这与现有诊断元数据的隐私要求完全一致。
@@ -725,7 +727,7 @@ P0-1 与 P0-2 可以作为**第一个独立小阶段**先行交付，
 | Analyzer 核心 | ❌ 不修改 | 权重在装配阶段生效，`top_words` 签名不变 |
 | `analysis/` v2 报告 | ❌ 不修改 | 继续接收未降权 `kept_messages` |
 | Snapshot | ❌ 不受影响 | 质量判断是分析期行为，不写入 snapshot |
-| History | ⚠️ 向后兼容扩展 | 新增三个可选计数，默认 `None`，旧 JSONL 可读 |
+| Report Package metadata | ⚠️ 向后兼容扩展 | 新增三个可选计数，默认 `None`；旧报告包仍可读 |
 | GUI | ❌ 不修改 | 本轮不触及；P2 才展示质量指标 |
 | Facade | ⚠️ 可能微调 | 仅分层停用词路径组装；对外 API 不变 |
 | CLI | ❌ 不修改 | 继续通过 `AnalysisApplicationService` |
@@ -779,9 +781,7 @@ Q1 与 Q2 无依赖，可并行；Q4 依赖 Q3；Q5 依赖 Q3。
 - 词频/词云链路在无质量信号时**逐字节等价**于当前输出（Q3 必须证明）；
 - `ActivityAnalyzer` / `MessageLengthAnalyzer` / `UserProfileAnalyzer` /
   `ConversationAnalyzer` 输出不受质量层影响；
-- 现有 905 项测试保持通过（注意 `PROJECT_STATUS.md` 记录的
-  `test_conversation_analyzer_ignores_zero_timestamp_for_span`
-  为**既有已知失败**，与本设计无关，不得在本设计阶段"顺手修复"）。
+- 现有测试保持通过；与本设计无关的既有失败不在本设计阶段"顺手修复"。
 
 ---
 
@@ -1056,14 +1056,12 @@ A-3（@清洗修复）需要触碰 `cleaner.py`，而它属于 Analyzer 核心
 | B-1 | 接入前后全部分析输出**逐字节等价** |
 | B-2 | 重复计数正确；重复消息**未被删除**，仍计入活跃度 |
 | B-3 | 复制文本被标记；正常长讨论**不**被标记 |
-| B-4 | 旧 JSONL 历史记录仍可读；新计数为纯数字 |
+| B-4 | 旧报告包仍可读；新计数为纯数字 |
 
 ### 全程回归底线
 
 - 现有测试保持通过；
-- `PROJECT_STATUS.md` 记录的既有已知失败
-  （`test_conversation_analyzer_ignores_zero_timestamp_for_span`）
-  与本设计无关，**不得在本设计任一阶段"顺手修复"**；
+- 与本设计无关的既有失败 **不得在本设计任一阶段"顺手修复"**；
 - 非词频报告（活跃度、消息长度、用户画像、会话概览）在
   第一部分与第二部分**全程输出不变**。
 
