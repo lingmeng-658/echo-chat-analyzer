@@ -125,3 +125,15 @@ tests/test_gui.py::test_generate_share_button_creates_and_opens_share_image
 - regression 的价值高于「suite 看起来整洁」
 - Fast / Full 分层比继续从 30s 抠 2s 更高复利
 - 测试数量不是质量指标
+
+## 9. IDE shim 导致用户数据隔离测试误报（2026-10-09）
+
+- `tests/test_test_user_data_isolation.py::test_user_data_isolation` 在 IDE 注入环境下失败，但子 pytest 的两项测试通过。
+- 根因是 IDE 通过 `PYTHONPATH` 注入 `sitecustomize.py`，拦截 pytest 的 `shutil.rmtree`，调用外部安全删除／回收站工具。
+- 该工具继承测试重定向的 `LOCALAPPDATA`，创建 `Microsoft/Windows/Caches`，导致哨兵断言误报。
+- 对照实验：带 shim 失败，清除注入的 `PYTHONPATH` 后通过。
+- 结论：测试环境故障，不是 Echo 产品隐私缺陷，不应放宽现有隐私断言。
+- 后续运行 subprocess 测试时需排除 IDE shim，并验证实际源码导入路径。
+- 排障探针必须在进程启动前隔离用户目录。
+- 本次诊断曾发生一次对真实 `%LOCALAPPDATA%` 的目录名枚举，发现后立即停止并清理；未读取文件内容、修改用户文件或上传数据。
+- 不代表其他 Frozen / Full Suite 失败已经解决。
