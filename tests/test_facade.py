@@ -26,6 +26,10 @@ def _facade_module():
     return importlib.import_module("qq_chat_analyzer.application.facade")
 
 
+def _report_catalog_module():
+    return importlib.import_module("qq_chat_analyzer.application.report_package_catalog")
+
+
 def _analysis_models():
     return importlib.import_module("qq_chat_analyzer.analysis.models")
 
@@ -2525,6 +2529,44 @@ def test_facade_translates_single_report_deletion_failure(tmp_path, error):
         facade.delete_report_package("Echo_Report_20261004_120000")
     assert caught.value.code == "report_delete_failed"
     assert caught.value.public_message == "这份 Echo 报告未能删除，请稍后重试。"
+    assert internal_path not in str(caught.value)
+
+
+def test_facade_delegates_explicit_report_batch_deletion():
+    catalog_module = _report_catalog_module()
+    calls = []
+    expected = catalog_module.ReportPackageDeletionResult(
+        deleted=("Echo_Report_20261004_120000",),
+        failures=(
+            catalog_module.ReportPackageDeletionFailure("Echo_Report_20261004_120000_2", "missing"),
+        ),
+    )
+    class Catalog:
+        def delete_packages(self, package_names):
+            calls.append(list(package_names))
+            return expected
+    facade = _facade(report_package_catalog=Catalog())
+    result = facade.delete_report_packages([
+        "Echo_Report_20261004_120000", "Echo_Report_20261004_120000_2",
+    ])
+    assert result is expected
+    assert result.deleted == ("Echo_Report_20261004_120000",)
+    assert result.failures[0].reason == "missing"
+    assert calls == [["Echo_Report_20261004_120000", "Echo_Report_20261004_120000_2"]]
+
+
+@pytest.mark.parametrize("error", [TypeError, ValueError, FileNotFoundError, PermissionError, RuntimeError])
+def test_facade_translates_explicit_report_batch_deletion_failure(tmp_path, error):
+    module = _facade_module()
+    internal_path = str(tmp_path / "internal-private-path")
+    class Catalog:
+        def delete_packages(self, package_names):
+            raise error(internal_path)
+    facade = _facade(report_package_catalog=Catalog())
+    with pytest.raises(module.FacadeError) as caught:
+        facade.delete_report_packages(["Echo_Report_20261004_120000"])
+    assert caught.value.code == "report_delete_failed"
+    assert caught.value.public_message == "所选 Echo 报告未能删除，请稍后重试。"
     assert internal_path not in str(caught.value)
 
 

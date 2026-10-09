@@ -1,12 +1,17 @@
+import dataclasses
 import json
+import importlib
 from pathlib import Path
 
 import pytest
 
 
+def _catalog_module():
+    return importlib.import_module("qq_chat_analyzer.application.report_package_catalog")
+
+
 def _catalog(root):
-    from qq_chat_analyzer.application.report_package_catalog import ReportPackageCatalog
-    return ReportPackageCatalog(root)
+    return _catalog_module().ReportPackageCatalog(root)
 
 
 def _package(root, name="Echo_Report_20261004_120000", generated_at="2026-10-04T12:00:00+00:00"):
@@ -529,3 +534,249 @@ def test_resolve_html_path_windows_junction_never_follows_external(tmp_path, loc
         assert (external / "echo-report.html").exists()
     finally:
         link.rmdir()
+
+
+# ------------------------------------------------- explicit batch deletion
+
+
+def _failure_pairs(result):
+    return [(failure.package_name, failure.reason) for failure in result.failures]
+
+
+def _forbid_any_deletion(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("A rejected selection must never reach the filesystem")
+    monkeypatch.setattr("shutil.rmtree", forbidden)
+
+
+def test_delete_packages_deletes_only_named_targets_and_keeps_the_rest(tmp_path):
+    first = _package(tmp_path)
+    second = _package(tmp_path, "Echo_Report_20261004_120000_2")
+    kept = _package(tmp_path, "Echo_Report_20261003_120000", "2026-10-03T12:00:00+00:00")
+    kept_before = {path.name: (path.read_bytes(), path.stat().st_mtime_ns) for path in kept.iterdir()}
+    manual = tmp_path / "manual"
+    manual.mkdir()
+    (manual / "keep.txt").write_text("fictional", encoding="utf-8")
+    catalog = _catalog(tmp_path)
+    result = catalog.delete_packages([second.name, first.name])
+    assert result.deleted == (second.name, first.name)
+    assert result.failures == () and result.complete
+    assert isinstance(result.deleted, tuple) and isinstance(result.failures, tuple)
+    with pytest.raises((dataclasses.FrozenInstanceError, AttributeError)):
+        result.deleted = ()
+    assert not first.exists() and not second.exists()
+    assert {path.name: (path.read_bytes(), path.stat().st_mtime_ns) for path in kept.iterdir()} == kept_before
+    assert (manual / "keep.txt").read_text(encoding="utf-8") == "fictional"
+    assert catalog.storage_usage().package_count == 1
+
+
+def test_delete_packages_deduplicates_names_keeping_first_occurrence_order(tmp_path, monkeypatch):
+    import shutil
+    packages = _packages(tmp_path, 3)
+    attempts = []
+    original = shutil.rmtree
+    def counting(path, *args, **kwargs):
+        attempts.append(Path(path).name)
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(shutil, "rmtree", counting)
+    selected = [packages[1].name, packages[0].name, packages[1].name, packages[0].name]
+    result = _catalog(tmp_path).delete_packages(iter(selected))
+    assert result.deleted == (packages[1].name, packages[0].name)
+    assert result.failures == ()
+    assert attempts == [packages[1].name, packages[0].name]
+    assert packages[2].is_dir() and packages[2].name not in result.deleted
+
+
+@pytest.mark.parametrize("selection", [
+    [], (), iter(()), None, "Echo_Report_20261004_120000", b"fictional",
+    [None], ["manual"], ["Echo_Report_99999999_999999"],
+    ["Echo_Report_20261004_120000_1"], ["../Echo_Report_20261004_120000"],
+    ["Echo_Report_20261004_120000\\outside"],
+])
+def test_delete_packages_rejects_empty_or_invalid_selection_before_deleting(tmp_path, monkeypatch, selection):
+    package = _package(tmp_path)
+    _forbid_any_deletion(monkeypatch)
+    with pytest.raises((TypeError, ValueError)):
+        _catalog(tmp_path).delete_packages(selection)
+    assert package.is_dir()
+
+
+def test_delete_packages_rejects_whole_selection_when_one_name_is_invalid(tmp_path, monkeypatch):
+    selected = _package(tmp_path)
+    other = _package(tmp_path, "Echo_Report_20261004_120000_2")
+    _forbid_any_deletion(monkeypatch)
+    with pytest.raises(ValueError):
+        _catalog(tmp_path).delete_packages([selected.name, "manual", other.name])
+    assert selected.is_dir() and other.is_dir()
+
+
+def test_delete_packages_never_rescans_or_recovers_unlisted_entries(tmp_path, monkeypatch):
+    module = _catalog_module()
+    package = _package(tmp_path)
+    staging = tmp_path / (".echo-report-" + "a" * 32)
+    staging.mkdir()
+    (staging / "keep.txt").write_text("fictional", encoding="utf-8")
+    def forbidden(*args, **kwargs):
+        pytest.fail("Explicit batch deletion must not rescan or recover unlisted entries")
+    monkeypatch.setattr(module, "_candidates", forbidden)
+    monkeypatch.setattr(module, "recover_report_staging", forbidden)
+    result = module.ReportPackageCatalog(tmp_path).delete_packages([package.name])
+    assert result.deleted == (package.name,) and result.failures == ()
+    assert (staging / "keep.txt").read_text(encoding="utf-8") == "fictional"
+
+
+def test_delete_packages_continues_after_failure_and_reports_each_target(tmp_path, monkeypatch):
+    import shutil
+    module = _catalog_module()
+    first = _package(tmp_path)
+    blocked = _package(tmp_path, "Echo_Report_20261004_120000_2")
+    last = _package(tmp_path, "Echo_Report_20261004_120000_3")
+    original = shutil.rmtree
+    def fail_blocked(path, *args, **kwargs):
+        if Path(path) == blocked:
+            raise PermissionError(f"fictional blocked path {tmp_path}")
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(shutil, "rmtree", fail_blocked)
+    result = module.ReportPackageCatalog(tmp_path).delete_packages(
+        [first.name, blocked.name, last.name],
+    )
+    assert result.deleted == (first.name, last.name)
+    assert _failure_pairs(result) == [(blocked.name, "undeletable")]
+    assert not result.complete
+    assert blocked.is_dir() and (blocked / "metadata.json").exists()
+    assert result.failures[0].reason in module.REPORT_PACKAGE_DELETION_REASONS
+    assert str(tmp_path) not in repr(result)
+
+
+def test_delete_packages_reports_missing_target_and_never_creates_root(tmp_path):
+    root = tmp_path / "reports"
+    result = _catalog(root).delete_packages(["Echo_Report_20261004_120000"])
+    assert result.deleted == ()
+    assert _failure_pairs(result) == [("Echo_Report_20261004_120000", "missing")]
+    assert not root.exists()
+
+
+def test_delete_packages_missing_target_beside_a_deletable_one(tmp_path):
+    package = _package(tmp_path)
+    missing = "Echo_Report_20261005_120000"
+    result = _catalog(tmp_path).delete_packages([missing, package.name])
+    assert result.deleted == (package.name,)
+    assert _failure_pairs(result) == [(missing, "missing")]
+    assert not package.exists()
+
+
+@pytest.mark.parametrize("damage", ["broken_metadata", "missing_metadata", "missing_html"])
+def test_delete_packages_deletes_damaged_packages_without_reading_them(tmp_path, monkeypatch, damage):
+    module = _catalog_module()
+    package = _package(tmp_path)
+    if damage == "broken_metadata":
+        (package / "metadata.json").write_text("broken", encoding="utf-8")
+    elif damage == "missing_metadata":
+        (package / "metadata.json").unlink()
+    else:
+        (package / "echo-report.html").unlink()
+    def forbidden_read(*args, **kwargs):
+        pytest.fail("Batch deletion must not read report contents or metadata")
+    for name in ("read_text", "read_bytes", "open"):
+        monkeypatch.setattr(Path, name, forbidden_read)
+    result = module.ReportPackageCatalog(tmp_path).delete_packages([package.name])
+    assert result.deleted == (package.name,) and result.complete
+    assert not package.exists()
+
+
+def test_delete_packages_reports_named_regular_file_as_failure(tmp_path):
+    named_file = tmp_path / "Echo_Report_20261004_120000"
+    named_file.write_bytes(b"fictional sentinel")
+    before = named_file.stat()
+    result = _catalog(tmp_path).delete_packages([named_file.name])
+    assert result.deleted == ()
+    assert _failure_pairs(result) == [(named_file.name, "not_a_package")]
+    assert named_file.read_bytes() == b"fictional sentinel"
+    assert named_file.stat().st_mtime_ns == before.st_mtime_ns
+
+
+def test_delete_packages_rejects_reparse_package_without_following(tmp_path, monkeypatch):
+    import stat
+    module = _catalog_module()
+    packages = _packages(tmp_path, 2)
+    linked = packages[0]
+    original = Path.lstat
+    class ReparseStat:
+        st_file_attributes = stat.FILE_ATTRIBUTE_REPARSE_POINT
+        st_mode = stat.S_IFDIR
+    def reparse(path, *args, **kwargs):
+        return ReparseStat() if path == linked else original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "lstat", reparse)
+    result = module.ReportPackageCatalog(tmp_path).delete_packages([linked.name, packages[1].name])
+    assert result.deleted == (packages[1].name,)
+    assert _failure_pairs(result) == [(linked.name, "unsafe_target")]
+    assert (linked / "metadata.json").exists()
+
+
+def test_delete_packages_windows_junction_is_a_failure_and_external_stays(tmp_path):
+    import shutil
+    import subprocess
+    import sys
+    if sys.platform != "win32":
+        pytest.skip("Windows junction regression")
+    root = tmp_path / "reports"
+    packages = _packages(root, 2)
+    external = tmp_path / "external"
+    external.mkdir()
+    sentinel = external / "keep.txt"
+    sentinel.write_text("fictional external", encoding="utf-8")
+    link = packages[0]
+    shutil.rmtree(link)
+    subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(external)],
+                   check=True, capture_output=True)
+    try:
+        result = _catalog(root).delete_packages([link.name, packages[1].name])
+        assert result.deleted == (packages[1].name,)
+        assert _failure_pairs(result) == [(link.name, "unsafe_target")]
+        assert sentinel.read_text(encoding="utf-8") == "fictional external"
+        assert link.exists() and not packages[1].exists()
+    finally:
+        link.rmdir()
+
+
+def test_delete_packages_rejects_nested_junction_and_keeps_external_target(tmp_path):
+    import subprocess
+    import sys
+    if sys.platform != "win32":
+        pytest.skip("Windows junction regression")
+    root = tmp_path / "reports"
+    packages = _packages(root, 2)
+    external = tmp_path / "external"
+    external.mkdir()
+    sentinel = external / "keep.txt"
+    sentinel.write_text("fictional external", encoding="utf-8")
+    nested = packages[0] / "linked"
+    subprocess.run(["cmd", "/c", "mklink", "/J", str(nested), str(external)],
+                   check=True, capture_output=True)
+    try:
+        result = _catalog(root).delete_packages([packages[0].name, packages[1].name])
+        assert result.deleted == (packages[1].name,)
+        assert _failure_pairs(result) == [(packages[0].name, "unsafe_target")]
+        assert sentinel.read_text(encoding="utf-8") == "fictional external"
+        assert (packages[0] / "metadata.json").exists() and nested.exists()
+    finally:
+        nested.rmdir()
+
+
+def test_delete_packages_never_touches_packages_published_during_execution(tmp_path, monkeypatch):
+    import shutil
+    first = _package(tmp_path)
+    published = []
+    original = shutil.rmtree
+    def publish_then_delete(path, *args, **kwargs):
+        if not published:
+            published.append(_package(
+                tmp_path, "Echo_Report_20261005_120000", "2026-10-05T12:00:00+00:00",
+            ))
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(shutil, "rmtree", publish_then_delete)
+    result = _catalog(tmp_path).delete_packages([first.name])
+    assert result.deleted == (first.name,) and result.complete
+    assert published[0].is_dir()
+    assert (published[0] / "metadata.json").exists()
+    assert published[0].name not in result.deleted

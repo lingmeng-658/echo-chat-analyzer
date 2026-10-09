@@ -29,7 +29,7 @@ import stat
 import threading
 from time import monotonic as _monotonic, perf_counter as _perf_counter
 from tempfile import TemporaryDirectory
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta, timezone
@@ -71,6 +71,7 @@ from .echo_report_export import (
 )
 from .report_package_catalog import (
     ReportPackageCatalog,
+    ReportPackageDeletionResult,
     ReportPackageListing,
     ReportStorageUsage,
 )
@@ -770,6 +771,23 @@ class ChatAnalyzerFacade:
             raise FacadeError(
                 code="report_delete_failed",
                 public_message="这份 Echo 报告未能删除，请稍后重试。",
+            ) from exc
+
+    def delete_report_packages(self, package_names: Iterable[str]) -> ReportPackageDeletionResult:
+        """Delete exactly the selected report packages, reporting each outcome.
+
+        The caller owns the selection: nothing outside it is rescanned or
+        removed, so reports published while the batch runs stay on disk.
+        Per-package failures come back inside the result instead of aborting the
+        batch; only an unusable selection or storage boundary raises.
+        """
+        try:
+            return self._report_package_catalog.delete_packages(package_names)
+        except Exception as exc:
+            _LOGGER.exception("Selected report packages could not be deleted.")
+            raise FacadeError(
+                code="report_delete_failed",
+                public_message="所选 Echo 报告未能删除，请稍后重试。",
             ) from exc
 
     def clear_report_packages(self) -> None:
