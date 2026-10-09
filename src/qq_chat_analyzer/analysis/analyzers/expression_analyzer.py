@@ -29,11 +29,8 @@ from ..models import (
 )
 
 
-EXPRESSION_GLOBAL_TOP_LIMIT = 10
-EXPRESSION_MEMBER_TOP_LIMIT = 3
 EXPRESSION_NEARBY_WORD_LIMIT = 3
 EXPRESSION_NEARBY_WORD_MIN_COUNT = 2
-EXPRESSION_COMBINATION_TOP_LIMIT = 3
 # Count every unordered pair up to 64 distinct expressions (2,016 pairs).
 # Above this budget omit the whole message from combination statistics rather
 # than selecting an order-dependent prefix. Other expression counts are kept.
@@ -249,6 +246,8 @@ class ExpressionAnalyzer:
                 )
 
         total_occurrences = sum(occurrences.values())
+        # Keep ranked candidates complete: presentation filters stickers before
+        # applying its own global/member limits and must be able to backfill.
         top_expressions = tuple(
             ExpressionUsage(
                 expression_key=key,
@@ -261,9 +260,7 @@ class ExpressionAnalyzer:
                     nearby_word_counts.get(key, Counter()),
                 ),
             )
-            for key, count in _sorted_counts(occurrences)[
-                :EXPRESSION_GLOBAL_TOP_LIMIT
-            ]
+            for key, count in _sorted_counts(occurrences)
         )
         members = tuple(
             MemberExpressionUsage(
@@ -290,9 +287,7 @@ class ExpressionAnalyzer:
                             nearby_word_counts.get(key, Counter()),
                         ),
                     )
-                    for key, count in _sorted_counts(counts)[
-                        :EXPRESSION_MEMBER_TOP_LIMIT
-                    ]
+                    for key, count in _sorted_counts(counts)
                 ),
             )
             for speaker_key, counts in member_occurrences.items()
@@ -349,7 +344,7 @@ class ExpressionAnalyzer:
                     item.expressions[0].expression_key,
                     item.expressions[1].expression_key,
                 ),
-            )[:EXPRESSION_COMBINATION_TOP_LIMIT]
+            )
         )
 
         return ExpressionReport(

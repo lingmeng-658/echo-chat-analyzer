@@ -23,6 +23,7 @@ from ..analysis.analyzers import (
 )
 from ..analysis.analyzers.expression_analyzer import iter_emoji_clusters
 from ..analysis.models import AnalysisReports, ExpressionReport
+from ..presentation.builders import prepare_expression_report
 from ..analyzer import (
     WordSpeakerSummary,
     count_word_speakers,
@@ -210,6 +211,7 @@ class AnalysisApplicationService:
                 conversation_type=conversation_type,
                 rich_by_instance=rich_by_instance,
                 expression_report=expression_report,
+                expression_source=outcome.result.platform,
             )
         with timed_stage("word_speaker_analysis"):
             speaker_display_names = _speaker_display_names(reports)
@@ -329,6 +331,7 @@ def _build_reports(
     conversation_type: str = "unknown",
     rich_by_instance: Mapping[int, RichMessage] | None = None,
     expression_report: ExpressionReport | None = None,
+    expression_source: str | None = None,
 ) -> AnalysisReports:
     """Run every extended analyzer over the messages kept for analysis.
 
@@ -383,7 +386,14 @@ def _build_reports(
         conversation_sessions=conversation_sessions,
         distinctive_words=distinctive_words,
         private_language=private_language,
-        expression=expression,
+        expression=prepare_expression_report(
+            expression,
+            expression_source=(
+                expression_source
+                if expression_source is not None
+                else (messages[0].platform if messages else None)
+            ),
+        ),
     )
 
 
@@ -409,6 +419,7 @@ def _generate_content_report_or_fallback(
                 conversation_names=request.conversation_names,
                 conversation_type=conversation_type,
                 rich_by_instance=rich_by_instance,
+                expression_source=expression_source,
             )
         try:
             with timed_stage("artifact_export"):

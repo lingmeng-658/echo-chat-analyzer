@@ -660,6 +660,104 @@ def test_completed_analysis_reuses_expression_report(
     assert result.reports.expression.expression_message_count == 2
 
 
+def test_report_boundary_does_not_retain_full_expression_candidates() -> None:
+    import gc
+    import random
+    import tracemalloc
+    from qq_chat_analyzer.analysis.analyzers import ExpressionAnalyzer
+    from qq_chat_analyzer.message import ChatMessage
+    from qq_chat_analyzer.application.analysis_service import _build_reports
+    from qq_chat_analyzer.analysis.models import AnalysisReports
+    from qq_chat_analyzer.presentation import build_echo_report_view
+
+    randomizer = random.Random(71)
+    pool = [chr(0x1F300 + index) for index in range(200)]
+    messages = [
+        ChatMessage(
+            timestamp=1704099600 + index,
+            sender=f"Fictional {index % 100}",
+            sender_id=f"fictional-{index % 100}",
+            message_id=f"fictional-message-{index}",
+            message_type="text", platform="qq",
+            text="".join(randomizer.sample(pool, 8)),
+        )
+        for index in range(1000)
+    ]
+    gc.collect()
+    tracemalloc.start()
+    try:
+        candidates = ExpressionAnalyzer().analyze(messages)
+        original_prefix = candidates.top_expressions[:10]
+        expected_culture = build_echo_report_view(
+            AnalysisReports(expression=candidates), expression_source="qq",
+        ).expression_culture
+        expression = _build_reports(messages, [], expression_report=candidates).expression
+        # The selection boundary must not mutate a report held by another caller.
+        assert len(candidates.top_expressions) == 200
+        assert len(candidates.top_combinations) > 1000
+        del candidates
+        gc.collect()
+        retained_bytes, _ = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    # Final reports retain a fixed prefix plus visible top-N per ranking,
+    # rather than thousands of per-member candidates and expression pairs.
+    assert retained_bytes < 1024 * 1024
+    assert len(expression.top_expressions) <= 15
+    assert all(len(member.top_expressions) <= 6 for member in expression.members)
+    assert len(expression.top_combinations) <= 6
+    assert expression.top_expressions[:10] == original_prefix
+    assert build_echo_report_view(
+        AnalysisReports(expression=expression), expression_source="qq",
+    ).expression_culture == expected_culture
+    assert expression.expression_occurrence_count == 8000
+    assert expression.expression_message_count == 1000
+    assert expression.unique_expression_count == 200
+    assert sum(member.expression_occurrence_count for member in expression.members) == 8000
+
+
+@pytest.mark.parametrize("has_words", [False, True])
+def test_final_dto_retains_bounded_expression_report_and_rebuilds_view(
+    tmp_path: Path, has_words: bool,
+) -> None:
+    from qq_chat_analyzer.presentation import build_echo_report_view
+
+    application = _application_module()
+    input_path = tmp_path / "fictional-ranked-expressions.json"
+    (tmp_path / "private-output").mkdir()
+    emojis = "".join(chr(0x1F300 + index) for index in range(20))
+    prefixes = ("探索宇宙 ", "研究星系 ") if has_words else ("", "")
+    records = [
+        qq_db_record(
+            prefixes[index] + (emojis if index == 0 else emojis[::-1]),
+            sender_id=f"fictional-user-{index}", nickname=f"Fictional {index}",
+            timestamp=1704099600 + 3600 * index, message_id=f"fictional-{index}",
+        )
+        for index in range(2)
+    ]
+    input_path.write_text(json.dumps(qq_db_payload(records)), encoding="utf-8")
+    result = application.AnalysisApplicationService().execute(
+        _request(application, tmp_path, input_path)
+    )
+
+    expected_status = application.AnalysisStatus.COMPLETED if has_words else application.AnalysisStatus.EXPRESSION_ONLY
+    assert result.status is expected_status
+    expression = result.reports.expression
+    assert len(expression.top_expressions) == 10
+    assert all(len(member.top_expressions) == 3 for member in expression.members)
+    assert len(expression.top_combinations) == 3
+    assert expression.unique_expression_count == 20
+    assert expression.expression_occurrence_count == 40
+    assert expression.expression_only_message_count == (0 if has_words else 2)
+    rebuilt = build_echo_report_view(
+        result.reports, conversation_kind=result.echo_report_view.conversation_kind,
+        expression_source="qq",
+    )
+    assert rebuilt.expression_culture == result.echo_report_view.expression_culture
+    assert [item.expression_key for item in rebuilt.expression_culture.top_expressions] == list(emojis[:5])
+
+
 def test_market_face_reaches_expression_report_from_qq_db(tmp_path: Path) -> None:
     application = _application_module()
     input_path = tmp_path / "fictional-market-face-chat.json"

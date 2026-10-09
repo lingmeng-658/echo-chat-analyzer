@@ -73,6 +73,45 @@ def _rich(
     )
 
 
+@pytest.mark.parametrize("sticker_count", [0, 4, 12])
+@pytest.mark.parametrize("report_boundary", [False, True])
+def test_echo_expression_ranking_backfills_after_stickers(sticker_count, report_boundary) -> None:
+    from qq_chat_analyzer.analysis.models import AnalysisReports
+    from qq_chat_analyzer.presentation import build_echo_report_view
+
+    # Stickers outrank all five recurring emoji; a one-time emoji is ineligible.
+    faces = tuple(
+        ExpressionContent(
+            expression_kind=EXPRESSION_KIND_STICKER,
+            expression_key=f"fictional-sticker-{index:02d}",
+            display_text="[sticker]",
+            source="qq",
+            position=index,
+        )
+        for index in range(sticker_count)
+        for _ in range(10)
+    )
+    text = "😀" * 6 + "😁" * 5 + "😂" * 4 + "😃" * 4 + "😄" * 2 + "😅"
+    message = _chat(text)
+    rich = _rich(message.message_id, text=text, faces=faces)
+    report = ExpressionAnalyzer().analyze([message], [rich])
+    if report_boundary:
+        from qq_chat_analyzer.application.analysis_service import _build_reports
+        report = _build_reports([message], [], expression_report=report).expression
+    culture = build_echo_report_view(
+        AnalysisReports(expression=report), conversation_kind="group",
+    ).expression_culture
+
+    assert [(item.expression_key, item.count) for item in culture.top_expressions] == [
+        ("😀", 6), ("😁", 5), ("😂", 4), ("😃", 4), ("😄", 2),
+    ]
+    assert [(item.expression_key, item.count) for item in culture.members[0].top_expressions] == [
+        ("😀", 6), ("😁", 5), ("😂", 4),
+    ]
+    assert report.expression_occurrence_count == sticker_count * 10 + 22
+    assert report.unique_expression_count == sticker_count + 6
+
+
 def test_unicode_emoji_clusters_are_counted_and_attributed() -> None:
     messages = [
         _chat("今天 😀 😀 加油", sender_id="fictional-a", message_id="m1"),
@@ -97,6 +136,92 @@ def test_unicode_emoji_clusters_are_counted_and_attributed() -> None:
     assert all(item.kind == EXPRESSION_KIND_UNICODE for item in report.top_expressions)
     assert report.members[0].speaker_key == "fictional-b"
     assert report.members[0].expression_occurrence_count == 3
+
+
+@pytest.mark.parametrize("report_boundary", [False, True])
+def test_echo_combination_ranking_backfills_after_missing_assets(report_boundary) -> None:
+    from dataclasses import replace
+    from qq_chat_analyzer.analysis.models import AnalysisReports
+    from qq_chat_analyzer.presentation import build_echo_report_view
+
+    messages = []
+    rich_messages = []
+    for index in range(5):
+        message_id = f"fictional-combination-{index}"
+        names = (
+            ("fictional-a", "fictional-b", "fictional-c")
+            if index < 3 else ("捂脸", "旺柴")
+        )
+        messages.append(replace(_chat("", message_id=message_id), platform="wechat"))
+        rich_messages.append(_rich(
+            message_id,
+            faces=tuple(
+                ExpressionContent(
+                    expression_kind=EXPRESSION_KIND_PLATFORM_FACE,
+                    expression_key=name,
+                    display_text=f"[{name}]",
+                    source="wechat",
+                    position=position,
+                )
+                for position, name in enumerate(names)
+            ),
+        ))
+
+    report = ExpressionAnalyzer().analyze(messages, rich_messages)
+    if report_boundary:
+        from qq_chat_analyzer.application.analysis_service import _build_reports
+        report = _build_reports(messages, [], expression_report=report).expression
+    culture = build_echo_report_view(
+        AnalysisReports(expression=report), expression_source="wechat",
+    ).expression_culture
+
+    assert [(item.asset_keys, item.count) for item in culture.top_combinations] == [
+        (("wechat:捂脸", "wechat:旺柴"), 2),
+    ]
+
+
+def test_report_boundary_keeps_combination_top_three_and_ties() -> None:
+    from dataclasses import replace
+    from qq_chat_analyzer.analysis.models import AnalysisReports
+    from qq_chat_analyzer.application.analysis_service import _build_reports
+    from qq_chat_analyzer.presentation import build_echo_report_view
+
+    messages, rich_messages = [], []
+    for index in range(5):
+        message_id = f"fictional-tie-{index}"
+        # Reverse encounter order so insertion order cannot satisfy key sorting.
+        names = (
+            ("fictional-c", "fictional-b", "fictional-a") if index < 3
+            else ("流泪", "旺柴", "捂脸", "微笑")
+        )
+        messages.append(replace(_chat("", message_id=message_id), platform="wechat"))
+        rich_messages.append(_rich(message_id, faces=tuple(
+            ExpressionContent(
+                expression_kind=EXPRESSION_KIND_PLATFORM_FACE,
+                expression_key=name, display_text=f"[{name}]",
+                source="wechat", position=position,
+            )
+            for position, name in enumerate(names)
+        )))
+
+    candidates = ExpressionAnalyzer().analyze(messages, rich_messages)
+    compact = _build_reports(messages, [], expression_report=candidates).expression
+    original_view = build_echo_report_view(
+        AnalysisReports(expression=candidates), expression_source="wechat",
+    ).expression_culture
+    retained_view = build_echo_report_view(
+        AnalysisReports(expression=compact), expression_source="wechat",
+    ).expression_culture
+
+    assert len(candidates.top_combinations) == 9
+    assert len(compact.top_combinations) == 6
+    assert compact.top_combinations[:3] == candidates.top_combinations[:3]
+    assert retained_view == original_view
+    assert [(pair.asset_keys, pair.count) for pair in retained_view.top_combinations] == [
+        (("wechat:微笑", "wechat:捂脸"), 2),
+        (("wechat:微笑", "wechat:旺柴"), 2),
+        (("wechat:微笑", "wechat:流泪"), 2),
+    ]
 
 
 def test_reply_auto_mention_emoji_does_not_contaminate_sender_expression_stats() -> None:
