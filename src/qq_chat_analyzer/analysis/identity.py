@@ -11,3 +11,8 @@ def stable_sender_key(message: ChatMessage) -> str:
     if isinstance(sender_id, str) and sender_id.strip():
         return sender_id.strip()
     return message.sender
+
+
+def is_chat_participant(message: ChatMessage) -> bool:
+    """Exclude unresolved private senders; retain existing group semantics."""
+    return message.conversation_type != "private" or bool(stable_sender_key(message).strip())

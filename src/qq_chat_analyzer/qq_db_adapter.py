@@ -162,6 +162,12 @@ def _parse_record(
         ),
         conversation_kind=conversation_type,
     )
+    if conversation_type == "private" and canonical_qq_uin(fields.get("40033")) is None:
+        # Preserve the record, but a zero-value sender cannot identify a person.
+        # Do not let an incidental label become a fallback participant identity.
+        sender_id = None
+        display_name = ""
+        remark = nickname = contextual_name = None
     return RichMessage(
         message_id=_stringify_identifier(record.get("record_id")),
         source="qq",
@@ -407,6 +413,13 @@ def _protobuf_fields(data: bytes) -> tuple[tuple[int, int, int | bytes], ...]:
                 return ()
             scalar, offset = value
             fields.append((field_number, wire_type, scalar))
+        elif wire_type in {1, 5}:
+            # Fixed-width fields carry no semantics consumed by this adapter.
+            # Skip only a complete value; never salvage a truncated container.
+            end = offset + (8 if wire_type == 1 else 4)
+            if end > len(data):
+                return ()
+            offset = end
         elif wire_type == 2:
             length = _read_varint(data, offset)
             if length is None:

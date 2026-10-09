@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Protocol
 
 from ..analysis_diagnostics import timed_stage
-from ..analysis.identity import stable_sender_key
+from ..analysis.identity import is_chat_participant, stable_sender_key
 from ..analysis.conversation_sessions import analyze_conversation_sessions
 from ..analysis.analyzers import (
     ActivityAnalyzer,
@@ -500,7 +500,7 @@ def _analyze_kept_messages(
             rich_by_instance or {},
         )
         combined_tokens = [*message_tokens, *expression_tokens]
-        if combined_tokens:
+        if combined_tokens and is_chat_participant(message):
             sender_tokens.append(
                 (stable_sender_key(message), combined_tokens)
             )

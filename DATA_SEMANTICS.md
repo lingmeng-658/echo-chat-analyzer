@@ -10,6 +10,12 @@ QQ:
 - sender uid/uin
 - 显示名变化不得拆分同一成员
 
+QQ Direct DB 私聊中的零值发送者不代表真实参与者：Adapter 保留消息内容，
+将 sender_id 置为 None、sender 显示文本置空，并保持 is_self=None。
+无身份且无可用发送者名称的私信不进入成员画像或成员归属统计，
+但仍进入消息总量、时间范围、全局文本和表情统计；不推定为系统消息或任一方。
+群聊零值记录维持既有行为。
+
 WeChat DB:
 - 来自 Name2Id.user_name
 - self identity 必须 canonicalize 到同一 namespace

@@ -14,8 +14,8 @@ from qq_chat_analyzer.application.import_request import ImportRequest
 from qq_chat_analyzer.application.import_service import ImportService
 from qq_chat_analyzer.legacy_projection import project_legacy_messages
 from qq_chat_analyzer.providers.qq_database_provider import QQDatabaseProvider
-from qq_chat_analyzer.qq_db_adapter import parse_qq_db_rich_messages
-from qq_chat_analyzer.rich_message import ExpressionContent, NonTextContent, TextContent
+from qq_chat_analyzer.qq_db_adapter import WARNING_QQ_DB_RECORD_SKIPPED, parse_qq_db_rich_messages
+from qq_chat_analyzer.rich_message import ExpressionContent, MentionRelation, NonTextContent, TextContent
 
 
 def _varint(value: int) -> bytes:
@@ -80,6 +80,97 @@ def test_all_text_segments_and_second_segment_unicode_survive() -> None:
     report = ExpressionAnalyzer().analyze(legacy, [message])
     assert report.expression_occurrence_count == 1
     assert report.top_expressions[0].expression_key == "😂"
+
+
+@pytest.mark.parametrize("session_type", ["group", "private"])
+@pytest.mark.parametrize("wire_type,size", [(1, 8), (5, 4)])
+@pytest.mark.parametrize("location", ["body", "text", "face"])
+@pytest.mark.parametrize("prepend", [False, True])
+def test_fixed_width_metadata_preserves_text_and_face(
+    session_type, wire_type, size, location, prepend,
+) -> None:
+    # Even a known field number with a different wire type is opaque metadata.
+    tag = {"body": 40800, "text": 45101, "face": 47601}[location]
+    metadata = _varint((tag << 3) | wire_type) + b"\xff" * size
+    text, face = _text("fictional orchard"), _face()
+    def attach(value):
+        return metadata + value if prepend else value + metadata
+
+    if location == "text":
+        text = attach(text)
+    elif location == "face":
+        face = attach(face)
+    blob = _body(text, face)
+    if location == "body":
+        blob = attach(blob)
+    messages, warnings = parse_qq_db_rich_messages(_payload(blob, session_type=session_type))
+    assert warnings == ()
+    assert len(messages) == 1
+    assert messages[0].contents == (
+        TextContent("fictional orchard"),
+        ExpressionContent("platform_face", "14", "/fictional-face", "qq", position=0),
+    )
+    assert project_legacy_messages(messages)[0].text == "fictional orchard"
+    report = ExpressionAnalyzer().analyze(project_legacy_messages(messages), messages)
+    assert report.expression_occurrence_count == 1
+
+
+@pytest.mark.parametrize("wire_type,size", [(1, 8), (5, 4)])
+@pytest.mark.parametrize("location", ["body", "segment"])
+def test_truncated_fixed_width_field_rejects_entire_container(wire_type, size, location) -> None:
+    # Test every short length, including a tag with no following value.
+    for length in range(size):
+        truncated = _varint((49000 << 3) | wire_type) + b"x" * length
+        blob = (
+            _body(_text("must not survive"), _face()) + truncated
+            if location == "body"
+            else _body(_text("must not survive") + truncated)
+        )
+        messages, warnings = parse_qq_db_rich_messages(_payload(blob))
+        if location == "body":
+            assert messages == []
+            assert warnings == (WARNING_QQ_DB_RECORD_SKIPPED,)
+        else:
+            assert warnings == ()
+            assert len(messages) == 1
+            assert messages[0].contents == (NonTextContent("unknown"),)
+            assert project_legacy_messages(messages)[0].text == ""
+
+
+@pytest.mark.parametrize("invalid", [
+    b"\x00",  # Field number zero.
+    _varint((49000 << 3) | 6),
+    _varint((49000 << 3) | 7),
+    _varint((49000 << 3) | 2) + _varint(100) + b"short",
+    _varint((49000 << 3) | 2) + b"\x80" * 11,
+    b"\x80",  # Incomplete tag.
+])
+def test_malformed_body_does_not_return_preceding_valid_content(invalid) -> None:
+    fixed = _varint((49000 << 3) | 5) + b"abcd"
+    blob = _body(_text("must not survive"), _face()) + fixed + invalid
+    messages, warnings = parse_qq_db_rich_messages(_payload(blob))
+    assert messages == []
+    assert warnings == (WARNING_QQ_DB_RECORD_SKIPPED,)
+
+
+def test_fixed_width_metadata_does_not_promote_unknown_mentions_or_quotes_to_text() -> None:
+    metadata = (
+        _varint((49000 << 3) | 5) + b"abcd"
+        + _varint((49001 << 3) | 1) + b"abcdefgh"
+    )
+    message = _parse(
+        _scalar(45002, 999) + _bytes(45101, b"unknown content") + metadata,
+        _text("@Fictional display") + _scalar(45102, 2) + metadata,
+        _scalar(45002, 7) + _bytes(47710, _text("fictional quote")) + metadata,
+        _text("authored text"), _face(),
+    )
+    assert message.message_type == "reply"
+    assert message.relations == (MentionRelation(None, "@Fictional display"),)
+    assert message.contents[0] == NonTextContent("unknown")
+    assert message.contents[1] == TextContent("authored text")
+    assert isinstance(message.contents[2], ExpressionContent)
+    assert len(message.contents) == 3
+    assert project_legacy_messages([message])[0].text == "authored text"
 
 
 @pytest.mark.parametrize("session_type", ["group", "private"])
