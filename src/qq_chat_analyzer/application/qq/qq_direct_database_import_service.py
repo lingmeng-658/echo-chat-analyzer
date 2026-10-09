@@ -33,6 +33,7 @@ from ...providers.qq_direct_snapshot_runtime import (
 from ...qq_db_identity import QQ_DB_SELF_NAMESPACE, canonical_qq_uin
 from ..errors import ApplicationServiceError
 from .qq_environment_config import QQEnvironmentConfigLoader
+from .qq_runtime_session import default_qq_runtime_session
 
 
 _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.qq_direct_database")
@@ -150,11 +151,13 @@ class QQDirectDatabaseImportService:
         provider_factory: Any | None = None,
         config_loader: QQEnvironmentConfigLoader | None = None,
         shutdown_drain_seconds: float = DEFAULT_SHUTDOWN_DRAIN_SECONDS,
+        bridge_credential: object | None = None,
     ) -> None:
         self._runtime_client = runtime_client
         self._provider_factory = provider_factory
         self._config_loader = config_loader or QQEnvironmentConfigLoader()
         self._shutdown_drain_seconds = shutdown_drain_seconds
+        self._bridge_credential = bridge_credential or default_qq_runtime_session()
         self._state = QQDirectDatabaseState.CLOSED
         self._startup_attempted = False
         self._shutdown_started = False
@@ -191,9 +194,10 @@ class QQDirectDatabaseImportService:
             self._startup_attempted = True
             deadline = time.monotonic() + DEFAULT_STARTUP_READINESS_SECONDS
             try:
+                client = self._require_runtime_client()
                 while True:
                     try:
-                        self._recover_on_startup(deadline=deadline)
+                        self._recover_on_startup(deadline=deadline, client=client)
                         break
                     except QQDirectDatabaseNotReady:
                         remaining = deadline - time.monotonic()
@@ -231,6 +235,12 @@ class QQDirectDatabaseImportService:
             "QQ Direct DB shutdown entered state=shutting_down active=%s",
             active,
         )
+        client = None
+        client_error = None
+        try:
+            client = self._require_runtime_client()
+        except Exception as error:
+            client_error = error
         drained = self._drain_acquisitions()
         with self._condition:
             active = self._active_acquisitions
@@ -242,7 +252,10 @@ class QQDirectDatabaseImportService:
         )
         _LOGGER.info("QQ Direct DB recover started")
         try:
+            if client_error is not None:
+                raise client_error
             self._recover_on_shutdown(
+                client=client,
                 deadline=min(
                     shutdown_deadline,
                     time.monotonic() + DEFAULT_SHUTDOWN_RECOVER_SECONDS,
@@ -468,9 +481,8 @@ class QQDirectDatabaseImportService:
                 self.start()
                 return
             raise QQDirectDatabaseUnavailable()
-    def _recover_on_startup(self, *, deadline: float) -> None:
+    def _recover_on_startup(self, *, deadline: float, client: Any) -> None:
         """Recover orphan plaintext during startup."""
-        client = self._require_runtime_client()
         try:
             client.recover(deadline=deadline)
         except (QQSnapshotRuntimeNotReady, QQSnapshotRuntimeUnavailable) as error:
@@ -513,9 +525,8 @@ class QQDirectDatabaseImportService:
                 self._condition.wait(timeout=remaining)
         return True
 
-    def _recover_on_shutdown(self, *, deadline: float) -> None:
+    def _recover_on_shutdown(self, *, deadline: float, client: Any) -> None:
         """Recover orphan plaintext one last time before the runtime stops."""
-        client = self._require_runtime_client()
         try:
             client.recover(deadline=deadline)
         except QQSnapshotRuntimeError as error:
@@ -535,6 +546,7 @@ class QQDirectDatabaseImportService:
             base_url=base_url,
             snapshot_root=paths.snapshot_root,
             runtime_id=paths.runtime_id if config.runtime_mode == "managed" else None,
+            credential=self._bridge_credential,
         )
 
     def _environment_config(self) -> Any:

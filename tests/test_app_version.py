@@ -2,7 +2,9 @@
 
 from pathlib import Path
 import importlib.metadata
-import runpy
+import subprocess
+import sys
+import json
 import tomllib
 
 import pytest
@@ -12,23 +14,30 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _spec_datas(project_root):
-    class AnalysisReached(Exception):
-        pass
-
-    captured = []
-
-    def capture_analysis(*args, **kwargs):
-        captured.extend(kwargs["datas"])
-        raise AnalysisReached
-
-    try:
-        runpy.run_path(str(ROOT / "LocalChatAnalyzer.spec"), init_globals={
-            "SPEC": str(project_root / "LocalChatAnalyzer.spec"),
-            "Analysis": capture_analysis,
-        })
-    except AnalysisReached:
-        pass
-    return captured
+    # Other test modules prepend src at collection time. Its egg-info then
+    # shadows the installed dist-info that the real build command consumes.
+    # Execute the spec in the same isolated interpreter used for build checks.
+    script = """
+import json, runpy, sys
+class AnalysisReached(Exception): pass
+captured = []
+def capture_analysis(*args, **kwargs):
+    captured.extend(kwargs['datas'])
+    raise AnalysisReached
+try:
+    runpy.run_path(sys.argv[1], init_globals={'SPEC': sys.argv[2], 'Analysis': capture_analysis})
+except AnalysisReached:
+    pass
+print(json.dumps(captured))
+"""
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", script, str(ROOT / "LocalChatAnalyzer.spec"),
+         str(project_root / "LocalChatAnalyzer.spec")],
+        capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode:
+        raise RuntimeError(result.stderr)
+    return json.loads(result.stdout)
 
 
 def test_desktop_startup_version_matches_release_version():

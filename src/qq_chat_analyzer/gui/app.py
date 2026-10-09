@@ -51,29 +51,36 @@ def build_facade() -> ChatAnalyzerFacade:
     WeChat tooling still gets a working window with those sources disabled.
     """
     from ..application.analysis_service import AnalysisApplicationService
+    from ..application.qq.qq_runtime_session import QQRuntimeSession
     from ..application.report_package_catalog import ReportPackageCatalog
 
+    # One owner for the local bridge credential of the QQ runtime Echo launches:
+    # every QQ service below is wired with the same session, and the facade keeps
+    # it to retire the credential after the runtime is stopped.
+    session = QQRuntimeSession()
     return ChatAnalyzerFacade(
         source_builders={
-            ChatSource.QQ: _qq_bundle_factory,
+            ChatSource.QQ: lambda: _qq_bundle_factory(session),
             ChatSource.WECHAT: _wechat_bundle_factory,
         },
+        qq_runtime_session=session,
         analysis_service=AnalysisApplicationService(),
         report_package_catalog=ReportPackageCatalog(),
         stopwords_directory=resources_dir(),
     )
 
 
-def _qq_bundle_factory() -> Any:
+def _qq_bundle_factory(session: Any = None) -> Any:
     """Build all QQ services together on first QQ access."""
-    provider_factory = _qq_provider_factory()
+    provider_factory = _qq_provider_factory(session)
     connection_service = _optional_qq_connection_service(provider_factory)
     return SimpleNamespace(
-        service=_optional_qq_service(provider_factory),
+        service=_optional_qq_service(provider_factory, session),
         connection=connection_service,
         setup=_optional_qq_setup_service(
             provider_factory,
             connection_service,
+            session,
         ),
     )
 
@@ -92,20 +99,22 @@ def _wechat_bundle_factory() -> Any:
     )
 
 
-def _qq_provider_factory() -> Any:
+def _qq_provider_factory(session: Any = None) -> Any:
     """Build the one factory all QQ services share."""
     from ..application.qq.qq_provider_factory import QQProviderFactory
     from ..application.qq.qq_environment_config import QQEnvironmentConfigLoader
 
-    return QQProviderFactory(config_loader=QQEnvironmentConfigLoader())
+    return QQProviderFactory(
+        config_loader=QQEnvironmentConfigLoader(), bridge_credential=session
+    )
 
 
-def _optional_qq_service(provider_factory: Any) -> Any:
+def _optional_qq_service(provider_factory: Any, session: Any = None) -> Any:
     from ..application.qq.qq_direct_database_import_service import (
         QQDirectDatabaseImportService,
     )
 
-    return QQDirectDatabaseImportService(provider_factory=provider_factory, config_loader=getattr(provider_factory, "config_loader", None))
+    return QQDirectDatabaseImportService(provider_factory=provider_factory, config_loader=getattr(provider_factory, "config_loader", None), bridge_credential=session)
 
 
 def _optional_qq_connection_service(provider_factory: Any) -> Any:
@@ -117,6 +126,7 @@ def _optional_qq_connection_service(provider_factory: Any) -> Any:
 def _optional_qq_setup_service(
     provider_factory: Any,
     connection_service: Any,
+    session: Any = None,
 ) -> Any:
     from ..application.qq.qq_setup_service import QQSetupService
 
@@ -124,6 +134,7 @@ def _optional_qq_setup_service(
         config_loader=getattr(provider_factory, "config_loader", None),
         provider_factory=provider_factory,
         connection_service=connection_service,
+        bridge_credential=session,
     )
 
 

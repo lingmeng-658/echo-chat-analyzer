@@ -41,6 +41,7 @@ from .qq_process_registry import (
     default_qq_process_registry,
 )
 from .qq_process_detection import find_conflicting_qq_pids
+from .qq_runtime_session import default_qq_runtime_session
 
 
 _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.qq_auth_bridge")
@@ -117,6 +118,7 @@ class QQAuthBridge:
         process_registry: QQProcessRegistry | None = None,
         qrcode_path: Path | None = None,
         runtime_cleaner: Callable[[Path], None] | None = None,
+        credential: Any = None,
         process_wait_timeout: float = 120,
         process_poll_interval: float = 0.5,
     ) -> None:
@@ -126,6 +128,8 @@ class QQAuthBridge:
         self._window_launcher = window_launcher
         self._qrcode_path = qrcode_path
         self._runtime_cleaner = runtime_cleaner
+        # One owner for the bridge credential of the runtime Echo launches.
+        self._credential_source = credential or default_qq_runtime_session()
         self._process_wait_timeout = process_wait_timeout
         self._process_poll_interval = process_poll_interval
         self._auth_lock = threading.Lock()
@@ -350,7 +354,9 @@ class QQAuthBridge:
             return snapshot
         from ...providers.napcat_qq_provider import NapCatQQProvider
         try:
-            status = NapCatQQProvider(config.napcat_bridge_url, timeout=1).status()
+            status = NapCatQQProvider(
+                config.napcat_bridge_url, timeout=1, credential=self._credential_source
+            ).status()
             if status.runtime_id == self._runtime_paths.runtime_id:
                 return snapshot
         except Exception:
@@ -448,14 +454,19 @@ class QQAuthBridge:
                 "[qq auth] building default window launcher config=%s",
                 _config_summary(config),
             )
-            launcher = default_auth_window_launcher(config, paths=self._runtime_paths)
+            launcher = default_auth_window_launcher(
+                config, paths=self._runtime_paths, credential=self._credential_source
+            )
             self._check_cancelled(cancelled)
             process = launcher()
         with self._session_lock:
             if generation != self._session_generation:
                 close = getattr(process, "close", None)
-                if callable(close):
-                    close()
+                try:
+                    if callable(close):
+                        close()
+                finally:
+                    self._credential_source.retire_process(process)
                 raise QQAuthWindowUnavailable()
             self._auth_launch_started = True
             self._launched_process = process
@@ -482,7 +493,16 @@ class QQAuthBridge:
         return poll() is None
 
     def _terminate_runtime_sessions(self) -> None:
-        """Stop owned processes and bundled runtime sessions, best-effort."""
+        """Stop owned processes and bundled runtime sessions, best-effort.
+
+        The instance's credential is retired as well: once Echo has asked its own
+        runtime to stop, a value minted for it must not be able to reach whatever
+        might answer on the port later. The direction of this decision is
+        deliberate - failing closed on later probes is preferred over keeping a
+        credential alive for an instance Echo just stopped. A kill that failed is
+        still retained by the process registry for retry, and orphan plaintext is
+        also swept by the runtime's own in-process recovery.
+        """
         try:
             self._process_registry.terminate_all()
         except Exception as error:
@@ -492,12 +512,12 @@ class QQAuthBridge:
             )
         config = self._environment_config()
         if config is None:
-            return
+            return self._retire_bridge_credential()
         directory = _path_value(getattr(config, "runtime_directory", None))
         if self._runtime_paths is not None:
             directory = self._runtime_paths.program_root
         if directory is None:
-            return
+            return self._retire_bridge_credential()
         cleaner = self._runtime_cleaner or terminate_bundled_runtime_sessions
         try:
             cleaner(directory)
@@ -506,6 +526,13 @@ class QQAuthBridge:
                 "[qq auth] disconnect runtime cleanup failed error=%s",
                 type(error).__name__,
             )
+        self._retire_bridge_credential()
+
+    def _retire_bridge_credential(self) -> None:
+        """Drop the credential of the runtime session Echo just stopped."""
+        retire = getattr(self._credential_source, "retire", None)
+        if callable(retire):
+            retire()
 
     def _reset_auth_session(self) -> None:
         """Forget the current launcher/QR session so the next login is fresh."""
@@ -622,12 +649,16 @@ class QQAuthBridge:
         )
 
 
-def default_auth_window_launcher(config: Any, *, paths=None) -> Callable[[], None]:
+def default_auth_window_launcher(config: Any, *, paths=None, credential: Any = None) -> Callable[[], None]:
     """Build a callable that opens the bundled runtime's login window.
 
     The runtime's own launcher decides the login form; this code only locates
     the launcher, the QQ install, and the injection hook. No QR code or
     account number is assumed or passed.
+
+    ``credential`` is the session that owns the bridge credential for the
+    instance this launcher starts; when it is omitted the process-wide default
+    session is used, so a launch never produces a bridge without a credential.
     """
     from .qq_runtime_paths import resolve_runtime_paths
     paths = paths or resolve_runtime_paths(config, prepare=True)
@@ -639,7 +670,7 @@ def default_auth_window_launcher(config: Any, *, paths=None) -> Callable[[], Non
         raise QQAuthWindowUnavailable(MESSAGE_WINDOW_MISSING)
     managed = getattr(config, "runtime_mode", None) == "managed"
     return lambda: _launch_auth_window(runtime_directory, runtime_directory / "NapCatWinBootMain.exe", qq_path,
-                                       paths=paths, managed=managed)
+                                       paths=paths, managed=managed, credential=credential)
 
 
 def resolve_qq_install_path(
@@ -896,7 +927,7 @@ def _launch_auth_window(
     runtime_directory: Path,
     launcher: Path,
     qq_path: Path,
-    *, paths=None, managed=False,
+    *, paths=None, managed=False, credential=None,
 ) -> Any:
     """Open the runtime login window once, without waiting for login."""
     environment = os.environ.copy()
@@ -934,6 +965,13 @@ def _launch_auth_window(
     environment.pop("ECHO_RUNTIME_ID", None)
     if managed:
         environment["ECHO_RUNTIME_ID"] = paths.runtime_id
+    # Mint this launch's own credential and hand it to the child through its
+    # private environment only. A value inherited from the parent is never
+    # trusted, and Echo's own environment never carries one.
+    session = credential or default_qq_runtime_session()
+    environment.pop("ECHO_BRIDGE_TOKEN", None)
+    token = session.begin_launch()
+    environment["ECHO_BRIDGE_TOKEN"] = token
     command = [str(launcher), str(qq_path), environment["NAPCAT_INJECT_PATH"]]
     _LOGGER.info(
         "[qq auth] launch command=%s cwd=%s qq_path=%s",
@@ -951,25 +989,34 @@ def _launch_auth_window(
     }
     if os.name == "nt":
         launch_options["creationflags"] = subprocess.CREATE_NO_WINDOW
+    process = None
     try:
         spawn = launch_owned_process if os.name == "nt" else subprocess.Popen
         process = spawn(
             command,
             **launch_options,
         )
-    except OSError as error:
+        return_code = process.poll()
+    except Exception as error:
         _LOGGER.warning(
             "[qq auth] launch failed error=%s",
             type(error).__name__,
         )
-        raise QQAuthWindowUnavailable() from error
-    return_code = process.poll()
+        session.retire(token)
+        close = getattr(process, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+        raise QQAuthWindowUnavailable() from None
     _LOGGER.info(
         "[qq auth] launch result pid=%s returncode=%s",
         getattr(process, "pid", None),
         return_code,
     )
     if return_code not in (None, 0):
+        session.retire(token)
         # Descendants can retain stdout/stderr after the launcher fails. Kill
         # our Job before draining, otherwise synchronous log collection hangs.
         close = getattr(process, "close", None)
@@ -987,7 +1034,11 @@ def _launch_auth_window(
         else:
             _log_launcher_completion(process)
     if return_code not in (None, 0):
+        # A launch that never produced a running instance must not leave a
+        # credential behind for whatever else might answer on that port.
+        session.retire(token)
         raise QQAuthWindowUnavailable()
+    session.bind_process(process, token)
     return process
 
 

@@ -15,6 +15,7 @@ from .qq_environment_config import (
     QQEnvironmentConfigError,
     QQEnvironmentConfigLoader,
 )
+from .qq_runtime_session import default_qq_runtime_session
 
 
 class QQProviderUnavailable(ApplicationServiceError):
@@ -24,23 +25,30 @@ class QQProviderUnavailable(ApplicationServiceError):
     public_message = "无法连接 QQ 数据源，请稍后重试。"
 
 
-def default_provider_builder(config: QQEnvironmentConfig) -> Any:
-    """Construct the Desktop Echo NapCat provider."""
+def default_provider_builder(config: QQEnvironmentConfig, *, credential: object | None = None) -> Any:
+    """Construct the Desktop Echo NapCat provider bound to the launch credential."""
     from ...providers.napcat_qq_provider import NapCatQQProvider
-    return NapCatQQProvider(config.napcat_bridge_url)
+    return NapCatQQProvider(config.napcat_bridge_url, credential=credential)
 
 
 class QQProviderFactory:
-    """Create and cache one QQ provider built from stored configuration."""
+    """Create and cache one QQ provider built from stored configuration.
+
+    The provider is cached for the life of the process, so it is given the
+    session rather than one credential value: the value is minted per launch and
+    read at request time, and a relaunch is picked up by the cached instance.
+    """
 
     def __init__(
         self,
         *,
         config_loader: QQEnvironmentConfigLoader | None = None,
-        provider_builder: Callable[[QQEnvironmentConfig], Any] | None = None,
+        provider_builder: Callable[..., Any] | None = None,
+        bridge_credential: object | None = None,
     ) -> None:
         self._config_loader = config_loader or QQEnvironmentConfigLoader()
         self._provider_builder = provider_builder or default_provider_builder
+        self._bridge_credential = bridge_credential or default_qq_runtime_session()
         self._provider: Any | None = None
 
     def create(self) -> Any:
@@ -62,7 +70,7 @@ class QQProviderFactory:
     def _build(self) -> Any:
         config = self._config_loader.load_or_default()
         try:
-            return self._provider_builder(config)
+            return self._provider_builder(config, credential=self._bridge_credential)
         except QQEnvironmentConfigError:
             raise
         except Exception:

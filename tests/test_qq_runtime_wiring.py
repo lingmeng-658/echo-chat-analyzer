@@ -1,8 +1,10 @@
 """Read-only releases and writable QQ workspaces, using fictional assets only."""
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 from types import SimpleNamespace
@@ -12,6 +14,10 @@ import pytest
 from qq_chat_analyzer.application.qq import qq_auth_bridge as auth
 from qq_chat_analyzer.application.qq import qq_environment_config as env
 from qq_chat_analyzer.application.qq import qq_runtime_workspace as workspace
+from qq_chat_analyzer.application.qq.qq_runtime_session import (
+    QQRuntimeSession,
+    default_qq_runtime_session,
+)
 from qq_chat_analyzer.application.qq.qq_setup_service import QQSetupService
 from qq_chat_analyzer.application.qq.qq_direct_database_import_service import QQDirectDatabaseImportService
 from qq_chat_analyzer.application.connection_models import ConnectionSnapshot, ConnectionState
@@ -108,6 +114,9 @@ def test_managed_launch_reuses_workspace_and_never_writes_release(release, monke
         assert child['NAPCAT_MAIN_PATH'] == str(program / 'napcat.mjs')
         assert child['ECHO_SNAPSHOT_ROOT'] == str(paths.snapshot_root)
         assert child['ECHO_RUNTIME_ID'] == paths.runtime_id
+        # Every managed launch carries a fresh, high-entropy bridge credential.
+        assert re.fullmatch(r'[0-9a-f]{64}', child['ECHO_BRIDGE_TOKEN'])
+        assert 'ECHO_BRIDGE_TOKEN' not in os.environ
     assert json.loads((paths.work_root / 'config/plugins.json').read_text())['napcat-plugin-echo'] is True
     assert (paths.work_root / 'plugins/napcat-plugin-echo/index.mjs').read_bytes() == before['plugins/napcat-plugin-echo/index.mjs']
     assert (paths.work_root / 'config/napcat.json').read_bytes() == b'{"fileLog":true}'
@@ -139,6 +148,152 @@ def test_prepare_precedes_qr_baseline_and_work_cache_preserves_freshness(release
     assert not bridge.is_qrcode_ready()
     qr.write_bytes(b'fictional new QR with different bytes')
     assert bridge.is_qrcode_ready()
+
+
+def test_launch_injects_an_ephemeral_credential_and_never_leaks_it(release, monkeypatch, caplog):
+    """The credential is fresh per launch, never inherited, never logged."""
+    program, loader, qq = release
+    paths = loader.runtime_paths(prepare=True)
+    config_before = loader.config_path().read_bytes()
+    seen = []
+    monkeypatch.setattr(*_launch_target(), lambda args, **kw: seen.append((args, kw)) or SimpleNamespace(pid=12345, poll=lambda: None))
+    # A pre-existing value must never be inherited as if it were ours.
+    monkeypatch.setenv('ECHO_BRIDGE_TOKEN', 'f' * 64)
+    session = QQRuntimeSession()
+    with caplog.at_level(logging.DEBUG):
+        auth.default_auth_window_launcher(loader.load_or_default(), paths=paths, credential=session)()
+    token = seen[0][1]['env']['ECHO_BRIDGE_TOKEN']
+    assert re.fullmatch(r'[0-9a-f]{64}', token)
+    assert token != 'f' * 64
+    assert session.credential() == token
+    assert os.environ['ECHO_BRIDGE_TOKEN'] == 'f' * 64  # Echo's own env is untouched
+    assert token not in caplog.text
+    assert loader.config_path().read_bytes() == config_before
+    assert b'ECHO_BRIDGE_TOKEN' not in config_before
+    assert not (program / 'loadNapCat.js').exists()
+
+
+def test_failed_launch_does_not_leave_a_credential_for_an_instance_that_never_started(release, monkeypatch):
+    program, loader, qq = release
+    paths = loader.runtime_paths(prepare=True)
+    monkeypatch.setattr(*_launch_target(), lambda args, **kw: SimpleNamespace(poll=lambda: 1))
+    session = QQRuntimeSession()
+    with pytest.raises(auth.QQAuthWindowUnavailable):
+        auth.default_auth_window_launcher(loader.load_or_default(), paths=paths, credential=session)()
+    assert session.credential() is None
+
+
+def test_credential_lifecycle_follows_the_owned_runtime(release, monkeypatch):
+    """A launch mints; stopping Echo's own runtime retires. No old value survives."""
+    program, loader, _ = release
+    loader.runtime_paths(prepare=True)
+    session = QQRuntimeSession()
+    monkeypatch.setattr(auth, 'find_conflicting_qq_pids', lambda owned: [])
+    monkeypatch.setattr(*_launch_target(), lambda args, **kw: SimpleNamespace(pid=4242, poll=lambda: None))
+    manager = SimpleNamespace(
+        get_snapshot=lambda: ConnectionSnapshot(ConnectionState.WAITING_AUTH, 'qq', ''),
+        begin_auth_waiting=lambda: None,
+        end_auth_waiting=lambda: None,
+        disconnect=lambda: ConnectionSnapshot(ConnectionState.DISCONNECTED, 'qq', ''),
+    )
+    # Owned processes are recorded in the registry; this test must not taskkill a
+    # fictional PID, so it observes termination instead of performing it.
+    registry = SimpleNamespace(record=lambda pid: None, record_process=lambda process: None,
+                               terminate_all=lambda: 0, recorded=lambda: ())
+    bridge = auth.QQAuthBridge(
+        setup_service=QQSetupService(config_loader=loader),
+        manager=manager,
+        process_registry=registry,
+        credential=session,
+    )
+    assert bridge.start_auth_flow().state is ConnectionState.WAITING_AUTH
+    first = session.credential()
+    assert first is not None and re.fullmatch(r'[0-9a-f]{64}', first)
+    assert bridge.disconnect().state is ConnectionState.DISCONNECTED
+    assert session.credential() is None
+    # A later launch mints a different value: an old credential is never reused.
+    assert bridge.start_auth_flow().state is ConnectionState.WAITING_AUTH
+    assert session.credential() not in (None, first)
+
+
+def test_facade_shutdown_retires_the_bridge_credential():
+    from qq_chat_analyzer.application.facade import ChatAnalyzerFacade
+    session = QQRuntimeSession()
+    session.begin_launch()
+    facade = ChatAnalyzerFacade(
+        qq_runtime_session=session,
+        qq_process_registry=SimpleNamespace(terminate_all=lambda: 0),
+    )
+    facade.shutdown()
+    assert session.credential() is None
+
+
+def test_default_facade_shutdown_retires_default_launch_credential():
+    from qq_chat_analyzer.application.facade import ChatAnalyzerFacade
+    session = default_qq_runtime_session()
+    session.begin_launch()
+    facade = ChatAnalyzerFacade(qq_process_registry=SimpleNamespace(terminate_all=lambda: 0))
+    facade.shutdown()
+    assert session.credential() is None
+
+
+def test_disconnect_during_spawn_retires_late_launch_credential(release, monkeypatch):
+    _, loader, _ = release
+    session = QQRuntimeSession()
+    closed = []
+    process = SimpleNamespace(pid=4242, poll=lambda: None, close=lambda: closed.append(True))
+    manager = SimpleNamespace(disconnect=lambda: ConnectionSnapshot(ConnectionState.DISCONNECTED, 'qq', ''))
+    registry = SimpleNamespace(terminate_all=lambda: 0)
+    bridge = auth.QQAuthBridge(setup_service=QQSetupService(config_loader=loader), manager=manager,
+                               process_registry=registry, credential=session)
+    ensure_script = auth._ensure_load_script
+    def before_mint(*args, **kwargs):
+        bridge.disconnect()
+        return ensure_script(*args, **kwargs)
+    monkeypatch.setattr(auth, '_ensure_load_script', before_mint)
+    monkeypatch.setattr(*_launch_target(), lambda *a, **kw: process)
+    with pytest.raises(auth.QQAuthWindowUnavailable):
+        bridge._launch_window()
+    assert closed == [True]
+    assert session.credential() is None
+
+
+def test_runtime_tree_exit_retires_credential_without_retiring_new_launch(release, monkeypatch):
+    _, loader, _ = release
+    session = QQRuntimeSession()
+    alive = [True]
+    process = SimpleNamespace(pid=4242, poll=lambda: 0, tree_running=lambda: alive[0])
+    monkeypatch.setattr(*_launch_target(), lambda *a, **kw: process)
+    auth.default_auth_window_launcher(loader.load_or_default(), credential=session)()
+    assert session.credential() is not None  # Boot exit 0 is not a QQ tree exit.
+    alive[0] = False
+    assert session.credential() is None
+
+
+@pytest.mark.parametrize('failure', ['spawn', 'poll'])
+def test_launch_exception_retires_credential_and_closes_owned_process(release, monkeypatch, failure):
+    _, loader, _ = release
+    session = QQRuntimeSession()
+    closed = []
+    def fail():
+        raise RuntimeError('fictional process API failure')
+    process = SimpleNamespace(pid=4242, poll=fail, close=lambda: closed.append(True))
+    def spawn(*a, **kw):
+        if failure == 'spawn':
+            fail()
+        return process
+    monkeypatch.setattr(*_launch_target(), spawn)
+    with pytest.raises(auth.QQAuthWindowUnavailable):
+        auth.default_auth_window_launcher(loader.load_or_default(), credential=session)()
+    assert session.credential() is None
+    assert closed == ([] if failure == 'spawn' else [True])
+
+
+def test_direct_db_service_propagates_the_injected_session(release):
+    _, loader, _ = release
+    session = QQRuntimeSession()
+    service = QQDirectDatabaseImportService(config_loader=loader, bridge_credential=session)
+    assert service._require_runtime_client()._credential_source is session
 
 
 @pytest.mark.parametrize('failure', ['unknown', 'missing-plugin'])
@@ -329,7 +484,12 @@ def test_setup_runtime_factory_uses_the_shared_paths_and_prepares_before_start(r
 @pytest.mark.slow_integration
 def test_python_and_js_plugin_share_snapshot_root_and_refuse_old_clients(release, tmp_path, monkeypatch):
     import socket
-    from qq_chat_analyzer.providers.qq_direct_snapshot_runtime import QQDirectSnapshotRuntimeClient, QQSnapshotRuntimeError
+    from qq_chat_analyzer.providers.qq_direct_snapshot_runtime import (
+        QQDirectSnapshotRuntimeClient,
+        QQSnapshotRuntimeError,
+        QQSnapshotRuntimeUnauthorized,
+        QQSnapshotRuntimeUnavailable,
+    )
     node = shutil.which('node')
     if not node:
         pytest.skip('Node required for fictional plugin integration')
@@ -376,14 +536,29 @@ process.stdin.once('data',async()=>{await plugin_cleanup();process.exit(0)});
     try:
         assert process.stdout.readline().strip() == 'READY'
         url = f'http://127.0.0.1:{port}'
-        client = QQDirectSnapshotRuntimeClient(url, snapshot_root=paths.snapshot_root, runtime_id=paths.runtime_id, timeout=1)
+        # The same process minted the credential the plugin received via its env.
+        session = default_qq_runtime_session()
+        assert session.credential() == seen[0]['ECHO_BRIDGE_TOKEN']
+        client = QQDirectSnapshotRuntimeClient(url, snapshot_root=paths.snapshot_root, runtime_id=paths.runtime_id, timeout=1, credential=session)
         client.recover()
         generation = client.acquire()
         assert (client.generation_directory(generation) / 'snapshot.db').read_bytes() == b'fictional snapshot'
         for wrong_id in (None, '0' * 64):
-            old = QQDirectSnapshotRuntimeClient(url, snapshot_root=tmp_path / 'old-root', runtime_id=wrong_id, timeout=1)
+            old = QQDirectSnapshotRuntimeClient(url, snapshot_root=tmp_path / 'old-root', runtime_id=wrong_id, timeout=1, credential=session)
             with pytest.raises(QQSnapshotRuntimeError):
                 old.recover()
+        # A client without a credential is refused locally, before any request.
+        tokenless = QQDirectSnapshotRuntimeClient(url, snapshot_root=paths.snapshot_root, runtime_id=paths.runtime_id, timeout=1)
+        with pytest.raises(QQSnapshotRuntimeUnavailable):
+            tokenless.recover()
+
+        class _Stale:
+            def credential(self):
+                return 'b' * 64
+
+        stale = QQDirectSnapshotRuntimeClient(url, snapshot_root=paths.snapshot_root, runtime_id=paths.runtime_id, timeout=1, credential=_Stale())
+        with pytest.raises(QQSnapshotRuntimeUnauthorized):
+            stale.recover()
         assert (client.generation_directory(generation) / 'snapshot.db').exists()
         client.cleanup(generation)
         assert not client.generation_directory(generation).exists()

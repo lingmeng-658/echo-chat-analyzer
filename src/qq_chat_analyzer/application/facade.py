@@ -363,6 +363,7 @@ class ChatAnalyzerFacade:
         qq_connection_manager: Any = None,
         qq_auth_bridge: Any = None,
         qq_process_registry: Any = None,
+        qq_runtime_session: Any = None,
         wechat_service: Any = None,
         wechat_connection_service: Any = None,
         wechat_setup_service: Any = None,
@@ -385,6 +386,7 @@ class ChatAnalyzerFacade:
         self._qq_connection_manager = qq_connection_manager
         self._qq_auth_bridge = qq_auth_bridge
         self._qq_process_registry = qq_process_registry
+        self._qq_runtime_session = qq_runtime_session
         self._wechat_connection_service_value = wechat_connection_service
         self._wechat_setup_service_value = wechat_setup_service
         self._source_builders = dict(source_builders or {})
@@ -1172,10 +1174,26 @@ class ChatAnalyzerFacade:
             _SHUTDOWN_STEP_QQ_RUNTIME,
             self.shutdown_qq_runtime,
         )
+        self._retire_qq_bridge_credential()
         _LOGGER.info(
             "QQ shutdown finished elapsed=%.2fs",
             _monotonic() - started_at,
         )
+
+    def _retire_qq_bridge_credential(self) -> None:
+        """Drop the credential of the QQ runtime Echo just stopped.
+
+        Deliberately last: the plaintext recovery step above still needs it, and
+        once the runtime is gone a value minted for it must not be able to reach
+        whatever might answer on the port later.
+        """
+        session = self._qq_runtime_session
+        if session is None:
+            from .qq.qq_runtime_session import default_qq_runtime_session
+            session = default_qq_runtime_session()
+        retire = getattr(session, "retire", None)
+        if callable(retire):
+            retire()
 
     def _direct_db_step_window(self) -> float:
         """Return the bounded window the Direct DB cleanup step gets.
@@ -1460,6 +1478,7 @@ class ChatAnalyzerFacade:
                 connection_service=self._optional_qq_connection_service(),
                 manager=self._require_qq_connection_manager(),
                 process_registry=self._require_qq_process_registry(),
+                credential=self._qq_runtime_session,
                 # A new auth session must not keep sharing the QR cache with
                 # a runtime left over from an earlier Echo instance.
                 runtime_cleaner=terminate_bundled_runtime_sessions,
