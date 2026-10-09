@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime
 import json
@@ -12,12 +13,33 @@ import shutil
 import stat
 
 from ..resources import user_data_dir
-from .echo_report_export import ECHO_REPORT_HTML_NAME, _require_no_reparse_points
+from .echo_report_export import (
+    ECHO_REPORT_HTML_NAME,
+    EchoReportExportError,
+    _require_no_reparse_points,
+)
 from .scope_filter import AnalysisScope, AnalysisScopeMode
 from .report_staging import recover_report_staging
 
 _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.report_package")
 _PACKAGE_NAME = re.compile(r"Echo_Report_[0-9]{8}_[0-9]{6}(?:_(?:[2-9]|[1-9][0-9]+))?\Z")
+
+# Closed vocabulary for a failed batch deletion target. Results never carry the
+# internal exception, real paths, or report contents, so callers can surface a
+# failure without leaking local storage details.
+_DELETION_MISSING = "missing"
+_DELETION_NOT_A_PACKAGE = "not_a_package"
+_DELETION_UNSAFE_TARGET = "unsafe_target"
+_DELETION_UNDELETABLE = "undeletable"
+_DELETION_UNKNOWN = "unknown"
+
+REPORT_PACKAGE_DELETION_REASONS: tuple[str, ...] = (
+    _DELETION_MISSING,
+    _DELETION_NOT_A_PACKAGE,
+    _DELETION_UNSAFE_TARGET,
+    _DELETION_UNDELETABLE,
+    _DELETION_UNKNOWN,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +82,33 @@ class ReportStorageUsage:
     def complete(self) -> bool:
         """True when every owned package contributed to ``measured_bytes``."""
         return not self.unmeasured_packages
+
+
+@dataclass(frozen=True, slots=True)
+class ReportPackageDeletionFailure:
+    """One explicit target that stayed on disk, with a safe category only."""
+
+    package_name: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReportPackageDeletionResult:
+    """Immutable outcome of one explicit batch deletion.
+
+    ``deleted`` keeps the order of the requested names; ``failures`` names
+    every target that was not removed. Both tuples are immutable, and each
+    failure carries only the package name and a reason from
+    :data:`REPORT_PACKAGE_DELETION_REASONS`.
+    """
+
+    deleted: tuple[str, ...] = ()
+    failures: tuple[ReportPackageDeletionFailure, ...] = ()
+
+    @property
+    def complete(self) -> bool:
+        """True when every requested package was deleted."""
+        return not self.failures
 
 
 class ReportPackageClearError(RuntimeError):
@@ -150,6 +199,38 @@ class ReportPackageCatalog:
         root = self._root()
         _delete_package(root, root / package_name)
 
+    def delete_packages(self, package_names: Iterable[str]) -> ReportPackageDeletionResult:
+        """Delete exactly the named owned packages, without rescanning the root.
+
+        The selection is complete and explicit: names are validated and
+        deduplicated before the first deletion, so an empty, malformed, or
+        partly invalid selection removes nothing. Each target reuses the
+        single-package ownership boundary, and one failing target does not stop
+        the remaining ones. Packages published while this call runs are outside
+        the selection and stay untouched. Failures carry only a safe category
+        from :data:`REPORT_PACKAGE_DELETION_REASONS`.
+        """
+        names = _validated_selection(package_names)
+        root = self._root()
+        deleted: list[str] = []
+        failures: list[ReportPackageDeletionFailure] = []
+        _LOGGER.info("Report package batch delete started root=%s targets=%d", root, len(names))
+        for name in names:
+            package = root / name
+            try:
+                _delete_package(root, package)
+            except Exception as error:
+                reason = _deletion_failure_reason(error)
+                failures.append(ReportPackageDeletionFailure(name, reason))
+                _LOGGER.warning("Report package delete failed path=%s reason=%s",
+                                package, reason, exc_info=True)
+            else:
+                deleted.append(name)
+                _LOGGER.info("Report package delete finished path=%s", package)
+        _LOGGER.info("Report package batch delete finished root=%s deleted=%d failed=%d",
+                     root, len(deleted), len(failures))
+        return ReportPackageDeletionResult(tuple(deleted), tuple(failures))
+
     def clear_all(self) -> None:
         root = self._root()
         failed = not recover_report_staging(root)
@@ -170,6 +251,39 @@ class ReportPackageCatalog:
                      root, len(candidates), deleted, failed)
         if failed:
             raise ReportPackageClearError("Some report packages could not be deleted.")
+
+
+def _validated_selection(package_names: Iterable[str]) -> tuple[str, ...]:
+    """Deduplicate and validate an explicit selection before any deletion."""
+    if isinstance(package_names, (str, bytes)) or not isinstance(package_names, Iterable):
+        raise TypeError("Report package names must be an iterable of names.")
+    names: list[str] = []
+    seen: set[str] = set()
+    for name in package_names:
+        if not isinstance(name, str) or not _is_package_name(name):
+            raise ValueError("Invalid report package name.")
+        if name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+    if not names:
+        raise ValueError("Report package selection is empty.")
+    return tuple(names)
+
+
+def _deletion_failure_reason(error: BaseException) -> str:
+    """Map an internal deletion failure to a safe, closed category."""
+    if isinstance(error, FileNotFoundError):
+        return _DELETION_MISSING
+    if isinstance(error, EchoReportExportError):
+        return _DELETION_UNSAFE_TARGET
+    if isinstance(error, OSError):
+        return _DELETION_UNDELETABLE
+    if isinstance(error, RuntimeError):
+        return _DELETION_UNSAFE_TARGET
+    if isinstance(error, ValueError):
+        return _DELETION_NOT_A_PACKAGE
+    return _DELETION_UNKNOWN
 
 
 def _candidates(root: Path) -> list[Path]:

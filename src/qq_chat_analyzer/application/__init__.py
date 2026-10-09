@@ -47,7 +47,10 @@ from .import_request import ImportRequest
 from .import_result import ImportResult
 from .import_service import ImportService
 from .report_package_catalog import (
+    REPORT_PACKAGE_DELETION_REASONS,
     ReportPackageCatalog,
+    ReportPackageDeletionFailure,
+    ReportPackageDeletionResult,
     ReportPackageSummary,
     ReportPackageIssue,
     ReportPackageListing,
@@ -95,7 +98,10 @@ from .task import AnalysisTask
 from .scope_filter import AnalysisScope, AnalysisScopeMode
 
 __all__ = [
+    "REPORT_PACKAGE_DELETION_REASONS",
     "ReportPackageCatalog",
+    "ReportPackageDeletionFailure",
+    "ReportPackageDeletionResult",
     "ReportPackageSummary",
     "ReportPackageIssue",
     "ReportPackageListing",
