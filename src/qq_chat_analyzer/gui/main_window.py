@@ -28,6 +28,7 @@ from ..resources import default_echo_icon_path
 from .dashboard_page import DashboardPage
 from .home_page import HomePage
 from .local_data_page import LocalDataPage
+from .processing_page import ProcessingPage
 from .qq_workspace import QQWorkspace
 from .shutdown import ShutdownProtocol
 from .theme import STATUS_STYLE_BASE, WINDOW_CLIENT_SEPARATOR_STYLE, WINDOW_TITLE_STYLE
@@ -98,15 +99,10 @@ class MainWindow(QMainWindow):
         self.home_page = HomePage()
         self.qq_workspace = QQWorkspace(facade, executor=executor)
         self.wechat_workspace = WeChatWorkspace(facade, executor=executor)
-        self.processing_page = QWidget()
-        processing_layout = QVBoxLayout(self.processing_page)
-        self.processing_status_label = QLabel(_PREPARING)
-        self.processing_status_label.setWordWrap(True)
-        processing_layout.addWidget(self.processing_status_label)
-        self._cancel_analysis_button = QPushButton(_CANCEL_ANALYSIS)
-        self._cancel_analysis_button.clicked.connect(self.cancel_analysis)
-        processing_layout.addWidget(self._cancel_analysis_button)
-        processing_layout.addStretch(1)
+        self.processing_page = ProcessingPage()
+        self.processing_status_label = self.processing_page.status_label
+        self._cancel_analysis_button = self.processing_page.cancel_button
+        self.processing_page.cancel_requested.connect(self.cancel_analysis)
         self.dashboard_page = DashboardPage()
         self.local_data_page = LocalDataPage(
             facade, executor=executor,
@@ -185,12 +181,14 @@ class MainWindow(QMainWindow):
         self.home_page.navigate_requested.connect(self._on_navigate_requested)
 
         # Connect workspace signals
-        self.qq_workspace.analysis_started.connect(self.show_processing_page)
+        self.qq_workspace.analysis_started.connect(lambda: self._start_workspace_analysis("qq"))
+        self.qq_workspace.analysis_phase_changed.connect(lambda phase: self._handle_analysis_phase("qq", phase))
         self.qq_workspace.analysis_succeeded.connect(self.show_outcome)
         self.qq_workspace.analysis_failed.connect(self.show_error)
         self.qq_workspace.status_changed.connect(self.show_status)
 
-        self.wechat_workspace.analysis_started.connect(self.show_processing_page)
+        self.wechat_workspace.analysis_started.connect(lambda: self._start_workspace_analysis("wechat"))
+        self.wechat_workspace.analysis_phase_changed.connect(lambda phase: self._handle_analysis_phase("wechat", phase))
         self.wechat_workspace.analysis_succeeded.connect(self.show_outcome)
         self.wechat_workspace.analysis_failed.connect(self.show_error)
         self.wechat_workspace.status_changed.connect(self.show_status)
@@ -205,6 +203,8 @@ class MainWindow(QMainWindow):
     def _sync_page_chrome(self, index: int) -> None:
         """Let Home fill the native window; restore existing chrome elsewhere."""
         is_home = index == HOME_PAGE_INDEX
+        if index != PROCESSING_PAGE_INDEX:
+            self.processing_page.stop()
         self._title_label.setVisible(not is_home)
         if is_home:
             self._page_layout.setContentsMargins(0, 0, 0, 0)
@@ -246,12 +246,20 @@ class MainWindow(QMainWindow):
 
     def show_processing_page(self) -> None:
         """Isolate one active analysis from all selection controls."""
-        self.processing_status_label.setText(_PREPARING)
+        self.processing_page.start()
         self.stack.setCurrentIndex(PROCESSING_PAGE_INDEX)
         self._home_button.setVisible(False)
         self._back_button.setVisible(False)
         self._clear_echo_report_entry()
         self._cancel_analysis_button.setVisible(True)
+
+    def _start_workspace_analysis(self, source: str) -> None:
+        self._active_source = source
+        self.show_processing_page()
+
+    def _handle_analysis_phase(self, source: str, phase: object) -> None:
+        if source == self._active_source and self.stack.currentIndex() == PROCESSING_PAGE_INDEX:
+            self.processing_page.set_phase(phase)
 
     def _on_navigate_requested(self, intent: str) -> None:
         """Handle home page navigation signals."""
@@ -291,6 +299,7 @@ class MainWindow(QMainWindow):
 
     def cancel_analysis(self) -> None:
         """Cancel the active analysis."""
+        self.processing_page.stop()
         self.qq_workspace.cancel_analysis()
         self.wechat_workspace.cancel_analysis()
         # Cancellation returns to the existing selection; entering the source
@@ -307,13 +316,12 @@ class MainWindow(QMainWindow):
 
 
     def show_status(self, message: str) -> None:
-        """Show a compact status in the header row and processing page."""
+        """Preserve legacy string status; typed phases own the processing copy."""
         self._status_label.setText(message)
-        if self.stack.currentIndex() == PROCESSING_PAGE_INDEX:
-            self.processing_status_label.setText(message)
 
     def show_outcome(self, outcome: Any) -> None:
         """Finish one analysis, open Echo, and return to the active workspace."""
+        self.processing_page.stop()
         self._current_outcome = outcome
         _LOGGER.info(
             "[gui] show_outcome report_path=%s report_directory=%s",
@@ -518,6 +526,7 @@ class MainWindow(QMainWindow):
 
     def show_error(self, code: str, message: str) -> None:
         """Show a user-safe message. Never a traceback."""
+        self.processing_page.stop()
         if self.stack.currentIndex() == PROCESSING_PAGE_INDEX:
             self._show_active_workspace_or_home()
         self._status_label.setText(message)
@@ -541,6 +550,9 @@ class MainWindow(QMainWindow):
         shutdown protocol, and the desktop entry point waits on that same
         protocol before the process is allowed to leave.
         """
+        self.processing_page.close()
+        self.qq_workspace.cancel_analysis()
+        self.wechat_workspace.cancel_analysis()
         shutdown_workers()
         self.begin_shutdown()
         super().closeEvent(event)

@@ -38,6 +38,10 @@ def _errors():
     return importlib.import_module("qq_chat_analyzer.application.errors")
 
 
+def _analysis_phase_module():
+    return importlib.import_module("qq_chat_analyzer.application.analysis_phase")
+
+
 class _FakeQQGroup:
     """Mirror the fields of the real QQ ExportGroup without importing it."""
 
@@ -217,6 +221,31 @@ class _FailingExportQQService(_StubQQService):
         )()
 
 
+class _TrackingQQService(_StubQQService):
+    """Record how long one Direct DB acquisition context stays open."""
+
+    def __init__(self, payload_path: Path) -> None:
+        super().__init__(
+            groups=[_FakeQQGroup("fictional-session", "Fictional")],
+            export_path=payload_path,
+        )
+        self.acquisition_entered = 0
+        self.acquisition_exited = 0
+
+    @contextmanager
+    def acquired_session(self, session_id, *, start_time=None, end_time=None):
+        with super().acquired_session(
+            session_id,
+            start_time=start_time,
+            end_time=end_time,
+        ) as acquisition:
+            self.acquisition_entered += 1
+            try:
+                yield acquisition
+            finally:
+                self.acquisition_exited += 1
+
+
 class _StubWeChatService:
     def __init__(
         self,
@@ -246,6 +275,39 @@ class _StubWeChatService:
 
     def provider(self):
         return self._provider
+
+
+class _ReturnTrackingWeChatService(_StubWeChatService):
+    """Record that ``export_only`` already returned a payload."""
+
+    def __init__(self, export_path: Path) -> None:
+        super().__init__(export_path=export_path)
+        self.export_returns = 0
+
+    def export_only(self, request):
+        path = super().export_only(request)
+        self.export_returns += 1
+        return path
+
+
+class _FailingExportWeChatService(_StubWeChatService):
+    """List sessions normally, but fail while Echo exports the conversation.
+
+    Session listing must succeed so the failure lands on the export step, the
+    step that must not publish the second analysis phase.
+    """
+
+    def __init__(self, error) -> None:
+        super().__init__()
+        self._export_error = error
+
+    def list_sessions(self):
+        self.list_calls += 1
+        return []
+
+    def export_only(self, request):
+        self.export_requests.append(request)
+        raise self._export_error
 
 
 class _FakeReadProvider:
@@ -1394,6 +1456,255 @@ def test_session_analysis_reports_each_analysis_stage(tmp_path: Path) -> None:
         "正在生成报告...",
         "分析完成",
     ]
+
+
+def test_structured_phase_names_are_stable() -> None:
+    phases_module = _analysis_phase_module()
+
+    assert [phase.name for phase in phases_module.AnalysisPhase] == [
+        "READING",
+        "ANALYZING_REPORT",
+    ]
+
+
+def test_qq_session_analysis_publishes_reading_then_reporting_phase(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    phases_module = _analysis_phase_module()
+    progress: list[str] = []
+    phases: list[object] = []
+    facade, _ = _qq_session_facade(tmp_path)
+
+    facade.analyze_session(
+        module.ChatSource.QQ,
+        _FICTIONAL_SESSION_ID,
+        progress=progress.append,
+        on_phase=phases.append,
+    )
+
+    assert phases == [
+        phases_module.AnalysisPhase.READING,
+        phases_module.AnalysisPhase.ANALYZING_REPORT,
+    ]
+    # The structured phases are additive: the Chinese progress text is unchanged.
+    assert progress == [
+        "正在准备分析...",
+        "正在读取聊天记录...",
+        "正在处理消息...",
+        "正在分析聊天内容...",
+        "正在生成报告...",
+        "分析完成",
+    ]
+
+
+def test_wechat_session_analysis_publishes_reading_then_reporting_phase(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    phases_module = _analysis_phase_module()
+    phases: list[object] = []
+    facade = _facade(
+        wechat_service=_ReturnTrackingWeChatService(
+            _export_file(tmp_path, "wechat_phase_export.json")
+        ),
+        tmp_path=tmp_path,
+    )
+
+    facade.analyze_session(
+        module.ChatSource.WECHAT,
+        "wxid_fictional_phases",
+        on_phase=phases.append,
+    )
+
+    assert phases == [
+        phases_module.AnalysisPhase.READING,
+        phases_module.AnalysisPhase.ANALYZING_REPORT,
+    ]
+
+
+def test_qq_phases_bracket_the_single_direct_db_acquisition(tmp_path: Path) -> None:
+    """READING precedes acquisition; the second phase runs inside its context."""
+    module = _facade_module()
+    service = _TrackingQQService(_export_file(tmp_path, "qq_phase_export.json"))
+    facade = _facade(qq_service=service, tmp_path=tmp_path)
+    observed: list[tuple[str, int, int, int]] = []
+
+    def _on_phase(phase) -> None:
+        observed.append(
+            (
+                phase.value,
+                service.acquisition_entered,
+                service.acquisition_exited,
+                len(service.export_requests),
+            )
+        )
+
+    facade.analyze_session(
+        module.ChatSource.QQ,
+        "fictional-session",
+        on_phase=_on_phase,
+    )
+
+    assert observed == [
+        ("reading", 0, 0, 0),
+        ("analyzing_report", 1, 0, 1),
+    ]
+    assert service.acquisition_exited == 1
+
+
+def test_wechat_phases_bracket_the_export_call(tmp_path: Path) -> None:
+    module = _facade_module()
+    service = _ReturnTrackingWeChatService(
+        _export_file(tmp_path, "wechat_phase_export.json")
+    )
+    facade = _facade(wechat_service=service, tmp_path=tmp_path)
+    observed: list[tuple[str, int]] = []
+
+    def _on_phase(phase) -> None:
+        observed.append((phase.value, service.export_returns))
+
+    facade.analyze_session(
+        module.ChatSource.WECHAT,
+        "wxid_fictional_phases",
+        on_phase=_on_phase,
+    )
+
+    assert observed == [("reading", 0), ("analyzing_report", 1)]
+
+
+def test_failed_qq_acquisition_publishes_only_the_reading_phase(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    phases_module = _analysis_phase_module()
+    provider_errors = importlib.import_module(
+        "qq_chat_analyzer.application.qq.qq_direct_database_import_service"
+    )
+    phases: list[object] = []
+    facade = _facade(
+        qq_service=_FailingExportQQService(
+            provider_errors.QQDirectDatabaseUnavailable()
+        ),
+        tmp_path=tmp_path,
+    )
+
+    with pytest.raises(module.FacadeError):
+        facade.analyze_session(
+            module.ChatSource.QQ,
+            "fictional-session",
+            on_phase=phases.append,
+        )
+
+    assert phases == [phases_module.AnalysisPhase.READING]
+
+
+def test_failed_wechat_export_publishes_only_the_reading_phase(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    phases_module = _analysis_phase_module()
+    phases: list[object] = []
+    facade = _facade(
+        wechat_service=_FailingExportWeChatService(
+            RuntimeError("fictional export failure")
+        ),
+        tmp_path=tmp_path,
+    )
+
+    with pytest.raises(module.FacadeError):
+        facade.analyze_session(
+            module.ChatSource.WECHAT,
+            "wxid_fictional_failure",
+            on_phase=phases.append,
+        )
+
+    assert phases == [phases_module.AnalysisPhase.READING]
+
+
+def test_reading_phase_callback_failure_stops_before_acquisition(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    service = _TrackingQQService(_export_file(tmp_path, "qq_reading_failure.json"))
+    analysis_service = _StubAnalysisService(result=_result())
+    facade = _facade(
+        qq_service=service,
+        analysis_service=analysis_service,
+        tmp_path=tmp_path,
+    )
+
+    def _on_phase(phase) -> None:
+        raise RuntimeError(f"fictional phase failure: {phase.value}")
+
+    with pytest.raises(RuntimeError, match="fictional phase failure: reading"):
+        facade.analyze_session(
+            module.ChatSource.QQ,
+            "fictional-session",
+            on_phase=_on_phase,
+        )
+
+    assert service.export_requests == []
+    assert service.acquisition_entered == 0
+    assert analysis_service.requests == []
+
+
+def test_report_phase_callback_failure_still_releases_the_qq_acquisition(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    phases_module = _analysis_phase_module()
+    service = _TrackingQQService(_export_file(tmp_path, "qq_phase_failure.json"))
+    analysis_service = _StubAnalysisService(result=_result())
+    facade = _facade(
+        qq_service=service,
+        analysis_service=analysis_service,
+        tmp_path=tmp_path,
+    )
+
+    def _on_phase(phase) -> None:
+        if phase is phases_module.AnalysisPhase.ANALYZING_REPORT:
+            raise RuntimeError("fictional phase callback failure")
+
+    with pytest.raises(RuntimeError, match="fictional phase callback failure"):
+        facade.analyze_session(
+            module.ChatSource.QQ,
+            "fictional-session",
+            on_phase=_on_phase,
+        )
+
+    assert service.acquisition_exited == 1
+    assert analysis_service.requests == []
+
+
+def test_report_phase_callback_failure_stops_before_wechat_analysis(
+    tmp_path: Path,
+) -> None:
+    module = _facade_module()
+    phases_module = _analysis_phase_module()
+    service = _ReturnTrackingWeChatService(
+        _export_file(tmp_path, "wechat_phase_failure.json")
+    )
+    analysis_service = _StubAnalysisService(result=_result())
+    facade = _facade(
+        wechat_service=service,
+        analysis_service=analysis_service,
+        tmp_path=tmp_path,
+    )
+
+    def _on_phase(phase) -> None:
+        if phase is phases_module.AnalysisPhase.ANALYZING_REPORT:
+            raise RuntimeError("fictional phase callback failure")
+
+    with pytest.raises(RuntimeError, match="fictional phase callback failure"):
+        facade.analyze_session(
+            module.ChatSource.WECHAT,
+            "wxid_fictional_phases",
+            on_phase=_on_phase,
+        )
+
+    assert service.export_returns == 1
+    assert analysis_service.requests == []
 
 
 def test_session_analysis_uses_defaults_without_a_config(tmp_path: Path) -> None:

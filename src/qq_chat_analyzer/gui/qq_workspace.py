@@ -275,6 +275,7 @@ class QQWorkspace(QWidget):
     analysis_started = Signal()
     analysis_succeeded = Signal(object)
     analysis_failed = Signal(str, str)
+    analysis_phase_changed = Signal(object)
     status_changed = Signal(str)
 
     def __init__(
@@ -416,6 +417,7 @@ class QQWorkspace(QWidget):
         self.session_panel.analysis_started.connect(self._on_analysis_started)
         self.session_panel.analysis_succeeded.connect(self.analysis_succeeded.emit)
         self.session_panel.analysis_failed.connect(self.analysis_failed.emit)
+        self.session_panel.analysis_phase_changed.connect(self.analysis_phase_changed.emit)
         self.session_panel.status_changed.connect(self._on_panel_status)
         self.session_panel.workspace_width_changed.connect(self._update_setup_spacing)
 

@@ -56,8 +56,16 @@ def test_frozen_package_uses_pinned_echo_napcat_without_qce() -> None:
     _require_frozen_build()
     runtime = DIST_APP / 'runtime'
     manifest = json.loads((PROJECT_ROOT / 'scripts/windows_runtime_manifest.json').read_text())
+    excluded = set(manifest['portableExcludedFiles'])
     for entry in manifest['requirements']:
-        assert (runtime / entry['path']).exists(), entry['path']
+        if entry['path'] not in excluded:
+            assert (runtime / entry['path']).exists(), entry['path']
+    for relative in excluded:
+        assert not (runtime / relative).exists(), relative
+    for relative in manifest['releaseCopyrightFiles']:
+        target = DIST_APP / relative
+        assert target.is_file(), relative
+        assert target.read_bytes() == (PROJECT_ROOT / relative).read_bytes(), relative
     assert not (runtime / 'qq').exists()
     assert not list(DIST_APP.rglob('qce-server.exe'))
     assert not list(DIST_APP.rglob('napcat-plugin-qce'))

@@ -46,7 +46,8 @@ function Get-RuntimeContract {
     ) | ConvertFrom-Json
     if (-not $Contract.requirements -or -not $Contract.privatePaths -or
         -not $Contract.packageDirectories -or -not $Contract.releaseTreePrivatePaths -or
-        -not $Contract.wechatPinnedAssets) {
+        -not $Contract.wechatPinnedAssets -or -not $Contract.portableExcludedFiles -or
+        -not $Contract.releaseCopyrightFiles) {
         throw "Runtime contract manifest is incomplete: scripts\windows_runtime_manifest.json"
     }
     $script:RuntimeContract = $Contract
@@ -63,7 +64,12 @@ function Get-QQConfigSeedRequirement {
     )
 }
 
-function Assert-NapCatArtifactPins([string]$Root) {
+function Test-PortableExcludedFile([string]$RelativePath) {
+    # Exact runtime-relative file paths only; source validation never uses this.
+    return $RelativePath -in (Get-RuntimeContract).portableExcludedFiles
+}
+
+function Assert-NapCatArtifactPins([string]$Root, [string]$Phase) {
     $PinsName = [string](Get-RuntimeContract).qqPins
     if ($PinsName -ne 'qq_napcat_runtime_pins.json') {
         throw 'Release must use the official Echo NapCat pins.'
@@ -84,6 +90,9 @@ function Assert-NapCatArtifactPins([string]$Root) {
     foreach ($Name in $Hashes.Keys) {
         if ($Name -match '(^/|\\|:|(^|/)\.\.(/|$))' -or $Hashes[$Name] -notmatch '^[0-9a-f]{64}$') {
             throw 'Invalid NapCat artifact pin.'
+        }
+        if ($Phase -eq 'portable' -and (Test-PortableExcludedFile ("qq-napcat-candidate/" + $Name))) {
+            continue
         }
         $Target = Join-Path $Root ("qq-napcat-candidate/" + $Name)
         Assert-ProgramPathNotLinked $Target
@@ -135,6 +144,20 @@ function Assert-ReleaseTreeStateAbsent([string]$Root) {
     }
 }
 
+function Assert-ReleaseCopyrightFiles([string]$Root) {
+    foreach ($Relative in (Get-RuntimeContract).releaseCopyrightFiles) {
+        if ($Relative -match '(^/|\\|:|(^|/)\.\.(/|$))') {
+            throw 'Invalid release copyright file path.'
+        }
+        $Target = Join-Path $Root $Relative
+        if (-not (Test-Path -LiteralPath $Target -PathType Leaf) -or
+            (Get-Item -LiteralPath $Target).Length -eq 0) {
+            throw ('Required release copyright file is missing or empty: ' + $Relative)
+        }
+        Assert-ProgramPathNotLinked $Target
+    }
+}
+
 function Assert-RuntimeContract {
     param(
         [Parameter(Mandatory = $true)]
@@ -158,6 +181,9 @@ function Assert-RuntimeContract {
     }
 
     foreach ($Requirement in (Get-RuntimeContract).requirements) {
+        if ($Phase -eq 'portable' -and (Test-PortableExcludedFile ([string]$Requirement.path))) {
+            continue
+        }
         $RelativePath = ([string]$Requirement.path) -replace '/', '\'
         $Target = Join-Path $Root $RelativePath
         switch ([string]$Requirement.type) {
@@ -182,9 +208,14 @@ function Assert-RuntimeContract {
             }
         }
     }
-    Assert-NapCatArtifactPins $Root
+    Assert-NapCatArtifactPins $Root $Phase
     Assert-WeChatArtifactPins $Root
     if ($Phase -eq 'portable') {
+        foreach ($Relative in (Get-RuntimeContract).portableExcludedFiles) {
+            if (Test-Path -LiteralPath (Join-Path $Root $Relative)) {
+                throw ('Excluded portable runtime asset: ' + $Relative)
+            }
+        }
         foreach ($Relative in (Get-RuntimeContract).forbiddenPaths) {
             if (Test-Path -LiteralPath (Join-Path $Root $Relative)) {
                 throw ('Forbidden release runtime asset: ' + $Relative)
@@ -281,6 +312,7 @@ function Copy-RuntimeProgramAssets([string]$SourceRoot, [string]$DestinationRoot
     }
     # Enumerate and validate before copying; never visit the live output tree.
     foreach ($Relative in $Files.Keys) {
+        if (Test-PortableExcludedFile $Relative) { continue }
         $Destination = Join-Path $DestinationRoot $Relative
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Destination) | Out-Null
         Copy-Item -LiteralPath $Files[$Relative] -Destination $Destination
@@ -294,6 +326,7 @@ if (-not (Test-Path -LiteralPath $RuntimeSource -PathType Container)) {
 # Validate the contract before packaging starts: a package that would be
 # missing a product dependency must never be produced.
 Assert-RuntimeContract -Root $RuntimeSource -Phase "source"
+Assert-ReleaseCopyrightFiles $ProjectRoot
 $QQConfigSeeds = Get-QQConfigSeedRequirement
 
 Push-Location $ProjectRoot
@@ -314,7 +347,7 @@ try {
     }
     Copy-RuntimeProgramAssets -SourceRoot $RuntimeSource -DestinationRoot $PortableRuntime
 
-    # Preserve the complete verified official NapCat dependency layout.
+    # Source stays complete; only the exact portableExcludedFiles are omitted.
 
     # The QQ launchers and WeChat native libraries use the MSVC dynamic
     # runtime. Ship it app-local so both child-process trees also start on
@@ -402,6 +435,13 @@ try {
     Copy-Item -LiteralPath $DiagnosticRunnerSource -Destination (
         Join-Path $PortableScripts "run_wechat_wcdb_diagnostic.ps1"
     )
+
+    foreach ($Relative in (Get-RuntimeContract).releaseCopyrightFiles) {
+        $Destination = Join-Path $PortableDirectory $Relative
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Destination) | Out-Null
+        Copy-Item -LiteralPath (Join-Path $ProjectRoot $Relative) -Destination $Destination
+    }
+    Assert-ReleaseCopyrightFiles $PortableDirectory
 
     # The release tree is now complete, so this is the last point where a local
     # run residue could still be caught before the tree is packaged.

@@ -542,6 +542,19 @@ QQ 与微信来源分别由 `QQWorkspace` / `WeChatWorkspace` 负责连接与生
 会话列表、搜索、排序、时间范围与分析按钮由两者共享的
 `SessionAnalysisPanel` 承担。
 
+分析中的共享页面由 `ProcessingPage` 承载 `ProcessingAnimationWidget`；其确定性
+`processing_animation_model.py`、`processing_geometry.py` 和
+`processing_animation.py` 只负责原生 Qt 动画状态、几何和绘制，不读取聊天数据，
+也不推断分析进度。独立预览入口 `processing_animation_preview.py` 供无真实聊天记录的视觉验收使用。
+
+Facade 通过 `analyze_session(..., on_phase=...)` 在真实业务边界发布
+`application/analysis_phase.py` 定义的 `READING` 与
+`ANALYZING_REPORT` 结构化阶段（按顺序、同一阶段每次任务最多一次）。
+QQ / 微信 Workspace 将事件转发给 `MainWindow` 与同一 `ProcessingPage`；
+不根据中文进度文本、预估耗时或动画循环推测实际处理进度。
+任务取消、成功、失败和页面离开时停止动画；旧任务的迟到阶段事件
+不得改变新任务的页面。后台取消仍采用协作式机制，不保证立即终止阻塞中的数据获取。
+
 ### 4.9 CLI
 
 | | 内容 |

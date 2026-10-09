@@ -24,6 +24,29 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = PROJECT_ROOT / "scripts" / "windows_runtime_manifest.json"
 BUILD_SCRIPT = PROJECT_ROOT / "scripts" / "build_windows_exe.ps1"
 GITIGNORE = PROJECT_ROOT / ".gitignore"
+
+
+def test_echo_license_is_unmodified_mozilla_official_mpl_20() -> None:
+    import hashlib
+
+    license_file = PROJECT_ROOT / "LICENSE"
+    assert license_file.is_file()
+    assert hashlib.sha256(license_file.read_bytes()).hexdigest() == (
+        "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"
+    )
+
+
+def test_echo_release_has_license_scope_and_public_source_notice() -> None:
+    manifest = _load_manifest()
+    assert {"LICENSE", "NOTICE.md"} <= set(manifest["releaseCopyrightFiles"])
+    notice = (PROJECT_ROOT / "NOTICE.md").read_text(encoding="utf-8")
+    assert "This Source Code Form is subject to the terms of the Mozilla Public" in notice
+    assert "https://github.com/lingmeng-658/echo-chat-analyzer" in notice
+    assert "third_party/napcat/NOTICE.md" in notice
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "## 开源许可" in readme
+    assert "MPL 2.0 本身允许商业使用" in readme
+    assert "https://github.com/NapNeko/NapCatQQ/issues/2096" in readme
 PYPROJECT = PROJECT_ROOT / "pyproject.toml"
 DEVELOPMENT_GUIDE = PROJECT_ROOT / "DEVELOPMENT.md"
 
@@ -147,6 +170,8 @@ def test_manifest_uses_the_minimal_agreed_schema() -> None:
         "forbiddenPaths",
         "releaseTreePrivatePaths",
         "wechatPinnedAssets",
+        "portableExcludedFiles",
+        "releaseCopyrightFiles",
     }
 
     for key in ("requirements", "privatePaths", "packageDirectories"):
@@ -237,6 +262,16 @@ def test_manifest_describes_qq_and_wechat_runtime_separately() -> None:
 
 
 # --------------------------------------------------------- privacy contract
+
+
+def test_napcat_license_preserves_original_v41818_bytes() -> None:
+    import hashlib
+
+    license_path = PROJECT_ROOT / "third_party/napcat/LICENSE"
+    assert license_path.is_file()
+    assert hashlib.sha256(license_path.read_bytes()).hexdigest() == (
+        "2bbc0dba0c62fcde4adfe38ebadad0b7d4e23b06b88d9551904bbe07769dc46f"
+    )
 
 
 @pytest.mark.parametrize("path", sorted(PRIVATE_PATHS))

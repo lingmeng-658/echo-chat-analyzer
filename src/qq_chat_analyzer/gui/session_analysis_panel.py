@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..application.facade import AnalysisConfig, AnalysisScopeMode, ChatSource
+from ..application.facade import AnalysisConfig, AnalysisPhase, AnalysisScopeMode, ChatSource
 from .theme import (
     COLOR_ACCENT_SOFT, COLOR_PAPER, COLOR_PAPER_ALT, HOME_COLOR_ACCENT,
     SESSION_CONNECTION_STYLE, SESSION_WORKSPACE_MAX_WIDTH, SESSION_WORKSPACE_QSS,
@@ -265,6 +265,7 @@ class SessionAnalysisPanel(QWidget):
     analysis_started = Signal()
     analysis_succeeded = Signal(object)
     analysis_failed = Signal(str, str)
+    analysis_phase_changed = Signal(object)
     status_changed = Signal(str)
     workspace_width_changed = Signal()
 
@@ -682,6 +683,7 @@ class SessionAnalysisPanel(QWidget):
             session_id,
             config,
             progress=report,
+            on_phase=report,
         )
         identity = object()
         self._analysis_operation = identity
@@ -740,10 +742,12 @@ class SessionAnalysisPanel(QWidget):
         if self._analysis_operation is identity:
             self._analysis_task = task
 
-    def _handle_analysis_progress(self, identity: object, message: str) -> None:
+    def _handle_analysis_progress(self, identity: object, message: object) -> None:
         if self._analysis_operation is not identity:
             return
-        if message:
+        if isinstance(message, AnalysisPhase):
+            self.analysis_phase_changed.emit(message)
+        elif isinstance(message, str) and message:
             self.status_changed.emit(message)
 
     def _finish_analysis(self, identity: object) -> None:
@@ -756,11 +760,13 @@ class SessionAnalysisPanel(QWidget):
     def _handle_success(self, identity: object, outcome: Any) -> None:
         if self._analysis_operation is not identity:
             return
+        self._finish_analysis(identity)
         self.analysis_succeeded.emit(outcome)
 
     def _handle_error(self, identity: object, code: str, message: str) -> None:
         if self._analysis_operation is not identity:
             return
+        self._finish_analysis(identity)
         self.analysis_failed.emit(code, message)
 
     def _set_busy(self, busy: bool) -> None:

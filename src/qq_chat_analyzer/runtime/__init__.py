@@ -136,7 +136,7 @@ class BundledQQRuntime:
             return self._info
         launch_options = {
             "cwd": str(self._config.working_directory),
-            "env": os.environ.copy(),
+            "env": {**os.environ, "NAPCAT_DISABLE_FFMPEG_DOWNLOAD": "1"},
         }
         if os.name == "nt":
             launch_options["creationflags"] = subprocess.CREATE_NO_WINDOW
