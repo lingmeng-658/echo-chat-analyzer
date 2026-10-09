@@ -6,14 +6,12 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from . import template_syntax
 from .analysis.identity import stable_sender_key
 from .filter_decisions import FilterDecision
 from .message import ChatMessage
 
 
-_TEMPLATE_PLACEHOLDER_PATTERN = re.compile(
-    r"\{(?P<kind>variable|number|id|user|url)\}"
-)
 _TEMPLATE_PLACEHOLDER_REGEXES = {
     "variable": r".+?",
     "number": r"(?:\d+\.\d+|\d{1,5})",
@@ -139,16 +137,11 @@ def _template_matches(template: str, text: str) -> bool:
 
 def _template_pattern(template: str) -> str:
     parts: list[str] = []
-    position = 0
-
-    for match in _TEMPLATE_PLACEHOLDER_PATTERN.finditer(template):
-        parts.append(re.escape(template[position : match.start()]))
-        parts.append(
-            _TEMPLATE_PLACEHOLDER_REGEXES[match.group("kind")]
-        )
-        position = match.end()
-
-    parts.append(re.escape(template[position:]))
+    for kind, value in template_syntax.iter_tokens(template):
+        if kind == "kind":
+            parts.append(_TEMPLATE_PLACEHOLDER_REGEXES[value])
+        else:
+            parts.append(re.escape(value))
     return "".join(parts)
 
 

@@ -8,4 +8,8 @@
 # a member who shares a nickname are no longer removed (Smart Profile decisions
 # and burst-run continuity); interactive automation evidence is kept for review
 # and never deletes messages on its own.
-ANALYSIS_REVISION = "echo-analysis.v3"
+# v4: literal placeholder text in user messages is escaped before the detector
+# inserts its own markers, so a repeated template that contains text such as
+# "{number}" can no longer widen its automatic deletion beyond the messages it
+# was detected from, nor fail to match them.
+ANALYSIS_REVISION = "echo-analysis.v4"

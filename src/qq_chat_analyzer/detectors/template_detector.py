@@ -7,6 +7,7 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
+from .. import template_syntax
 from ..candidates import Candidate
 from ..message import ChatMessage
 
@@ -22,9 +23,6 @@ _FINGERPRINT_PATTERN = re.compile(
     r"|(?P<user>@[^\s，,。.!！?？、:：;；）)\]】}]+)"
     r"|(?P<number>\d+(?:\.\d+)?)",
     re.IGNORECASE,
-)
-_VARIABLE_TOKEN_PATTERN = re.compile(
-    r"\{(?P<kind>variable|user|number|id|url)\}"
 )
 _TERMINAL_PUNCTUATION = "。.!！?？"
 _MIN_ID_DIGITS = 6
@@ -132,7 +130,7 @@ def _normalize_template(text: str) -> tuple[str, str] | None:
 
     template, replacement_count = _FINGERPRINT_PATTERN.subn(
         _fingerprint_replacement,
-        text,
+        template_syntax.escape_literal(text),
     )
     if replacement_count == 0:
         return None
@@ -140,7 +138,7 @@ def _normalize_template(text: str) -> tuple[str, str] | None:
 
 
 def _static_template_length(template: str) -> int:
-    static_text = _VARIABLE_TOKEN_PATTERN.sub("", template)
+    static_text = template_syntax.static_text(template)
     return len(re.sub(r"\W+", "", static_text))
 
 
@@ -157,7 +155,4 @@ def _fingerprint_replacement(match: re.Match[str]) -> str:
 
 
 def _variable_counts(template: str) -> Counter[str]:
-    return Counter(
-        match.group("kind")
-        for match in _VARIABLE_TOKEN_PATTERN.finditer(template)
-    )
+    return template_syntax.variable_counts(template)
