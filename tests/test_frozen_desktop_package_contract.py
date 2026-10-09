@@ -11,6 +11,7 @@ from pathlib import Path
 import hashlib
 import json
 import importlib.metadata
+import sys
 import tomllib
 
 import pytest
@@ -52,10 +53,46 @@ def _frozen_modules() -> dict:
     return reader.open_embedded_archive("PYZ.pyz").toc
 
 
+@pytest.mark.parametrize("filename", [
+    "windows_runtime_manifest.json",
+    "qq_napcat_runtime_pins.json",
+])
+def test_frozen_package_ships_current_qq_resource_contract(filename, monkeypatch) -> None:
+    _require_frozen_build()
+    from qq_chat_analyzer import resources
+
+    packaged = INTERNAL / "scripts" / filename
+    assert packaged.is_file(), packaged
+    assert hashlib.sha256(packaged.read_bytes()).hexdigest() == hashlib.sha256(
+        (PROJECT_ROOT / "scripts" / filename).read_bytes()
+    ).hexdigest(), filename
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(INTERNAL), raising=False)
+    assert resources.resource_path("scripts/" + filename) == packaged
+
+
+def test_frozen_managed_qq_resolves_from_packaged_metadata(monkeypatch, tmp_path) -> None:
+    _require_frozen_build()
+    from qq_chat_analyzer import resources
+    from qq_chat_analyzer.application.qq.qq_environment_config import QQEnvironmentConfig
+    from qq_chat_analyzer.application.qq.qq_runtime_paths import resolve_runtime_paths
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(INTERNAL), raising=False)
+    monkeypatch.setattr(sys, "executable", str(EXECUTABLE))
+    monkeypatch.setattr(resources, "_PROJECT_ROOT", tmp_path / "absent-checkout")
+    user = resources.user_data_root()
+    paths = resolve_runtime_paths(QQEnvironmentConfig(runtime_mode="managed"))
+    assert paths.program_root == DIST_APP / "runtime/qq-napcat-candidate"
+    assert paths.work_root.parent == user / "runtime/qq"
+    assert paths.snapshot_root == user / "transient/qq-direct-db"
+    assert not user.exists()
+
+
 def test_frozen_package_uses_pinned_echo_napcat_without_qce() -> None:
     _require_frozen_build()
     runtime = DIST_APP / 'runtime'
-    manifest = json.loads((PROJECT_ROOT / 'scripts/windows_runtime_manifest.json').read_text())
+    manifest = _manifest()
     excluded = set(manifest['portableExcludedFiles'])
     for entry in manifest['requirements']:
         if entry['path'] not in excluded:
@@ -70,7 +107,7 @@ def test_frozen_package_uses_pinned_echo_napcat_without_qce() -> None:
     assert not list(DIST_APP.rglob('qce-server.exe'))
     assert not list(DIST_APP.rglob('napcat-plugin-qce'))
     assert not (runtime / 'qq-napcat-candidate/static/qce').exists()
-    pins = json.loads((PROJECT_ROOT / 'scripts/qq_napcat_runtime_pins.json').read_text())
+    pins = json.loads((INTERNAL / 'scripts' / manifest['qqPins']).read_text(encoding='utf-8'))
     candidate = runtime / 'qq-napcat-candidate'
     assert hashlib.sha256((candidate / 'napcat.mjs').read_bytes()).hexdigest() == pins['napcatPatch']['patchedSha256']
     for template in pins['templates']:
@@ -184,7 +221,7 @@ def test_frozen_package_keeps_retained_runtime_libraries(relative: str) -> None:
 
 def _manifest() -> dict:
     return json.loads(
-        (PROJECT_ROOT / "scripts/windows_runtime_manifest.json").read_text()
+        (INTERNAL / "scripts/windows_runtime_manifest.json").read_text(encoding="utf-8")
     )
 
 

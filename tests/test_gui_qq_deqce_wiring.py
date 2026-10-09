@@ -2,6 +2,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 import json
+import hashlib
 
 import pytest
 
@@ -21,6 +22,21 @@ def candidate(tmp_path, monkeypatch):
     monkeypatch.setattr(env,'default_qq_runtime_directory',lambda:directory,raising=False)
     monkeypatch.setattr(env,'user_data_dir',lambda:tmp_path)
     monkeypatch.delenv('ECHO_QQ_RUNTIME',raising=False)
+    metadata = tmp_path / 'metadata'
+    metadata.mkdir()
+    names = ['napcat.mjs','plugins/napcat-plugin-echo/index.mjs','plugins/napcat-plugin-echo/bridge.mjs','config/plugins.json']
+    (directory/'config').mkdir()
+    (directory/'config/plugins.json').write_bytes(b'{"napcat-plugin-echo":true}\n')
+    hashes = {n:hashlib.sha256((directory/n).read_bytes()).hexdigest() for n in names}
+    (metadata/'pins.json').write_text(json.dumps({'upstream':{'version':'4.18.18'},
+        'napcatPatch':{'path':'napcat.mjs','patchedSha256':hashes['napcat.mjs']},
+        'templates':[{'target':n,'sha256':hashes[n]} for n in names if n.startswith('plugins/')],
+        'pluginConfigSha256':hashes['config/plugins.json']}),encoding='utf-8')
+    (metadata/'windows_runtime_manifest.json').write_text(json.dumps({'qqPins':'pins.json',
+        'requirements':[{'path':'qq-napcat-candidate/'+n,'type':'file'} for n in names]}),encoding='utf-8')
+    from qq_chat_analyzer import resources
+    original_resource = resources.resource_path
+    monkeypatch.setattr(resources,'resource_path',lambda p:metadata/Path(p).name if str(p)=='scripts/windows_runtime_manifest.json' else original_resource(p))
     return directory
 
 
@@ -94,7 +110,7 @@ def test_connection_state_machine_reuses_retries_and_relogin(candidate,monkeypat
     monkeypatch.setattr(auth_module, "find_conflicting_qq_pids", lambda owned: [])
     provider=NapCatQQProvider();current=[status(online=False)]
     monkeypatch.setattr(provider,'status',lambda:current[0])
-    config=env.QQEnvironmentConfig(runtime_directory=candidate)
+    config=env.QQEnvironmentConfig(runtime_directory=candidate,runtime_mode='custom')
     runtime=SimpleNamespace(get_status=lambda:QQRuntimeStatus(QQRuntimeState.STOPPED,True),stop=lambda:QQRuntimeStatus(QQRuntimeState.STOPPED,True))
     setup=QQSetupService(config_loader=SimpleNamespace(load_or_default=lambda:config),runtime_manager=runtime)
     launched=[]
@@ -130,8 +146,9 @@ def test_native_launcher_uses_detected_qq_and_never_qce(candidate,tmp_path,monke
     package=tmp_path/'resources/app/package.json';package.parent.mkdir(parents=True);package.write_text('{"name":"QQ","main":"index.js"}')
     seen=[]
     process=SimpleNamespace(pid=12345,poll=lambda:None)
-    monkeypatch.setattr(auth.subprocess,'Popen',lambda command,**options:seen.append((command,options)) or process)
-    config=env.QQEnvironmentConfig(qq_install_path=qq,runtime_directory=candidate)
+    target, attribute = (auth, 'launch_owned_process') if auth.os.name == 'nt' else (auth.subprocess, 'Popen')
+    monkeypatch.setattr(target, attribute, lambda command,**options:seen.append((command,options)) or process)
+    config=env.QQEnvironmentConfig(qq_install_path=qq,runtime_directory=candidate,runtime_mode='custom')
     assert auth.default_auth_window_launcher(config)() is process
     command,options=seen[0]
     assert command[:3]==[str(candidate/'NapCatWinBootMain.exe'),str(qq),str(candidate/'NapCatWinBootHook.dll')]
@@ -145,7 +162,7 @@ def test_native_launcher_uses_detected_qq_and_never_qce(candidate,tmp_path,monke
 def test_napcat_setup_waiting_status_does_not_claim_qce(candidate):
     from qq_chat_analyzer.application.qq.qq_setup_service import QQSetupService
     from qq_chat_analyzer.application.qq.qq_runtime_manager import QQRuntimeStatus, QQRuntimeState
-    config = env.QQEnvironmentConfig(runtime_directory=candidate)
+    config = env.QQEnvironmentConfig(runtime_directory=candidate, runtime_mode='custom')
     running = QQRuntimeStatus(QQRuntimeState.RUNNING, True)
     runtime = SimpleNamespace(get_status=lambda: running)
     setup = QQSetupService(

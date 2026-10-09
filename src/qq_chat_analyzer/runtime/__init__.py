@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
+
+from .windows_job import WindowsJobProcess, launch_owned_process
 
 
 DEFAULT_READY_TIMEOUT_SECONDS = 30.0
@@ -39,6 +42,7 @@ class RuntimeInfo:
     pid: int | None = None
     version: str | None = None
     owned_process: bool = False
+    owned_process_handle: object | None = field(default=None, repr=False, compare=False)
 
 
 @runtime_checkable
@@ -103,8 +107,11 @@ class BundledQQRuntime:
         self._ready_timeout = ready_timeout
         self._poll_interval = poll_interval
         self._monotonic = monotonic or time.monotonic
-        self._process: subprocess.Popen | None = None
+        self._process: subprocess.Popen | WindowsJobProcess | None = None
         self._external_service = False
+        self._lifecycle_lock = threading.RLock()
+        self._generation = 0
+        self._starting = False
         self._info = RuntimeInfo(
             pid=None,
             version=config.version,
@@ -118,22 +125,32 @@ class BundledQQRuntime:
         process = self._process
         if process is None:
             return self._external_service and self._service_is_healthy()
-        return process.poll() is None
+        tree_running = getattr(process, "tree_running", None)
+        return tree_running() if callable(tree_running) else process.poll() is None
 
     def start(self) -> RuntimeInfo:
-        if not self.is_installed():
-            raise QQChatRuntimeError(
-                "\u672a\u627e\u5230\u90e8\u7f72\u7684 QQ \u8fd0\u884c\u73af\u5883\u3002"
-            )
-        if self._service_is_healthy():
-            self._process = None
-            self._external_service = True
-            self._info = RuntimeInfo(
-                pid=None,
-                version=self._config.version,
-                owned_process=False,
-            )
-            return self._info
+        with self._lifecycle_lock:
+            if self._starting:
+                raise QQChatRuntimeError()
+            if not self.is_installed():
+                raise QQChatRuntimeError(
+                    "\u672a\u627e\u5230\u90e8\u7f72\u7684 QQ \u8fd0\u884c\u73af\u5883\u3002"
+                )
+            if self._process is not None:
+                if self.running():
+                    return self._info
+                self.stop()
+            if self._service_is_healthy():
+                self._process = None
+                self._external_service = True
+                self._info = RuntimeInfo(
+                    pid=None,
+                    version=self._config.version,
+                    owned_process=False,
+                )
+                return self._info
+            generation = self._generation
+            self._starting = True
         launch_options = {
             "cwd": str(self._config.working_directory),
             "env": {**os.environ, "NAPCAT_DISABLE_FFMPEG_DOWNLOAD": "1"},
@@ -141,38 +158,56 @@ class BundledQQRuntime:
         if os.name == "nt":
             launch_options["creationflags"] = subprocess.CREATE_NO_WINDOW
         try:
-            process = self._launcher() if self._launcher is not None else subprocess.Popen(
+            spawn = launch_owned_process if os.name == "nt" else subprocess.Popen
+            process = self._launcher() if self._launcher is not None else spawn(
                 [str(self._config.executable_path)],
                 **launch_options,
             )
+            with self._lifecycle_lock:
+                if generation != self._generation:
+                    self._close_process(process)
+                    raise QQChatRuntimeError()
+                self._process = process
+                self._external_service = False
+                self._info = RuntimeInfo(
+                    pid=process.pid,
+                    version=self._config.version,
+                    owned_process=True,
+                    owned_process_handle=process if callable(getattr(process, "close", None)) else None,
+                )
+                return self._info
         except OSError as error:
             raise QQChatRuntimeError() from error
-        self._process = process
-        self._external_service = False
-        self._info = RuntimeInfo(
-            pid=process.pid,
-            version=self._config.version,
-            owned_process=True,
-        )
-        return self._info
+        finally:
+            with self._lifecycle_lock:
+                self._starting = False
 
     def stop(self) -> None:
-        process = self._process
-        if process is None:
-            return
-        if process.poll() is None:
+        with self._lifecycle_lock:
+            self._generation += 1
+            process = self._process
+            if process is None:
+                return
+            self._close_process(process)
+            self._process = None
+            self._info = RuntimeInfo(
+                pid=None,
+                version=self._config.version,
+                owned_process=False,
+            )
+
+    @staticmethod
+    def _close_process(process) -> None:
+        close = getattr(process, "close", None)
+        if callable(close):
+            close()
+        elif process.poll() is None:
             process.terminate()
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
-        self._process = None
-        self._info = RuntimeInfo(
-            pid=None,
-            version=self._config.version,
-            owned_process=False,
-        )
 
     def get_info(self) -> RuntimeInfo:
         return self._info
@@ -191,7 +226,7 @@ class BundledQQRuntime:
                     return
             except Exception:
                 pass
-            if self._process is not None and self._process.poll() is not None:
+            if self._process is not None and not self.running():
                 raise QQChatRuntimeError(
                     "\u8fd0\u884c\u73af\u5883\u8fdb\u7a0b\u5df2\u9000\u51fa\uff0c"
                     "\u65e0\u6cd5\u5c31\u7eea\u3002"

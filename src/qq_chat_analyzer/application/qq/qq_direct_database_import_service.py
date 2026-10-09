@@ -38,7 +38,6 @@ from .qq_environment_config import QQEnvironmentConfigLoader
 _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.qq_direct_database")
 
 
-_SNAPSHOT_ROOT_RELATIVE_PATH = Path("output", "qq_direct_db_phase35")
 _GENERATION_MANIFEST_NAME = "manifest.json"
 _MANIFEST_SCHEMA_VERSION = 1
 
@@ -527,13 +526,15 @@ class QQDirectDatabaseImportService:
         if self._runtime_client is not None:
             return self._runtime_client
         config = self._environment_config()
-        runtime_directory = config.runtime_directory
-        if runtime_directory is None:
-            raise QQDirectDatabaseUnavailable()
+        try:
+            paths = self._config_loader.runtime_paths()
+        except Exception:
+            raise QQDirectDatabaseUnavailable() from None
         base_url = config.napcat_bridge_url or "http://127.0.0.1:40655"
         return QQDirectSnapshotRuntimeClient(
             base_url=base_url,
-            snapshot_root=Path(runtime_directory).parent / _SNAPSHOT_ROOT_RELATIVE_PATH,
+            snapshot_root=paths.snapshot_root,
+            runtime_id=paths.runtime_id if config.runtime_mode == "managed" else None,
         )
 
     def _environment_config(self) -> Any:

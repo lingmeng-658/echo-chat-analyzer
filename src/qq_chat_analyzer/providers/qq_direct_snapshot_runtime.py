@@ -23,6 +23,7 @@ passphrase and absolute paths never reach an exception's public message.
 from __future__ import annotations
 
 import json
+import re
 import logging
 import time
 import urllib.error
@@ -142,9 +143,14 @@ class QQDirectSnapshotRuntimeClient:
         timeout: float = DEFAULT_RPC_TIMEOUT_SECONDS,
         acquire_timeout: float = DEFAULT_ACQUIRE_RPC_TIMEOUT_SECONDS,
         transport: Callable[[str, bytes, float], tuple[int, str]] | None = None,
+        runtime_id: str | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._snapshot_root = Path(snapshot_root)
+        if runtime_id is not None and (not isinstance(runtime_id, str)
+                                      or re.fullmatch(r"[0-9a-f]{64}", runtime_id) is None):
+            raise QQSnapshotRuntimeInvalidResponse()
+        self._runtime_id = runtime_id
         self._timeout = timeout
         self._acquire_timeout = acquire_timeout
         self._transport = transport or _urllib_transport
@@ -250,6 +256,8 @@ class QQDirectSnapshotRuntimeClient:
             ensure_ascii=False,
         ).encode("utf-8")
         url = f"{self._base_url}/rpc"
+        if self._runtime_id is not None:
+            url += "/" + self._runtime_id
         timeout = self._timeout if timeout is None else timeout
         if deadline is not None:
             remaining = deadline - time.monotonic()

@@ -82,6 +82,7 @@ class QQRuntimeManager:
         )
         self._pid: int | None = None
         self._version: str | None = None
+        self._owned_process_handle: object | None = None
 
     def is_available(self) -> bool:
         """Return whether a usable runtime is present on this machine."""
@@ -114,7 +115,18 @@ class QQRuntimeManager:
         self._state = QQRuntimeState.RUNNING
         self._pid = _optional_int(getattr(info, "pid", None))
         self._version = _optional_str(getattr(info, "version", None))
-        self._process_registry.record(self._pid)
+        self._owned_process_handle = None
+        if (
+            getattr(info, "owned_process", False) is True
+            and self._pid is not None
+            and self._pid > 0
+        ):
+            process = getattr(info, "owned_process_handle", None)
+            if process is not None:
+                self._process_registry.record_process(process)
+                self._owned_process_handle = process
+            else:
+                self._process_registry.record(self._pid)
         return self._status(
             QQRuntimeState.RUNNING,
             message=MESSAGE_RUNNING,
@@ -128,7 +140,8 @@ class QQRuntimeManager:
                 message=MESSAGE_UNAVAILABLE,
                 action_hint=ACTION_HINT_INSTALL,
             )
-        if not self._runtime.running():
+        if (not self._runtime.running() and self._owned_process_handle is None
+                and self._state is not QQRuntimeState.STARTING):
             return self._status(
                 QQRuntimeState.ERROR,
                 message=MESSAGE_ERROR,
@@ -149,6 +162,7 @@ class QQRuntimeManager:
         self._state = QQRuntimeState.STOPPED
         self._process_registry.discard(self._pid)
         self._pid = None
+        self._owned_process_handle = None
         return self._status(
             QQRuntimeState.STOPPED,
             message=MESSAGE_STOPPED,

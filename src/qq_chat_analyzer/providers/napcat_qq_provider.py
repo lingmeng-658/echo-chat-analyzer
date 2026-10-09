@@ -30,6 +30,7 @@ class NapCatStatus:
     database_api_ready: bool
     passphrase_ready: bool
     snapshot_api_ready: bool
+    runtime_id: str | None = None
 
     @property
     def ready(self) -> bool:
@@ -118,7 +119,8 @@ class NapCatQQProvider:
             raise NapCatQQError()
         identity = {key: _text(value["self_info"].get(key)) for key in ("uin", "uid", "nickname")}
         return NapCatStatus(value["bridge_ready"], value["qq_online"], identity,
-                            value["database_api_ready"], value["passphrase_ready"], value["snapshot_api_ready"])
+                            value["database_api_ready"], value["passphrase_ready"], value["snapshot_api_ready"],
+                            _text(value.get("runtime_id")) or None)
 
     def list_friends(self) -> list[NapCatFriend]:
         rows = self._rpc("EchoMetadata.listFriends")

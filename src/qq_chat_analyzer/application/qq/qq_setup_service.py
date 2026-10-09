@@ -72,6 +72,10 @@ class QQSetupService:
             "QQ 连接参数无效，请重新填写。"
         )
 
+    class RuntimeIdentityMismatch(ApplicationServiceError):
+        code = "qq_runtime_identity_mismatch"
+        public_message = "检测到不同 QQ 工作区的运行实例，请关闭该实例后重试。"
+
     def __init__(
         self,
         *,
@@ -87,7 +91,9 @@ class QQSetupService:
         self._provider_factory = provider_factory
         self._connection_service = connection_service
         self._runtime_manager = runtime_manager
-        self._runtime_factory = runtime_factory or default_runtime_factory
+        self._runtime_factory = runtime_factory or (lambda config: default_runtime_factory(
+            config, paths=self.get_runtime_paths(),
+            path_preparer=lambda: self.get_runtime_paths(prepare=True)))
         self._built_runtime_manager: Any = None
 
     def check_setup(self) -> QQSetupStatus:
@@ -137,6 +143,13 @@ class QQSetupService:
         """Return the effective QQ environment config (saved or default)."""
         return self._load_config_or_default()
 
+    def get_runtime_paths(self, *, prepare=False):
+        getter = getattr(self._config_loader, "runtime_paths", None)
+        if callable(getter):
+            return getter(prepare=prepare)
+        from .qq_runtime_paths import resolve_runtime_paths
+        return resolve_runtime_paths(self.get_environment_config(), prepare=prepare)
+
     def save_environment(self, config: QQEnvironmentConfig) -> Any:
         """Persist a config, refresh the provider, and re-check connection.
 
@@ -174,13 +187,19 @@ class QQSetupService:
         )
         runtime_status = None
         if config is not None and self._runtime_complete(config):
+            self._require_runtime_provenance(config)
+            if config.runtime_mode == "managed":
+                self.get_runtime_paths(prepare=True)
             self._persist_recovered_runtime_config(config)
             if self._connection_service is not None:
                 status = self._connection_service.check_status()
                 if status.available or runtime_running(status):
+                    self._verify_running_identity(config)
                     _LOGGER.info("[qq setup] connect reused running QQ runtime")
                     return status
             runtime_status = self._runtime_manager_for(config).get_status()
+            if runtime_status.state is QQRuntimeState.RUNNING:
+                self._verify_running_identity(config)
             if runtime_status.state is not QQRuntimeState.RUNNING:
                 _LOGGER.info(
                     "[qq setup] connect starting runtime state=%s",
@@ -243,6 +262,9 @@ class QQSetupService:
         config = self._load_runtime_config()
         if config is None or not self._runtime_complete(config):
             return self._runtime_unavailable_status(self.check_setup())
+        self._require_runtime_provenance(config)
+        if config.runtime_mode == "managed":
+            self.get_runtime_paths(prepare=True)
         return self._runtime_manager_for(config).start()
 
     def stop_runtime(self) -> QQRuntimeStatus:
@@ -288,11 +310,30 @@ class QQSetupService:
         return self._config_loader.load()
 
     def _runtime_manager_for(self, config: QQEnvironmentConfig) -> Any:
+        self._require_runtime_provenance(config)
         if self._runtime_manager is not None:
             return self._runtime_manager
         if self._built_runtime_manager is None:
             self._built_runtime_manager = self._runtime_factory(config)
         return self._built_runtime_manager
+
+    @staticmethod
+    def _require_runtime_provenance(config: QQEnvironmentConfig) -> None:
+        if config.runtime_mode not in ("managed", "custom"):
+            from .qq_runtime_paths import AmbiguousQQRuntime
+            raise AmbiguousQQRuntime(AmbiguousQQRuntime.public_message)
+
+    def _verify_running_identity(self, config: QQEnvironmentConfig) -> None:
+        if config.runtime_mode != "managed":
+            return
+        from ...providers.napcat_qq_provider import NapCatQQProvider
+        try:
+            status = NapCatQQProvider(config.napcat_bridge_url, timeout=1).status()
+            if status.runtime_id == self.get_runtime_paths().runtime_id:
+                return
+        except Exception:
+            pass
+        raise self.RuntimeIdentityMismatch()
 
     def _runtime_unavailable_status(
         self,
@@ -365,18 +406,24 @@ class QQSetupService:
         )
 
 
-def default_runtime_factory(config: QQEnvironmentConfig) -> Any:
+def default_runtime_factory(config: QQEnvironmentConfig, *, paths=None, path_preparer=None) -> Any:
     """Build a QQRuntimeManager from one QQ environment config."""
     from ...runtime import BundledQQRuntime, QQRuntimeConfig
 
     from ...providers.napcat_qq_provider import NapCatQQProvider
     from .qq_auth_bridge import default_auth_window_launcher
+    from .qq_runtime_paths import resolve_runtime_paths
+    paths = paths or resolve_runtime_paths(config)
+    def healthy(url):
+        status = NapCatQQProvider(url, timeout=1).status()
+        return status.bridge_ready and (config.runtime_mode != "managed" or status.runtime_id == paths.runtime_id)
     runtime = BundledQQRuntime(
-        QQRuntimeConfig(executable_path=config.runtime_directory / "NapCatWinBootMain.exe",
-                        working_directory=config.runtime_directory, base_url=config.napcat_bridge_url,
+        QQRuntimeConfig(executable_path=paths.program_root / "NapCatWinBootMain.exe",
+                        working_directory=paths.work_root, base_url=config.napcat_bridge_url,
                         version=config.version),
-        health_checker=lambda url: NapCatQQProvider(url, timeout=1).status().bridge_ready,
-        launcher=lambda: default_auth_window_launcher(config)(),
+        health_checker=healthy,
+        launcher=lambda: default_auth_window_launcher(config, paths=(path_preparer() if path_preparer
+                                          else resolve_runtime_paths(config, prepare=True)))(),
     )
     return QQRuntimeManager(runtime)
 

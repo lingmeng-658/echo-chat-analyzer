@@ -58,7 +58,7 @@ def test_configure_diagnostics_creates_echo_log(
             target.setLevel(original_target_levels[target.name])
 
 
-def test_runtime_root_uses_frozen_executable_parent(
+def test_frozen_log_uses_local_app_data_without_creating_install_files(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -66,8 +66,53 @@ def test_runtime_root_uses_frozen_executable_parent(
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", str(executable))
 
-    assert diagnostics.runtime_root() == executable.parent
-    assert diagnostics.log_path() == executable.parent / "logs" / "echo.log"
+    expected_root = tmp_path / "local-app-data" / "LocalChatAnalyzer"
+    assert diagnostics.runtime_root() == expected_root
+    assert diagnostics.log_path() == expected_root / "logs" / "echo.log"
+    assert not expected_root.exists()
+    assert not executable.parent.exists()
+
+
+def test_source_log_path_remains_predictable(monkeypatch):
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    expected = Path(diagnostics.__file__).resolve().parents[2] / "Echo/logs/echo.log"
+    assert diagnostics.log_path() == expected
+
+
+def test_frozen_diagnostics_needs_no_write_access_to_install(monkeypatch, tmp_path):
+    executable = tmp_path / "Program Files" / "Echo" / "Echo.exe"
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(executable))
+    real_mkdir = Path.mkdir
+    def deny_install(path, *args, **kwargs):
+        if path == executable.parent or executable.parent in path.parents:
+            raise PermissionError("fictional read-only install")
+        return real_mkdir(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "mkdir", deny_install)
+    logger = logging.getLogger(diagnostics.LOGGER_NAME)
+    original_handlers = logger.handlers[:]
+    original_level = logger.level
+    target_levels = {name: logging.getLogger(name).level for name in diagnostics.DESKTOP_DIAGNOSTIC_LOGGERS}
+    try:
+        logger.handlers.clear()
+        configured = diagnostics.configure_diagnostics()
+        configured.info("fictional frozen startup")
+        for handler in configured.handlers:
+            handler.flush()
+        location = tmp_path / "local-app-data/LocalChatAnalyzer/logs/echo.log"
+        assert "fictional frozen startup" in location.read_text(encoding="utf-8")
+        assert not executable.parent.exists()
+    finally:
+        _close_new_handlers(logger, original_handlers)
+        logger.setLevel(original_level)
+        for name, level in target_levels.items():
+            logging.getLogger(name).setLevel(level)
+
+
+def test_frozen_log_falls_back_to_isolated_home_without_localappdata(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.delenv("LOCALAPPDATA")
+    assert diagnostics.log_path() == tmp_path / "test-home/.localchatanalyzer/logs/echo.log"
 
 
 def test_sensitive_filter_redacts_key_paths_and_helper_stderr() -> None:

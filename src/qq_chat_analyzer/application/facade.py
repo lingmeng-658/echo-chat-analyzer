@@ -565,6 +565,10 @@ class ChatAnalyzerFacade:
         """Return whether the QQ login QR belongs to the current session."""
         return self._require_qq_auth_bridge().is_qrcode_ready()
 
+    def get_qq_qrcode_path(self) -> Path | None:
+        """Return the auth bridge's fresh QR path without deriving GUI paths."""
+        return self._require_qq_auth_bridge().get_qrcode_path()
+
     def shutdown_qq_runtime(self) -> None:
         """Stop only QQ processes LCA started.
 

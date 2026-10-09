@@ -8,16 +8,20 @@ const object = value => value !== null && typeof value === 'object';
 const generation = value => typeof value === 'string' && value.length > 0 && value.length <= 128 &&
   value === value.trim() && value !== '.' && value !== '..' && !/[\\/\x00]/.test(value);
 
-export async function startBridge(core, snapshot, {port = 40655, host = '127.0.0.1'} = {}) {
+export async function startBridge(core, snapshot, {port = 40655, host = '127.0.0.1', runtimeId = null} = {}) {
   if (host !== '127.0.0.1' || !Number.isInteger(port) || port < 0 || port > 65535) throw new Error('invalid_bridge_address');
   if (!core?.apis) throw new Error('echo_core_unavailable');
+  if (runtimeId !== null && (typeof runtimeId !== 'string' || !/^[0-9a-f]{64}$/.test(runtimeId))) {
+    throw new Error('invalid_runtime_identity');
+  }
   const status = () => ({
     bridge_ready: true,
     qq_online: core.selfInfo?.online === true,
     self_info: {uin: uin(core.selfInfo?.uin), uid: text(core.selfInfo?.uid), nickname: text(core.selfInfo?.nick)},
     database_api_ready: typeof core.apis.DatabaseApi?.decryptDatabase === 'function',
     passphrase_ready: core.apis.DatabaseApi?.hasPassphrase?.() === true,
-    snapshot_api_ready: ['acquire', 'cleanup', 'recover'].every(name => typeof snapshot?.[name] === 'function')
+    snapshot_api_ready: ['acquire', 'cleanup', 'recover'].every(name => typeof snapshot?.[name] === 'function'),
+    ...(runtimeId === null ? {} : {runtime_id: runtimeId})
   });
   const friends = async () => {
     const categories = await core.apis.FriendApi.getBuddyV2ExWithCate();
@@ -61,7 +65,8 @@ export async function startBridge(core, snapshot, {port = 40655, host = '127.0.0
     const failure = (code, error) => { req.resume(); send(code, {ok: false, error}); };
     const boundPort = server.address().port;
     if (req.headers.origin || ![`127.0.0.1:${boundPort}`, `localhost:${boundPort}`].includes(req.headers.host)) return failure(403, 'invalid_origin');
-    if (req.method !== 'POST' || req.url !== '/rpc') return failure(404, 'invalid_route');
+    const boundRoute = runtimeId !== null && req.url === `/rpc/${runtimeId}`;
+    if (req.method !== 'POST' || (req.url !== '/rpc' && !boundRoute)) return failure(404, 'invalid_route');
     if (req.headers['content-type']?.split(';')[0].trim() !== 'application/json') return failure(415, 'invalid_content_type');
     if (Number(req.headers['content-length']) > MAX_REQUEST_BYTES) return failure(413, 'request_too_large');
     let size = 0;
@@ -78,6 +83,11 @@ export async function startBridge(core, snapshot, {port = 40655, host = '127.0.0
       try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
       catch { return send(400, {ok: false, error: 'invalid_request'}); }
       if (!object(body) || Array.isArray(body) || typeof body.method !== 'string') return send(400, {ok: false, error: 'invalid_request'});
+      // Echo's managed snapshot lifecycle requires a matching path contract.
+      // A legacy client cannot touch a different instance's plaintext state.
+      if (runtimeId !== null && body.method.startsWith('EchoSnapshotApi.') && !boundRoute) {
+        return send(409, {ok: false, error: 'runtime_identity_mismatch'});
+      }
       const method = methods.get(body.method);
       if (!method) return send(400, {ok: false, error: 'invalid_method'});
       const params = Object.hasOwn(body, 'params') ? body.params : [];
