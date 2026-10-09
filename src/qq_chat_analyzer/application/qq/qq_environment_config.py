@@ -69,6 +69,8 @@ class QQEnvironmentConfig:
     runtime_directory: Path | None = None
     napcat_bridge_url: str = DEFAULT_NAPCAT_BRIDGE_URL
     version: str | None = "4.18.18"
+    # None means legacy/unknown provenance; never infer ownership from a path.
+    runtime_mode: str | None = None
 
 
 class QQEnvironmentConfigWriter:
@@ -100,6 +102,10 @@ class QQEnvironmentConfigWriter:
             ),
             "version": config.version or None,
         }
+        if config.runtime_mode is not None:
+            if config.runtime_mode not in ("managed", "custom"):
+                raise QQConfigWriteFailed()
+            payload["runtime_mode"] = config.runtime_mode
         body = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
         try:
             self._config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -139,6 +145,9 @@ class QQEnvironmentConfigLoader:
 
         if not isinstance(payload, dict):
             raise QQConfigCorrupted()
+        runtime_mode = payload.get("runtime_mode")
+        if runtime_mode is not None and runtime_mode not in ("managed", "custom"):
+            raise QQConfigCorrupted()
 
         # Old Desktop settings may only contribute the installed QQ path.
         # Never reuse an old runtime directory, API endpoint or credential file.
@@ -152,6 +161,7 @@ class QQEnvironmentConfigLoader:
                 _string_value(payload.get("napcat_bridge_url")) or DEFAULT_NAPCAT_BRIDGE_URL
             ),
             version="4.18.18" if legacy else _string_value(payload.get("version")) or "4.18.18",
+            runtime_mode=None if legacy else runtime_mode,
         )
 
     def load_or_default(self) -> QQEnvironmentConfig:
@@ -160,6 +170,16 @@ class QQEnvironmentConfigLoader:
             config = self.load()
         except QQConfigNotFound:
             config = None
+        if config is not None and config.runtime_mode == "managed":
+            default = default_qq_environment_config()
+            return QQEnvironmentConfig(
+                qq_install_path=config.qq_install_path,
+                runtime_directory=default.runtime_directory,
+                napcat_bridge_url=default.napcat_bridge_url,
+                version=default.version, runtime_mode="managed",
+            )
+        if config is not None and config.runtime_mode == "custom":
+            return config
         if config is not None and _runtime_paths_available(config):
             return config
         default = default_qq_environment_config()
@@ -168,7 +188,23 @@ class QQEnvironmentConfigLoader:
             runtime_directory=default.runtime_directory,
             napcat_bridge_url=default.napcat_bridge_url,
             version=default.version,
+            # A startup fallback does not establish ownership of a saved path.
+            runtime_mode=default.runtime_mode if config is None else None,
         )
+
+    def runtime_paths(self, *, prepare=False):
+        """Share one resolved path object with setup, auth and Direct DB.
+
+        Preparation always rechecks ownership and contents. Passive consumers
+        reuse that object's paths until configuration changes; no writes occur.
+        """
+        from .qq_runtime_paths import resolve_runtime_paths
+        config = self.load_or_default()
+        cached = getattr(self, "_resolved_runtime", None)
+        if prepare or cached is None or cached[0] != config:
+            paths = resolve_runtime_paths(config, prepare=prepare)
+            self._resolved_runtime = (config, paths)
+        return self._resolved_runtime[1]
 
 
 def bundled_qq_runtime_available() -> bool:
@@ -177,7 +213,9 @@ def bundled_qq_runtime_available() -> bool:
 
 
 def default_qq_environment_config() -> QQEnvironmentConfig:
-    return QQEnvironmentConfig(runtime_directory=default_qq_runtime_directory())
+    return QQEnvironmentConfig(
+        runtime_directory=default_qq_runtime_directory(), runtime_mode="managed"
+    )
 
 
 def _runtime_paths_available(config: QQEnvironmentConfig) -> bool:

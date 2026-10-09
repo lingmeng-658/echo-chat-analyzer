@@ -113,7 +113,7 @@ def _config(tmp_path: Path, *, complete: bool = True):
             path = runtime / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("fictional", encoding="utf-8")
-    return module.QQEnvironmentConfig(runtime_directory=runtime)
+    return module.QQEnvironmentConfig(runtime_directory=runtime, runtime_mode="custom")
 
 
 def _connection_status(*, available: bool = True):
@@ -228,7 +228,7 @@ def test_connect_repairs_stale_portable_paths_with_bundled_runtime(
     module = _module()
     stale = module.QQEnvironmentConfig(
         runtime_directory=tmp_path / "old-echo" / "runtime" / "qq",
-
+        runtime_mode="managed",
     )
     _store_config(tmp_path, stale)
     bundled = _config(tmp_path)
@@ -250,6 +250,9 @@ def test_connect_repairs_stale_portable_paths_with_bundled_runtime(
         connection_status=_connection_status(available=False),
         provider_factory=factory,
     )
+    # This unit fixture stubs packaging/preparation; the managed workspace
+    # integrity contract is exercised with pinned assets in runtime_wiring.
+    monkeypatch.setattr(service, "get_runtime_paths", lambda **_kwargs: None)
 
     result = service.connect()
 
@@ -368,8 +371,8 @@ def test_connect_detects_running_service_without_bundled_runtime(
     )
     monkeypatch.setattr(
         env_module,
-        "bundled_qq_runtime_available",
-        lambda: False,
+        "default_qq_environment_config",
+        lambda: config,
     )
     manager = _FakeRuntimeManager(available=False)
     service = _service(
@@ -383,6 +386,7 @@ def test_connect_detects_running_service_without_bundled_runtime(
 
     assert manager.start_calls == 0
     assert result.available is True
+    assert service.get_environment_config().runtime_directory == config.runtime_directory
 
 
 def test_connect_reuses_running_service_before_starting_runtime(

@@ -2701,9 +2701,13 @@ class _GatedQRFacade(_ConnectWaitingAuthFacade):
     def __init__(self, status_snapshot, connect_snapshot, **kwargs):
         super().__init__(status_snapshot, connect_snapshot, **kwargs)
         self.qr_ready = False
+        self.qr_path = None
 
     def is_qq_qrcode_ready(self):
         return self.qr_ready
+
+    def get_qq_qrcode_path(self):
+        return self.qr_path if self.qr_ready else None
 
 
 def _write_qrcode_png(path: Path) -> None:
@@ -2712,6 +2716,87 @@ def _write_qrcode_png(path: Path) -> None:
     pixmap = QPixmap(8, 8)
     pixmap.fill(Qt.GlobalColor.black)
     assert pixmap.save(str(path)) is True
+
+
+@pytest.mark.parametrize("runtime_mode", ["managed", "custom"])
+def test_qq_gui_reads_fresh_qr_from_auth_workspace(qt_app, tmp_path, runtime_mode):
+    """Display the bridge's QR, never an installation or previous session QR."""
+    from PySide6.QtGui import QPixmap
+    from qq_chat_analyzer.application.facade import ChatAnalyzerFacade
+    from qq_chat_analyzer.application.qq.qq_auth_bridge import QQAuthBridge
+    from qq_chat_analyzer.application.qq.qq_environment_config import QQEnvironmentConfig
+    from qq_chat_analyzer.application.qq.qq_runtime_paths import (
+        qq_runtime_paths, resolve_runtime_paths,
+    )
+    from qq_chat_analyzer.application.qq.qq_setup_service import QQSetupService
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+
+    program = tmp_path / "fictional-program"
+    config = QQEnvironmentConfig(runtime_directory=program, runtime_mode=runtime_mode)
+    paths = (qq_runtime_paths(component_id="a" * 64, program_root=program,
+                              data_root=tmp_path / "user")
+             if runtime_mode == "managed" else resolve_runtime_paths(config))
+    qr = (tmp_path / "user/runtime/qq" / ("a" * 64) / "cache/qrcode.png"
+          if runtime_mode == "managed" else program / "cache/qrcode.png")
+    qr.parent.mkdir(parents=True)
+    stale = QPixmap(8, 8)
+    stale.fill(Qt.GlobalColor.white)
+    assert stale.save(str(qr))
+    setup = QQSetupService(config_loader=SimpleNamespace(
+        load_or_default=lambda: config, runtime_paths=lambda **_: paths,
+    ))
+    manager = SimpleNamespace(
+        get_snapshot=lambda: _qq_snapshot("disconnected"),
+        begin_auth_waiting=lambda: None, end_auth_waiting=lambda: None,
+        disconnect=lambda: _qq_snapshot("disconnected"),
+    )
+    bridge = QQAuthBridge(setup_service=setup, manager=manager,
+                          window_launcher=lambda: None, runtime_cleaner=lambda _: None)
+    facade = ChatAnalyzerFacade(qq_auth_bridge=bridge)
+    workspace = QQWorkspace(facade, executor=_inline_executor())
+
+    workspace._refresh_qq_qrcode()
+    assert workspace._qq_qrcode_label.isHidden()
+    facade.start_qq_auth_flow()
+    workspace._refresh_qq_qrcode()
+    assert workspace._qq_qrcode_label.isHidden()
+    _write_qrcode_png(qr)
+    workspace._refresh_qq_qrcode()
+    assert workspace._qq_qrcode_label.isVisibleTo(workspace)
+    assert facade.get_qq_qrcode_path() == qr
+    assert bridge.get_qrcode_path() == qr
+
+    # A new GUI instance must not reuse an old runtime's otherwise fresh QR.
+    other = ChatAnalyzerFacade(qq_auth_bridge=QQAuthBridge(setup_service=setup))
+    assert other.get_qq_qrcode_path() is None
+    qr.write_bytes(b"fictional invalid PNG")
+    workspace._refresh_qq_qrcode()
+    assert workspace._qq_qrcode_label.isHidden()
+    qr.unlink()
+    workspace._refresh_qq_qrcode()
+    assert workspace._qq_qrcode_label.isHidden()
+    assert facade.get_qq_qrcode_path() is None
+
+    _write_qrcode_png(qr)
+    facade.disconnect_qq()
+    assert facade.get_qq_qrcode_path() is None
+    # Reconnection resolves the current workspace rather than a GUI-cached path.
+    if runtime_mode == "managed":
+        paths = qq_runtime_paths(component_id="b" * 64, program_root=program,
+                                 data_root=tmp_path / "user")
+        next_qr = tmp_path / "user/runtime/qq" / ("b" * 64) / "cache/qrcode.png"
+    else:
+        config = dataclasses.replace(config, runtime_directory=tmp_path / "custom-second")
+        paths = resolve_runtime_paths(config)
+        next_qr = tmp_path / "custom-second/cache/qrcode.png"
+    facade.start_qq_auth_flow()
+    workspace._refresh_qq_qrcode()
+    assert workspace._qq_qrcode_label.isHidden()
+    next_qr.parent.mkdir(parents=True)
+    _write_qrcode_png(next_qr)
+    workspace._refresh_qq_qrcode()
+    assert workspace._qq_qrcode_label.isVisibleTo(workspace)
+    assert facade.get_qq_qrcode_path() == next_qr
 
 
 def test_poll_displays_qr_before_snapshot_worker_completes(
@@ -2747,7 +2832,7 @@ def test_poll_displays_qr_before_snapshot_worker_completes(
     facade.qr_ready = True
 
     workspace = QQWorkspace(facade)
-    workspace._qq_qrcode_path = qr_path
+    facade.qr_path = qr_path
     workspace._qq_waiting_auth_since = time.monotonic()
 
     try:
@@ -3093,7 +3178,7 @@ def test_qq_workspace_waiting_auth_disables_button_until_qr_ready(
     )
     facade.qr_ready = False
     workspace = QQWorkspace(facade, executor=_inline_executor())
-    workspace._qq_qrcode_path = qr_path
+    facade.qr_path = qr_path
 
     workspace.connect_qq()
     _drain(workspace)
@@ -3124,7 +3209,7 @@ def test_qq_workspace_waiting_auth_enables_button_once_qr_displayed(
     )
     facade.qr_ready = True
     workspace = QQWorkspace(facade, executor=_inline_executor())
-    workspace._qq_qrcode_path = qr_path
+    facade.qr_path = qr_path
 
     workspace.connect_qq()
     _drain(workspace)
@@ -3153,7 +3238,7 @@ def test_qq_status_leaves_auth_wait_and_preserves_session_load_timing(
     pixmap = QPixmap(8, 8)
     pixmap.fill(Qt.GlobalColor.black)
     assert pixmap.save(str(qr_path))
-    workspace._qq_qrcode_path = qr_path
+    facade.qr_path = qr_path
     workspace._show_qq_status(
         _qq_snapshot("waiting_auth"), load_sessions_on_ready=False
     )
@@ -3281,7 +3366,7 @@ def test_qq_scan_stage_makes_the_qr_the_subject_then_hands_over_to_sessions(
     )
     facade.qr_ready = True
     workspace = QQWorkspace(facade, executor=_inline_executor())
-    workspace._qq_qrcode_path = qr_path
+    facade.qr_path = qr_path
 
     workspace._show_qq_status(
         _qq_snapshot("waiting_auth"), load_sessions_on_ready=False
@@ -3473,7 +3558,7 @@ def test_qq_connection_journey_fits_window(
     window.setStyleSheet(BASE_QSS)
     window.stack.setCurrentIndex(QQ_WORKSPACE_INDEX)
     page = window.qq_workspace
-    page._qq_qrcode_path = qr_path
+    facade.qr_path = qr_path
 
     if state == "idle":
         page._show_qq_status(_qq_snapshot("disconnected"), load_sessions_on_ready=False)

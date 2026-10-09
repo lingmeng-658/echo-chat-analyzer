@@ -73,7 +73,7 @@
     {
       "source": "qq_napcat_plugin/index.mjs",
       "target": "plugins/napcat-plugin-echo/index.mjs",
-      "sha256": "1d09991d17d7c26a649b2376575b28432c25e72a33f9edeced7c700123e5d011"
+      "sha256": "553171cb243b7101b0fac773c22faf295877c8de1bbe566f296cbe0f28ffede3"
     },
     {
       "source": "qq_napcat_plugin/package.json",
@@ -98,7 +98,7 @@
     {
       "source": "qq_napcat_plugin/bridge.mjs",
       "target": "plugins/napcat-plugin-echo/bridge.mjs",
-      "sha256": "fb8e989fc0860ecea864eeb21e883dab575b7fb506fdec60fdda60fc46206349"
+      "sha256": "e312b9b8d46b786af2b5f8afbc6c47d042b6df0053bd707452a52a392ef20a67"
     }
   ],
   "pluginConfigSha256": "83f2f45b62071d5ad84ece29baa2a25654cab204f469e59cc0f44149346b55eb"

@@ -1,15 +1,8 @@
-"""Track the QQ processes LCA itself launched.
+"""Retain only resources Echo created, without scanning or adoption.
 
-The bundled QQ runtime is a process tree: Echo starts the NapCat boot launcher, and the launcher starts the injected QQ client.
-Only those PIDs belong to LCA; a QQ client the user opened on their own must
-never be touched. This registry records exactly the PIDs LCA created so the
-application can stop them on exit without scanning or killing unrelated QQ
-processes.
-
-Every step logs a privacy-safe summary: the owned PIDs, the taskkill command,
-its return code, and a truncated output digest.  Echo's real shutdown left an
-owned launcher tree running, and without that record nothing could say whether
-the registry was empty or the kill simply failed.
+Windows QQ launch paths register a native Job process object, not a taskkill
+PID. Legacy injected runtimes retain PID cleanup for compatibility. A PID
+associated with a Job never falls back to the legacy terminator.
 """
 
 from __future__ import annotations
@@ -19,6 +12,7 @@ import logging
 import os
 import signal
 import subprocess
+import threading
 from typing import Any, Callable
 
 
@@ -38,12 +32,33 @@ class QQProcessRegistry:
     ) -> None:
         self._terminator = terminator or _terminate_process_tree
         self._pids: set[int] = set()
+        self._jobs: dict[int, Any] = {}
+        # Tombstones prevent late/repeated legacy registration of a closed Job
+        # PID from turning into taskkill against an unrelated, reused PID.
+        self._job_pids: set[int] = set()
+        self._lock = threading.RLock()
+
+    def record_process(self, process: Any) -> None:
+        """Retain a session's native resource; never convert it to PID cleanup."""
+        pid = getattr(process, "pid", None)
+        if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+            raise ValueError("Invalid owned process PID")
+        if not callable(getattr(process, "close", None)):
+            raise ValueError("Owned process must have explicit resource cleanup")
+        with self._lock:
+            self._jobs[id(process)] = process
+            self._job_pids.add(pid)
+            self._pids.discard(pid)
+        _LOGGER.info("QQ owned Job recorded pid=%s", pid)
 
     def record(self, pid: int | None) -> None:
         """Remember one PID LCA launched. Invalid values are ignored."""
         if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
             return
-        self._pids.add(pid)
+        with self._lock:
+            if pid in self._job_pids:
+                return
+            self._pids.add(pid)
         _LOGGER.info(
             "QQ owned process recorded pid=%s owned=%s",
             pid,
@@ -54,13 +69,31 @@ class QQProcessRegistry:
         """Forget one PID, e.g. after it was stopped normally."""
         if isinstance(pid, bool) or not isinstance(pid, int):
             return
-        self._pids.discard(pid)
+        with self._lock:
+            self._pids.discard(pid)
+            self._jobs = {key: process for key, process in self._jobs.items()
+                          if process.pid != pid or not getattr(process, "closed", False)}
 
     def recorded(self) -> tuple[int, ...]:
         """Return the currently recorded PIDs."""
-        return tuple(sorted(self._pids))
+        with self._lock:
+            return tuple(sorted(self._pids | {process.pid for process in self._jobs.values()}))
 
     def terminate_all(self) -> int:
+        """Close owned Jobs, then legacy PIDs; retain failed cleanup for retry."""
+        with self._lock:
+            count = len(self._jobs)
+            for key, process in tuple(self._jobs.items()):
+                try:
+                    process.close()
+                except Exception as error:
+                    _LOGGER.warning("QQ Job cleanup failed pid=%s error=%s",
+                                    process.pid, type(error).__name__)
+                else:
+                    self._jobs.pop(key, None)
+            return count + self._terminate_legacy_pids()
+
+    def _terminate_legacy_pids(self) -> int:
         """Terminate every recorded process tree and clear the registry.
 
         Never raises: a missing process, a permission failure, or a slow
@@ -108,8 +141,9 @@ class QQProcessRegistry:
         return len(pids)
 
     def clear(self) -> None:
-        """Forget every recorded PID without terminating anything."""
-        self._pids.clear()
+        """Forget legacy PIDs; native resources remain owned until closed."""
+        with self._lock:
+            self._pids.clear()
 
 
 def _output_summary(value: Any) -> str:

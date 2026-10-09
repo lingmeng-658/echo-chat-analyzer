@@ -38,7 +38,7 @@ WeChat 当前能力不变；架构细节以 `ARCHITECTURE.md` 为准。
 | 当前待办 | 状态 / 收口边界 |
 | --- | --- |
 | REL-04 用户错误提示 | CLOSED：现役错误安全边界已收口；分享与最终真人验收仍各归原条目 |
-| REL-06 Windows 普通用户发布 / 分发体验 | 未完成；REL-06B ZIP / 运行目录分离在发布工作树，Frozen / 异常恢复待验收；Setup 待收口 |
+| REL-06 Windows 普通用户发布 / 分发体验 | 未完成；REL-06B ZIP / 运行目录分离已整合至最新 main（PR #24）；**独立工作树 Frozen 实机验收已通过，整合版最终发行验收未完成**；Setup 待收口 |
 | REL-06C NapCat 升级与兼容性 | **Release Blocker：Yes**；尚未完成升级及兼容性验收，现有 pin 为 4.18.18 |
 | QQ Guided Setup 启动前退出引导 | 待实现 / 验收；已有 QQ 后台进程可能阻碍登录，不能只提示关闭主窗口 |
 | REL-07 GUI 最终 polish | 首页、QQ / 微信工作台及 Processing 原生双阶段书本动画已合入 main（Processing：PR #21，阶段性人工视觉验收通过）；QQ 会话目录加载意象、完成反馈、本地数据页与最终 Frozen 验收仍待收口 |
@@ -104,7 +104,8 @@ regression 保留。此关闭不代表 REL-08 Share、最终真实验收或跨�
 
 #### REL-06B Portable ZIP 与运行目录分离
 
-2026-10-08 可见进度位于 `release/portable-distribution` 未提交工作树，尚不属于 main：
+2026-10-08 起在 `release/portable-distribution` 工作树实现；2026-10-09 已整合到最新
+`origin/main`（PR #24）。以下区分**独立工作树实机验收**（已通过）与**最新 main 整合版验收**（未完成）：
 
 - `scripts/package_windows_portable.py` 已有 ZIP + SHA-256 包装实现，读取权威版本，
   检查发行树状态、拒绝链接与已有输出覆盖，并验证归档和源文件一致性。
@@ -127,19 +128,20 @@ regression 保留。此关闭不代表 REL-08 Share、最终真实验收或跨�
 | 程序与用户数据目录分离 | 初步通过 | 程序目录五项可变状态检查均为 False，用户工作区及快照根均存在 |
 | 正常退出后的快照清理 | 通过 | staging、generations 剩余项目数及数据库残留文件数均为 0 |
 | 完整退出生命周期 | 部分验证 | 正常关闭后快照清理符合预期；未逐项验证全部进程终止和恢复日志 |
-| Frozen 可执行程序 | 未验收 | 尚未完成本分支完整 Frozen 构建及只读安装目录测试 |
-| 异常退出与恢复 | 未真实验收 | 已有自动化测试，尚未进行真实 Frozen 异常退出与恢复测试 |
+| Frozen 可执行程序 | 独立工作树已通过；整合版未验收 | REL-06B 工作树的独立 Frozen 构建与只读安装目录测试已通过；整合后的 main 版本尚未重新构建 Frozen |
+| 异常退出与恢复 | 独立工作树已通过；整合版未验收 | 强杀自动回收与重新启动恢复已在独立 Frozen 上通过（三轮实机）；整合版需在最终 fresh Frozen 上复验 |
 | 跨机器运行 | 未验收 | 尚未在其他 Windows 机器验证 |
 
 以上只记录验收结论，不记录个人路径、账号或敏感日志；不将历史 Direct DB E2E
 当成本轮目录分离验收，也不从快照清理通过推断全部进程终止或异常恢复已通过。
+独立工作树的通过记录属于该工作树快照，不能替代整合版的最终发行验收。
 
-仍需：分支提交 / 合并后正式 fresh Frozen build、实际 Portable ZIP 解压运行、
+仍需：合并后正式 fresh Frozen build、实际 Portable ZIP 解压运行、
 只读安装目录与发行目录不承载运行状态的验证、完整退出生命周期，
-以及实际中断 / 崩溃后的异常恢复与清理验收。
+以及实际中断 / 崩溃后的异常恢复与清理验收；上述项目必须在**整合版**上重新验收。
 不得用源码环境通过或虚构恢复测试关闭上述待办。
 
-状态：进行中（发布工作树成果未提交 / 未合并）；Frozen / 异常恢复真实验收未完成。
+状态：进行中（REL-06B 已整合至最新 main，PR #24 待审合并）；**独立工作树 Frozen 实机验收已通过，最新 main 整合版的最终发行验收未完成**。
 
 #### REL-06C NapCat 版本升级与兼容性验收
 
@@ -864,6 +866,28 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build_windows_ex
   因未设置 `ECHO_NATIVE_WCDB_CLI_PATH`。这些数字只记录本次 checkpoint，不是固定测试数量要求。
 - 两个 Release Packaging blocker：**CLOSED**；本轮无产品源码修改。
   REL-06 整体仍开放：installer、普通用户首次运行和最终分发体验尚未完成。
+
+2026-10-09 REL-06B Windows Job Object 原子纳管 checkpoint：
+
+- 范围：`runtime/windows_job.py` 以 `PROC_THREAD_ATTRIBUTE_JOB_LIST` 在创建时原子纳管，
+  `QQProcessRegistry` 持有会话资源；程序目录 / 用户运行目录 / Direct DB transient 目录分离，
+  安装目录只读，GUI 经 Facade 取得 QR 路径。
+- 独立 Frozen 实机验收：**通过**（三轮）——正常退出、强杀自动回收、重新启动恢复。
+  安装目录只读、用户数据目录隔离与快照清理均通过。
+- 发行资源合同：fresh Frozen build 与发行资源合同通过；成功口径见上文 package checkpoint。
+- 本次验收快照：Focused **157 passed**；Fast **2912 passed，2 skipped，316 deselected**。
+  这些数字只记录本次 checkpoint，不是固定测试数量要求。
+- 边界：**独立 Frozen 实机验收通过，最终集成发行验收未完成。** 最终 Portable ZIP、
+  含其他并行成果的整合版回归，以及 QA-01 / QA-03 / QA-06 的最终发行验收仍待完成，
+  本记录不声称 Echo 0.1 已完成最终发行验收。
+- 本 checkpoint 记录的是 REL-06B **独立工作树**的验收结论。2026-10-09 该分支已整合到最新
+  `origin/main`（PR #24），上方 REL-06B live 状态表已同步，区分「独立工作树已通过」与
+  「整合版未完成」。整合版 Fast 回归：**3145 passed，5 skipped，344 deselected**；
+  5 项 skip 为环境原因（2 项 Windows 符号链接权限、3 项缺 bundled 微信运行资源）；
+  `tests/test_frozen_desktop_package_contract.py` 的 18 个用例在无 Frozen 构建产物时全部 skip，
+  其运行期语义仍需在最终 fresh Frozen 上验收。
+  已知 GUI worker / Qt native access violation 仍未关闭（见 Active Bugs）；本轮整合版 Fast
+  未复现崩溃不等于该问题已消失。记录不含个人路径、账号或敏感日志。
 
 历史包体变化（不代表当前 fresh package 大小）：
 

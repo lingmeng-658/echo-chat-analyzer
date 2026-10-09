@@ -36,6 +36,8 @@ echo_report_logo = project_root / "assets/branding/echo/echo_wordmark_with_sloga
 echo_expression_assets = project_root / "frontend/echo_report/wechat-emojis"
 echo_qq_expression_assets = project_root / "frontend/echo_report/qq-emojis"
 datas = [(str(path), ".") for path in resources]
+datas.append((str(project_root / "scripts/windows_runtime_manifest.json"), "scripts"))
+datas.append((str(project_root / "scripts/qq_napcat_runtime_pins.json"), "scripts"))
 datas += copy_metadata("qq-chat-analyzer")
 datas.append((str(echo_icon), "assets/branding/echo"))
 datas.append((str(echo_favicon), "assets/branding/echo"))

@@ -887,9 +887,14 @@ QQ 与微信的页面状态互相隔离。切换来源或返回数据源选择�
   “停止接受新的 Direct DB acquisition → bounded drain / recover plaintext →
   终止 Echo 自有的 QQ runtime 进程树”执行。每一步都有独立时间窗，
   某一步失败或卡死都不会跳过后续步骤，也不会让退出无限挂住。
-- **进程所有权只来自记录。** 终止只针对 Echo 自己记录 / 启动的 launcher root PID
-  （`QQProcessRegistry` → `taskkill /PID <pid> /T /F`）。
-  不按进程名扫描，不触碰用户自己启动的 QQ。
+- **Windows 托管进程在创建时获得所有权。** 两条 QQ 启动入口通过
+  `runtime/windows_job.py` 的 `PROC_THREAD_ATTRIBUTE_JOB_LIST` 原子创建到
+  不可继承、未命名的 kill-on-close Job 中。`QQProcessRegistry` 持有会话资源，
+  launcher 或日志线程结束不释放 Job；正常 shutdown 关闭 Job，Echo 异常退出
+  则由 Windows 关闭句柄并终止受管后代。纳管失败不退回无托管启动。
+  旧 PID 记录仅保留兼容清理；Job 对应 PID 不再执行 taskkill。
+  不按端口、进程名或路径扫描认领，不接管外部健康服务或旧版本孤儿进程，
+  不触碰用户自己启动的 QQ。
 - **超时有明确 fallback。** 超过 bounded 窗口后强制退出；跨步骤总预算与
   last-resort watchdog 都是有限值。
 

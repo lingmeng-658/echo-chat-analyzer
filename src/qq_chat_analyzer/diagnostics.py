@@ -6,6 +6,7 @@ import logging
 import sys
 from pathlib import Path
 
+from .resources import user_data_root
 from .logging_config import (
     DESKTOP_DIAGNOSTIC_LOGGERS,
     SensitiveDataFilter,
@@ -18,9 +19,9 @@ LOG_FILENAME = "echo.log"
 
 
 def runtime_root() -> Path:
-    """Return the directory beside the executable, or the development root."""
+    """Calculate writable Frozen data root, or the predictable development root."""
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
+        return user_data_root()
     return Path(__file__).resolve().parents[2] / "Echo"
 
 

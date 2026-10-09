@@ -601,6 +601,7 @@ def test_production_service_builds_runtime_client(
 
     config = QQEnvironmentConfig(
         runtime_directory=tmp_path / "runtime" / "qq",
+        runtime_mode="custom",
         napcat_bridge_url="http://127.0.0.1:40654",
     )
     monkeypatch.setattr(
