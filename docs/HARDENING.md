@@ -18,7 +18,7 @@ Echo 已过「先证明有没有人愿意用」的阶段。当前目标是修复
 
 四者逐级独立；低层级完成不得用于关闭更高层级待办。
 
-校准基线：2026-10-09，`origin/main = fec51e9`。
+校准基线：2026-10-09，`origin/main = e820579d`。
 （历史校准、逐次 checkpoint 与旧测试数字已移除以降低维护成本；需要时见 Git 历史与
 `docs/BUG_JOURNAL.md`。）
 
@@ -27,19 +27,20 @@ Echo 已过「先证明有没有人愿意用」的阶段。当前目标是修复
 | 条目 | 状态 |
 | --- | --- |
 | REL-06C NapCat 升级与兼容性 | **Release Blocker：Yes**；未完成升级及验收，pin 仍为 4.18.18 |
-| REL-08 分析结果分享闭环 | **Release Blocker：Yes**；入口 / 生成已合入，完整真人闭环未验收 |
+| REL-08 分析结果分享闭环 | **源码功能已合入；分享体验优化 DEFERRED**（与报告内容后续一并优化）；最终基本可用性纳入 QA-01 |
 | REL-06 Windows Portable ZIP 发布 | 未完成：v0.1.0 只交付 Windows Portable ZIP（不开发 Setup 安装器）；REL-06B 已合入 main（PR #24），整合版最终发行验收未完成 |
-| REL-07 GUI 最终 polish | OPEN：Processing（PR #21）、「关于余音」更新入口（PR #27）已合入；剩余视觉 / Frozen 验收未收口 |
+| REL-07 GUI 最终 polish | **源码功能收尾完成**（含 `9a81d5b`、`b5413dd`、`e820579d`）；仅保留最终真实使用 / Frozen 验收，不再作为独立功能开发阻塞项 |
 | QA-03 GitHub Release | 未完成：需核对 tag / 发布说明 / fresh build 资产后发布 |
 | QA-04 新版本检测 | Core 与 GUI 手动检查已合入（PR #27）；待最终视觉与真实交互验收 |
 | QA-06 跨机器 Direct DB RC | 待真实验收 |
 | QA-01 最终真实验收 | 未完成（见下） |
-| 版权 / 第三方分发合规 | 待核对最终随包资产、许可 / 声明与官方表情 PNG |
-| GUI native access violation | 待定位风险 |
+| 版权 / 第三方分发合规 | **许可与 NOTICE 专项已有实施结果**（仓库已包含 MPL-2.0 `LICENSE` / `NOTICE.md`）；仍需最终发行包资产与第三方许可复核，不重复开展专项开发 |
+| GUI native access violation | 既有偶发现象，尚未证明修复；纳入 QA-01 稳定性验收，出现复现证据再专项处置 |
 
 已合入 main、非阻塞（**源码功能完成**，不代表发行 / 真人验收）：报告历史浏览与批量删除
 （PR #26、`b9c42de`、`fec51e9`）、微信会话排序修复（`f264ae0`）。
-独立审计分支 `audit/algorithm-quality` **尚未合入 main**，其成果不得计为已交付。
+独立审计分支 `audit/algorithm-quality` 的成果须以合入 `main` 为准，不得将并行报告直接计为已交付。
+NapCat RPC 客户端认证正在独立分支实施；REL-06C NapCat 升级处于只读兼容审计阶段，两者尚未计入 `main` 交付。
 
 ## Active Bugs
 
@@ -71,13 +72,14 @@ Echo 已过「先证明有没有人愿意用」的阶段。当前目标是修复
 只处理明显影响体验的视觉 / 交互问题，不重新设计 GUI。
 已合入 main：Home、QQ / 微信引导、会话工作台与琴键回响、Processing 原生书本动画（PR #21）、
 「关于余音」更新入口（PR #27）。
-剩余：QQ 会话列表加载动效改为「整理会话目录」；分析完成反馈 / Local Data 视觉一致性；
-最终 fresh Frozen / Portable 与真人视觉验收；跟踪 Qt 退出崩溃（环境失败不得静默记为通过）。
+GUI 收尾提交包括 `9a81d5b`（整体 / Local Data polish）、`b5413dd`（QQ 二维码等待与取消）、
+`e820579d`（QQ / 微信连接交互）。不再将旧版视觉待办默认视为未开发；
+仅保留最终 fresh Frozen / Portable、真人视觉与稳定性验收。
 微信消息数量排序的高效可信计数来源留作后续优化。
 
-状态：Processing 阶段性验收 CLOSED；**REL-07 整体仍 OPEN**。
+状态：**源码功能收尾完成；最终发行验收待做**。
 
-### REL-08 分析结果导出 / 分享闭环（Release Blocker：Yes）
+### REL-08 分析结果导出 / 分享闭环（后续体验优化 DEFERRED）
 
 需要验收整条用户链：
 
@@ -87,14 +89,15 @@ Echo 已过「先证明有没有人愿意用」的阶段。当前目标是修复
 ```
 
 `d67f51e` 已合入 main：有结果时显示 / 启用分享按钮，经 Facade 生成图片并展示状态、尝试打开图片。
-入口 / 生成实现已恢复并合并；**完整真人闭环与最终发布包复验仍待验收**。
+用户决定现有分享能力先保持当前状态，分享效果及内容随报告优化后续处理，**不再将体验完善列为 0.1 独立 Release Blocker**。
+正式交付时的基本分享可用性仍纳入 QA-01 验收，不宣称完整真人闭环已通过。
 
 ### 版权 / 第三方分发合规
 
-发布前核对最终资产清单、第三方许可与所需声明，覆盖 NapCat、微信 native 工具、字体 / 图形
-及官方表情 PNG。NapCat pins 已记录其 Limited Redistribution License，但 hash 命中不是分发合规结论。
-`fix/echo-0.1-remove-official-emoji-png` 仍指向 `b09e83b`，未见独立移除提交。
-本项只记录待核对状态，不作法律结论。
+专项已实施 Echo 自有源码 MPL-2.0 许可文本、`NOTICE.md` 和发行复制契约；
+`third_party/napcat/NOTICE.md` 保留 NapCat 第三方边界。**不再把已完成的许可补齐工作列作待开发事项**。
+最终生成发行包后仍须核对实际随包资产、第三方许可与声明（含 NapCat、微信 native、字体 / 图形及官方表情资源排除情况）。
+仓库声明或 hash 校验不能单独代替最终发行分发合规结论；不作法律结论。
 
 ### QA-03 版本号 / GitHub Release
 
@@ -153,6 +156,7 @@ v0.1.0 **不开发 Setup 安装器**，也**不实现** Windows 原地更新器�
 
 - **CAP-01**：更完整的图片 / 语音 / 视频 / system message 分析。
 - **CAP-02**：Rich Model 最终迁移、逐步减少 legacy projection。
+- 分享图片/入口体验与报告内容一并优化；不在 0.1 前单独重做 REL-08。
 - 其余方向：AI 内部梗、语言趋同、表达变化趋势、更复杂关系推断、新数据来源、大型智能过滤框架升级。
 - **REL-05 大型数据容量与 UX**：先按 QA-01 验收，有新证据再决定是否专项优化。DEFERRED，Blocker：No。
 - **REL-09 语言画像语义 / 代表词算法分工**：`top_words` 更接近「常说什么」，
