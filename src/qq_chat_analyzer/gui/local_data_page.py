@@ -9,6 +9,7 @@ from typing import Any, Callable
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -22,7 +23,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .theme import COLOR_ACCENT_SOFT, COLOR_PAPER, EMPTY_TEXT_STYLE, STATUS_STYLE_BASE
+from ..application.facade import FacadeError
+from .theme import COLOR_ACCENT_SOFT, COLOR_PAPER, LOCAL_DATA_QSS, STATUS_STYLE_BASE
 from .workers import submit
 
 
@@ -66,36 +68,97 @@ class LocalDataPage(QWidget):
         self._report_opener = report_opener
         self._confirm_delete_report = confirm_delete_report
         self._reports = ()
+        self._refresh_generation = 0
+        self._has_loaded = False
+        self._load_failed = False
         self._build_ui()
 
     def _build_ui(self) -> None:
+        self.setObjectName("localDataPage")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(LOCAL_DATA_QSS)
         layout = QVBoxLayout(self)
-        layout.setSpacing(12)
+        layout.setContentsMargins(32, 24, 32, 24)
+        layout.setSpacing(20)
+
+        title = QLabel("Echo 历史")
+        title.setObjectName("localDataTitle")
+        layout.addWidget(title)
+        description = QLabel(
+            "本机保存的 Echo 报告都在这里，可以随时打开回看；删除只影响 Echo 报告文件。"
+        )
+        description.setObjectName("localDataDescription")
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        summary = QFrame()
+        summary.setObjectName("localDataSummary")
+        summary_layout = QVBoxLayout(summary)
+        summary_layout.setContentsMargins(20, 16, 20, 16)
+        summary_row = QHBoxLayout()
+        self._summary_count_label = QLabel("—")
+        self._summary_count_label.setObjectName("localDataCount")
+        self._summary_size_label = QLabel("—")
+        self._summary_size_label.setObjectName("localDataSize")
+        for caption, value in (
+            ("已保存报告", self._summary_count_label),
+            ("报告文件占用", self._summary_size_label),
+        ):
+            metric = QVBoxLayout()
+            metric.setSpacing(6)
+            caption_label = QLabel(caption)
+            caption_label.setObjectName("localDataMetricCaption")
+            metric.addWidget(caption_label)
+            metric.addWidget(value)
+            summary_row.addLayout(metric, stretch=1)
+        summary_layout.addLayout(summary_row)
+        self._summary_note_label = QLabel("")
+        self._summary_note_label.setObjectName("localDataSummaryNote")
+        self._summary_note_label.setWordWrap(True)
+        self._summary_note_label.hide()
+        summary_layout.addWidget(self._summary_note_label)
+        layout.addWidget(summary)
 
         self._status_label = QLabel("")
         self._status_label.setWordWrap(True)
         self._status_label.setStyleSheet(STATUS_STYLE_BASE)
+        self._status_label.hide()
         layout.addWidget(self._status_label)
 
-        refresh_row = QHBoxLayout()
+        history_box = QGroupBox("报告列表")
+        history_box.setObjectName("localDataHistory")
+        history_layout = QVBoxLayout(history_box)
+        history_layout.setContentsMargins(20, 32, 20, 20)
+        history_layout.setSpacing(16)
+        search_row = QHBoxLayout()
         self._refresh_button = QPushButton("刷新")
         self._refresh_button.setMinimumHeight(34)
         self._refresh_button.clicked.connect(self.refresh)
-        refresh_row.addWidget(self._refresh_button)
-        refresh_row.addStretch(1)
-        layout.addLayout(refresh_row)
-
-        history_box = QGroupBox("Echo 历史")
-        history_layout = QVBoxLayout(history_box)
         self._search_input = QLineEdit()
+        self._search_input.setMinimumHeight(36)
         self._search_input.setPlaceholderText("搜索会话名、来源、类型、日期或分析范围")
         self._search_input.setAccessibleName("搜索历史报告")
         self._search_input.setClearButtonEnabled(True)
         self._search_input.textChanged.connect(self._apply_search)
-        history_layout.addWidget(self._search_input)
+        search_row.addWidget(self._search_input, stretch=1)
+        search_row.addWidget(self._refresh_button)
+        history_layout.addLayout(search_row)
+        self._history_empty_state = QWidget()
+        self._history_empty_state.setObjectName("localDataEmptyState")
+        empty_layout = QVBoxLayout(self._history_empty_state)
+        empty_layout.setContentsMargins(12, 40, 12, 40)
+        empty_layout.addStretch(1)
         self._history_empty_label = QLabel("暂无报告")
-        self._history_empty_label.setStyleSheet(EMPTY_TEXT_STYLE)
-        history_layout.addWidget(self._history_empty_label)
+        self._history_empty_label.setObjectName("localDataEmptyTitle")
+        self._history_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_layout.addWidget(self._history_empty_label)
+        self._history_empty_detail_label = QLabel("分析完成后，报告会保存在本机，方便随时回看。")
+        self._history_empty_detail_label.setObjectName("localDataEmptyDetail")
+        self._history_empty_detail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._history_empty_detail_label.setWordWrap(True)
+        empty_layout.addWidget(self._history_empty_detail_label)
+        empty_layout.addStretch(1)
+        history_layout.addWidget(self._history_empty_state, stretch=1)
         self._issues_label = QLabel("")
         self._issues_label.setWordWrap(True)
         self._issues_label.hide()
@@ -110,6 +173,9 @@ class LocalDataPage(QWidget):
         self._history_table.setHorizontalHeaderLabels(
             ["时间", "来源", "会话", "消息数", "分析范围"]
         )
+        self._history_table.verticalHeader().hide()
+        self._history_table.verticalHeader().setDefaultSectionSize(44)
+        self._history_table.setShowGrid(False)
         self._history_table.setEditTriggers(
             QAbstractItemView.EditTrigger.NoEditTriggers
         )
@@ -127,7 +193,11 @@ class LocalDataPage(QWidget):
         )
         for column, width in enumerate((160, 80, 240, 80, 220)):
             self._history_table.setColumnWidth(column, width)
-        history_layout.addWidget(self._history_table)
+        for column in (2, 4):
+            self._history_table.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeMode.Stretch,
+            )
+        history_layout.addWidget(self._history_table, stretch=1)
 
         history_actions = QHBoxLayout()
         self._open_report_button = QPushButton("打开报告")
@@ -148,35 +218,72 @@ class LocalDataPage(QWidget):
         history_layout.addLayout(history_actions)
         layout.addWidget(history_box, stretch=1)
 
-        self._back_button = QPushButton("返回首页")
-        self._back_button.setMinimumWidth(160)
-        self._back_button.setMinimumHeight(34)
-        self._back_button.clicked.connect(self._on_back_clicked)
-        layout.addWidget(self._back_button, alignment=Qt.AlignmentFlag.AlignLeft)
-
     # ---------------------------------------------------------------- public API
 
     def refresh(self, *, error_message: str = "") -> None:
-        """Reload package summaries through the facade."""
+        """Load the list and storage summary together off the GUI thread."""
+        self._refresh_generation += 1
+        generation = self._refresh_generation
         self._history_table.clearSelection()
         self._history_table.setCurrentCell(-1, -1)
-        self._status_label.setText(_LOADING_STATUS)
+        self._set_status(_LOADING_STATUS)
+        self._refresh_button.setEnabled(False)
+
+        def on_success(result: Any) -> None:
+            if generation == self._refresh_generation:
+                listing, usage, usage_error = result
+                self._render_data(listing, usage, usage_error, error_message)
+                self._refresh_button.setEnabled(True)
+
+        def on_error(code: str, message: str) -> None:
+            if generation == self._refresh_generation:
+                self._load_failed = not self._has_loaded
+                self._apply_search()
+                self._show_error(code, message)
+                self._refresh_button.setEnabled(True)
+
         self._executor(
-            lambda: self._facade.list_report_packages(),
-            on_success=lambda listing: self._render_data(listing, error_message),
-            on_error=self._show_error,
+            self._load_archive,
+            on_success=on_success,
+            on_error=on_error,
         )
 
     # ---------------------------------------------------------------- internals
 
-    def _render_data(self, listing: Any, error_message: str = "") -> None:
+    def _load_archive(self) -> tuple[Any, Any, str]:
+        listing = self._facade.list_report_packages()
+        try:
+            usage = self._facade.get_report_storage_usage()
+        except FacadeError as error:
+            return listing, None, error.public_message
+        except Exception:
+            _LOGGER.exception("Local report storage summary failed")
+            return listing, None, "无法统计 Echo 本地报告占用空间，请稍后重试。"
+        return listing, usage, ""
+
+    def _render_data(
+        self, listing: Any, usage: Any, usage_error: str, error_message: str = "",
+    ) -> None:
         _LOGGER.info("Local data rendered reports=%d issues=%d deletion_error=%s",
                      len(listing.reports), len(listing.issues), bool(error_message))
         self._reports = tuple(listing.reports)
+        self._has_loaded = True
+        self._load_failed = False
+        count = usage.package_count if usage is not None else len(self._reports)
+        self._summary_count_label.setText(f"{count} 份")
+        size = _format_bytes(usage.measured_bytes) if usage is not None else "—"
+        self._summary_size_label.setText(size)
+        note = usage_error
+        if usage is not None and not usage.complete:
+            note = (
+                f"当前大小为已测量下界；{len(usage.unmeasured_packages)} 份报告无法测量。"
+            )
+        self._summary_note_label.setText(note)
+        self._summary_note_label.setVisible(bool(note))
         self._apply_search()
         self._issues_label.setText(f"发现 {len(listing.issues)} 个无法读取的 Echo 报告")
         self._issues_label.setVisible(bool(listing.issues))
-        self._status_label.setText(error_message)
+        self._set_status(error_message)
 
     def _apply_search(self) -> None:
         """Filter only loaded summaries using their user-facing text."""
@@ -189,9 +296,14 @@ class LocalDataPage(QWidget):
             if not query or any(query in field.casefold() for field in fields):
                 records.append(record)
         self._render_history(records)
-        self._history_empty_label.setText(
-            "没有匹配的报告" if self._reports else "暂无报告"
-        )
+        if self._load_failed:
+            title, detail = "暂时无法读取本地报告", "请稍后点击刷新重试。"
+        elif self._reports:
+            title, detail = "没有匹配的报告", "换一个关键词试试，或清空搜索框。"
+        else:
+            title, detail = "暂无报告", "分析完成后，报告会保存在本机，方便随时回看。"
+        self._history_empty_label.setText(title)
+        self._history_empty_detail_label.setText(detail)
 
     def _render_history(self, history: Any) -> None:
         records = list(history)
@@ -210,6 +322,8 @@ class LocalDataPage(QWidget):
                     item,
                 )
         self._history_empty_label.setVisible(len(records) == 0)
+        self._history_empty_detail_label.setVisible(len(records) == 0)
+        self._history_empty_state.setVisible(len(records) == 0)
         self._history_table.setVisible(len(records) > 0)
         self._update_open_report_button()
 
@@ -239,7 +353,7 @@ class LocalDataPage(QWidget):
             opened = self._report_opener(path) if self._report_opener is not None else False
         except Exception:
             opened = False
-        self._status_label.setText(
+        self._set_status(
             "" if opened else "无法打开 Echo 报告，请检查系统默认浏览器后重试。"
         )
 
@@ -257,7 +371,7 @@ class LocalDataPage(QWidget):
             )
         if not confirmed:
             return
-        self._status_label.setText("正在删除选中报告...")
+        self._set_status("正在删除选中报告...")
         self._executor(
             lambda: self._facade.delete_report_package(package_name),
             on_success=lambda _result: self.refresh(),
@@ -271,7 +385,7 @@ class LocalDataPage(QWidget):
             _LOGGER.info("Local data delete-all cancelled")
             return
         _LOGGER.info("Local data delete-all confirmed; submitting package deletion")
-        self._status_label.setText("正在删除全部报告...")
+        self._set_status("正在删除全部报告...")
         self._executor(
             self._facade.clear_report_packages,
             on_success=lambda _result: self.refresh(),
@@ -291,12 +405,11 @@ class LocalDataPage(QWidget):
         return box.clickedButton() is delete_button
 
     def _show_error(self, code: str, message: str) -> None:
-        self._status_label.setText(message)
+        self._set_status(message)
 
-    def _on_back_clicked(self) -> None:
-        main_window = self.window()
-        if hasattr(main_window, "show_home_page"):
-            main_window.show_home_page()
+    def _set_status(self, message: str) -> None:
+        self._status_label.setText(message)
+        self._status_label.setVisible(bool(message))
 
 
 def _delete_report_confirmation_dialog(parent: QWidget | None = None) -> QMessageBox:
@@ -330,6 +443,15 @@ def _readonly_item(value: str) -> QTableWidgetItem:
     item = QTableWidgetItem(str(value))
     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
     return item
+
+
+def _format_bytes(size: int) -> str:
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024 or unit == "TB":
+            return f"{int(value)} B" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    raise AssertionError("unreachable size unit")
 
 
 def _history_values(record: Any) -> tuple[str, ...]:

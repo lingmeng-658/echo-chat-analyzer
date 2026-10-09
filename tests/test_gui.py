@@ -121,6 +121,9 @@ class StubFacade:
         message_range=None,
         reports=(),
         report_issues=(),
+        report_usage=None,
+        report_usage_error=None,
+        list_reports_error=None,
         clear_reports_error=None,
         share_image_path=None,
         share_image_error=None,
@@ -144,6 +147,9 @@ class StubFacade:
         self._message_range = message_range
         self._reports = list(reports)
         self._report_issues = tuple(report_issues)
+        self._report_usage = report_usage
+        self._report_usage_error = report_usage_error
+        self._list_reports_error = list_reports_error
         self._clear_reports_error = clear_reports_error
         self._share_image_path = share_image_path
         self._share_image_error = share_image_error
@@ -171,6 +177,7 @@ class StubFacade:
         self.get_session_message_range_calls: list[tuple] = []
         self.analyze_session_calls: list[tuple] = []
         self.list_report_packages_calls: list[object] = []
+        self.get_report_storage_usage_calls: list[object] = []
         self.clear_report_packages_calls: list[object] = []
         self.list_snapshots_calls: list[tuple] = []
         self.validate_snapshot_calls: list[object] = []
@@ -182,7 +189,18 @@ class StubFacade:
     def list_report_packages(self):
         from qq_chat_analyzer.application.report_package_catalog import ReportPackageListing
         self.list_report_packages_calls.append(1)
+        if self._list_reports_error is not None:
+            raise self._list_reports_error
         return ReportPackageListing(tuple(self._reports), self._report_issues)
+
+    def get_report_storage_usage(self):
+        from qq_chat_analyzer.application.report_package_catalog import ReportStorageUsage
+        self.get_report_storage_usage_calls.append(1)
+        if self._report_usage_error is not None:
+            raise self._report_usage_error
+        if self._report_usage is not None:
+            return self._report_usage
+        return ReportStorageUsage(len(self._reports), 0)
 
     def clear_report_packages(self):
         self.clear_report_packages_calls.append(1)
@@ -871,6 +889,37 @@ class _DeferredExecutor:
             self.on_error(code, message)
         if self.on_finished is not None:
             self.on_finished()
+
+
+class _QueuedExecutor:
+    """Keep every submitted call so a test chooses the completion order."""
+
+    def __init__(self):
+        self.tasks: list[tuple] = []
+
+    def __call__(
+        self,
+        operation,
+        *,
+        on_success,
+        on_error,
+        on_finished=None,
+        on_progress=None,
+    ):
+        self.tasks.append((operation, on_success, on_error, on_finished))
+        return self.tasks[-1]
+
+    def succeed(self, index: int) -> None:
+        operation, on_success, _on_error, on_finished = self.tasks[index]
+        on_success(operation())
+        if on_finished is not None:
+            on_finished()
+
+    def fail(self, index: int, code: str, message: str) -> None:
+        _operation, _on_success, on_error, on_finished = self.tasks[index]
+        on_error(code, message)
+        if on_finished is not None:
+            on_finished()
 
 
 def test_qq_exit_wait_stays_preparing_and_allows_cancel(qt_app):
@@ -3021,14 +3070,19 @@ def test_click_wechat_navigates_to_wechat_workspace_with_wechat_source(qt_app, s
     # local_data_page is the current (top) page in the stack
 
 
-def test_local_data_page_has_back_to_home_button(qt_app, sources) -> None:
-    """LocalDataPage has a button that returns to HomePage."""
+def test_local_data_page_uses_global_home_navigation(qt_app, sources) -> None:
+    """History keeps one home entry in the global navigation."""
+    from PySide6.QtWidgets import QPushButton
     from qq_chat_analyzer.gui.main_window import HOME_PAGE_INDEX
     facade = StubFacade(sources=sources)
     window = _main_window(qt_app, facade)
     window.show_local_data_page()
     _drain(window)
-    window.local_data_page._back_button.click()
+    assert window._home_button.isVisibleTo(window)
+    assert "返回首页" not in {
+        button.text() for button in window.local_data_page.findChildren(QPushButton)
+    }
+    window._home_button.click()
     _drain(window)
     assert window.stack.currentIndex() == HOME_PAGE_INDEX
 
@@ -6115,6 +6169,7 @@ def test_local_data_search_clear_restores_rows_without_storage_calls(qt_app, sou
     def forbidden(*args, **kwargs):
         pytest.fail("Typing a search must use only loaded summaries")
     monkeypatch.setattr(facade, "list_report_packages", forbidden)
+    monkeypatch.setattr(facade, "get_report_storage_usage", forbidden)
     monkeypatch.setattr(facade, "get_report_package_html_path", forbidden, raising=False)
     monkeypatch.setattr(facade, "clear_report_packages", forbidden)
     monkeypatch.setattr(page, "_executor", forbidden)
@@ -6221,12 +6276,252 @@ def test_local_data_page_exposes_history_without_retired_snapshot_controls(
     _drain(window)
     page = window.local_data_page
 
-    assert [box.title() for box in page.findChildren(QGroupBox)] == ["Echo 历史"]
+    assert [box.title() for box in page.findChildren(QGroupBox)] == ["报告列表"]
     assert {button.text() for button in page.findChildren(QPushButton)} == {
-        "刷新", "打开报告", "删除选中报告", "删除全部报告", "返回首页",
+        "刷新", "打开报告", "删除选中报告", "删除全部报告",
     }
     assert all("快照" not in label.text() for label in page.findChildren(QLabel))
     assert len(page.findChildren(QTableWidget)) == 1
+    assert page._history_table.rowCount() == 1
+
+
+def _archive_window(qt_app, sources, reports=(), **kwargs):
+    facade = StubFacade(sources=sources, reports=list(reports), **kwargs)
+    window = _main_window(qt_app, facade)
+    window.show_local_data_page()
+    _drain(window)
+    return window, facade
+
+
+def test_local_data_page_shows_archive_heading_and_storage_summary(
+    qt_app, sources,
+) -> None:
+    from PySide6.QtWidgets import QLabel
+    from qq_chat_analyzer.application.report_package_catalog import ReportStorageUsage
+
+    window, _facade = _archive_window(
+        qt_app,
+        sources,
+        reports=[_gui_report_summary("h1"), _gui_report_summary("h2")],
+        report_usage=ReportStorageUsage(2, 12_975_513),
+    )
+    page = window.local_data_page
+
+    assert page.findChild(QLabel, "localDataTitle").text() == "Echo 历史"
+    assert page.findChild(QLabel, "localDataDescription").text() == (
+        "本机保存的 Echo 报告都在这里，可以随时打开回看；删除只影响 Echo 报告文件。"
+    )
+    captions = page.findChildren(QLabel, "localDataMetricCaption")
+    assert [label.text() for label in captions] == ["已保存报告", "报告文件占用"]
+    assert all(label.isVisibleTo(window) for label in captions)
+    assert page._summary_count_label.text() == "2 份"
+    assert page._summary_size_label.text() == "12.4 MB"
+    assert page._summary_note_label.isVisibleTo(window) is False
+
+
+def test_local_data_page_empty_archive_state(qt_app, sources) -> None:
+    window, _facade = _archive_window(qt_app, sources)
+    page = window.local_data_page
+
+    assert page._history_table.isVisibleTo(window) is False
+    assert page._history_empty_label.isVisibleTo(window) is True
+    assert page._history_empty_label.text() == "暂无报告"
+    assert page._history_empty_detail_label.isVisibleTo(window) is True
+    assert "报告会保存在本机" in page._history_empty_detail_label.text()
+    assert page._summary_count_label.text() == "0 份"
+    assert page._summary_size_label.text() == "0 B"
+
+
+def test_local_data_table_fills_width_when_window_resizes(qt_app, sources) -> None:
+    window, _facade = _archive_window(
+        qt_app, sources, reports=[_gui_report_summary("h1")],
+    )
+    table = window.local_data_page._history_table
+    window.resize(1000, 760)
+    window.show()
+    _drain(window)
+    compact_widths = [table.columnWidth(column) for column in range(5)]
+    assert abs(sum(compact_widths) - table.viewport().width()) <= 1
+
+    window.resize(1400, 760)
+    _drain(window)
+    wide_widths = [table.columnWidth(column) for column in range(5)]
+    assert abs(sum(wide_widths) - table.viewport().width()) <= 1
+    assert wide_widths[2] > compact_widths[2]
+    assert wide_widths[4] > compact_widths[4]
+    assert [wide_widths[i] for i in (0, 1, 3)] == [compact_widths[i] for i in (0, 1, 3)]
+    table.selectRow(0)
+    assert all(table.item(0, column).isSelected() for column in range(5))
+    assert table.visualItemRect(table.item(0, 4)).right() == table.viewport().width() - 1
+
+
+def test_local_data_page_search_without_matches_state(qt_app, sources) -> None:
+    window, _facade = _archive_window(
+        qt_app, sources, reports=[_gui_report_summary("h1")],
+    )
+    page = window.local_data_page
+    page._search_input.setText("虚构关键词")
+
+    assert page._history_table.isVisibleTo(window) is False
+    assert page._history_empty_label.text() == "没有匹配的报告"
+    assert page._history_empty_detail_label.text() == "换一个关键词试试，或清空搜索框。"
+    assert page._summary_count_label.text() == "1 份"
+
+    page._search_input.clear()
+    assert page._history_empty_label.isVisibleTo(window) is False
+    assert page._history_table.rowCount() == 1
+
+
+def test_local_data_page_marks_incomplete_storage_usage_as_lower_bound(
+    qt_app, sources,
+) -> None:
+    from qq_chat_analyzer.application.report_package_catalog import ReportStorageUsage
+
+    window, _facade = _archive_window(
+        qt_app,
+        sources,
+        reports=[_gui_report_summary("h1"), _gui_report_summary("h2")],
+        report_usage=ReportStorageUsage(4, 2_048, ("h3", "h4")),
+    )
+    page = window.local_data_page
+
+    assert page._summary_count_label.text() == "4 份"
+    assert page._summary_size_label.text() == "2.0 KB"
+    assert page._summary_note_label.isVisibleTo(window) is True
+    assert "已测量下界" in page._summary_note_label.text()
+    assert "2 份" in page._summary_note_label.text()
+
+
+def test_local_data_page_load_failure_state(qt_app, sources) -> None:
+    module = _facade_module()
+    facade = StubFacade(
+        sources=sources,
+        list_reports_error=module.FacadeError(
+            "report_list_failed", "无法读取 Echo 本地报告，请稍后重试。",
+        ),
+    )
+    window = _main_window(qt_app, facade)
+    window.show_local_data_page()
+    _drain(window)
+    page = window.local_data_page
+
+    assert page._status_label.isVisibleTo(window) is True
+    assert page._status_label.text() == "无法读取 Echo 本地报告，请稍后重试。"
+    assert page._summary_count_label.text() == "—"
+    assert page._summary_size_label.text() == "—"
+    assert page._history_empty_label.text() == "暂时无法读取本地报告"
+    assert page._history_empty_detail_label.text() == "请稍后点击刷新重试。"
+    assert page._refresh_button.isEnabled() is True
+
+
+def test_local_data_page_keeps_last_known_archive_when_reload_fails(
+    qt_app, sources,
+) -> None:
+    from qq_chat_analyzer.application.report_package_catalog import ReportStorageUsage
+
+    module = _facade_module()
+    window, facade = _archive_window(
+        qt_app,
+        sources,
+        reports=[_gui_report_summary("h1")],
+        report_usage=ReportStorageUsage(1, 4_096),
+    )
+    page = window.local_data_page
+    facade._list_reports_error = module.FacadeError(
+        "report_list_failed", "无法读取 Echo 本地报告，请稍后重试。",
+    )
+    page.refresh()
+
+    assert page._status_label.text() == "无法读取 Echo 本地报告，请稍后重试。"
+    assert page._history_table.rowCount() == 1
+    assert page._history_empty_label.isVisibleTo(window) is False
+    assert page._summary_count_label.text() == "1 份"
+    assert page._summary_size_label.text() == "4.0 KB"
+
+
+def test_local_data_page_uses_one_report_scan_per_refresh(qt_app, sources) -> None:
+    window, facade = _archive_window(
+        qt_app, sources, reports=[_gui_report_summary("h1")],
+    )
+    page = window.local_data_page
+
+    assert len(facade.list_report_packages_calls) == 1
+    assert len(facade.get_report_storage_usage_calls) == 1
+
+    page._search_input.setText("h1")
+    assert len(facade.list_report_packages_calls) == 1
+    assert len(facade.get_report_storage_usage_calls) == 1
+
+    page.refresh()
+    assert len(facade.list_report_packages_calls) == 2
+    assert len(facade.get_report_storage_usage_calls) == 2
+
+
+def test_local_data_page_ignores_stale_refresh_results(qt_app, sources) -> None:
+    window, facade = _archive_window(
+        qt_app, sources, reports=[_gui_report_summary("first")],
+    )
+    page = window.local_data_page
+    executor = _QueuedExecutor()
+    page._executor = executor
+
+    facade._reports = [_gui_report_summary("second")]
+    page.refresh()
+    facade._reports = [_gui_report_summary("third")]
+    page.refresh()
+    assert len(executor.tasks) == 2
+
+    # The newer load lands first ...
+    executor.succeed(1)
+    assert page._history_table.item(0, 0).data(Qt.ItemDataRole.UserRole) == "third"
+    # ... and the older result, which arrives last, must not overwrite it.
+    facade._reports = [_gui_report_summary("second")]
+    executor.succeed(0)
+    assert page._history_table.rowCount() == 1
+    assert page._history_table.item(0, 0).data(Qt.ItemDataRole.UserRole) == "third"
+    assert page._refresh_button.isEnabled() is True
+
+
+def test_local_data_page_keeps_list_when_storage_usage_fails(qt_app, sources) -> None:
+    module = _facade_module()
+    window, _facade = _archive_window(
+        qt_app, sources, reports=[_gui_report_summary("h1")],
+        report_usage_error=module.FacadeError(
+            "report_usage_failed", "无法统计 Echo 本地报告占用空间，请稍后重试。",
+        ),
+    )
+    page = window.local_data_page
+
+    assert page._history_table.rowCount() == 1
+    assert page._history_table.isVisibleTo(window)
+    assert page._summary_count_label.text() == "1 份"
+    assert page._summary_size_label.text() == "—"
+    assert page._summary_note_label.isVisibleTo(window)
+    assert "无法统计" in page._summary_note_label.text()
+    page._history_table.selectRow(0)
+    assert page._open_report_button.isEnabled()
+
+
+def test_local_data_page_stale_error_and_finish_do_not_end_latest_refresh(
+    qt_app, sources,
+) -> None:
+    window, _facade = _archive_window(
+        qt_app, sources, reports=[_gui_report_summary("h1")],
+    )
+    page = window.local_data_page
+    executor = _QueuedExecutor()
+    page._executor = executor
+    page.refresh()
+    assert len(executor.tasks) == 1
+    page.refresh()
+    assert len(executor.tasks) == 2
+
+    executor.fail(0, "report_list_failed", "过期的错误")
+    assert "过期的错误" not in page._status_label.text()
+    assert not page._refresh_button.isEnabled()
+    executor.succeed(1)
+    assert page._refresh_button.isEnabled()
+    assert page._status_label.text() == ""
     assert page._history_table.rowCount() == 1
 
 

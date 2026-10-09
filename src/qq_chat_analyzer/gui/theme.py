@@ -300,6 +300,43 @@ DASHBOARD_TITLE_STYLE = (
 EMPTY_TEXT_STYLE = f"color: {COLOR_MUTED};"
 METRIC_CARD_STYLE = f"border: 1px solid {COLOR_RULE_SOFT}; padding: 8px;"
 
+LOCAL_DATA_QSS = f"""
+QWidget#localDataPage {{ background: {COLOR_PAPER}; }}
+QWidget#localDataPage QWidget {{ font-family: {REFRESH_SANS_FAMILY}; }}
+QWidget#localDataPage QLabel, QWidget#localDataEmptyState {{ background: transparent; }}
+QWidget#localDataPage QLabel#localDataTitle {{
+    font-family: {SERIF_FAMILY}; font-size: 28px; font-weight: 500;
+}}
+QWidget#localDataPage QLabel#localDataDescription,
+QWidget#localDataPage QLabel#localDataSummaryNote,
+QWidget#localDataPage QLabel#localDataEmptyDetail {{ color: {COLOR_MUTED}; }}
+QWidget#localDataPage QFrame#localDataSummary {{
+    background: {COLOR_PAPER_ALT}; border: 1px solid {COLOR_RULE_SOFT}; border-radius: 8px;
+}}
+QWidget#localDataPage QLabel#localDataCount,
+QWidget#localDataPage QLabel#localDataSize {{
+    font-size: {FONT_SIZE_HOME_TITLE}; font-weight: 600; color: {COLOR_TEXT};
+}}
+QWidget#localDataPage QLabel#localDataMetricCaption,
+QWidget#localDataPage QLabel#localDataSummaryNote {{
+    font-size: {FONT_SIZE_SMALL}; color: {COLOR_MUTED}; font-weight: 400;
+}}
+QWidget#localDataPage QGroupBox#localDataHistory {{
+    background: {COLOR_PAPER}; border: 1px solid {COLOR_BORDER};
+    border-radius: 8px; margin-top: 10px; font-weight: 500;
+}}
+QWidget#localDataPage QGroupBox#localDataHistory::title {{
+    subcontrol-origin: margin; left: 20px; padding: 0 8px;
+}}
+QWidget#localDataPage QLabel#localDataEmptyTitle {{ font-size: 18px; font-weight: 500; }}
+QWidget#localDataPage QTableWidget {{ border: none; background: {COLOR_PAPER}; }}
+QWidget#localDataPage QHeaderView {{ background: {COLOR_PAPER_ALT}; }}
+QWidget#localDataPage QHeaderView::section {{
+    background: {COLOR_PAPER_ALT}; color: {COLOR_MUTED}; border: none;
+    border-bottom: 1px solid {COLOR_RULE_SOFT}; padding: 10px 8px;
+}}
+"""
+
 SESSION_LIST_STYLE = (
     "QListWidget { border: none; border-radius: 4px; background: transparent; } "
     "QListWidget::item { border-radius: 3px; padding: 4px 6px; } "
@@ -594,6 +631,7 @@ __all__ = [
     "HOME_COLOR_PAPER",
     "HOME_COLOR_TEXT",
     "HOME_QSS",
+    "LOCAL_DATA_QSS",
     "METRIC_CARD_STYLE",
     "QQ_GUIDE_STYLE",
     "QQ_SESSION_LOADING_STYLE",
