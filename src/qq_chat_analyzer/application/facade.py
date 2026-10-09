@@ -543,6 +543,8 @@ class ChatAnalyzerFacade:
     def start_qq_auth_flow(
         self,
         progress: Callable[[str], None] | None = None,
+        *,
+        cancel_event: threading.Event | None = None,
     ) -> ConnectionSnapshot:
         """Start QQ authorization and return the resulting lifecycle state.
 
@@ -550,7 +552,14 @@ class ChatAnalyzerFacade:
         the runtime's own login flow and the caller keeps polling
         :meth:`get_qq_connection_snapshot` until it reports ``CONNECTED``.
         """
-        return self._require_qq_auth_bridge().start_auth_flow(progress=progress)
+        bridge = self._require_qq_auth_bridge()
+        if cancel_event is None:
+            return bridge.start_auth_flow(progress=progress)
+        return bridge.start_auth_flow(progress=progress, cancel_event=cancel_event)
+
+    def cancel_qq_auth_flow(self, cancel_event: threading.Event) -> None:
+        """Clean the cancelled QQ attempt off the GUI thread, without touching a newer one."""
+        self._require_qq_auth_bridge().cancel_auth_flow(cancel_event)
 
     def is_qq_qrcode_ready(self) -> bool:
         """Return whether the QQ login QR belongs to the current session."""

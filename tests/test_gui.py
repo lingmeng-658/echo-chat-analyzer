@@ -340,7 +340,7 @@ class StubFacade:
             self._connection_status = self._connection_status_after_connect
         return self._qq_snapshot()
 
-    def start_qq_auth_flow(self, progress=None):
+    def start_qq_auth_flow(self, progress=None, *, cancel_event=None):
         self.start_qq_auth_flow_calls.append(1)
         if progress is not None:
             progress("正在加载 NapCat...")
@@ -871,6 +871,121 @@ class _DeferredExecutor:
             self.on_error(code, message)
         if self.on_finished is not None:
             self.on_finished()
+
+
+def test_qq_exit_wait_stays_preparing_and_allows_cancel(qt_app):
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+    workspace = QQWorkspace(StubFacade(), executor=_DeferredExecutor())
+    workspace.connect_qq()
+    workspace._connection_task.progress("请完全退出 QQ")
+    assert workspace._qq_guide_label.text() == "请完全退出 QQ"
+    assert workspace._qq_connect_button.isEnabled()
+    assert workspace._progress_track.stage == 0
+    workspace._qq_connect_button.click()
+    assert workspace._qq_connect_in_flight is False
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_qq_process_wait_runs_in_background_through_real_facade(qt_app, monkeypatch, cancel):
+    from qq_chat_analyzer.application.qq import qq_auth_bridge as auth
+    from qq_chat_analyzer.application.qq.qq_process_registry import QQProcessRegistry
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+    from qq_chat_analyzer.application.connection_models import ConnectionSnapshot, ConnectionState
+    main_thread = threading.get_ident()
+    detected_threads = []
+    conflicts = threading.Event()
+    conflicts.set()
+    completed = threading.Event()
+    launches = []
+    def detect(owned):
+        detected_threads.append(threading.get_ident())
+        return [101, 102] if conflicts.is_set() else []
+    def launch():
+        launches.append(threading.get_ident())
+    monkeypatch.setattr(auth, "find_conflicting_qq_pids", detect)
+    manager = SimpleNamespace(
+        get_snapshot=lambda: ConnectionSnapshot(ConnectionState.DISCONNECTED, "qq", "disconnected"),
+        begin_auth_waiting=lambda: None, end_auth_waiting=completed.set,
+    )
+    bridge = auth.QQAuthBridge(setup_service=SimpleNamespace(), manager=manager,
+                              window_launcher=launch, process_registry=QQProcessRegistry(),
+                              process_poll_interval=0.01)
+    facade = _facade_module().ChatAnalyzerFacade(qq_auth_bridge=bridge)
+    workspace = QQWorkspace(facade)
+    workspace.connect_qq()
+    deadline = time.monotonic() + 3
+    while workspace._qq_guide_label.text() != "请完全退出 QQ" and time.monotonic() < deadline:
+        qt_app.processEvents()
+        QTest.qWait(5)
+    assert workspace._qq_guide_label.text() == "请完全退出 QQ"
+    assert detected_threads and main_thread not in detected_threads
+    assert launches == []
+    if cancel:
+        workspace.cancel_connection()
+        conflicts.clear()
+        assert completed.wait(2)
+        QTest.qWait(30)
+        assert launches == []
+        assert workspace._qq_connect_in_flight is False
+    else:
+        conflicts.clear()
+        deadline = time.monotonic() + 3
+        while not launches and time.monotonic() < deadline:
+            qt_app.processEvents()
+            QTest.qWait(5)
+        assert len(launches) == 1
+        assert launches[0] != main_thread
+        workspace.cancel_connection()
+    workspace._stop_qq_status_polling()
+
+
+@pytest.mark.parametrize("event", ["progress", "success", "error", "delayed_success", "delayed_error"])
+def test_qq_cancel_rejects_old_callbacks_after_restart(qt_app, monkeypatch, event):
+    from qq_chat_analyzer.gui import qq_workspace as module
+    executor = _IndependentDeferredExecutor()
+    workspace = module.QQWorkspace(StubFacade(), executor=executor)
+    delayed = []
+    monkeypatch.setattr(module.QTimer, "singleShot", lambda delay, callback: delayed.append(callback))
+    workspace.connect_qq()
+    first = executor.tasks[0]
+    if event == "delayed_success":
+        first.succeed(SimpleNamespace(state="waiting_auth", message="old"))
+    if event == "delayed_error":
+        first.fail("old_error", "old failure")
+    workspace.cancel_connection()
+    workspace.connect_qq()
+    second = executor.tasks[-1]
+    before = workspace._status_label.text()
+    if event == "progress":
+        first.progress("请完全退出 QQ")
+    elif event == "success":
+        first.succeed(SimpleNamespace(state="waiting_auth", message="old"))
+    elif event == "error":
+        first.fail("old_error", "old failure")
+    for callback in delayed:
+        callback()
+    assert workspace._status_label.text() == before
+    assert workspace._connection_task is second
+    assert workspace._qq_connect_in_flight
+
+
+@pytest.mark.parametrize("poll", [False, True])
+def test_qq_cancel_ignores_older_status_worker(qt_app, poll):
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+    executor = _IndependentDeferredExecutor()
+    workspace = QQWorkspace(StubFacade(), executor=executor)
+    if poll:
+        workspace._start_qq_status_polling()
+        workspace._poll_qq_status()
+    else:
+        workspace.refresh_qq_status()
+    old_status = executor.tasks[0]
+    workspace.connect_qq()
+    workspace.cancel_connection()
+    before = workspace._status_label.text()
+    old_status.succeed(SimpleNamespace(state="waiting_auth", message="old status"))
+    assert workspace._status_label.text() == before
+    assert not workspace._qq_status_timer.isActive()
 
 
 class _IndependentDeferredExecutor:
@@ -2575,7 +2690,7 @@ class _ConnectWaitingAuthFacade(_SnapshotFacade):
         super().__init__(status_snapshot, **kwargs)
         self._connect_snapshot = connect_snapshot
 
-    def start_qq_auth_flow(self, progress=None):
+    def start_qq_auth_flow(self, progress=None, *, cancel_event=None):
         self.start_qq_auth_flow_calls.append(1)
         return self._connect_snapshot
 

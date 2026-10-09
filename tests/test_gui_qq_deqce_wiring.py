@@ -86,10 +86,12 @@ def test_metadata_no_qce_pagination_and_members_preserve_identity(monkeypatch):
 
 
 def test_connection_state_machine_reuses_retries_and_relogin(candidate,monkeypatch):
+    from qq_chat_analyzer.application.qq import qq_auth_bridge as auth_module
     from qq_chat_analyzer.application.qq.qq_auth_bridge import QQAuthBridge
     from qq_chat_analyzer.application.qq.qq_setup_service import QQSetupService
     from qq_chat_analyzer.application.qq.qq_runtime_manager import QQRuntimeStatus,QQRuntimeState
     from qq_chat_analyzer.application.connection_models import ConnectionState
+    monkeypatch.setattr(auth_module, "find_conflicting_qq_pids", lambda owned: [])
     provider=NapCatQQProvider();current=[status(online=False)]
     monkeypatch.setattr(provider,'status',lambda:current[0])
     config=env.QQEnvironmentConfig(runtime_directory=candidate)

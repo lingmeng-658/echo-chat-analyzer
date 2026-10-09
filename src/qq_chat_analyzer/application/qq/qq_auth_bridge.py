@@ -38,9 +38,15 @@ from .qq_process_registry import (
     QQProcessRegistry,
     default_qq_process_registry,
 )
+from .qq_process_detection import find_conflicting_qq_pids
 
 
 _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.qq_auth_bridge")
+PROGRESS_WAITING_QQ_EXIT = "请完全退出 QQ"
+
+
+class _AuthCancelled(Exception):
+    """Cooperative cancellation before any subsequent lifecycle mutation."""
 
 
 MESSAGE_ERROR = (
@@ -109,6 +115,8 @@ class QQAuthBridge:
         process_registry: QQProcessRegistry | None = None,
         qrcode_path: Path | None = None,
         runtime_cleaner: Callable[[Path], None] | None = None,
+        process_wait_timeout: float = 120,
+        process_poll_interval: float = 0.5,
     ) -> None:
         self._setup_service = setup_service
         self._connection_service = connection_service
@@ -116,6 +124,11 @@ class QQAuthBridge:
         self._window_launcher = window_launcher
         self._qrcode_path = qrcode_path
         self._runtime_cleaner = runtime_cleaner
+        self._process_wait_timeout = process_wait_timeout
+        self._process_poll_interval = process_poll_interval
+        self._auth_lock = threading.Lock()
+        self._cancel_event: threading.Event | None = None
+        self._launcher_event: threading.Event | None = None
         self._auth_launch_started = False
         self._launched_process: Any | None = None
         self._qr_session_started = False
@@ -129,6 +142,88 @@ class QQAuthBridge:
     def start_auth_flow(
         self,
         progress: Callable[[str], None] | None = None,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> ConnectionSnapshot:
+        """Serialize auth attempts; a cancelled detector cannot resume a launch."""
+        cancelled = cancel_event or threading.Event()
+        with self._auth_lock:
+            if cancelled.is_set():
+                return self._cancelled_snapshot()
+            self._cancel_event = cancelled
+            try:
+                return self._start_auth_flow(progress, cancelled)
+            except _AuthCancelled:
+                return self._cancelled_snapshot()
+            finally:
+                if cancelled.is_set() and self._launcher_event is cancelled:
+                    if self._auth_launch_started:
+                        self._terminate_runtime_sessions()
+                    self._reset_auth_session()
+                    self._manager_instance().end_auth_waiting()
+
+    def cancel_auth_flow(self, cancel_event: threading.Event) -> None:
+        """Background cleanup only if the cancelled attempt still owns auth."""
+        cancel_event.set()
+        with self._auth_lock:
+            if (
+                self._cancel_event is not cancel_event
+                or self._launcher_event is not cancel_event
+            ):
+                return
+            self._terminate_runtime_sessions()
+            self._reset_auth_session()
+            self._manager_instance().end_auth_waiting()
+
+    @staticmethod
+    def _check_cancelled(cancelled: threading.Event) -> None:
+        if cancelled.is_set():
+            raise _AuthCancelled
+
+    @staticmethod
+    def _cancelled_snapshot() -> ConnectionSnapshot:
+        return ConnectionSnapshot(
+            ConnectionState.DISCONNECTED, SOURCE_QQ,
+            "已取消 QQ 连接。", code="qq_auth_cancelled",
+        )
+
+    def _wait_for_conflicting_processes(
+        self,
+        progress: Callable[[str], None] | None,
+        cancelled: threading.Event,
+    ) -> ConnectionSnapshot | None:
+        deadline = time.monotonic() + self._process_wait_timeout
+        waiting = False
+        while True:
+            self._check_cancelled(cancelled)
+            try:
+                pids = find_conflicting_qq_pids(self._process_registry.recorded())
+            except Exception:
+                self._check_cancelled(cancelled)
+                _LOGGER.warning("[qq auth] QQ process detection failed", exc_info=True)
+                return self._error_snapshot(
+                    "无法检测 QQ 进程，请稍后重试。", HINT_RETRY,
+                    code="qq_process_detection_failed",
+                )
+            self._check_cancelled(cancelled)
+            if not pids:
+                return None
+            if not waiting:
+                _report_progress(progress, PROGRESS_WAITING_QQ_EXIT)
+                waiting = True
+            self._check_cancelled(cancelled)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return self._error_snapshot(
+                    "等待 QQ 退出超时，请完全退出 QQ 后重新连接。",
+                    HINT_RETRY, code="qq_process_exit_timeout",
+                )
+            cancelled.wait(min(self._process_poll_interval, remaining))
+
+    def _start_auth_flow(
+        self,
+        progress: Callable[[str], None] | None,
+        cancelled: threading.Event,
     ) -> ConnectionSnapshot:
         """Launch QQ authorization and return the immediate lifecycle state.
 
@@ -139,6 +234,7 @@ class QQAuthBridge:
         _report_progress(progress, PROGRESS_CHECKING)
         manager = self._manager_instance()
         snapshot = manager.get_snapshot()
+        self._check_cancelled(cancelled)
         _LOGGER.info(
             "[qq auth] start_auth_flow entered state=%s setup_service=%s",
             _state_value(snapshot.state),
@@ -159,14 +255,42 @@ class QQAuthBridge:
             return snapshot
 
         try:
+            previous_cancelled = (
+                self._launcher_event is not None and self._launcher_event.is_set()
+            )
+            needs_launch = (
+                not self._auth_launch_started
+                or not self._launcher_process_alive()
+                or previous_cancelled
+            )
+            if needs_launch:
+                self._check_cancelled(cancelled)
+                self._reset_auth_session()
+                self._launcher_event = cancelled
+                self._process_registry.terminate_all()
+                self._clean_stale_runtime()
+                self._check_cancelled(cancelled)
+                if self._process_registry.recorded():
+                    return self._error_snapshot(
+                        "无法清理 Echo 的旧 QQ 连接，请退出 Echo 后重试。",
+                        HINT_RETRY,
+                        code="qq_runtime_cleanup_failed",
+                    )
+                failure = self._wait_for_conflicting_processes(progress, cancelled)
+                if failure is not None:
+                    return failure
+                self._check_cancelled(cancelled)
+                self._remember_qr_baseline()
             _report_progress(progress, PROGRESS_STARTING)
             _report_progress(progress, PROGRESS_LOADING_NAPCAT)
-            if not self._auth_launch_started:
-                self._clean_stale_runtime()
-                self._remember_qr_baseline()
+            self._check_cancelled(cancelled)
             manager.begin_auth_waiting()
             _LOGGER.info("[qq auth] opening login window")
-            self._launch_window()
+            self._launch_window(cancelled)
+            self._check_cancelled(cancelled)
+        except _AuthCancelled:
+            manager.end_auth_waiting()
+            raise
         except Exception as error:
             manager.end_auth_waiting()
             _LOGGER.warning(
@@ -182,6 +306,7 @@ class QQAuthBridge:
         _report_progress(progress, PROGRESS_WAITING_LOGIN)
 
         latest = manager.get_snapshot()
+        self._check_cancelled(cancelled)
         if latest.state is ConnectionState.CONNECTED:
             manager.end_auth_waiting()
             _report_progress(progress, PROGRESS_CONNECTED)
@@ -261,7 +386,10 @@ class QQAuthBridge:
             )
         return self._manager
 
-    def _launch_window(self) -> None:
+    def _launch_window(self, cancelled: threading.Event | None = None) -> None:
+        cancelled = cancelled or threading.Event()
+        self._check_cancelled(cancelled)
+        self._launcher_event = cancelled
         if self._auth_launch_started and self._launcher_process_alive():
             _LOGGER.info("[qq auth] launcher already started; reusing")
             return
@@ -280,6 +408,7 @@ class QQAuthBridge:
             _config_summary(config),
         )
         launcher = default_auth_window_launcher(config)
+        self._check_cancelled(cancelled)
         process = launcher()
         self._auth_launch_started = True
         self._launched_process = process
@@ -333,6 +462,7 @@ class QQAuthBridge:
         self._qr_baseline = None
         self._qr_session_started_at = None
         self._qr_ready_logged = False
+        self._launcher_event = None
 
     def _recover_environment_config(self) -> Any:
         """Persist the effective default config, then return it for launch.

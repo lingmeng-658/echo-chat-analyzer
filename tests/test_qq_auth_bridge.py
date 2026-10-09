@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,12 @@ def _bridge_module():
     return importlib.import_module(
         "qq_chat_analyzer.application.qq.qq_auth_bridge"
     )
+
+
+@pytest.fixture(autouse=True)
+def fictional_processes_only(monkeypatch):
+    # Never inspect the developer's real QQ clients during auth tests.
+    monkeypatch.setattr(_bridge_module(), "find_conflicting_qq_pids", lambda owned: [], raising=False)
 
 
 def _connection_module():
@@ -149,7 +156,7 @@ def _bridge(
         registry_module = importlib.import_module(
             "qq_chat_analyzer.application.qq.qq_process_registry"
         )
-        process_registry = registry_module.QQProcessRegistry()
+        process_registry = registry_module.QQProcessRegistry(terminator=lambda _pid: True)
     return _bridge_module().QQAuthBridge(
         setup_service=setup_service,
         connection_service=connection_service,
@@ -170,6 +177,207 @@ class _RecordingLauncher:
         self.calls += 1
         if self._error is not None:
             raise self._error
+
+
+def _process_wait_bridge(monkeypatch, samples, **kwargs):
+    launcher = _RecordingLauncher()
+    sequence = iter(samples)
+    observed = []
+
+    def find(owned):
+        sample = next(sequence)
+        observed.append(sample)
+        assert launcher.calls == 0
+        if isinstance(sample, Exception):
+            raise sample
+        return sample
+
+    monkeypatch.setattr(_bridge_module(), "find_conflicting_qq_pids", find)
+    bridge = _bridge_module().QQAuthBridge(
+        setup_service=_StubSetupService(),
+        connection_service=_StubConnectionService(_status()),
+        window_launcher=launcher,
+        process_registry=importlib.import_module(
+            "qq_chat_analyzer.application.qq.qq_process_registry"
+        ).QQProcessRegistry(terminator=lambda _pid: True),
+        **kwargs,
+    )
+    return bridge, launcher, observed
+
+
+@pytest.mark.parametrize("samples", [[[]], [[101, 102], [102], []], [[101], [102], []]])
+def test_auth_waits_for_every_conflict_then_automatically_launches(monkeypatch, samples):
+    bridge, launcher, observed = _process_wait_bridge(monkeypatch, samples, process_poll_interval=0)
+    progress = []
+    result = bridge.start_auth_flow(progress=progress.append)
+    assert observed == samples
+    assert launcher.calls == 1
+    assert result.state is _connection_module().ConnectionState.WAITING_AUTH
+    if samples[0]:
+        assert "请完全退出 QQ" in progress
+        assert progress.index("请完全退出 QQ") < progress.index(_bridge_module().PROGRESS_STARTING)
+    else:
+        assert "请完全退出 QQ" not in progress
+
+
+def test_connected_auth_never_detects_or_cleans_processes(monkeypatch):
+    def forbidden(*args):
+        raise AssertionError("connected session must be preserved")
+    monkeypatch.setattr(_bridge_module(), "find_conflicting_qq_pids", forbidden)
+    bridge = _bridge(setup_service=_StubSetupService(),
+                     connection_service=_StubConnectionService(_status(available=True, runtime_running=True, qq_online=True)),
+                     window_launcher=forbidden, runtime_cleaner=forbidden)
+    assert bridge.start_auth_flow().connected
+
+
+def test_process_detection_failure_does_not_launch(monkeypatch):
+    bridge, launcher, _ = _process_wait_bridge(monkeypatch, [OSError("fictional detection failure")])
+    result = bridge.start_auth_flow()
+    assert result.code == "qq_process_detection_failed"
+    assert result.state is _connection_module().ConnectionState.ERROR
+    assert launcher.calls == 0
+
+
+def test_process_wait_timeout_does_not_launch(monkeypatch):
+    bridge, launcher, _ = _process_wait_bridge(monkeypatch, [[101]], process_wait_timeout=0)
+    result = bridge.start_auth_flow()
+    assert result.code == "qq_process_exit_timeout"
+    assert launcher.calls == 0
+
+
+def test_cancel_during_process_detection_prevents_late_launch(monkeypatch):
+    cancelled = threading.Event()
+    bridge, launcher, _ = _process_wait_bridge(monkeypatch, [])
+    def detect(owned):
+        cancelled.set()
+        return []
+    monkeypatch.setattr(_bridge_module(), "find_conflicting_qq_pids", detect)
+    result = bridge.start_auth_flow(cancel_event=cancelled)
+    assert result.code == "qq_auth_cancelled"
+    assert launcher.calls == 0
+    assert bridge.is_qrcode_ready() is False
+
+
+def test_cancel_process_wait_wakes_without_waiting_for_poll_interval(monkeypatch):
+    bridge, launcher, _ = _process_wait_bridge(monkeypatch, [[101]], process_poll_interval=60)
+    cancelled = threading.Event()
+    entered = threading.Event()
+    results = []
+    def report(message):
+        if message == "请完全退出 QQ":
+            entered.set()
+    worker = threading.Thread(target=lambda: results.append(bridge.start_auth_flow(report, cancel_event=cancelled)))
+    worker.start()
+    try:
+        assert entered.wait(2)
+        cancelled.set()
+        worker.join(2)
+        assert not worker.is_alive()
+        assert results[0].code == "qq_auth_cancelled"
+        assert launcher.calls == 0
+    finally:
+        cancelled.set()
+        worker.join(2)
+
+
+def test_stale_owned_runtime_cleanup_precedes_conflict_detection(monkeypatch, tmp_path):
+    events = []
+    registry_module = importlib.import_module("qq_chat_analyzer.application.qq.qq_process_registry")
+    registry = registry_module.QQProcessRegistry(terminator=lambda pid: events.append(("owned", pid)))
+    registry.record(201)
+    def detect(owned):
+        events.append(("detect", owned))
+        return []
+    monkeypatch.setattr(_bridge_module(), "find_conflicting_qq_pids", detect)
+    bridge = _bridge(setup_service=_StubSetupService(config=type("Config", (), {"runtime_directory": tmp_path})()),
+                     connection_service=_StubConnectionService(_status()),
+                     process_registry=registry,
+                     runtime_cleaner=lambda directory: events.append(("runtime", directory)),
+                     window_launcher=lambda: events.append(("launch", None)))
+    bridge.start_auth_flow()
+    assert [event[0] for event in events] == ["owned", "runtime", "detect", "launch"]
+
+
+def test_cancel_while_resolving_launcher_never_spawns_qq(monkeypatch, tmp_path):
+    cancelled = threading.Event()
+    launches = []
+    def resolve(config):
+        cancelled.set()
+        return lambda: launches.append("spawn")
+    monkeypatch.setattr(_bridge_module(), "default_auth_window_launcher", resolve)
+    bridge = _bridge(setup_service=_StubSetupService(config=_runtime_config(tmp_path)),
+                     connection_service=_StubConnectionService(_status()))
+    result = bridge.start_auth_flow(cancel_event=cancelled)
+    assert result.code == "qq_auth_cancelled"
+    assert launches == []
+    assert bridge.is_qrcode_ready() is False
+
+
+def test_old_cancel_cleanup_cannot_stop_new_auth_attempt(monkeypatch):
+    bridge, launcher, _ = _process_wait_bridge(monkeypatch, [[]])
+    old = threading.Event()
+    old.set()
+    bridge.start_auth_flow(cancel_event=old)
+    current = threading.Event()
+    bridge.start_auth_flow(cancel_event=current)
+    bridge.cancel_auth_flow(old)
+    # Reuse the current launcher; late cleanup must not clear its guard.
+    bridge.start_auth_flow(cancel_event=current)
+    assert launcher.calls == 1
+
+
+def test_cancel_cleanup_after_worker_result_stops_only_its_owned_runtime(monkeypatch):
+    bridge, launcher, _ = _process_wait_bridge(monkeypatch, [[]])
+    terminated = []
+    registry = importlib.import_module("qq_chat_analyzer.application.qq.qq_process_registry").QQProcessRegistry(
+        terminator=lambda pid: terminated.append(pid))
+    bridge._process_registry = registry
+    cancelled = threading.Event()
+    bridge.start_auth_flow(cancel_event=cancelled)
+    registry.record(301)
+    bridge.cancel_auth_flow(cancelled)
+    assert terminated == [301]
+    assert not bridge._auth_launch_started
+
+
+def test_failed_owned_cleanup_reports_error_instead_of_waiting_on_echo_or_launching(monkeypatch):
+    bridge, launcher, observed = _process_wait_bridge(monkeypatch, [])
+    registry = importlib.import_module("qq_chat_analyzer.application.qq.qq_process_registry").QQProcessRegistry(
+        terminator=lambda pid: False)
+    registry.record(301)
+    bridge._process_registry = registry
+    result = bridge.start_auth_flow()
+    assert result.code == "qq_runtime_cleanup_failed"
+    assert observed == []
+    assert launcher.calls == 0
+
+
+def test_cancel_does_not_clean_an_existing_valid_connection(monkeypatch):
+    cleaned = []
+    bridge = _bridge(setup_service=_StubSetupService(),
+                     connection_service=_StubConnectionService(_status(available=True)),
+                     runtime_cleaner=lambda directory: cleaned.append(directory))
+    # A previous Echo login is already valid when Connect is clicked again.
+    bridge._auth_launch_started = True
+    bridge._launcher_event = threading.Event()
+    token = threading.Event()
+    assert bridge.start_auth_flow(cancel_event=token).connected
+    bridge.cancel_auth_flow(token)
+    assert bridge._auth_launch_started
+    assert cleaned == []
+
+
+def test_new_attempt_cleans_cancelled_launcher_even_when_old_cleanup_is_queued(monkeypatch):
+    bridge, launcher, observed = _process_wait_bridge(monkeypatch, [[]])
+    old = threading.Event()
+    bridge.start_auth_flow(cancel_event=old)
+    old.set()
+    # The new worker wins the lock before the cancelled worker's cleanup task.
+    monkeypatch.setattr(_bridge_module(), "find_conflicting_qq_pids", lambda owned: [])
+    bridge.start_auth_flow(cancel_event=threading.Event())
+    bridge.cancel_auth_flow(old)
+    assert launcher.calls == 2
+    assert bridge._auth_launch_started
 
 
 # ------------------------------------------------------------------ connected
