@@ -14,7 +14,7 @@ from ..models import (
     WeekdayActivity,
 )
 from ..peaks import DAYS_PER_WEEK, HOURS_PER_DAY, busiest_index
-from ..identity import stable_sender_key
+from ..identity import is_chat_participant, stable_sender_key
 from ..timestamps import to_chat_datetime
 from ...analyzer import top_words
 from ...cleaner import clean_text
@@ -56,6 +56,8 @@ class UserProfileAnalyzer:
                     )
                 current_run_key = speaker_key
                 current_run_length = 1
+            if not is_chat_participant(message):
+                continue
             speaker_stats = stats.setdefault(speaker_key, _SpeakerStats())
             speaker_stats.add(message)
         if current_run_key is not None and current_run_length:

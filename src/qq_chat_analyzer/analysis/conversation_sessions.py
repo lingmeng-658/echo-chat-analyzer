@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from statistics import median
 
 from ..message import ChatMessage
-from .identity import stable_sender_key
+from .identity import is_chat_participant, stable_sender_key
 from .timestamps import to_chat_datetime, to_epoch_seconds
 
 
@@ -253,7 +253,8 @@ def _build_session(
     peer_message_count: int | None = None
     for message in messages:
         key = stable_sender_key(message)
-        participant_keys.add(key)
+        if is_chat_participant(message):
+            participant_keys.add(key)
         if conversation_type == "private":
             if message.is_self is True:
                 self_message_count = (self_message_count or 0) + 1
@@ -295,7 +296,7 @@ def _initiator(
             return "self", sender_key, True
         if message.is_self is False:
             return "peer", sender_key, False
-        return "unknown", sender_key, None
+        return "unknown", sender_key or None, None
     if conversation_type == "group":
         return sender_key, sender_key, message.is_self
     return "unknown", sender_key, None

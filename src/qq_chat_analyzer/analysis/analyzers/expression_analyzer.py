@@ -19,7 +19,7 @@ from ...rich_message import (
     TextContent,
 )
 from ...tokenizer import iter_expression_placeholders
-from ..identity import stable_sender_key
+from ..identity import is_chat_participant, stable_sender_key
 from ..models import (
     ExpressionCombinationMember,
     ExpressionCombinationMemberCount,
@@ -216,25 +216,29 @@ class ExpressionAnalyzer:
             )[:EXPRESSION_COMBINATION_MESSAGE_LIMIT]
             for pair in itertools.combinations(distinct_keys, 2):
                 combination_counts[pair] += 1
-                combination_speaker_counts.setdefault(
-                    pair,
-                    Counter(),
-                )[speaker_key] += 1
+                if is_chat_participant(message):
+                    combination_speaker_counts.setdefault(
+                        pair,
+                        Counter(),
+                    )[speaker_key] += 1
             for _, expression_key, _ in items:
                 if expression_only:
                     text_only_counts[expression_key] += 1
                 else:
                     with_text_counts[expression_key] += 1
 
+            for kind, expression_key, display_text in items:
+                occurrences[expression_key] += 1
+                display_by_key.setdefault(expression_key, display_text)
+                kind_by_key.setdefault(expression_key, kind)
+            if not is_chat_participant(message):
+                continue
             speaker_counts = member_occurrences.setdefault(
                 speaker_key,
                 Counter(),
             )
-            for kind, expression_key, display_text in items:
-                occurrences[expression_key] += 1
+            for _, expression_key, _ in items:
                 speaker_counts[expression_key] += 1
-                display_by_key.setdefault(expression_key, display_text)
-                kind_by_key.setdefault(expression_key, kind)
             member_message_counts[speaker_key] = (
                 member_message_counts.get(speaker_key, 0) + 1
             )
