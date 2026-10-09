@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from math import ceil, cos, pi, sin
 from pathlib import Path
@@ -295,6 +296,8 @@ class QQWorkspace(QWidget):
         self._qq_install_prompt_active = False
         self._last_qq_status_message = ""
         self._qq_waiting_auth_since: float | None = None
+        self._qq_attempt_generation = 0
+        self._qq_cancel_event: threading.Event | None = None
         self._qq_qrcode_path = _default_qq_qrcode_path()
         self._sessions_loaded = False
         self._session_request: object | None = None
@@ -475,6 +478,7 @@ class QQWorkspace(QWidget):
 
     def refresh_qq_status(self, *, load_sessions_on_ready: bool = False) -> None:
         """Ask the connection manager, through the facade, for QQ state."""
+        generation = self._qq_attempt_generation
         self._set_stage(None)
         self._hide_qq_guide()
         self._status_label.setVisible(True)
@@ -488,11 +492,11 @@ class QQWorkspace(QWidget):
             on_success=lambda snapshot: self._show_qq_status(
                 snapshot,
                 load_sessions_on_ready,
-            ),
+            ) if generation == self._qq_attempt_generation else None,
             on_error=lambda code, message: self._handle_source_status_error(
                 code,
                 message,
-            ),
+            ) if generation == self._qq_attempt_generation else None,
         )
 
     # ---------------------------------------------------------------- status
@@ -606,15 +610,16 @@ class QQWorkspace(QWidget):
         # fresh and can be shown immediately during this poll.
         if self._qq_waiting_auth_since is not None:
             self._refresh_qq_qrcode()
+        generation = self._qq_attempt_generation
         self._executor(
             lambda: self._facade.get_qq_connection_snapshot(),
             on_success=lambda snapshot: self._show_qq_status(
                 snapshot,
                 load_sessions_on_ready=True,
-            ) if self._qq_status_timer.isActive() else None,
+            ) if self._qq_status_timer.isActive() and generation == self._qq_attempt_generation else None,
             on_error=lambda code, message: self._handle_connection_status_error(
                 code, message,
-            ) if self._qq_status_timer.isActive() else None,
+            ) if self._qq_status_timer.isActive() and generation == self._qq_attempt_generation else None,
         )
 
     def _start_qq_status_polling(self) -> None:
@@ -741,6 +746,11 @@ class QQWorkspace(QWidget):
             self.cancel_connection()
             return
         _LOGGER.info("[qq gui] connect_qq requested")
+        self._qq_attempt_generation += 1
+        generation = self._qq_attempt_generation
+        cancelled = threading.Event()
+        self._qq_cancel_event = cancelled
+        self._stop_qq_status_polling()
         self._invalidate_session_request()
         started_at = time.monotonic()
         self._qq_waiting_auth_since = None
@@ -756,36 +766,44 @@ class QQWorkspace(QWidget):
         self.status_changed.emit(_QQ_CONNECTING)
         _LOGGER.info("[qq gui] connect_qq worker submitted")
         self._connection_task = self._executor(
-            lambda report: self._facade.start_qq_auth_flow(progress=report),
+            lambda report: self._facade.start_qq_auth_flow(progress=report, cancel_event=cancelled),
             on_success=lambda status: self._finish_qq_connect(
                 status,
                 started_at,
+                generation,
             ),
             on_error=lambda code, message: self._finish_qq_connect_error(
                 code,
                 message,
                 started_at,
+                generation,
             ),
-            on_progress=lambda message: self._handle_qq_connect_progress(message),
+            on_progress=lambda message: self._handle_qq_connect_progress(message)
+            if generation == self._qq_attempt_generation else None,
         )
 
     def _handle_qq_connect_progress(self, message: str) -> None:
         """Translate backend progress into one of the user-facing stages."""
         if not message:
             return
-        stage = _qq_progress_stage(message)
+        stage = _QQ_STAGE_PREPARING if message == "请完全退出 QQ" else _qq_progress_stage(message)
         action = _QQ_STAGE_COPY[stage][0]
         self._status_label.setText(_QQ_PENDING_PREFIX + action)
         self._status_label.setToolTip("")
         self._status_label.setVisible(True)
         self._show_qq_stage(stage)
+        if message == "请完全退出 QQ":
+            self._show_qq_guide(message, "退出所有 QQ 窗口及托盘进程后，将自动继续连接。")
+            self._qq_connect_button.setEnabled(True)
         self.status_changed.emit(action)
 
     def _after_qq_connect(self, snapshot: Any) -> None:
         self._show_qq_status(snapshot, load_sessions_on_ready=True)
 
-    def _finish_qq_connect(self, status: Any, started_at: float) -> None:
+    def _finish_qq_connect(self, status: Any, started_at: float, generation: int) -> None:
         def _apply() -> None:
+            if generation != self._qq_attempt_generation:
+                return
             self._qq_connect_in_flight = False
             self._connection_task = None
             _LOGGER.info(
@@ -801,8 +819,11 @@ class QQWorkspace(QWidget):
         code: str,
         message: str,
         started_at: float,
+        generation: int,
     ) -> None:
         def _apply() -> None:
+            if generation != self._qq_attempt_generation:
+                return
             self._qq_connect_in_flight = False
             self._connection_task = None
             _LOGGER.info("[qq gui] connect_qq failed code=%s", code)
@@ -928,12 +949,18 @@ class QQWorkspace(QWidget):
         task = self._connection_task
         if task is None and not self._qq_connect_in_flight:
             return
+        self._qq_attempt_generation += 1
+        cancelled = self._qq_cancel_event
+        if cancelled is not None:
+            cancelled.set()
         cancel = getattr(task, "cancel", None)
         if callable(cancel):
             cancel()
-        shutdown = getattr(self._facade, "shutdown_qq_runtime", None)
-        if callable(shutdown):
-            shutdown()
+        cleanup = getattr(self._facade, "cancel_qq_auth_flow", None)
+        if callable(cleanup) and cancelled is not None:
+            self._executor(lambda: cleanup(cancelled),
+                           on_success=lambda _result: None,
+                           on_error=lambda _code, _message: None)
         self._connection_task = None
         self._qq_connect_in_flight = False
         self._qq_waiting_auth_since = None
