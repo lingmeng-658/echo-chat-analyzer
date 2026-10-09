@@ -2477,6 +2477,32 @@ def test_facade_translates_report_clear_failure():
     assert caught.value.public_message == "部分 Echo 报告未能删除，请稍后重试。"
 
 
+def test_facade_delegates_report_storage_usage():
+    calls = []
+    class Catalog:
+        def storage_usage(self):
+            calls.append("usage")
+            return "usage"
+    facade = _facade(report_package_catalog=Catalog())
+    assert facade.get_report_storage_usage() == "usage"
+    assert calls == ["usage"]
+
+
+@pytest.mark.parametrize("error", [ValueError, FileNotFoundError, PermissionError, RuntimeError])
+def test_facade_translates_report_storage_usage_failure(tmp_path, error):
+    module = _facade_module()
+    internal_path = str(tmp_path / "internal-private-path")
+    class Catalog:
+        def storage_usage(self):
+            raise error(internal_path)
+    facade = _facade(report_package_catalog=Catalog())
+    with pytest.raises(module.FacadeError) as caught:
+        facade.get_report_storage_usage()
+    assert caught.value.code == "report_usage_failed"
+    assert caught.value.public_message == "无法统计 Echo 本地报告占用空间，请稍后重试。"
+    assert internal_path not in str(caught.value)
+
+
 def test_facade_delegates_single_report_deletion():
     calls = []
     class Catalog:
@@ -2529,7 +2555,7 @@ def test_facade_translates_report_package_html_path_failure(tmp_path, error):
     assert internal_path not in str(caught.value)
 
 
-def _retention_analysis(tmp_path):
+def _analysis_over_existing_reports(tmp_path, existing):
     module = _facade_module()
     root = tmp_path / "injected-reports"
     catalog = module.ReportPackageCatalog(root)
@@ -2538,11 +2564,13 @@ def _retention_analysis(tmp_path):
     for name in ("echo-report.html", "echo-report.json"):
         (source / name).write_text("fictional", encoding="utf-8")
     old = []
-    for index in range(50):
+    for index in range(existing):
         metadata = module.build_report_metadata(
             result=_result_with_echo_artifact(), source="qq",
             scope=module.AnalysisScope.all(),
-            generated_at=datetime(2020, 1, 1, 0, 0, index, tzinfo=timezone.utc),
+            generated_at=datetime(
+                2020, 1, 1, 0, index // 60, index % 60, tzinfo=timezone.utc,
+            ),
         )
         old.append(module.package_echo_report(source, reports_root=root, metadata=metadata))
     class WritingService(_StubAnalysisService):
@@ -2556,73 +2584,54 @@ def _retention_analysis(tmp_path):
     return facade, catalog, root, old
 
 
-@pytest.mark.parametrize("mode", ["normal", "corrupt", "locked_corrupt", "catalog_error"])
+@pytest.mark.parametrize("existing", [50, 99])
 def test_retention_after_successful_publication_uses_injected_root_and_preserves_new(
-    tmp_path, monkeypatch, mode,
+    tmp_path, monkeypatch, existing,
 ):
     module = _facade_module()
-    facade, catalog, root, old = _retention_analysis(tmp_path)
-    if mode in {"corrupt", "locked_corrupt"}:
-        (old[-1] / "metadata.json").write_text("broken", encoding="utf-8")
+    facade, catalog, root, old = _analysis_over_existing_reports(tmp_path, existing)
     attempted = []
     original_delete = module.shutil.rmtree
     def delete(path, *args, **kwargs):
-        if Path(path).parent == root:
+        if Path(path).parent == root and Path(path).name.startswith("Echo_Report_"):
             attempted.append(Path(path))
-        if mode == "locked_corrupt" and Path(path) == old[-1]:
-            raise PermissionError("fictional internal path")
         return original_delete(path, *args, **kwargs)
     monkeypatch.setattr(module.shutil, "rmtree", delete)
-    calls = []
-    original = getattr(catalog, "enforce_retention", None)
-    def enforce(*, published_package):
-        assert published_package.parent == root
-        assert len(list(root.iterdir())) == 51
-        assert all((published_package / name).is_file() for name in (
-            "echo-report.html", "echo-report.json", "metadata.json", "README.txt",
-        ))
-        calls.append(published_package)
-        if mode == "catalog_error":
-            raise PermissionError("fictional internal path")
-        return original(published_package=published_package)
-    monkeypatch.setattr(catalog, "enforce_retention", enforce, raising=False)
     catalog_module = importlib.import_module("qq_chat_analyzer.application.report_package_catalog")
     def forbidden_default():
         pytest.fail("An injected Catalog must never resolve default user data")
     monkeypatch.setattr(catalog_module, "user_data_dir", forbidden_default)
     outcome = facade.analyze_session(module.ChatSource.QQ, _FICTIONAL_SESSION_ID)
     assert outcome.report_directory.parent == root
-    assert calls == [outcome.report_directory]
     assert outcome.report_path == outcome.report_directory / "echo-report.html"
-    assert outcome.report_path.is_file()
-    failed = mode in {"locked_corrupt", "catalog_error"}
-    assert len(list(root.iterdir())) == (51 if failed else 50)
-    assert bool(outcome.retention_warning) is failed
-    if failed:
-        assert outcome.retention_warning == "报告已保存，但部分旧报告清理失败，本地报告数量可能超过 50 份。"
-        assert str(root) not in outcome.retention_warning
-        assert all(package.exists() for package in old)
-    elif mode == "corrupt":
-        assert attempted == [old[-1]]
-        assert all(package.exists() for package in old[:-1])
-    else:
-        assert attempted == [old[0]]
-        assert all(package.exists() for package in old[1:])
+    assert all((outcome.report_directory / name).is_file() for name in (
+        "echo-report.html", "echo-report.json", "metadata.json", "README.txt",
+    ))
+    assert attempted == []
+    assert len(list(root.iterdir())) == existing + 1
+    assert all(package.exists() for package in old)
+    usage = facade.get_report_storage_usage()
+    assert usage.package_count == existing + 1 and usage.complete
+    assert usage.measured_bytes > 0
 
 
 def test_retention_publication_failure_never_calls_cleanup(tmp_path, monkeypatch):
     module = _facade_module()
-    facade, catalog, root, old = _retention_analysis(tmp_path)
+    facade, catalog, root, old = _analysis_over_existing_reports(tmp_path, 50)
+    attempted = []
+    original_delete = module.shutil.rmtree
+    def delete(path, *args, **kwargs):
+        if Path(path).parent == root and Path(path).name.startswith("Echo_Report_"):
+            attempted.append(Path(path))
+        return original_delete(path, *args, **kwargs)
     def fail_publication(*args, **kwargs):
         raise OSError("fictional publication failure")
-    def forbidden_cleanup(*args, **kwargs):
-        pytest.fail("Failed publication must not run retention")
     monkeypatch.setattr(module, "package_echo_report", fail_publication)
-    monkeypatch.setattr(catalog, "enforce_retention", forbidden_cleanup, raising=False)
+    monkeypatch.setattr(module.shutil, "rmtree", delete)
     outcome = facade.analyze_session(module.ChatSource.QQ, _FICTIONAL_SESSION_ID)
     assert outcome.report_directory is None
     assert outcome.report_path.is_file()
-    assert outcome.retention_warning == ""
+    assert attempted == []
     assert len(list(root.iterdir())) == 50
     assert all(package.exists() for package in old)
 

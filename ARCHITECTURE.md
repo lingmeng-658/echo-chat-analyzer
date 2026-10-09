@@ -63,7 +63,7 @@ flowchart TD
         SVC["AnalysisApplicationService"]
         FACADE["ChatAnalyzerFacade"]
         PACKAGER["Echo Report Packager<br/>staging → 正式 package"]
-        CATALOG["ReportPackageCatalog<br/>metadata / ownership / retention"]
+        CATALOG["ReportPackageCatalog<br/>metadata / ownership / usage"]
     end
 
     subgraph CORE["Analysis Core 分析核心"]
@@ -383,24 +383,25 @@ LocalChatAnalyzer/
 
 - `reports/` 的持久资产只包括正式 Report Package，不放默认分析 scratch 或 raw export。
   发布期间在同一 root 创建 `.echo-report-<uuid>` staging，四文件完整写入后 rename
-  为正式 package；staging 不进入 catalog，不计入 retention。发布时创建同 root ownership
+  为正式 package；staging 不进入 catalog，也不计入报告存储统计。发布时创建同 root ownership
   sidecar，绑定 root、staging 和 sidecar 的文件系统身份，并持有 OS 文件锁。
   普通发布异常会尝试清理 staging；catalog list / clear_all 会恢复清理具有有效 ownership
   且未被活跃发布锁定的 staging。清理前拒绝 reparse point、身份变化和未知成员；仅有前缀
   或缺少有效 sidecar 的旧 staging 不会被删除。恢复失败只记录安全诊断，clear_all 沿用
   既有失败错误；staging 不作为正式报告或不可读报告 issue 展示。
 - `package_echo_report()` 只负责发布；Facade 显式使用 Catalog 的 canonical
-  `reports_root`，成功返回正式目录后才调用 Catalog retention。发布失败不淘汰旧报告。
+  `reports_root`，成功返回正式目录即作为本次结果。发布成功后不自动删除任何既有报告；
+  发布失败不删除旧报告，生成的报告仍留在本次 output。
 - `ReportPackageCatalog` 只读 `metadata.json` 构建 summary（包括 `conversation_kind`）；
   检查 package 完整性时不读取 report JSON 或聊天正文。损坏或不完整 package
   作为 issue 对用户可见，不因 metadata 不可读而脱离 package ownership 枚举。
 - 正式报告的分析结果是 immutable historical snapshot。app upgrade 不自动 migration 或
   re-analysis；Local Data 重开使用包内原 HTML。新算法或新数据库字段需要新版重新
-  acquisition / analysis，生成新包；旧报告不伪造缺失数据。既有删除、retention 与
+  acquisition / analysis，生成新包；旧报告不伪造缺失数据。既有删除与
   可选分享产物的生命周期不改变这一分析快照约束。
 - `echo-report-meta.v1` 是包摘要契约，允许 additive 可选字段；reader 忽略未知字段，
   新 reader 必须继续读取旧包。新包追加 `app_version`、`report_schema_version` 和
-  `analysis_revision`；旧包缺这些字段仍正常 list / reopen / retention，不补写当前版本。
+  `analysis_revision`；旧包缺这些字段仍正常 list / reopen / 统计，不补写当前版本。
   `echo-report.v0.7` 是展示 JSON 契约，不是原始消息或可重新分析的完整中间结果；
   当前不承诺用新版 presentation 重新渲染旧 JSON。
 - app release version 唯一事实源为 `pyproject.toml`；`version.py` 从安装元数据读取，
@@ -408,17 +409,17 @@ LocalChatAnalyzer/
   `analysis/revision.py` 单独记录分析语义修订；影响结果的数据解释、identity、过滤、
   分词或统计规则变化时递增，纯 presentation 改动不递增。report schema 使用 serializer
   的既有常量，三个版本不绑定递增。
-- listing、retention 与 delete 共用正式 package 候选边界：reports root 的直属真实目录，
+- listing、统计与 delete 共用正式 package 候选边界：reports root 的直属真实目录，
   且名称严格符合 ownership naming。合法名称的普通文件不是 Report Package，忽略并保留；
   reparse / symlink / junction 仍进入安全拒绝流程，不跟随外部目标。
-- 正式 owned package 固定最多保留 50 份。可信 `generated_at` 按新到旧保留，
-  同时间按 `package_name` 升序；时间未知的 package 仍计数，超限时优先按名称升序淘汰。
-  仅缺少 HTML 而时间可读取的 package 仍按时间排序；不使用 mtime / ctime。
-  本次刚发布的 package 受保护。删除前验证 direct child、ownership naming、canonical root、
-  目录身份与整棵树的 symlink / junction / reparse 边界，不跟随外部路径。
-- 某个淘汰目标删除失败时只继续原定淘汰集合，不补删本应保留的新报告。
-  数量可暂时超过 50；本次分析仍成功，新报告仍保存，`AnalysisOutcome.retention_warning`
-  通过现有状态栏提示“报告已保存，但部分旧报告清理失败，本地报告数量可能超过 50 份。”
+- 报告发布后不按数量或空间阈值自动淘汰：既有正式报告只由用户在 Local Data 显式删除。
+  删除前验证 direct child、ownership naming、canonical root、目录身份与
+  整棵树的 symlink / junction / reparse 边界，不跟随外部路径。
+- `ReportPackageCatalog.storage_usage()` 只使用文件元信息统计 owned package 数量与字节占用，
+  包含损坏或不完整但仍属 Echo 管理范围的 package；不读取报告正文或 metadata，也不使用
+  mtime / ctime 作为报告时间。无法安全统计（reparse、身份变化、文件系统错误）的 package
+  仍计入数量并单独标记为 unmeasured，未知占用不得记为零。Facade 通过
+  `get_report_storage_usage()` 暴露该统计，供后续 GUI 显示报告数量与总占用空间。
 - 默认 scratch 位于 `transient/`，Facade 持有最近一次成功分析的 scratch，替换或 shutdown
   时清理；分析失败也清理。每个 Facade 首次创建默认 scratch 前执行一次 stale scratch
   recovery，只处理严格命名的直属自有目录，拒绝 reparse，失败记日志并继续。
@@ -525,11 +526,11 @@ Analysis 仍不得出现平台分支。
 
 GUI 层零业务逻辑。所有报告展示控件为只读
 （`setEditTriggers(NoEditTriggers)`），但保留选中与复制能力。
-分析成功后在现有状态栏展示报告保存状态及非致命 retention warning。
+分析成功后在现有状态栏展示报告保存状态。
 Local Data 通过 Facade 读取真实 package catalog，支持刷新、删除选中报告、删除全部报告、轻量搜索与 reopen。
 搜索仅对已加载的 summaries 做 `query.strip().casefold()` substring 匹配：会话名、来源、
 会话类型、生成日期、分析范围的显示文本；空查询显示全部，issues 始终可见。
-正常 retention 后最多 50 份；清理失败的超限状态不靠搜索静默隐藏。
+报告不做自动淘汰，列表展示当前全部已发布正式报告；不可读报告不靠搜索静默隐藏。
 搜索不发起新的 Facade / Catalog 磁盘调用，refresh 后保留 query 并重新过滤。
 选中行的 `Qt.UserRole` 保存 `package_name`，打开按钮和双击共用 reopen 流程：
 Facade → Catalog 安全定位 `echo-report.html` → 注入的系统 opener。
@@ -705,7 +706,7 @@ GUI 只装配控件、转发事件、展示状态。
 | `application/echo_report_export.py` | 四文件 Report Package staging 与正式发布 |
 | `application/report_staging.py` | Report staging ownership、发布锁与安全恢复清理 |
 | `application/report_package_metadata.py` | Report Package metadata 构建 |
-| `application/report_package_catalog.py` | metadata catalog、安全定位、完整 package 删除与固定 max-50 retention |
+| `application/report_package_catalog.py` | metadata catalog、安全定位、完整 package 删除与报告存储统计 |
 | `application/dto.py` / `errors.py` / `task.py` / `export_config.py` | 应用契约 |
 | `application/facade.py` | Facade |
 | `runtime/` | 外部运行时契约（ChatRuntime）与捆绑运行时实现（BundledQQRuntime） |

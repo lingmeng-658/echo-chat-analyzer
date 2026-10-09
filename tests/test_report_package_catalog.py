@@ -61,7 +61,7 @@ def test_fixed_01_metadata_survives_list_reopen_and_retention_without_rewrite(tm
       "analysis_scope": {"mode": "all", "start_date": null, "end_date": null}
     }''', encoding="utf-8")
     before = {path.name: (path.read_bytes(), path.stat().st_mtime_ns) for path in old.iterdir()}
-    # 51 packages exercise eviction, with the old readable fixture in the middle.
+    # 51 packages exceed the retired 50-package cap; none may be evicted.
     for index in range(50):
         package = _package(
             tmp_path, f"Echo_Report_20261004_120000_{index + 2}",
@@ -79,10 +79,9 @@ def test_fixed_01_metadata_survives_list_reopen_and_retention_without_rewrite(tm
     assert summary.conversation_name == "Fictional 0.1 Conversation"
     assert summary.conversation_kind == "group"
     assert catalog.resolve_html_path(old.name) == old / "echo-report.html"
-    retention = catalog.enforce_retention()
-    assert retention.complete and retention.total_after == 50
-    assert retention.deleted == ("Echo_Report_20261004_120000_2",)
+    assert catalog.storage_usage().package_count == 51
     assert old.name in {report.package_name for report in catalog.list_reports().reports}
+    assert len(list(tmp_path.glob("Echo_Report_*"))) == 51
     assert catalog.resolve_html_path(old.name) == old / "echo-report.html"
     assert {path.name: (path.read_bytes(), path.stat().st_mtime_ns) for path in old.iterdir()} == before
 
@@ -145,8 +144,12 @@ def test_named_regular_file_is_ignored_by_all_package_operations(tmp_path):
     listing = catalog.list_reports()
     assert [report.package_name for report in listing.reports] == [package.name]
     assert not listing.issues
-    retention = catalog.enforce_retention()
-    assert retention.total_before == retention.total_after == 1
+    usage = catalog.storage_usage()
+    assert usage.package_count == 1 and usage.complete
+    assert usage.measured_bytes == sum(
+        (package / name).stat().st_size
+        for name in ("echo-report.html", "echo-report.json", "metadata.json", "README.txt")
+    )
     catalog.clear_all()
     assert not package.exists()
     assert named_file.read_bytes() == b"fictional sentinel"
@@ -315,170 +318,137 @@ def test_resolve_html_path_uses_canonical_root(tmp_path):
     assert _catalog(nested / "..").resolve_html_path(package.name) == package / "echo-report.html"
 
 
-def _retention_packages(root, count, same_time=False):
+def _packages(root, count):
     return [_package(
         root, "Echo_Report_20261004_120000" + (f"_{index + 1}" if index else ""),
-        "2020-01-01T00:00:00+00:00" if same_time else f"2020-01-01T00:00:{index:02d}+00:00",
+        f"2020-01-01T00:{index // 60:02d}:{index % 60:02d}+00:00",
     ) for index in range(count)]
 
 
-@pytest.mark.parametrize("count", [0, 1, 49, 50])
-def test_retention_at_or_below_50_never_deletes(tmp_path, monkeypatch, count):
-    _retention_packages(tmp_path, count)
+def _package_bytes(package):
+    return sum(child.stat().st_size for child in package.iterdir() if child.is_file())
+
+
+@pytest.mark.parametrize("count", [0, 1, 50, 51, 100])
+def test_catalog_reads_never_evict_owned_packages(tmp_path, monkeypatch, count):
+    packages = _packages(tmp_path, count)
     def forbidden(*args, **kwargs):
-        pytest.fail("Retention must not delete at or below 50")
+        pytest.fail("Listing or measuring reports must not delete a package")
     monkeypatch.setattr("shutil.rmtree", forbidden)
-    result = _catalog(tmp_path).enforce_retention()
-    assert result.total_before == result.total_after == count
-    assert result.selected_for_removal == result.deleted == result.failures == ()
-    assert result.complete
+    catalog = _catalog(tmp_path)
+    assert len(catalog.list_reports().reports) == count
+    usage = catalog.storage_usage()
+    assert usage.package_count == count and usage.complete
+    assert usage.measured_bytes == sum(_package_bytes(package) for package in packages)
+    assert all(package.is_dir() for package in packages)
 
 
-def test_retention_removes_oldest_metadata_time_without_reading_report_bodies(tmp_path, monkeypatch):
-    import os
-    packages = _retention_packages(tmp_path, 51)
-    for index, package in enumerate(packages):
-        os.utime(package, (2000000000 - index, 2000000000 - index))
-    original = Path.read_text
-    def metadata_only(path, *args, **kwargs):
-        assert path.name == "metadata.json"
-        return original(path, *args, **kwargs)
-    monkeypatch.setattr(Path, "read_text", metadata_only)
-    result = _catalog(tmp_path).enforce_retention()
-    assert result.total_before == 51 and result.total_after == 50
-    assert result.selected_for_removal == result.deleted == (packages[0].name,)
-    assert result.complete
-    assert not packages[0].exists()
-    assert all(package.exists() for package in packages[1:])
-
-
-def test_retention_equal_times_use_catalog_name_order_stably(tmp_path):
-    removed = []
-    for folder in ("a", "b"):
-        root = tmp_path / folder
-        packages = _retention_packages(root, 51, same_time=True)
-        result = _catalog(root).enforce_retention()
-        expected = sorted(package.name for package in packages)[-1]
-        assert result.deleted == (expected,)
-        removed.append(result.deleted)
-        assert _catalog(root).enforce_retention().selected_for_removal == ()
-    assert removed[0] == removed[1]
-
-
-@pytest.mark.parametrize("damage", ["missing", "broken", "missing_time", "naive_time", "metadata_directory"])
-def test_retention_unknown_time_counts_and_is_removed_first(tmp_path, damage):
-    packages = _retention_packages(tmp_path, 51)
-    metadata = packages[-1] / "metadata.json"
-    if damage in {"missing", "metadata_directory"}:
-        metadata.unlink()
-        if damage == "metadata_directory":
-            metadata.mkdir()
-    elif damage == "broken":
-        metadata.write_text("broken", encoding="utf-8")
-    else:
-        data = json.loads(metadata.read_text(encoding="utf-8"))
-        if damage == "missing_time":
-            del data["generated_at"]
-        else:
-            data["generated_at"] = "2020-01-01T00:00:00"
-        metadata.write_text(json.dumps(data), encoding="utf-8")
-    result = _catalog(tmp_path).enforce_retention()
-    assert result.total_before == 51 and result.total_after == 50
-    assert result.deleted == (packages[-1].name,)
-    assert packages[0].exists()
-
-
-def test_retention_missing_html_does_not_discard_trustworthy_time(tmp_path):
-    packages = _retention_packages(tmp_path, 51)
-    (packages[-1] / "echo-report.html").unlink()
-    result = _catalog(tmp_path).enforce_retention()
-    assert result.deleted == (packages[0].name,)
-    assert packages[-1].exists()
-
-
-def test_retention_unknown_siblings_staging_and_named_files_are_untouched(tmp_path):
-    _retention_packages(tmp_path, 50)
-    siblings = [tmp_path / name for name in ("manual", ".echo-report-staging", "Echo_Report_not_owned")]
+def test_storage_usage_reads_only_file_metadata_and_ignores_unowned_entries(tmp_path, monkeypatch):
+    packages = _packages(tmp_path, 3)
+    (packages[1] / "future-artifact").write_text("fictional", encoding="utf-8")
+    outside = tmp_path / "outside"
+    _package(outside, "manual")
+    siblings = [tmp_path / name for name in ("manual", ".echo-report-staging")]
     for directory in siblings:
         directory.mkdir()
         (directory / "keep.txt").write_text("fictional", encoding="utf-8")
     named_file = tmp_path / "Echo_Report_20261005_120000"
     named_file.write_text("fictional", encoding="utf-8")
-    result = _catalog(tmp_path).enforce_retention()
-    assert result.total_before == result.total_after == 50
-    assert not result.selected_for_removal
+    def forbidden_read(*args, **kwargs):
+        pytest.fail("Storage usage must not read report contents or metadata")
+    monkeypatch.setattr(Path, "read_text", forbidden_read)
+    usage = _catalog(tmp_path).storage_usage()
+    assert usage.package_count == 3 and usage.complete
+    assert usage.measured_bytes == sum(_package_bytes(package) for package in packages)
     assert all((directory / "keep.txt").exists() for directory in siblings)
-    assert named_file.is_file()
+    assert named_file.read_bytes() == b"fictional"
 
 
-def test_retention_failure_does_not_expand_original_removal_set(tmp_path, monkeypatch):
-    packages = _retention_packages(tmp_path, 53)
-    for package in packages[:2]:
-        (package / "metadata.json").write_text("broken", encoding="utf-8")
-    original = __import__("shutil").rmtree
-    attempted = []
-    def fail_one(path, *args, **kwargs):
-        attempted.append(Path(path))
-        if Path(path) == packages[0]:
-            raise PermissionError("fictional locked package")
+@pytest.mark.parametrize("damage", ["broken_metadata", "missing_metadata", "missing_html"])
+def test_storage_usage_counts_damaged_but_owned_packages(tmp_path, damage):
+    packages = _packages(tmp_path, 3)
+    damaged = packages[1]
+    if damage == "broken_metadata":
+        (damaged / "metadata.json").write_text("broken", encoding="utf-8")
+    elif damage == "missing_metadata":
+        (damaged / "metadata.json").unlink()
+    else:
+        (damaged / "echo-report.html").unlink()
+    catalog = _catalog(tmp_path)
+    assert len(catalog.list_reports().issues) == 1
+    usage = catalog.storage_usage()
+    assert usage.package_count == 3 and usage.complete
+    assert usage.unmeasured_packages == ()
+    assert usage.measured_bytes == sum(_package_bytes(package) for package in packages)
+
+
+def test_storage_usage_marks_reparse_package_unmeasured_instead_of_zero(tmp_path, monkeypatch):
+    import stat
+    packages = _packages(tmp_path, 2)
+    linked = packages[0]
+    original = Path.lstat
+    class ReparseStat:
+        st_file_attributes = stat.FILE_ATTRIBUTE_REPARSE_POINT
+        st_mode = stat.S_IFDIR
+    def reparse(path, *args, **kwargs):
+        return ReparseStat() if path == linked else original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "lstat", reparse)
+    usage = _catalog(tmp_path).storage_usage()
+    assert usage.package_count == 2
+    assert usage.unmeasured_packages == (linked.name,)
+    assert not usage.complete
+    assert usage.measured_bytes == _package_bytes(packages[1])
+    assert (linked / "metadata.json").exists()
+
+
+def test_storage_usage_marks_filesystem_failure_unmeasured_and_keeps_others(tmp_path, monkeypatch):
+    packages = _packages(tmp_path, 2)
+    broken = packages[1]
+    original = Path.lstat
+    def failing(path, *args, **kwargs):
+        if path == broken / "metadata.json":
+            raise PermissionError("fictional unreadable file")
         return original(path, *args, **kwargs)
-    monkeypatch.setattr("shutil.rmtree", fail_one)
-    result = _catalog(tmp_path).enforce_retention()
-    assert set(result.selected_for_removal) == {p.name for p in packages[:3]}
-    assert set(attempted) == set(packages[:3])
-    assert len(result.deleted) == 2
-    assert [failure.package_name for failure in result.failures] == [packages[0].name]
-    assert result.total_after == 51 and not result.complete
-    assert packages[0].exists()
-    assert all(package.exists() for package in packages[3:])
+    monkeypatch.setattr(Path, "lstat", failing)
+    usage = _catalog(tmp_path).storage_usage()
+    assert usage.package_count == 2
+    assert usage.unmeasured_packages == (broken.name,)
+    assert not usage.complete
+    assert usage.measured_bytes == _package_bytes(packages[0])
 
 
-@pytest.mark.parametrize("location", ["package", "inside"])
-def test_retention_windows_reparse_failure_preserves_external_and_continues(tmp_path, location):
-    import sys
+def test_storage_usage_windows_junction_package_unmeasured_and_external_kept(tmp_path):
     import subprocess
+    import sys
     if sys.platform != "win32":
         pytest.skip("Windows junction regression")
     root = tmp_path / "reports"
-    packages = _retention_packages(root, 52)
+    packages = _packages(root, 2)
     external = tmp_path / "external"
     external.mkdir()
     sentinel = external / "keep.txt"
-    sentinel.write_text("fictional", encoding="utf-8")
-    if location == "package":
-        __import__("shutil").rmtree(packages[0])
-        link = packages[0]
-    else:
-        link = packages[0] / "linked"
+    sentinel.write_text("fictional external", encoding="utf-8")
+    link = packages[0]
+    __import__("shutil").rmtree(link)
     subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(external)],
                    check=True, capture_output=True)
     try:
-        result = _catalog(root).enforce_retention()
-        assert sentinel.exists()
-        assert packages[0].exists()
-        assert not packages[1].exists()
-        assert all(package.exists() for package in packages[2:])
-        assert result.total_after == 51 and not result.complete
-        assert [failure.package_name for failure in result.failures] == [packages[0].name]
+        usage = _catalog(root).storage_usage()
+        assert usage.package_count == 2
+        assert usage.unmeasured_packages == (link.name,)
+        assert not usage.complete
+        assert usage.measured_bytes == _package_bytes(packages[1])
+        assert sentinel.read_text(encoding="utf-8") == "fictional external"
     finally:
         link.rmdir()
 
 
-def test_retention_protects_published_package_even_if_clock_is_behind(tmp_path):
-    packages = _retention_packages(tmp_path, 51)
-    result = _catalog(tmp_path).enforce_retention(published_package=packages[0])
-    assert packages[0].exists()
-    assert result.deleted == (packages[1].name,)
-    assert result.total_after == 50
-
-
-def test_retention_rejects_published_package_from_different_root(tmp_path):
+def test_storage_usage_missing_root_is_empty_and_not_created(tmp_path):
     root = tmp_path / "reports"
-    packages = _retention_packages(root, 51)
-    outside = _package(tmp_path / "outside")
-    with pytest.raises(ValueError):
-        _catalog(root).enforce_retention(published_package=outside)
-    assert all(package.exists() for package in packages)
+    usage = _catalog(root).storage_usage()
+    assert usage.package_count == usage.measured_bytes == 0
+    assert usage.unmeasured_packages == () and usage.complete
+    assert not root.exists()
 
 
 @pytest.mark.parametrize("name", [

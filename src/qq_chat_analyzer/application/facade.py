@@ -69,7 +69,11 @@ from .echo_report_export import (
     _require_no_reparse_points,
     package_echo_report,
 )
-from .report_package_catalog import ReportPackageCatalog, ReportPackageListing
+from .report_package_catalog import (
+    ReportPackageCatalog,
+    ReportPackageListing,
+    ReportStorageUsage,
+)
 from .report_package_metadata import build_report_metadata
 from .update_check_service import UpdateChecker, UpdateCheckResult, UpdateCheckService
 from .wechat.wechat_connection_service import WeChatConnectionStatus
@@ -335,7 +339,6 @@ class AnalysisOutcome:
     report_directory: Path | None = field(default=None, repr=False)
     echo_report_view: EchoReportView | None = field(default=None, repr=False)
     report_generated_at: datetime | None = None
-    retention_warning: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -732,6 +735,17 @@ class ChatAnalyzerFacade:
                 public_message="无法读取 Echo 本地报告，请稍后重试。",
             ) from exc
 
+    def get_report_storage_usage(self) -> ReportStorageUsage:
+        """Report owned package count and recorded size for later display."""
+        try:
+            return self._report_package_catalog.storage_usage()
+        except Exception as exc:
+            _LOGGER.exception("Report package storage usage could not be read.")
+            raise FacadeError(
+                code="report_usage_failed",
+                public_message="无法统计 Echo 本地报告占用空间，请稍后重试。",
+            ) from exc
+
     def get_report_package_html_path(self, package_name: str) -> Path:
         """Return a safely located historical report for the GUI opener."""
         try:
@@ -1046,7 +1060,6 @@ class ChatAnalyzerFacade:
             report_path = _generated_echo_report_path(result, output_directory)
             echo_report_view = getattr(result, "echo_report_view", None)
             report_directory = None
-            retention_warning = ""
             if report_path is not None:
                 try:
                     metadata = build_report_metadata(
@@ -1067,19 +1080,6 @@ class ChatAnalyzerFacade:
                         "Analysis completed but the Echo report could not be "
                         "packaged; keeping the generated report in place.",
                         exc_info=True,
-                    )
-            if report_directory is not None:
-                try:
-                    retention = self._report_package_catalog.enforce_retention(
-                        published_package=report_directory,
-                    )
-                    retention_complete = retention.complete
-                except Exception:
-                    retention_complete = False
-                    _LOGGER.exception("Report saved but retention could not complete.")
-                if not retention_complete:
-                    retention_warning = (
-                        "报告已保存，但部分旧报告清理失败，本地报告数量可能超过 50 份。"
                     )
             _LOGGER.info(
                 "[facade] analysis outcome ready report_path=%s "
@@ -1104,7 +1104,6 @@ class ChatAnalyzerFacade:
                 report_directory=report_directory,
                 echo_report_view=echo_report_view,
                 report_generated_at=report_generated_at,
-                retention_warning=retention_warning,
             )
             _report_progress(progress, "分析完成")
             self._replace_retained_output(temporary_output)

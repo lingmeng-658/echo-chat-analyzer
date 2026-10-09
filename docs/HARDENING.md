@@ -45,7 +45,7 @@ WeChat 当前能力不变；架构细节以 `ARCHITECTURE.md` 为准。
 | REL-08 分享闭环 | **Release Blocker：Yes**；`d67f51e` 已恢复入口及生成，完整真人闭环尚未确认 |
 | GOV-04 权威版本号 | CLOSED：pyproject.toml 为唯一发布版本事实源；runtime / GUI / metadata 共用，frozen build 核对并携带安装元数据 |
 | QA-03 / QA-04 GitHub Release / 检查更新 | 未完成；Update Check Core 已实现，GUI 异步提示/打开下载页待接线；仍需核对 tag、发布说明和最终 fresh build；不自动下载、替换或静默更新 |
-| QA-05 0.1 → 0.2 本地数据兼容审计 | CLOSED：metadata provenance additive 收口；固定旧 0.1 包的 list / reopen / retention 与不改写回归；演进边界见 ARCHITECTURE.md |
+| QA-05 0.1 → 0.2 本地数据兼容审计 | CLOSED：metadata provenance additive 收口；固定旧 0.1 包的 list / reopen / 存储统计与不改写回归；演进边界见 ARCHITECTURE.md |
 | GOV-05 发布构建可复现性 | CLOSED：build toolchain 已 tracked 声明并精确 pin；文档与合同齐备；fresh build 重建验证通过 |
 | QA-02 定点 release / privacy / build audit | CLOSED：发布树残留防线、构建依赖声明、WeChat native DLL pin 三项收口；fresh build + frozen 合同验收通过 |
 | 版权 / 第三方分发合规 | 待核对最终随包资产、许可 / 声明及官方表情 PNG 处理；不以 QA-02 工程审计代替 |
@@ -384,7 +384,7 @@ native crash 风险仍见 Active Bugs，本次未重跑 Fast / Full，不能更�
 
 已完成 Version / Data Evolution Contract 最小收口：新包在 `echo-report-meta.v1` 内
 追加 app version、report schema version、analysis revision；旧包缺字段仍可读取，不补写。
-固定虚构旧 0.1 metadata 回归覆盖 list / reopen / 超限 retention，并检查保留旧包的
+固定虚构旧 0.1 metadata 回归覆盖 list / reopen / 超限目录读取，并检查保留旧包的
 文件内容与 mtime 未改变。证据：`tests/test_report_package_catalog.py`、
 `tests/test_echo_report_export.py`；现有配置缺字段、portable 路径修复与 QCE 隔离覆盖沿用。
 
@@ -529,8 +529,8 @@ package 内的 HTML，使用系统默认浏览器打开，无需重新分析。
 - 生产 `ChatDataSnapshot` 已删除；QQ raw acquisition 是一次性 transient lease。
 - 正常分析结束后会清理 transient payload；重新分析会重新 acquisition。
 - Report Package 是唯一持久分析对象，Local Data 从 package metadata 构建 catalog；
-  独立 JSONL history 已退休。报告 reopen、完整 package deletion、固定 max-50 retention
-  与默认 analysis scratch / stale recovery 已随 BUG-03 完成。
+  独立 JSONL history 已退休。报告 reopen、完整 package deletion 与默认 analysis
+  scratch / stale recovery 已随 BUG-03 完成；数量 / 空间自动淘汰已按阶段 A 取消。
 - Local Data 的最终用户措辞为“删除全部报告”，不承诺删除 QQ / 微信原始数据或用户另存文件。
 - 桌面 QQ Direct DB generation 在会话查询或 payload 物化后清理；启动与 shutdown
   的 `recover` 负责遗留 plaintext。真人验收确认正常 shutdown 后 `snapshot.db` 无残留。
@@ -631,11 +631,12 @@ Release Blocker：No / CLOSED。
   recovery 遗留自有 scratch，正常替换、失败及 shutdown 清理遵守 ownership / reparse 边界。
 - Local Data 支持“删除选中报告”、“删除全部报告”、安全 reopen 与纯内存轻量搜索；删除目标是完整自有
   package，不是 QQ / 微信原始数据或用户另存文件。单项删除已完成，刷新后保留搜索 query，失败明确可见。
-- listing、retention 与 delete 共用正式 package 候选边界：reports root 的直属真实目录，
+- listing、统计与 delete 共用正式 package 候选边界：reports root 的直属真实目录，
   且名称严格符合 ownership naming。合法名称的普通文件忽略并保留；reparse / symlink / junction
   仍走安全拒绝，不跟随外部目标。
-- 固定 max-50 retention 在新 package 发布成功后执行；损坏 metadata package 仍计数、
-  时间未知者优先淘汰。清理失败保留新报告成功结果，公开 warning，并允许暂时超限。
+- 报告发布成功后不自动淘汰任何既有正式报告；删除只由用户在 Local Data 显式触发。
+  报告存储统计只读文件元信息，返回 owned package 数量与已测字节；无法安全统计的 package
+  单独标记为 unmeasured，不把未知占用记为零。
 - Automated tests 通过 autouse fixture 隔离真实用户数据目录，默认 packaging / production
   composition 测试也落入临时环境；sentinel regression 固定该边界。
 

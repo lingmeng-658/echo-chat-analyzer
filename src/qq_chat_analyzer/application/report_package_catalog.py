@@ -1,4 +1,4 @@
-"""List package-owned metadata and delete complete, bounded report assets."""
+"""List package-owned metadata, measure report storage, and delete owned assets."""
 
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ from .report_staging import recover_report_staging
 
 _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.report_package")
 _PACKAGE_NAME = re.compile(r"Echo_Report_[0-9]{8}_[0-9]{6}(?:_(?:[2-9]|[1-9][0-9]+))?\Z")
-MAX_REPORT_PACKAGES = 50
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,16 +44,22 @@ class ReportPackageListing:
 
 
 @dataclass(frozen=True, slots=True)
-class ReportPackageRetentionResult:
-    total_before: int
-    selected_for_removal: tuple[str, ...]
-    deleted: tuple[str, ...]
-    failures: tuple[ReportPackageIssue, ...]
-    total_after: int
+class ReportStorageUsage:
+    """What the owned report packages currently occupy on this machine.
+
+    ``measured_bytes`` sums only packages that could be measured safely, so
+    it is a lower bound unless ``complete`` is true. ``unmeasured_packages``
+    names every owned package whose size stays unknown instead of zero.
+    """
+
+    package_count: int
+    measured_bytes: int
+    unmeasured_packages: tuple[str, ...] = ()
 
     @property
     def complete(self) -> bool:
-        return not self.failures and self.total_after <= MAX_REPORT_PACKAGES
+        """True when every owned package contributed to ``measured_bytes``."""
+        return not self.unmeasured_packages
 
 
 class ReportPackageClearError(RuntimeError):
@@ -75,58 +80,25 @@ class ReportPackageCatalog:
         """Expose the validated canonical root for same-root publishing."""
         return self._root()
 
-    def enforce_retention(
-        self, *, published_package: Path | None = None,
-    ) -> ReportPackageRetentionResult:
-        """Keep at most 50 owned packages, protecting this analysis's publication."""
-        root = self._root()
-        protected = None
-        if published_package is not None:
-            published = Path(published_package).absolute()
-            _require_no_reparse_points(published)
-            if published.parent.resolve() != root:
-                raise ValueError("Published report is outside the catalog root.")
-            protected = root / published.name
-            _check_package(root, protected)
-        candidates = _candidates(root)
-        excess = max(0, len(candidates) - MAX_REPORT_PACKAGES)
-        if not excess:
-            return ReportPackageRetentionResult(len(candidates), (), (), (), len(candidates))
+    def storage_usage(self) -> ReportStorageUsage:
+        """Count owned packages and their bytes from file metadata only.
 
-        known, unknown = [], []
+        Damaged but owned packages still count. A package that cannot be
+        measured safely is named in ``unmeasured_packages`` instead of being
+        silently reported as zero bytes.
+        """
+        root = self._root()
+        candidates = _candidates(root)
+        measured_bytes, unmeasured = 0, []
         for package in candidates:
-            if package == protected:
-                continue
             try:
-                _check_package(root, package)
-                known.append((package, _retention_generated_at(package)))
+                measured_bytes += _package_bytes(root, package)
             except Exception:
-                _LOGGER.warning("Retention time unknown package=%s", package, exc_info=True)
-                unknown.append(package)
-        # Keep the listing's newest-first, name-ascending order. Its reverse
-        # is the eviction order; unknown-time packages are evicted first.
-        known.sort(key=lambda item: item[0].name)
-        known.sort(key=lambda item: item[1], reverse=True)
-        unknown.sort(key=lambda package: package.name)
-        selected = (unknown + [package for package, _ in reversed(known)])[:excess]
-        deleted, failures = [], []
-        _LOGGER.info("Report retention started root=%s total=%d selected=%d",
-                     root, len(candidates), len(selected))
-        for package in selected:
-            try:
-                _delete_package(root, package)
-                deleted.append(package.name)
-                _LOGGER.info("Report retention deleted path=%s", package)
-            except Exception:
-                failures.append(ReportPackageIssue(package.name, "retention_delete_failed"))
-                _LOGGER.exception("Report retention could not delete path=%s", package)
-        total_after = len(_candidates(root))
-        _LOGGER.info("Report retention finished root=%s deleted=%d failures=%d remaining=%d",
-                     root, len(deleted), len(failures), total_after)
-        return ReportPackageRetentionResult(
-            len(candidates), tuple(package.name for package in selected),
-            tuple(deleted), tuple(failures), total_after,
-        )
+                unmeasured.append(package.name)
+                _LOGGER.warning("Report usage unknown package=%s", package, exc_info=True)
+        _LOGGER.info("Report storage usage root=%s packages=%d measured_bytes=%d unmeasured=%d",
+                     root, len(candidates), measured_bytes, len(unmeasured))
+        return ReportStorageUsage(len(candidates), measured_bytes, tuple(unmeasured))
 
     def resolve_html_path(self, package_name: str) -> Path:
         """Locate an owned package's regular HTML file without reading it."""
@@ -222,18 +194,25 @@ def _candidates(root: Path) -> list[Path]:
     return candidates
 
 
-def _retention_generated_at(package: Path) -> datetime:
-    metadata = package / "metadata.json"
-    _require_no_reparse_points(metadata)
-    if not stat.S_ISREG(metadata.lstat().st_mode):
-        raise ValueError("Report metadata is not a regular file.")
-    data = json.loads(metadata.read_text(encoding="utf-8"))
-    if data["schema_version"] != "echo-report-meta.v1":
-        raise ValueError("Unsupported report metadata.")
-    generated_at = datetime.fromisoformat(data["generated_at"])
-    if generated_at.utcoffset() is None:
-        raise ValueError("Report time requires a timezone.")
-    return generated_at
+def _package_bytes(root: Path, package: Path) -> int:
+    """Sum regular-file bytes of one owned package without reading contents."""
+    identity = _check_package(root, package)
+    total = 0
+    pending = [package]
+    while pending:
+        directory = pending.pop()
+        for child in directory.iterdir():
+            _require_no_reparse_points(child)
+            info = child.lstat()
+            if stat.S_ISDIR(info.st_mode):
+                pending.append(child)
+            elif stat.S_ISREG(info.st_mode):
+                total += info.st_size
+            else:
+                raise ValueError("Unsupported report package member.")
+    if _check_package(root, package) != identity:
+        raise RuntimeError("Report package changed during measurement.")
+    return total
 
 
 def _is_package_name(name: str) -> bool:

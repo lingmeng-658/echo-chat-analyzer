@@ -51,6 +51,7 @@ from .report_package_catalog import (
     ReportPackageSummary,
     ReportPackageIssue,
     ReportPackageListing,
+    ReportStorageUsage,
 )
 from .qq.qq_connection_service import (
     QQConnectionService,
@@ -98,6 +99,7 @@ __all__ = [
     "ReportPackageSummary",
     "ReportPackageIssue",
     "ReportPackageListing",
+    "ReportStorageUsage",
     "ActivityReport",
     "AnalysisApplicationService",
     "AnalysisConfig",
