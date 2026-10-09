@@ -104,13 +104,19 @@ def default_echo_icon_path() -> Path:
     return resource_path(ECHO_ICON_RELATIVE_PATH)
 
 
-def user_data_dir() -> Path:
-    """Return the user-writable application data directory, creating it."""
+def user_data_root() -> Path:
+    """Calculate the user data root without creating any directories."""
     local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
     if local_app_data:
         directory = Path(local_app_data) / APP_DATA_DIR_NAME
     else:
         directory = Path.home() / f".{APP_DATA_DIR_NAME.lower()}"
+    return directory
+
+
+def user_data_dir() -> Path:
+    """Return the user-writable application data directory, creating it."""
+    directory = user_data_root()
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 
@@ -145,4 +151,5 @@ __all__ = [
     "require_bundled_runtime_dir",
     "resources_dir",
     "user_data_dir",
+    "user_data_root",
 ]

@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
 )
 
 from ..application.facade import ChatSource
-from ..resources import default_qq_runtime_directory
 from .progress_track import ConnectionProgressTrack
 from .session_analysis_panel import SessionAnalysisPanel
 from .theme import (
@@ -62,7 +61,6 @@ _QQ_WAITING_AUTH_TIMEOUT_MS = 120_000
 _QQ_AUTH_TIMEOUT_TITLE = "QQ登录等待超时"
 _QQ_AUTH_TIMEOUT_HINT = "扫码时间过长，请取消后重新连接。"
 _QQ_QRCODE_SIZE = 240
-_QQ_QRCODE_RELATIVE_PATH = Path("cache") / "qrcode.png"
 # The connection journey the trail walks: 准备 → 启动 QQ → 扫码 → 连接.
 _QQ_STAGE_PREPARING = 0
 _QQ_STAGE_STARTING_QQ = 1
@@ -294,7 +292,6 @@ class QQWorkspace(QWidget):
         self._qq_install_prompt_active = False
         self._last_qq_status_message = ""
         self._qq_waiting_auth_since: float | None = None
-        self._qq_qrcode_path = _default_qq_qrcode_path()
         self._sessions_loaded = False
         self._session_request: object | None = None
 
@@ -640,19 +637,16 @@ class QQWorkspace(QWidget):
 
     def _refresh_qq_qrcode(self) -> None:
         """Show the runtime QR only when the facade says it is fresh."""
-        if not self._qq_qrcode_path.is_file():
-            self._hide_qq_qrcode()
-            return
         try:
-            fresh = self._facade.is_qq_qrcode_ready()
+            path = self._facade.get_qq_qrcode_path()
         except Exception:
-            _LOGGER.debug("[qq gui] qr readiness probe failed", exc_info=True)
-            fresh = False
-        if not fresh:
+            _LOGGER.debug("[qq gui] qr path unavailable", exc_info=True)
+            path = None
+        if path is None:
             self._hide_qq_qrcode()
             return
         try:
-            pixmap = QPixmap(str(self._qq_qrcode_path))
+            pixmap = QPixmap(str(path))
         except Exception:
             pixmap = QPixmap()
         if pixmap.isNull():
@@ -1078,8 +1072,3 @@ def _qq_error_title(code: str) -> str:
     if code == "service_unavailable":
         return "QQ连接服务启动失败"
     return _QQ_CONNECT_FAILED
-
-
-def _default_qq_qrcode_path() -> Path:
-    """Return where the bundled QQ runtime writes its login QR image."""
-    return default_qq_runtime_directory() / _QQ_QRCODE_RELATIVE_PATH

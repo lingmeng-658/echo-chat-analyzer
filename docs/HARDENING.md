@@ -728,6 +728,22 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build_windows_ex
 - 两个 Release Packaging blocker：**CLOSED**；本轮无产品源码修改。
   REL-06 整体仍开放：installer、普通用户首次运行和最终分发体验尚未完成。
 
+2026-10-09 REL-06B Windows Job Object 原子纳管 checkpoint：
+
+- 范围：`runtime/windows_job.py` 以 `PROC_THREAD_ATTRIBUTE_JOB_LIST` 在创建时原子纳管，
+  `QQProcessRegistry` 持有会话资源；程序目录 / 用户运行目录 / Direct DB transient 目录分离，
+  安装目录只读，GUI 经 Facade 取得 QR 路径。
+- 独立 Frozen 实机验收：**通过**（三轮）——正常退出、强杀自动回收、重新启动恢复。
+  安装目录只读、用户数据目录隔离与快照清理均通过。
+- 发行资源合同：fresh Frozen build 与发行资源合同通过；成功口径见上文 package checkpoint。
+- 本次验收快照：Focused **157 passed**；Fast **2912 passed，2 skipped，316 deselected**。
+  这些数字只记录本次 checkpoint，不是固定测试数量要求。
+- 边界：**独立 Frozen 实机验收通过，最终集成发行验收未完成。** 最终 Portable ZIP、
+  含其他并行成果的整合版回归，以及 QA-01 / QA-03 / QA-06 的最终发行验收仍待完成，
+  本记录不声称 Echo 0.1 已完成最终发行验收。
+- 本记录基于 REL-06B 未提交工作树快照；该分支基线早于当前 `origin/main` 的 REL-06B
+  状态条目，合并后需按 main 的结构同步 live 状态。记录不含个人路径、账号或敏感日志。
+
 历史包体变化（不代表当前 fresh package 大小）：
 
 | 阶段 | unpacked | ZIP |

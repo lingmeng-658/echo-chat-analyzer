@@ -1,6 +1,6 @@
 """Behavior tests for the bundled QQ runtime process integration.
 
-No real NapCat executable is ever started. ``subprocess.Popen`` is mocked and the
+No real NapCat executable is ever started. The platform launcher is mocked and the
 health endpoint is simulated with an injected checker, so the tests cover the
 runtime lifecycle without touching external processes or real chat data.
 """
@@ -22,6 +22,10 @@ sys.path.insert(0, str(SRC_ROOT))
 
 def _runtime_module():
     return importlib.import_module("qq_chat_analyzer.runtime")
+
+
+def _launch_target(module):
+    return (module, "launch_owned_process") if module.os.name == "nt" else (module.subprocess, "Popen")
 
 
 class _FakePopen:
@@ -104,7 +108,7 @@ def test_runtime_launcher_hides_console_on_windows(
         0x08000000,
         raising=False,
     )
-    monkeypatch.setattr(module.subprocess, "Popen", _popen)
+    monkeypatch.setattr(*_launch_target(module), _popen)
 
     info = runtime.start()
 
@@ -133,7 +137,7 @@ def test_runtime_launcher_omits_windows_creation_flags_on_non_windows(
         return _FakePopen(args)
 
     monkeypatch.setattr(module.os, "name", "posix")
-    monkeypatch.setattr(module.subprocess, "Popen", _popen)
+    monkeypatch.setattr(*_launch_target(module), _popen)
 
     runtime.start()
 
@@ -184,8 +188,7 @@ def _popen_patch(runtime_module, **popen_kwargs):
         return fake
 
     patcher = mock.patch.object(
-        runtime_module.subprocess,
-        "Popen",
+        *_launch_target(runtime_module),
         side_effect=_popen,
     )
     patcher.start()
@@ -263,7 +266,7 @@ def test_start_reuses_healthy_external_runtime_without_spawning(
         health=True,
     )
 
-    with mock.patch.object(module.subprocess, "Popen") as popen:
+    with mock.patch.object(*_launch_target(module)) as popen:
         info = runtime.start()
 
     popen.assert_not_called()
@@ -282,8 +285,7 @@ def test_start_failure_raises_user_safe_error(tmp_path: Path) -> None:
         working_directory=tmp_path,
     )
     patcher = mock.patch.object(
-        module.subprocess,
-        "Popen",
+        *_launch_target(module),
         side_effect=OSError("spawn exploded with secret"),
     )
     patcher.start()
@@ -342,7 +344,7 @@ def test_stop_does_not_terminate_healthy_external_runtime(tmp_path: Path) -> Non
         health=True,
     )
 
-    with mock.patch.object(module.subprocess, "Popen") as popen:
+    with mock.patch.object(*_launch_target(module)) as popen:
         runtime.start()
         runtime.stop()
 

@@ -17,6 +17,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_ROOT))
 
+from qq_chat_analyzer.runtime import RuntimeInfo
+
 
 def _manager_module():
     return importlib.import_module(
@@ -62,7 +64,7 @@ class _FakeRuntime:
         if self._start_error is not None:
             raise self._start_error
         self._running = True
-        return type("Info", (), {"pid": self._pid, "version": self._version})()
+        return RuntimeInfo(pid=self._pid, version=self._version, owned_process=True)
 
     def stop(self) -> None:
         self.stop_calls += 1
@@ -78,7 +80,7 @@ class _FakeRuntime:
             raise RuntimeError("runtime not ready")
 
     def get_info(self):
-        return type("Info", (), {"pid": self._pid, "version": self._version})()
+        return RuntimeInfo(pid=self._pid, version=self._version, owned_process=True)
 
 
 def _manager(runtime: _FakeRuntime):

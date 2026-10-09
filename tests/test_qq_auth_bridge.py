@@ -2,7 +2,7 @@
 
 Everything here is fictional. No real QQ process, launcher, or login window
 is started; runtime launch is stubbed and the default window launcher is
-exercised against temp files with ``subprocess.Popen`` mocked.
+exercised against temp files with the platform launcher mocked.
 """
 
 from __future__ import annotations
@@ -20,6 +20,10 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_ROOT))
+
+
+def _launch_target(module):
+    return (module, "launch_owned_process") if module.os.name == "nt" else (module.subprocess, "Popen")
 
 
 def _bridge_module():
@@ -751,6 +755,7 @@ def _runtime_config(tmp_path: Path, *, with_qq_path: bool = True):
         )
     return module.QQEnvironmentConfig(
         runtime_directory=tmp_path,
+        runtime_mode="custom",
         qq_install_path=qq_path,
     )
 
@@ -770,7 +775,7 @@ def test_default_launcher_opens_the_runtime_login_window(
         spawned["kwargs"] = kwargs
         return _FakeProcess(pid=4242)
 
-    monkeypatch.setattr(bridge.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(*_launch_target(bridge), _fake_popen)
 
     bridge.default_auth_window_launcher(config)()
 
@@ -808,7 +813,7 @@ def test_default_launcher_strips_napcat_quick_login_credentials(
         spawned["kwargs"] = kwargs
         return _FakeProcess(pid=4248)
 
-    monkeypatch.setattr(bridge.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(*_launch_target(bridge), _fake_popen)
 
     bridge.default_auth_window_launcher(config)()
 
@@ -847,7 +852,7 @@ def test_default_launcher_hides_napcat_console_on_windows(
         0x08000000,
         raising=False,
     )
-    monkeypatch.setattr(bridge.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(*_launch_target(bridge), _fake_popen)
 
     bridge.default_auth_window_launcher(config)()
 
@@ -875,8 +880,7 @@ def test_default_launcher_rejects_immediate_batch_failure(
             return 7
 
     monkeypatch.setattr(
-        bridge.subprocess,
-        "Popen",
+        *_launch_target(bridge),
         lambda args, **kwargs: _FailedProcess(pid=4246),
     )
 
@@ -902,8 +906,7 @@ def test_default_launcher_logs_completed_stdout_and_stderr(
             return ("launcher output", "launcher warning")
 
     monkeypatch.setattr(
-        bridge.subprocess,
-        "Popen",
+        *_launch_target(bridge),
         lambda args, **kwargs: _CompletedProcess(pid=4247),
     )
 
@@ -928,7 +931,7 @@ def test_default_launcher_logs_the_actual_command(
         spawned["args"] = list(args)
         return _FakeProcess(pid=4243)
 
-    monkeypatch.setattr(bridge.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(*_launch_target(bridge), _fake_popen)
 
     with caplog.at_level("INFO", logger="qq_chat_analyzer.desktop.qq_auth_bridge"):
         bridge.default_auth_window_launcher(config)()
@@ -966,7 +969,7 @@ def test_auth_flow_records_the_launched_window_pid(
     def _fake_popen(args, **kwargs):
         return _FakeProcess(pid=7777)
 
-    monkeypatch.setattr(bridge.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(*_launch_target(bridge), _fake_popen)
 
     snapshot = _bridge(
         setup_service=setup,
@@ -1002,6 +1005,7 @@ def test_default_launcher_prefers_the_configured_qq_path(
     (config_dir / "qq_path.txt").write_text(str(saved), encoding="utf-8")
     config = module.QQEnvironmentConfig(
         runtime_directory=tmp_path,
+        runtime_mode="custom",
         qq_install_path=configured,
     )
     spawned = {}
@@ -1011,7 +1015,7 @@ def test_default_launcher_prefers_the_configured_qq_path(
         spawned["kwargs"] = kwargs
         return _FakeProcess(pid=4244)
 
-    monkeypatch.setattr(bridge.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(*_launch_target(bridge), _fake_popen)
 
     bridge.default_auth_window_launcher(config)()
 
@@ -1061,7 +1065,7 @@ def test_find_qq_script_hides_powershell_console_on_windows(
     assert calls[0][1]["creationflags"] == 0x08000000
 
 
-def test_runtime_cleaner_targets_bundled_napcat_launcher(
+def test_runtime_cleaner_refuses_path_only_process_ownership(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1082,16 +1086,7 @@ def test_runtime_cleaner_targets_bundled_napcat_launcher(
 
     bridge.terminate_bundled_runtime_sessions(tmp_path)
 
-    assert calls
-    command, options = calls[0]
-    assert command[0] == "powershell"
-    assert "NapCatWinBootMain.exe" in command[-1]
-    assert "taskkill" in command[-1]
-    assert "Wait-Process" in command[-1]
-    assert options["env"]["ECHO_NAPCAT_BOOT_PATH"] == str(
-        (tmp_path / "NapCatWinBootMain.exe").resolve()
-    )
-    assert options["creationflags"] == 0x08000000
+    assert calls == []
 
 
 def test_runtime_cleaner_skips_non_windows(
@@ -1235,7 +1230,7 @@ def test_launch_window_recovers_missing_qq_config_before_launch(
             return config
 
     monkeypatch.setattr(bridge, "QQEnvironmentConfigLoader", _FakeLoader)
-    monkeypatch.setattr(bridge, "default_auth_window_launcher", lambda _: launcher)
+    monkeypatch.setattr(bridge, "default_auth_window_launcher", lambda _, **_kwargs: launcher)
 
     instance = _bridge(setup_service=setup)
     instance._launch_window()
@@ -1255,7 +1250,7 @@ def test_launch_window_keeps_existing_config_flow(
     setup = _StubSetupService(config=_runtime_config(tmp_path))
     launcher = _RecordingLauncher()
 
-    monkeypatch.setattr(bridge, "default_auth_window_launcher", lambda _: launcher)
+    monkeypatch.setattr(bridge, "default_auth_window_launcher", lambda _, **_kwargs: launcher)
 
     instance = _bridge(setup_service=setup)
     instance._launch_window()
@@ -1284,7 +1279,7 @@ def test_start_auth_flow_missing_config_recovery_failure_returns_friendly_error(
             raise _config_module().QQConfigNotFound()
 
     monkeypatch.setattr(bridge, "QQEnvironmentConfigLoader", _FakeLoader)
-    monkeypatch.setattr(bridge, "default_auth_window_launcher", lambda _: launcher)
+    monkeypatch.setattr(bridge, "default_auth_window_launcher", lambda _, **_kwargs: launcher)
 
     snapshot = _bridge(
         setup_service=setup,
@@ -1336,7 +1331,7 @@ def test_launch_window_relaunches_after_launcher_exits(
     process = _ExitableProcess()
     launcher = _ProcessReturningLauncher(process)
 
-    monkeypatch.setattr(bridge, "default_auth_window_launcher", lambda _: launcher)
+    monkeypatch.setattr(bridge, "default_auth_window_launcher", lambda _, **_kwargs: launcher)
 
     instance = _bridge(setup_service=setup)
     instance._launch_window()

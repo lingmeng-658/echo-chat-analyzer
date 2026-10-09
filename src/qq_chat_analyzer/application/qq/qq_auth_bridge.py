@@ -23,6 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from ...runtime.windows_job import launch_owned_process
+
 from ..connection_models import ConnectionSnapshot, ConnectionState
 from .qq_connection_manager import (
     HINT_WAITING_AUTH,
@@ -105,7 +107,7 @@ class QQAuthBridge:
         setup_service: Any = None,
         connection_service: Any = None,
         manager: Any = None,
-        window_launcher: Callable[[], None] | None = None,
+        window_launcher: Callable[[], Any] | None = None,
         process_registry: QQProcessRegistry | None = None,
         qrcode_path: Path | None = None,
         runtime_cleaner: Callable[[Path], None] | None = None,
@@ -125,6 +127,9 @@ class QQAuthBridge:
         self._process_registry = (
             process_registry or default_qq_process_registry()
         )
+        self._runtime_paths = None
+        self._session_lock = threading.RLock()
+        self._session_generation = 0
 
     def start_auth_flow(
         self,
@@ -138,7 +143,19 @@ class QQAuthBridge:
         """
         _report_progress(progress, PROGRESS_CHECKING)
         manager = self._manager_instance()
-        snapshot = manager.get_snapshot()
+        if self._auth_launch_started and not self._launcher_process_alive():
+            self._auth_launch_started = False
+        getter = getattr(self._setup_service, "get_runtime_paths", None)
+        if callable(getter):
+            try:
+                self._runtime_paths = getter(prepare=not self._auth_launch_started)
+            except Exception as error:
+                manager.end_auth_waiting()
+                return self._error_snapshot(_public_message(error, MESSAGE_ERROR), HINT_RETRY,
+                                            code=getattr(error, "code", None))
+        snapshot = self._check_runtime_binding(manager.get_snapshot())
+        if snapshot.code == "qq_runtime_identity_mismatch":
+            return snapshot
         _LOGGER.info(
             "[qq auth] start_auth_flow entered state=%s setup_service=%s",
             _state_value(snapshot.state),
@@ -181,7 +198,7 @@ class QQAuthBridge:
         _LOGGER.info("[qq auth] login window launched")
         _report_progress(progress, PROGRESS_WAITING_LOGIN)
 
-        latest = manager.get_snapshot()
+        latest = self._check_runtime_binding(manager.get_snapshot())
         if latest.state is ConnectionState.CONNECTED:
             manager.end_auth_waiting()
             _report_progress(progress, PROGRESS_CONNECTED)
@@ -198,7 +215,22 @@ class QQAuthBridge:
 
     def get_snapshot(self) -> ConnectionSnapshot:
         """Return the current lifecycle snapshot for continued detection."""
-        return self._manager_instance().get_snapshot()
+        return self._check_runtime_binding(self._manager_instance().get_snapshot())
+
+    def _check_runtime_binding(self, snapshot: ConnectionSnapshot) -> ConnectionSnapshot:
+        """Refuse a connected bridge from a different managed path contract."""
+        config = self._environment_config()
+        if (snapshot.state is not ConnectionState.CONNECTED or self._runtime_paths is None
+                or getattr(config, "runtime_mode", None) != "managed"):
+            return snapshot
+        from ...providers.napcat_qq_provider import NapCatQQProvider
+        try:
+            status = NapCatQQProvider(config.napcat_bridge_url, timeout=1).status()
+            if status.runtime_id == self._runtime_paths.runtime_id:
+                return snapshot
+        except Exception:
+            pass
+        return self._error_snapshot(MESSAGE_ERROR, HINT_RETRY, code="qq_runtime_identity_mismatch")
 
     def is_qrcode_ready(self) -> bool:
         """Return whether the QR cache belongs to the current auth session.
@@ -239,6 +271,12 @@ class QQAuthBridge:
             self._qr_ready_logged = False
         return fresh
 
+    def get_qrcode_path(self) -> Path | None:
+        """Return the current auth session's fresh QR path, or no image."""
+        if not self.is_qrcode_ready():
+            return None
+        return self._qrcode_cache_path()
+
     def disconnect(self) -> ConnectionSnapshot:
         """Stop the LCA-owned QQ session and return a disconnected snapshot.
 
@@ -247,8 +285,10 @@ class QQAuthBridge:
         a fresh QR flow.
         """
         _LOGGER.info("[qq auth] disconnect requested")
-        self._terminate_runtime_sessions()
-        self._reset_auth_session()
+        with self._session_lock:
+            self._session_generation += 1
+            self._terminate_runtime_sessions()
+            self._reset_auth_session()
         return self._manager_instance().disconnect()
 
     # ---------------------------------------------------------------- internals
@@ -262,30 +302,38 @@ class QQAuthBridge:
         return self._manager
 
     def _launch_window(self) -> None:
+        with self._session_lock:
+            generation = self._session_generation
         if self._auth_launch_started and self._launcher_process_alive():
             _LOGGER.info("[qq auth] launcher already started; reusing")
             return
         self._auth_launch_started = False
         if self._window_launcher is not None:
             _LOGGER.info("[qq auth] using injected window launcher")
-            self._window_launcher()
+            process = self._window_launcher()
+        else:
+            try:
+                config = self._setup_service.get_environment_config()
+            except QQConfigNotFound:
+                config = self._recover_environment_config()
+            _LOGGER.info(
+                "[qq auth] building default window launcher config=%s",
+                _config_summary(config),
+            )
+            launcher = default_auth_window_launcher(config, paths=self._runtime_paths)
+            process = launcher()
+        with self._session_lock:
+            if generation != self._session_generation:
+                close = getattr(process, "close", None)
+                if callable(close):
+                    close()
+                raise QQAuthWindowUnavailable()
             self._auth_launch_started = True
-            return
-        try:
-            config = self._setup_service.get_environment_config()
-        except QQConfigNotFound:
-            config = self._recover_environment_config()
-        _LOGGER.info(
-            "[qq auth] building default window launcher config=%s",
-            _config_summary(config),
-        )
-        launcher = default_auth_window_launcher(config)
-        process = launcher()
-        self._auth_launch_started = True
-        self._launched_process = process
-        pid = getattr(process, "pid", None)
-        if pid is not None:
-            self._process_registry.record(pid)
+            self._launched_process = process
+            if callable(getattr(process, "close", None)):
+                self._process_registry.record_process(process)
+            elif getattr(process, "pid", None) is not None:
+                self._process_registry.record(getattr(process, "pid", None))
 
     def _launcher_process_alive(self) -> bool:
         """Return whether the launched window process is still running.
@@ -296,6 +344,9 @@ class QQAuthBridge:
         process = self._launched_process
         if process is None:
             return True
+        tree_running = getattr(process, "tree_running", None)
+        if callable(tree_running):
+            return tree_running()
         poll = getattr(process, "poll", None)
         if not callable(poll):
             return True
@@ -314,6 +365,8 @@ class QQAuthBridge:
         if config is None:
             return
         directory = _path_value(getattr(config, "runtime_directory", None))
+        if self._runtime_paths is not None:
+            directory = self._runtime_paths.program_root
         if directory is None:
             return
         cleaner = self._runtime_cleaner or terminate_bundled_runtime_sessions
@@ -378,6 +431,8 @@ class QQAuthBridge:
         if config is None:
             return
         directory = _path_value(getattr(config, "runtime_directory", None))
+        if self._runtime_paths is not None:
+            directory = self._runtime_paths.program_root
         if directory is None:
             return
         _LOGGER.info(
@@ -396,6 +451,8 @@ class QQAuthBridge:
         """Resolve the bundled runtime's QR cache path when available."""
         if self._qrcode_path is not None:
             return Path(self._qrcode_path)
+        if self._runtime_paths is not None:
+            return self._runtime_paths.work_root / "cache/qrcode.png"
         config = self._environment_config()
         if config is None:
             return None
@@ -435,20 +492,24 @@ class QQAuthBridge:
         )
 
 
-def default_auth_window_launcher(config: Any) -> Callable[[], None]:
+def default_auth_window_launcher(config: Any, *, paths=None) -> Callable[[], None]:
     """Build a callable that opens the bundled runtime's login window.
 
     The runtime's own launcher decides the login form; this code only locates
     the launcher, the QQ install, and the injection hook. No QR code or
     account number is assumed or passed.
     """
-    runtime_directory = _runtime_directory(config)
+    from .qq_runtime_paths import resolve_runtime_paths
+    paths = paths or resolve_runtime_paths(config, prepare=True)
+    runtime_directory = paths.program_root
     qq_path = resolve_qq_install_path(config, runtime_directory)
     if qq_path is None or not qq_path.is_file():
         raise QQAuthWindowUnavailable(MESSAGE_QQ_MISSING, code=QQ_INSTALL_PATH_MISSING_CODE)
     if not (runtime_directory / "NapCatWinBootMain.exe").is_file() or not (runtime_directory / "NapCatWinBootHook.dll").is_file():
         raise QQAuthWindowUnavailable(MESSAGE_WINDOW_MISSING)
-    return lambda: _launch_auth_window(runtime_directory, runtime_directory / "NapCatWinBootMain.exe", qq_path)
+    managed = getattr(config, "runtime_mode", None) == "managed"
+    return lambda: _launch_auth_window(runtime_directory, runtime_directory / "NapCatWinBootMain.exe", qq_path,
+                                       paths=paths, managed=managed)
 
 
 def resolve_qq_install_path(
@@ -693,62 +754,19 @@ def _detect_qq_path_with_script(script: Path) -> Path | None:
 
 
 def terminate_bundled_runtime_sessions(runtime_directory: Path) -> None:
-    """Stop NapCat boot launchers started from one Echo runtime directory.
+    """Legacy no-op: a runtime directory is not evidence of ownership.
 
-    A new QQ login session must not share the QR cache with an old session.
-    The launcher starts ``NapCatWinBootMain.exe`` from the runtime directory,
-    and that process owns the QQ process tree, so terminating it also stops
-    the old QQ/NapCat session that would otherwise keep writing ``qrcode.png``.
+    Only the caller's registry may close its Jobs. Old-version orphans and
+    another Echo's processes must never be adopted by executable-path scans.
     """
-    if os.name != "nt":
-        return
-    target = (runtime_directory / "NapCatWinBootMain.exe").resolve()
-    script = r"""
-$ErrorActionPreference = "SilentlyContinue"
-$target = $env:ECHO_NAPCAT_BOOT_PATH
-Get-CimInstance Win32_Process -Filter "Name='NapCatWinBootMain.exe'" | ForEach-Object {
-    $exe = $_.ExecutablePath
-    if ($exe -and [IO.Path]::GetFullPath($exe) -eq [IO.Path]::GetFullPath($target)) {
-        $process = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue
-        taskkill /PID $_.ProcessId /T /F | Out-Null
-        if ($process) {
-            $process | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
-        }
-    }
-}
-"""
-    options = {
-        "capture_output": True,
-        "text": True,
-        "timeout": 10,
-        "check": False,
-        "env": {**os.environ, "ECHO_NAPCAT_BOOT_PATH": str(target)},
-    }
-    if os.name == "nt":
-        options["creationflags"] = subprocess.CREATE_NO_WINDOW
-    try:
-        subprocess.run(
-            [
-                "powershell",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                script,
-            ],
-            **options,
-        )
-    except (OSError, subprocess.SubprocessError):
-        _LOGGER.warning(
-            "[qq auth] stale runtime cleanup command failed",
-            exc_info=True,
-        )
+    _LOGGER.info("[qq auth] path-only runtime cleanup skipped; ownership required")
 
 
 def _launch_auth_window(
     runtime_directory: Path,
     launcher: Path,
     qq_path: Path,
+    *, paths=None, managed=False,
 ) -> Any:
     """Open the runtime login window once, without waiting for login."""
     environment = os.environ.copy()
@@ -760,7 +778,8 @@ def _launch_auth_window(
     environment.pop("NAPCAT_QUICK_PASSWORD_MD5", None)
     environment["NAPCAT_QQ_PATH"] = str(qq_path.resolve())
     import json
-    _ensure_load_script(runtime_directory)
+    work_root = paths.work_root if paths is not None else runtime_directory
+    _ensure_load_script(runtime_directory, work_root)
     packages = [qq_path.parent / "resources/app/package.json"]
     packages.extend(qq_path.parent.glob("versions/*/resources/app/package.json"))
     packages = [path for path in packages if path.is_file()]
@@ -769,22 +788,28 @@ def _launch_auth_window(
     package_path = max(packages, key=lambda path: path.stat().st_mtime_ns)
     package = json.loads(package_path.read_text(encoding="utf-8-sig"))
     package["main"] = "./loadNapCat.js"
-    patch_package = runtime_directory / "qqnt.echo.json"
+    patch_package = work_root / "qqnt.echo.json"
     patch_package.write_text(json.dumps(package), encoding="utf-8")
     environment.update({
         "NAPCAT_PATCH_PACKAGE": str(patch_package),
-        "NAPCAT_LOAD_PATH": str(runtime_directory / "loadNapCat.js"),
+        "NAPCAT_LOAD_PATH": str(work_root / "loadNapCat.js"),
+        "NAPCAT_WORKDIR": str(work_root),
         "NAPCAT_INJECT_PATH": str(runtime_directory / "NapCatWinBootHook.dll"),
         "NAPCAT_MAIN_PATH": str(runtime_directory / "napcat.mjs"),
         "ECHO_BRIDGE_PORT": "40655",
     })
+    if paths is not None:
+        environment["ECHO_SNAPSHOT_ROOT"] = str(paths.snapshot_root)
+    environment.pop("ECHO_RUNTIME_ID", None)
+    if managed:
+        environment["ECHO_RUNTIME_ID"] = paths.runtime_id
     command = [str(launcher), str(qq_path), environment["NAPCAT_INJECT_PATH"]]
     _LOGGER.info(
         "[qq auth] launch command=%s cwd=%s qq_path=%s",
-        command, runtime_directory, qq_path,
+        command, work_root, qq_path,
     )
     launch_options = {
-        "cwd": str(runtime_directory),
+        "cwd": str(work_root),
         "env": environment,
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.PIPE,
@@ -796,7 +821,8 @@ def _launch_auth_window(
     if os.name == "nt":
         launch_options["creationflags"] = subprocess.CREATE_NO_WINDOW
     try:
-        process = subprocess.Popen(
+        spawn = launch_owned_process if os.name == "nt" else subprocess.Popen
+        process = spawn(
             command,
             **launch_options,
         )
@@ -812,6 +838,12 @@ def _launch_auth_window(
         getattr(process, "pid", None),
         return_code,
     )
+    if return_code not in (None, 0):
+        # Descendants can retain stdout/stderr after the launcher fails. Kill
+        # our Job before draining, otherwise synchronous log collection hangs.
+        close = getattr(process, "close", None)
+        if callable(close):
+            close()
     communicate = getattr(process, "communicate", None)
     if callable(communicate):
         if return_code is None:
@@ -846,16 +878,17 @@ def _log_launcher_completion(process: Any) -> None:
     )
 
 
-def _ensure_load_script(runtime_directory: Path) -> None:
+def _ensure_load_script(runtime_directory: Path, work_root: Path | None = None) -> None:
     """Refresh the bootstrap file the launcher injects into QQ."""
     napcat_main = (runtime_directory / "napcat.mjs").resolve()
     if not napcat_main.is_file():
         raise QQAuthWindowUnavailable(MESSAGE_MAIN_MISSING)
-    load_js = runtime_directory / "loadNapCat.js"
+    import json
+    load_js = (work_root or runtime_directory) / "loadNapCat.js"
     content = (
-        '(async () => {await import("file:///'
-        + napcat_main.as_posix()
-        + '")})()\n'
+        '(async () => {await import('
+        + json.dumps(napcat_main.as_uri())
+        + ')})()\n'
     )
     load_js.write_text(content, encoding="utf-8")
 
