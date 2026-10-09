@@ -104,8 +104,9 @@ Echo 已过「先证明有没有人愿意用」的阶段。当前目标是修复
 ### QA-04 新版本检测与下载页
 
 内置权威版本 → 检查 GitHub 最新正式 Release → 提示新版 → 打开官方下载页，由用户自行下载；
-**不做自动下载、替换或静默更新**。Update Check Core 与 GUI「关于余音」手动检查均已合入 main（PR #27）；
-自动检查按所有尝试去重 24h，手动检查绕过去重。**待最终视觉与真实交互验收。**
+**不做自动下载、替换或静默更新**。Update Check Core 与 GUI「关于余音」手动检查均已合入 main（PR #27）。
+更新服务支持**非手动检查的 24 小时去重**；但 v0.1.0 GUI 只提供手动检查，
+**启动或打开关于对话框时不自动联网**。**待最终视觉与真实交互验收。**
 
 ### QA-06 跨机器 Direct DB RC
 
@@ -132,7 +133,6 @@ Feature Freeze → Bugfix Only → Final Build → Release
 - Sticker / 表情包完整语义：现役 QQ Direct DB / WeChat 的完整身份、资源与语义支持；
   已有基础映射保留。已退休的 BUG-02 / QCE `type_17` 不属于后续兼容待办。
 - Reply / 引用回复分析：已有 ReplyRelation 与 authored text 隔离不等于完整回复分析已交付。
-- Local Data 高级批量管理：不重新打开已 CLOSED 的 BUG-03 基础生命周期能力。
 - 快捷登录 / 统一 UX 优化：现有授权闭环不等于快捷登录完成，不阻塞 0.1。
 
 ### Setup 安装器与 Windows 原地覆盖更新（统一延期）
