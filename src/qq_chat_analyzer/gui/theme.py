@@ -303,37 +303,55 @@ METRIC_CARD_STYLE = f"border: 1px solid {COLOR_RULE_SOFT}; padding: 8px;"
 LOCAL_DATA_QSS = f"""
 QWidget#localDataPage {{ background: {COLOR_PAPER}; }}
 QWidget#localDataPage QWidget {{ font-family: {REFRESH_SANS_FAMILY}; }}
+QWidget#localDataPage QWidget#localDataHistory {{ background: transparent; }}
 QWidget#localDataPage QLabel, QWidget#localDataEmptyState {{ background: transparent; }}
 QWidget#localDataPage QLabel#localDataTitle {{
     font-family: {SERIF_FAMILY}; font-size: 28px; font-weight: 500;
 }}
-QWidget#localDataPage QLabel#localDataDescription,
 QWidget#localDataPage QLabel#localDataSummaryNote,
 QWidget#localDataPage QLabel#localDataEmptyDetail {{ color: {COLOR_MUTED}; }}
-QWidget#localDataPage QFrame#localDataSummary {{
-    background: {COLOR_PAPER_ALT}; border: 1px solid {COLOR_RULE_SOFT}; border-radius: 8px;
-}}
 QWidget#localDataPage QLabel#localDataCount,
 QWidget#localDataPage QLabel#localDataSize {{
-    font-size: {FONT_SIZE_HOME_TITLE}; font-weight: 600; color: {COLOR_TEXT};
+    font-size: {FONT_SIZE_SMALL}; color: {COLOR_MUTED};
 }}
-QWidget#localDataPage QLabel#localDataMetricCaption,
 QWidget#localDataPage QLabel#localDataSummaryNote {{
     font-size: {FONT_SIZE_SMALL}; color: {COLOR_MUTED}; font-weight: 400;
 }}
-QWidget#localDataPage QGroupBox#localDataHistory {{
-    background: {COLOR_PAPER}; border: 1px solid {COLOR_BORDER};
-    border-radius: 8px; margin-top: 10px; font-weight: 500;
-}}
-QWidget#localDataPage QGroupBox#localDataHistory::title {{
-    subcontrol-origin: margin; left: 20px; padding: 0 8px;
-}}
 QWidget#localDataPage QLabel#localDataEmptyTitle {{ font-size: 18px; font-weight: 500; }}
-QWidget#localDataPage QTableWidget {{ border: none; background: {COLOR_PAPER}; }}
-QWidget#localDataPage QHeaderView {{ background: {COLOR_PAPER_ALT}; }}
-QWidget#localDataPage QHeaderView::section {{
-    background: {COLOR_PAPER_ALT}; color: {COLOR_MUTED}; border: none;
-    border-bottom: 1px solid {COLOR_RULE_SOFT}; padding: 10px 8px;
+QWidget#localDataPage QListWidget#archiveList {{
+    border: none; background: {COLOR_PAPER}; outline: 0;
+}}
+QWidget#localDataPage QListWidget#archiveList::item {{
+    border: 1px solid {COLOR_RULE_SOFT}; border-radius: 6px; background: {COLOR_PAPER};
+}}
+QWidget#localDataPage QListWidget#archiveList::item:selected {{
+    border-color: {COLOR_MUTED}; background: {COLOR_PAPER_ALT};
+}}
+QWidget#localDataPage QFrame#archiveEntry {{ background: transparent; border: none; }}
+QWidget#localDataPage QListWidget#archiveList[deleteMode="true"]::item:selected {{
+    border-color: {COLOR_RULE_SOFT}; background: {COLOR_PAPER};
+}}
+QWidget#localDataPage QFrame#archiveEntry[checked="true"] {{
+    background: {COLOR_ACCENT_SOFT}; border: 1px solid {COLOR_ACCENT}; border-radius: 6px;
+}}
+QWidget#localDataPage QCheckBox {{ background: transparent; }}
+QWidget#localDataPage QLabel#archiveEntryTitle {{ font-size: {FONT_SIZE_TITLE}; font-weight: 500; }}
+QWidget#localDataPage QLabel#archiveEntryMeta,
+QWidget#localDataPage QLabel#archiveEntryScope,
+QWidget#localDataPage QLabel#archiveCheckedCount {{ font-size: {FONT_SIZE_SMALL}; color: {COLOR_MUTED}; }}
+"""
+
+ARCHIVE_CONFIRMATION_QSS = f"""
+QDialog#archiveDeletionDialog {{ background: {COLOR_PAPER}; }}
+QDialog#archiveDeletionDialog QLabel {{ background: transparent; color: {COLOR_MUTED}; }}
+QDialog#archiveDeletionDialog QLabel#archiveDeletionTitle {{
+    font-size: {FONT_SIZE_HOME_TITLE}; font-weight: 600; color: {COLOR_TEXT};
+}}
+QDialog#archiveDeletionDialog QListWidget {{ background: {COLOR_PAPER}; border: 1px solid {COLOR_RULE_SOFT}; }}
+QDialog#archiveDeletionDialog QListWidget::item {{ padding: 10px; border-bottom: 1px solid {COLOR_RULE_SOFT}; }}
+QDialog#archiveDeletionDialog QListWidget::item:hover {{ background: {COLOR_PAPER}; }}
+QDialog#archiveDeletionDialog QPushButton#archiveConfirmDelete {{
+    color: {COLOR_ERROR}; border-color: {COLOR_ERROR};
 }}
 """
 
@@ -593,6 +611,7 @@ QToolTip {{
 
 __all__ = [
     "BASE_QSS",
+    "ARCHIVE_CONFIRMATION_QSS",
     "COLOR_ACCENT",
     "COLOR_ACCENT_DARK",
     "COLOR_ACCENT_SOFT",

@@ -210,6 +210,11 @@ class StubFacade:
         self._reports = []
         self._report_issues = ()
 
+    def delete_report_packages(self, names):
+        from qq_chat_analyzer.application.report_package_catalog import ReportPackageDeletionResult
+        self._reports = [record for record in self._reports if record.package_name not in names]
+        return ReportPackageDeletionResult(tuple(names))
+
     def list_snapshots(self, source=None, session_id=None):
         self.list_snapshots_calls.append((source, session_id))
         if self._snapshot_error is not None:
@@ -6102,9 +6107,11 @@ def test_local_data_history_scope_uses_user_facing_labels(
     window.show_local_data_page()
     _drain(window)
 
-    table = window.local_data_page._history_table
-    assert table.rowCount() == 4
-    scopes = [table.item(row, 4).text() for row in range(table.rowCount())]
+    table = window.local_data_page._history_list
+    assert table.count() == 4
+    from PySide6.QtWidgets import QLabel
+    scopes = [table.itemWidget(table.item(row)).findChild(QLabel, "archiveEntryScope").text().removeprefix("分析范围：")
+              for row in range(table.count())]
     assert scopes == [
         "全部消息",
         "最近六个月",
@@ -6113,12 +6120,13 @@ def test_local_data_history_scope_uses_user_facing_labels(
     ]
 
 
-def test_local_data_clear_reports_button_is_visible(qt_app, sources) -> None:
+def test_local_data_delete_entry_is_visible_in_browse_mode(qt_app, sources) -> None:
     window = _main_window(qt_app, StubFacade(sources=sources))
     window.show_local_data_page()
     _drain(window)
 
-    assert window.local_data_page._clear_reports_button.isVisibleTo(window) is True
+    assert window.local_data_page._enter_delete_button.isVisibleTo(window) is True
+    assert window.local_data_page._delete_checked_button.isVisibleTo(window) is False
 
 
 def _search_window(qt_app, sources):
@@ -6151,8 +6159,8 @@ def test_local_data_search_matches_only_summary_display_fields(qt_app, sources, 
     window, facade, records = _search_window(qt_app, sources)
     page = window.local_data_page
     page._search_input.setText(query)
-    table = page._history_table
-    assert [table.item(row, 0).data(Qt.ItemDataRole.UserRole) for row in range(table.rowCount())] == [
+    table = page._history_list
+    assert [table.item(row).data(Qt.ItemDataRole.UserRole) for row in range(table.count())] == [
         records[index].package_name for index in indexes
     ]
     assert page._issues_label.isVisibleTo(window)
@@ -6178,7 +6186,7 @@ def test_local_data_search_clear_restores_rows_without_storage_calls(qt_app, sou
     monkeypatch.setattr(Path, "iterdir", forbidden)
     for text in ("读书", "alice", "not found", ""):
         page._search_input.setText(text)
-    assert page._history_table.rowCount() == 2
+    assert page._history_list.count() == 2
     assert not page._history_empty_label.isVisibleTo(window)
     assert facade.list_report_packages_calls == calls
 
@@ -6190,20 +6198,22 @@ def test_local_data_search_refresh_and_delete_preserve_query(qt_app, sources):
     facade._reports = [records[0]]
     page.refresh()
     assert page._search_input.text() == "alice"
-    assert page._history_table.rowCount() == 0
+    assert page._history_list.count() == 0
     assert page._history_empty_label.text() == "没有匹配的报告"
     facade._reports = records
     page.refresh()
-    assert page._history_table.rowCount() == 1
-    page._confirm_clear_reports = lambda: True
-    page._clear_reports_button.click()
+    assert page._history_list.count() == 1
+    page._enter_delete_button.click()
+    page._select_results_button.click()
+    page._confirm_delete_reports = lambda names, kept: True
+    page._delete_checked_button.click()
     assert page._search_input.text() == "alice"
-    assert page._history_table.rowCount() == 0
-    assert page._history_empty_label.text() == "暂无报告"
+    assert page._history_list.count() == 0
+    assert page._history_empty_label.text() == "没有匹配的报告"
     assert page._history_empty_label.isVisibleTo(window)
-    assert not page._issues_label.isVisibleTo(window)
+    assert page._issues_label.isVisibleTo(window)
     page._search_input.clear()
-    assert page._history_empty_label.text() == "暂无报告"
+    assert page._history_list.count() == 1
 
 
 def test_local_data_search_pending_refresh_uses_latest_query(qt_app, sources):
@@ -6217,26 +6227,8 @@ def test_local_data_search_pending_refresh_uses_latest_query(qt_app, sources):
     executor.succeed(executor.operation())
     assert executor.submission_count == 1
     assert page._search_input.text() == "alice"
-    assert page._history_table.rowCount() == 1
-    assert page._history_table.item(0, 0).data(Qt.ItemDataRole.UserRole) == records[1].package_name
-
-
-def test_local_data_search_partial_delete_keeps_filter_issues_and_error(qt_app, sources):
-    window, facade, records = _search_window(qt_app, sources)
-    page = window.local_data_page
-    facade._clear_reports_error = _facade_module().FacadeError("report_clear_failed", "部分报告删除失败。")
-    page._search_input.setText("alice")
-    page._confirm_clear_reports = lambda: True
-    page._clear_reports_button.click()
-    assert facade._reports == [records[0]]
-    assert page._search_input.text() == "alice"
-    assert page._history_table.rowCount() == 0
-    assert page._history_empty_label.text() == "没有匹配的报告"
-    assert page._issues_label.isVisibleTo(window)
-    assert page._status_label.text() == "部分报告删除失败。"
-    page._search_input.clear()
-    assert page._history_table.rowCount() == 1
-    assert page._status_label.text() == "部分报告删除失败。"
+    assert page._history_list.count() == 1
+    assert page._history_list.item(0).data(Qt.ItemDataRole.UserRole) == records[1].package_name
 
 
 @pytest.mark.parametrize("action", ["button", "double_click"])
@@ -6247,15 +6239,15 @@ def test_local_data_search_reopen_keeps_identity_and_invalidates_selection(qt_ap
     html = tmp_path / "fictional.html"
     facade.get_report_package_html_path = lambda name: resolved.append(name) or html
     window._report_opener = lambda path: opened.append(path) or True
-    page._history_table.selectRow(0)
+    page._history_list.setCurrentRow(0)
     assert page._open_report_button.isEnabled()
     page._search_input.setText("alice")
     assert not page._open_report_button.isEnabled()
-    page._history_table.selectRow(0)
+    page._history_list.setCurrentRow(0)
     if action == "button":
         page._open_report_button.click()
     else:
-        page._history_table.cellDoubleClicked.emit(0, 2)
+        page._history_list.itemDoubleClicked.emit(page._history_list.item(0))
     assert resolved == [records[1].package_name]
     assert opened == [html]
     page._search_input.setText("absent")
@@ -6268,7 +6260,7 @@ def test_local_data_search_reopen_keeps_identity_and_invalidates_selection(qt_ap
 def test_local_data_page_exposes_history_without_retired_snapshot_controls(
     qt_app, sources,
 ) -> None:
-    from PySide6.QtWidgets import QGroupBox, QLabel, QPushButton, QTableWidget
+    from PySide6.QtWidgets import QGroupBox, QLabel, QPushButton, QListWidget
 
     facade = StubFacade(sources=sources, reports=[_gui_report_summary("h1")])
     window = _main_window(qt_app, facade)
@@ -6276,13 +6268,13 @@ def test_local_data_page_exposes_history_without_retired_snapshot_controls(
     _drain(window)
     page = window.local_data_page
 
-    assert [box.title() for box in page.findChildren(QGroupBox)] == ["报告列表"]
+    assert page.findChildren(QGroupBox) == []
     assert {button.text() for button in page.findChildren(QPushButton)} == {
-        "刷新", "打开报告", "删除选中报告", "删除全部报告",
+        "刷新", "打开报告", "删除报告", "删除所选", "全选当前结果", "清空勾选", "取消",
     }
     assert all("快照" not in label.text() for label in page.findChildren(QLabel))
-    assert len(page.findChildren(QTableWidget)) == 1
-    assert page._history_table.rowCount() == 1
+    assert len(page.findChildren(QListWidget)) == 1
+    assert page._history_list.count() == 1
 
 
 def _archive_window(qt_app, sources, reports=(), **kwargs):
@@ -6308,12 +6300,9 @@ def test_local_data_page_shows_archive_heading_and_storage_summary(
     page = window.local_data_page
 
     assert page.findChild(QLabel, "localDataTitle").text() == "Echo 历史"
-    assert page.findChild(QLabel, "localDataDescription").text() == (
-        "本机保存的 Echo 报告都在这里，可以随时打开回看；删除只影响 Echo 报告文件。"
-    )
-    captions = page.findChildren(QLabel, "localDataMetricCaption")
-    assert [label.text() for label in captions] == ["已保存报告", "报告文件占用"]
-    assert all(label.isVisibleTo(window) for label in captions)
+    assert page.findChild(QLabel, "localDataDescription") is None
+    assert not page.findChildren(QLabel, "localDataMetricCaption")
+    assert page._summary_count_label.parent() is page._search_input.parent()
     assert page._summary_count_label.text() == "2 份"
     assert page._summary_size_label.text() == "12.4 MB"
     assert page._summary_note_label.isVisibleTo(window) is False
@@ -6323,36 +6312,13 @@ def test_local_data_page_empty_archive_state(qt_app, sources) -> None:
     window, _facade = _archive_window(qt_app, sources)
     page = window.local_data_page
 
-    assert page._history_table.isVisibleTo(window) is False
+    assert page._history_list.isVisibleTo(window) is False
     assert page._history_empty_label.isVisibleTo(window) is True
     assert page._history_empty_label.text() == "暂无报告"
     assert page._history_empty_detail_label.isVisibleTo(window) is True
     assert "报告会保存在本机" in page._history_empty_detail_label.text()
     assert page._summary_count_label.text() == "0 份"
     assert page._summary_size_label.text() == "0 B"
-
-
-def test_local_data_table_fills_width_when_window_resizes(qt_app, sources) -> None:
-    window, _facade = _archive_window(
-        qt_app, sources, reports=[_gui_report_summary("h1")],
-    )
-    table = window.local_data_page._history_table
-    window.resize(1000, 760)
-    window.show()
-    _drain(window)
-    compact_widths = [table.columnWidth(column) for column in range(5)]
-    assert abs(sum(compact_widths) - table.viewport().width()) <= 1
-
-    window.resize(1400, 760)
-    _drain(window)
-    wide_widths = [table.columnWidth(column) for column in range(5)]
-    assert abs(sum(wide_widths) - table.viewport().width()) <= 1
-    assert wide_widths[2] > compact_widths[2]
-    assert wide_widths[4] > compact_widths[4]
-    assert [wide_widths[i] for i in (0, 1, 3)] == [compact_widths[i] for i in (0, 1, 3)]
-    table.selectRow(0)
-    assert all(table.item(0, column).isSelected() for column in range(5))
-    assert table.visualItemRect(table.item(0, 4)).right() == table.viewport().width() - 1
 
 
 def test_local_data_page_search_without_matches_state(qt_app, sources) -> None:
@@ -6362,14 +6328,14 @@ def test_local_data_page_search_without_matches_state(qt_app, sources) -> None:
     page = window.local_data_page
     page._search_input.setText("虚构关键词")
 
-    assert page._history_table.isVisibleTo(window) is False
+    assert page._history_list.isVisibleTo(window) is False
     assert page._history_empty_label.text() == "没有匹配的报告"
     assert page._history_empty_detail_label.text() == "换一个关键词试试，或清空搜索框。"
     assert page._summary_count_label.text() == "1 份"
 
     page._search_input.clear()
     assert page._history_empty_label.isVisibleTo(window) is False
-    assert page._history_table.rowCount() == 1
+    assert page._history_list.count() == 1
 
 
 def test_local_data_page_marks_incomplete_storage_usage_as_lower_bound(
@@ -6433,7 +6399,7 @@ def test_local_data_page_keeps_last_known_archive_when_reload_fails(
     page.refresh()
 
     assert page._status_label.text() == "无法读取 Echo 本地报告，请稍后重试。"
-    assert page._history_table.rowCount() == 1
+    assert page._history_list.count() == 1
     assert page._history_empty_label.isVisibleTo(window) is False
     assert page._summary_count_label.text() == "1 份"
     assert page._summary_size_label.text() == "4.0 KB"
@@ -6473,12 +6439,12 @@ def test_local_data_page_ignores_stale_refresh_results(qt_app, sources) -> None:
 
     # The newer load lands first ...
     executor.succeed(1)
-    assert page._history_table.item(0, 0).data(Qt.ItemDataRole.UserRole) == "third"
+    assert page._history_list.item(0).data(Qt.ItemDataRole.UserRole) == "third"
     # ... and the older result, which arrives last, must not overwrite it.
     facade._reports = [_gui_report_summary("second")]
     executor.succeed(0)
-    assert page._history_table.rowCount() == 1
-    assert page._history_table.item(0, 0).data(Qt.ItemDataRole.UserRole) == "third"
+    assert page._history_list.count() == 1
+    assert page._history_list.item(0).data(Qt.ItemDataRole.UserRole) == "third"
     assert page._refresh_button.isEnabled() is True
 
 
@@ -6492,13 +6458,13 @@ def test_local_data_page_keeps_list_when_storage_usage_fails(qt_app, sources) ->
     )
     page = window.local_data_page
 
-    assert page._history_table.rowCount() == 1
-    assert page._history_table.isVisibleTo(window)
+    assert page._history_list.count() == 1
+    assert page._history_list.isVisibleTo(window)
     assert page._summary_count_label.text() == "1 份"
     assert page._summary_size_label.text() == "—"
     assert page._summary_note_label.isVisibleTo(window)
     assert "无法统计" in page._summary_note_label.text()
-    page._history_table.selectRow(0)
+    page._history_list.setCurrentRow(0)
     assert page._open_report_button.isEnabled()
 
 
@@ -6522,7 +6488,7 @@ def test_local_data_page_stale_error_and_finish_do_not_end_latest_refresh(
     executor.succeed(1)
     assert page._refresh_button.isEnabled()
     assert page._status_label.text() == ""
-    assert page._history_table.rowCount() == 1
+    assert page._history_list.count() == 1
 
 
 def _reopen_window(qt_app, sources, tmp_path):
@@ -6541,81 +6507,17 @@ def _reopen_window(qt_app, sources, tmp_path):
     return window, facade, names, calls, opened, resolved
 
 
-def test_local_data_selected_delete_confirmation_copy(qt_app):
-    page_module = importlib.import_module("qq_chat_analyzer.gui.local_data_page")
-    dialog = page_module._delete_report_confirmation_dialog()
-    assert "确定删除这份 Echo 报告吗？" in dialog.text()
-    assert {button.text() for button in dialog.buttons()} == {"删除", "取消"}
-
-
-def test_local_data_selected_delete_keeps_search_identity_and_reopen(qt_app, sources, tmp_path):
-    window, facade, records = _search_window(qt_app, sources)
-    page = window.local_data_page
-    deleted = []
-    def delete(name):
-        deleted.append(name)
-        facade._reports = [report for report in facade._reports if report.package_name != name]
-    facade.delete_report_package = delete
-    page._confirm_delete_report = lambda: True
-    assert not page._delete_report_button.isEnabled()
-    page._search_input.setText("alice")
-    page._history_table.selectRow(0)
-    assert page._delete_report_button.isEnabled()
-    # Display text is not identity.
-    page._history_table.item(0, 0).setText("misleading display text")
-    page._delete_report_button.click()
-    assert deleted == [records[1].package_name]
-    assert facade._reports == [records[0]]
-    assert page._search_input.text() == "alice"
-    assert page._history_table.rowCount() == 0
-    assert not page._delete_report_button.isEnabled()
-    assert page._issues_label.isVisibleTo(window)
-    assert page._status_label.text() == ""
-    page._search_input.clear()
-    page._history_table.selectRow(0)
-    resolved, opened = [], []
-    html = tmp_path / "fictional.html"
-    facade.get_report_package_html_path = lambda name: resolved.append(name) or html
-    window._report_opener = lambda path: opened.append(path) or True
-    page._history_table.cellDoubleClicked.emit(0, 2)
-    assert resolved == [records[0].package_name]
-    assert opened == [html]
-    page._search_input.setText("absent")
-    assert not page._delete_report_button.isEnabled()
-
-
-@pytest.mark.parametrize("confirm", [False, True])
-def test_local_data_selected_delete_cancel_or_failure_preserves_rows(qt_app, sources, tmp_path, confirm):
-    window, facade, names, _, _, _ = _reopen_window(qt_app, sources, tmp_path)
-    page = window.local_data_page
-    calls = []
-    def fail(name):
-        calls.append(name)
-        raise _facade_module().FacadeError("report_delete_failed", "这份 Echo 报告未能删除，请稍后重试。")
-    facade.delete_report_package = fail
-    page._confirm_delete_report = lambda: confirm
-    page._history_table.selectRow(1)
-    page._delete_report_button.click()
-    assert calls == ([names[1]] if confirm else [])
-    assert page._history_table.rowCount() == 2
-    if confirm:
-        assert page._status_label.text() == "这份 Echo 报告未能删除，请稍后重试。"
-        assert not page._delete_report_button.isEnabled()
-    page.refresh()
-    assert not page._delete_report_button.isEnabled()
-
-
 def test_local_data_reopen_identity_selection_and_refresh(qt_app, sources, tmp_path):
     window, facade, names, calls, opened, resolved = _reopen_window(qt_app, sources, tmp_path)
     page = window.local_data_page
     assert not page._open_report_button.isEnabled()
     for row, name in enumerate(names):
-        assert page._history_table.item(row, 0).data(Qt.ItemDataRole.UserRole) == name
-    page._history_table.selectRow(1)
+        assert page._history_list.item(row).data(Qt.ItemDataRole.UserRole) == name
+    page._history_list.setCurrentRow(1)
     assert page._open_report_button.isEnabled()
-    page._history_table.clearSelection()
+    page._history_list.clearSelection()
     assert not page._open_report_button.isEnabled()
-    page._history_table.selectRow(1)
+    page._history_list.setCurrentRow(1)
     # Same row count after refresh must not reuse an old selection for new records.
     facade._reports = [_gui_report_summary(names[0]), _gui_report_summary("Echo_Report_20261004_130000")]
     page.refresh()
@@ -6632,7 +6534,7 @@ def test_local_data_focus_frame_hidden_but_selection_remains_visible(qt_app, sou
     from PySide6.QtWidgets import QStyle, QStyleFactory, QStyleOptionViewItem
 
     window, _, _, _, _, _ = _reopen_window(qt_app, sources, tmp_path)
-    table = window.local_data_page._history_table
+    table = window.local_data_page._history_list
     # Use a deterministic native style and compare states, not a golden screenshot.
     style = QStyleFactory.create("Fusion")
     style.setParent(table)
@@ -6672,7 +6574,7 @@ def test_local_data_hover_does_not_change_cell_background(qt_app, sources, tmp_p
     window, _, _, _, _, _ = _reopen_window(qt_app, sources, tmp_path)
     # Reproduce the production theme's item:hover rule without changing app state.
     window.setStyleSheet(BASE_QSS)
-    table = window.local_data_page._history_table
+    table = window.local_data_page._history_list
     style = QStyleFactory.create("Fusion")
     style.setParent(table)
     table.setStyle(style)
@@ -6705,12 +6607,12 @@ def test_local_data_mouse_selection_keyboard_navigation_and_reopen(qt_app, sourc
     window.show()
     _drain(window)
     page = window.local_data_page
-    table = page._history_table
+    table = page._history_list
     QTest.mouseClick(table.viewport(), Qt.MouseButton.LeftButton,
-                     pos=table.visualItemRect(table.item(0, 2)).center())
+                     pos=table.visualItemRect(table.item(0)).center())
     assert table.hasFocus()
     assert page._selected_package_name() == names[0]
-    assert len(table.selectedItems()) == table.columnCount()
+    assert len(table.selectedItems()) == 1
     QTest.keyClick(table, Qt.Key.Key_Down)
     assert page._selected_package_name() == names[1]
     assert page._open_report_button.isEnabled()
@@ -6724,15 +6626,15 @@ def test_local_data_mouse_selection_keyboard_navigation_and_reopen(qt_app, sourc
 def test_local_data_reopen_resolves_identity_and_uses_existing_opener(qt_app, sources, tmp_path, action):
     window, facade, names, calls, opened, resolved = _reopen_window(qt_app, sources, tmp_path)
     page = window.local_data_page
-    page._history_table.selectRow(1)
+    page._history_list.setCurrentRow(1)
     if action == "button":
         page._open_report_button.click()
     else:
-        page._history_table.cellDoubleClicked.emit(1, 2)
+        page._history_list.itemDoubleClicked.emit(page._history_list.item(1))
     assert calls == [names[1]]
     assert opened == [resolved]
     assert page._status_label.text() == ""
-    assert page._history_table.rowCount() == 2
+    assert page._history_list.count() == 2
 
 
 def test_local_data_reopen_resolve_failure_preserves_rows(qt_app, sources, tmp_path):
@@ -6741,10 +6643,10 @@ def test_local_data_reopen_resolve_failure_preserves_rows(qt_app, sources, tmp_p
         raise _facade_module().FacadeError("report_open_failed", "这份 Echo 报告已损坏或缺少报告文件。")
     facade.get_report_package_html_path = fail
     page = window.local_data_page
-    page._history_table.selectRow(0)
+    page._history_list.setCurrentRow(0)
     page._open_report_button.click()
     assert page._status_label.text() == "这份 Echo 报告已损坏或缺少报告文件。"
-    assert page._history_table.rowCount() == 2
+    assert page._history_list.count() == 2
     assert opened == []
     assert page._open_report_button.isEnabled()
 
@@ -6758,97 +6660,11 @@ def test_local_data_reopen_opener_failure_is_visible(qt_app, sources, tmp_path, 
         return False
     window._report_opener = fail
     page = window.local_data_page
-    page._history_table.selectRow(0)
+    page._history_list.setCurrentRow(0)
     page._open_report_button.click()
     assert calls == [names[0]]
     assert page._status_label.text() == "无法打开 Echo 报告，请检查系统默认浏览器后重试。"
-    assert page._history_table.rowCount() == 2
-
-
-def test_clear_reports_confirmation_dialog_has_expected_copy(qt_app) -> None:
-    from PySide6.QtWidgets import QMessageBox
-
-    page_module = importlib.import_module("qq_chat_analyzer.gui.local_data_page")
-    dialog = page_module._clear_reports_confirmation_dialog()
-
-    assert dialog.windowTitle() == "确认删除"
-    assert "全部历史报告及其报告文件" in dialog.text()
-    assert "QQ / 微信原始聊天数据" in dialog.text()
-    assert "用户另存到其他位置" in dialog.text()
-    assert "删除后无法恢复。" in dialog.text()
-    buttons = {button.text(): button for button in dialog.buttons()}
-    assert "删除" in buttons
-    assert "取消" in buttons
-
-
-def test_local_data_clear_history_cancel_does_not_delete(
-    qt_app,
-    sources,
-) -> None:
-    facade = StubFacade(
-        sources=sources,
-        reports=[_gui_report_summary("h1")],
-    )
-    window = _main_window(qt_app, facade)
-    window.local_data_page._confirm_clear_reports = lambda: False
-    window.show_local_data_page()
-    _drain(window)
-
-    window.local_data_page._clear_reports_button.click()
-    _drain(window)
-
-    assert facade.clear_report_packages_calls == []
-    assert window.local_data_page._history_table.rowCount() == 1
-
-
-def test_local_data_clear_history_confirm_empties_list(
-    qt_app,
-    sources,
-) -> None:
-    facade = StubFacade(
-        sources=sources,
-        reports=[_gui_report_summary("h1")],
-    )
-    window = _main_window(qt_app, facade)
-    window.local_data_page._confirm_clear_reports = lambda: True
-    window.show_local_data_page()
-    _drain(window)
-
-    window.local_data_page._clear_reports_button.click()
-    _drain(window)
-
-    assert facade.clear_report_packages_calls == [1]
-    assert window.local_data_page._history_table.rowCount() == 0
-    assert window.local_data_page._history_empty_label.isVisibleTo(window) is True
-
-
-def test_local_data_clear_reports_failure_refreshes_remaining_content(
-    qt_app,
-    sources,
-) -> None:
-    module = _facade_module()
-    facade = StubFacade(
-        sources=sources,
-        reports=[_gui_report_summary("h1"), _gui_report_summary("h2")],
-        clear_reports_error=module.FacadeError(
-            code="report_clear_failed",
-            public_message="部分 Echo 报告未能删除，请稍后重试。",
-        ),
-    )
-    window = _main_window(qt_app, facade)
-    window.local_data_page._confirm_clear_reports = lambda: True
-    window.show_local_data_page()
-    _drain(window)
-
-    window.local_data_page._clear_reports_button.click()
-    _drain(window)
-
-    assert window.local_data_page._status_label.text() == (
-        "部分 Echo 报告未能删除，请稍后重试。"
-    )
-    assert window.local_data_page._history_table.rowCount() == 1
-
-    assert len(facade.list_report_packages_calls) == 2
+    assert page._history_list.count() == 2
 
 
 def test_qq_connect_error_snapshot_keeps_workspace_usable(
