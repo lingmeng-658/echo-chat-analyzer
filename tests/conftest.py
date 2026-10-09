@@ -48,6 +48,18 @@ def release_test_widgets():
 
 
 @pytest.fixture(autouse=True)
+def isolate_qq_runtime_ownership(monkeypatch):
+    """A fictional launch must never leave a PID for another test to kill."""
+    from qq_chat_analyzer.application.qq import qq_process_registry, qq_runtime_session
+
+    monkeypatch.setattr(
+        qq_process_registry, "_DEFAULT_REGISTRY",
+        qq_process_registry.QQProcessRegistry(terminator=lambda _pid: True),
+    )
+    monkeypatch.setattr(qq_runtime_session, "_DEFAULT_SESSION", qq_runtime_session.QQRuntimeSession())
+
+
+@pytest.fixture(autouse=True)
 def isolate_user_data(tmp_path, monkeypatch):
     home = tmp_path / "test-home"
     for variable, directory in {

@@ -9,6 +9,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from .bridge_credential import authorization_headers, resolve_bridge_credential
 from .qq_direct_snapshot_runtime import QQDirectSnapshotRuntimeClient, QQSnapshotRuntimeUnavailable
 
 DEFAULT_BRIDGE_URL = "http://127.0.0.1:40655"
@@ -20,6 +21,17 @@ class NapCatQQError(Exception):
 
     def __init__(self):
         super().__init__(self.public_message)
+
+
+class NapCatQQAuthRejected(NapCatQQError):
+    """The bridge refused this client's credential.
+
+    Echo-owned bridges authenticate every method, so a missing, stale or foreign
+    credential is rejected before any method runs.  The public message stays the
+    privacy-safe base message: no credential, URL, path or account is added.
+    """
+
+    code = "napcat_qq_auth_rejected"
 
 
 @dataclass(frozen=True)
@@ -68,7 +80,10 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 class NapCatQQProvider:
     def __init__(self, base_url: str = DEFAULT_BRIDGE_URL, *, timeout: float = 30,
-                 transport: Callable[[str, bytes, float], tuple[int, str]] | None = None):
+                 transport: Callable[[str, bytes, float], tuple[int, str]] | None = None,
+                 credential: object | None = None):
+        self._credential_source = credential
+        self._verified_credential = None
         try:
             parsed = urllib.parse.urlsplit(base_url)
             valid = (parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost"}
@@ -85,9 +100,18 @@ class NapCatQQProvider:
     def _request(self, url: str, body: bytes, timeout: float) -> tuple[int, str]:
         if url != self._base_url + "/rpc":
             raise NapCatQQError()
+        credential = resolve_bridge_credential(self._credential_source)
+        if credential is None:
+            # Fail closed: without a live credential no request leaves at all,
+            # so the client can never take part in an unauthenticated call.
+            raise NapCatQQError()
         if self._transport is not None:
             return self._transport(url, body, timeout)
-        request = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+        request = urllib.request.Request(
+            url,
+            data=body,
+            headers={"Content-Type": "application/json", **authorization_headers(credential)},
+        )
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
         try:
             try:
@@ -103,12 +127,26 @@ class NapCatQQProvider:
             raise NapCatQQError() from None
 
     def _rpc(self, method: str, params: list[Any] | None = None) -> Any:
+        credential = resolve_bridge_credential(self._credential_source)
+        if method != "Core.status" and self._verified_credential != credential:
+            self.status()
         try:
             status, text = self._request(self._base_url + "/rpc", json.dumps({"method": method, "params": params or []}).encode(), self._timeout)
+            if status == 401:
+                # The bridge rejected this client's credential.  No retry and no
+                # fallback: the caller must re-establish an owned instance.
+                raise NapCatQQAuthRejected()
             value = json.loads(text)
             if status != 200 or not isinstance(value, dict) or value.get("ok") is not True:
                 raise NapCatQQError()
-            return value["result"]
+            result = value["result"]
+            if method == "Core.status":
+                if not isinstance(result, dict) or result.get("rpc_auth") != "bearer-v1":
+                    raise NapCatQQAuthRejected()
+                self._verified_credential = credential
+            return result
+        except NapCatQQAuthRejected:
+            raise
         except (OSError, ValueError, KeyError, TypeError, NapCatQQError):
             raise NapCatQQError() from None
 
@@ -148,4 +186,10 @@ class NapCatQQProvider:
                 return self._request(url, body, timeout)
             except NapCatQQError:
                 raise QQSnapshotRuntimeUnavailable() from None
-        return QQDirectSnapshotRuntimeClient(self._base_url, snapshot_root=snapshot_root, timeout=self._timeout, transport=transport)
+        return QQDirectSnapshotRuntimeClient(
+            self._base_url,
+            snapshot_root=snapshot_root,
+            timeout=self._timeout,
+            transport=transport if self._transport is not None else None,
+            credential=self._credential_source,
+        )

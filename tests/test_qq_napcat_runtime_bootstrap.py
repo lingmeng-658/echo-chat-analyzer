@@ -17,6 +17,8 @@ SCRIPT = ROOT / "scripts/bootstrap_qq_napcat_runtime.py"
 PINS = ROOT / "scripts/qq_napcat_runtime_pins.json"
 MANIFEST = ROOT / "scripts/qq_napcat_runtime_manifest.json"
 ARCHIVE_SHA = "f1053918fae7ae24807841baa516d231f5412fc443fa217183698764be1c1817"
+#: Fictional, in-memory only: never a real bridge credential.
+FICTIONAL_TOKEN = "0123456789abcdef" * 4
 
 
 def digest(data):
@@ -188,6 +190,34 @@ def test_plugin_loads_without_bridge_or_acquisition(tmp_path):
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()
     (snapshot / "snapshot.mjs").write_text("export function registerEchoSnapshotApi(core, options) { core.apis.EchoSnapshotApi = {acquire(){throw Error('unexpected acquisition')},recover:async()=>({ok:true})}; }", encoding="utf-8")
-    check = "import {plugin_init,plugin_cleanup} from './index.mjs'; process.env.ECHO_BRIDGE_PORT='0'; process.env.ECHO_SNAPSHOT_ROOT=process.cwd(); const core={apis:{}}; let logged=false; await plugin_init({core,logger:{info(){logged=true}}}); if (!core.apis.EchoSnapshotApi) throw Error('not registered'); if (!logged) throw Error('plugin readiness log missing'); await plugin_cleanup();"
+    check = "import {plugin_init,plugin_cleanup} from './index.mjs'; process.env.ECHO_BRIDGE_PORT='0'; process.env.ECHO_SNAPSHOT_ROOT=process.cwd(); process.env.ECHO_BRIDGE_TOKEN='" + FICTIONAL_TOKEN + "'; const core={apis:{}}; let logged=false; await plugin_init({core,logger:{info(){logged=true}}}); if (!core.apis.EchoSnapshotApi) throw Error('not registered'); if (!logged) throw Error('plugin readiness log missing'); await plugin_cleanup();"
     result = subprocess.run([node, "--input-type=module", "-e", check], cwd=tmp_path, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("token", [None, "", "fictional", "A" * 64, "f" * 63])
+def test_plugin_refuses_an_absent_or_malformed_bridge_credential(tmp_path, token):
+    """A credential is mandatory: no token means no bridge, never an open one."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node required for plugin credential contract")
+    entry = ROOT / "scripts/qq_napcat_plugin/index.mjs"
+    assert entry.is_file(), "Echo plugin skeleton missing"
+    shutil.copy2(entry, tmp_path / "index.mjs")
+    shutil.copy2(entry.parent / "bridge.mjs", tmp_path / "bridge.mjs")
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    (snapshot / "snapshot.mjs").write_text("export function registerEchoSnapshotApi(core, options) { core.apis.EchoSnapshotApi = {acquire(){throw Error('unexpected acquisition')},recover:async()=>({ok:true})}; }", encoding="utf-8")
+    lines = [
+        "import {plugin_init} from './index.mjs';",
+        "process.env.ECHO_BRIDGE_PORT='0';",
+        "process.env.ECHO_SNAPSHOT_ROOT=process.cwd();",
+        f"if ({json.dumps(token)} === null) {{ delete process.env.ECHO_BRIDGE_TOKEN; }} else {{ process.env.ECHO_BRIDGE_TOKEN={json.dumps(token)}; }}",
+        "const core={apis:{}}; let logged=false;",
+        "try { await plugin_init({core,logger:{info(){logged=true}}}); process.exit(3); }",
+        "catch (error) { if (error.message !== 'echo_bridge_token_missing') throw error; }",
+        "if (core.apis.EchoSnapshotApi) throw Error('snapshot api registered without a credential');",
+        "if (logged) throw Error('bridge readiness was logged without a credential');",
+    ]
+    result = subprocess.run([node, "--input-type=module", "-e", "\n".join(lines)], cwd=tmp_path, capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
