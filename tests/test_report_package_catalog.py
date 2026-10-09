@@ -41,7 +41,10 @@ def test_lists_only_metadata_in_stable_generated_time_order(tmp_path, monkeypatc
         (tmp_path / name).mkdir()
     original = Path.read_text
     def guarded(path, *args, **kwargs):
-        assert path.name == "metadata.json"
+        # Importing the catalog resolves the installed distribution metadata via
+        # Path.read_text, so only reads inside the scanned root are constrained.
+        if path.is_relative_to(tmp_path):
+            assert path.name == "metadata.json"
         return original(path, *args, **kwargs)
     monkeypatch.setattr(Path, "read_text", guarded)
     listing = _catalog(tmp_path).list_reports()
@@ -310,8 +313,11 @@ def test_incomplete_package_is_an_issue_but_still_owned(tmp_path):
 def test_resolve_html_path_uses_package_identity_without_reading_reports(tmp_path, monkeypatch, suffix):
     package = _package(tmp_path, "Echo_Report_20261004_120000" + suffix)
     (package / "metadata.json").write_text("broken", encoding="utf-8")
-    def forbidden_read(*args, **kwargs):
-        pytest.fail("Resolving a report must not read its contents or metadata")
+    original = Path.read_text
+    def forbidden_read(path, *args, **kwargs):
+        if path.is_relative_to(tmp_path):
+            pytest.fail("Resolving a report must not read its contents or metadata")
+        return original(path, *args, **kwargs)
     monkeypatch.setattr(Path, "read_text", forbidden_read)
     assert _catalog(tmp_path).resolve_html_path(package.name) == package / "echo-report.html"
 
@@ -359,8 +365,11 @@ def test_storage_usage_reads_only_file_metadata_and_ignores_unowned_entries(tmp_
         (directory / "keep.txt").write_text("fictional", encoding="utf-8")
     named_file = tmp_path / "Echo_Report_20261005_120000"
     named_file.write_text("fictional", encoding="utf-8")
-    def forbidden_read(*args, **kwargs):
-        pytest.fail("Storage usage must not read report contents or metadata")
+    original = Path.read_text
+    def forbidden_read(path, *args, **kwargs):
+        if path.is_relative_to(tmp_path):
+            pytest.fail("Storage usage must not read report contents or metadata")
+        return original(path, *args, **kwargs)
     monkeypatch.setattr(Path, "read_text", forbidden_read)
     usage = _catalog(tmp_path).storage_usage()
     assert usage.package_count == 3 and usage.complete
