@@ -116,7 +116,8 @@ def test_desktop_checked_delete_changes_disk_and_preserves_unlisted_packages(
 
 @pytest.mark.slow_integration
 @pytest.mark.parametrize("fail_alpha", [False, True])
-def test_disk_batch_keeps_hidden_selection_and_newly_published_report(tmp_path, monkeypatch, fail_alpha):
+@pytest.mark.parametrize("retain_selected", [False, True])
+def test_disk_batch_keeps_hidden_selection_and_newly_published_report(tmp_path, monkeypatch, fail_alpha, retain_selected):
     source = tmp_path / "fictional-source"
     source.mkdir()
     for name in ("echo-report.html", "echo-report.json"):
@@ -129,13 +130,17 @@ def test_disk_batch_keeps_hidden_selection_and_newly_published_report(tmp_path, 
     packages = {}
     for name in ("Alpha", "Beta", "Gamma"):
         packages[name] = package_echo_report(source, metadata={**metadata, "conversation_name": name})
+    broken = package_echo_report(source, metadata={**metadata, "conversation_name": "Unreadable"})
+    (broken / "metadata.json").write_text("broken", encoding="utf-8")
+    targets = ("Beta", "Gamma") if retain_selected else ("Alpha", "Beta")
+    locked_name = targets[0]
     sentinel = packages["Alpha"].parent / "unknown.txt"
     sentinel.write_text("fictional sentinel", encoding="utf-8")
     original_delete = shutil.rmtree
     attempted = []
     def delete(path, *args, **kwargs):
         attempted.append(Path(path))
-        if fail_alpha and Path(path) == packages["Alpha"]:
+        if fail_alpha and Path(path) == packages[locked_name]:
             raise PermissionError("fictional lock")
         return original_delete(path, *args, **kwargs)
     monkeypatch.setattr(shutil, "rmtree", delete)
@@ -153,29 +158,45 @@ def test_disk_batch_keeps_hidden_selection_and_newly_published_report(tmp_path, 
     monkeypatch.setattr(facade, "clear_report_packages", forbidden)
     app = QApplication.instance() or QApplication([])
     def confirm(names, kept):
-        assert set(names) == {packages["Alpha"].name, packages["Beta"].name}
+        assert set(names) == {packages[name].name for name in targets}
         assert kept == 1
         packages["Delta"] = package_echo_report(source, metadata={**metadata, "conversation_name": "Delta"})
         return True
     page = LocalDataPage(facade, executor=workers.run_inline, confirm_delete_reports=confirm)
     try:
         page.refresh()
+        assert all(record.size_bytes is not None for record in page._reports)
+        assert len(facade.list_report_packages().issues) == 1
         page._enter_delete_button.click()
-        for query in ("Alpha", "Beta"):
+        for query in (("Alpha",) if retain_selected else ("Alpha", "Beta")):
             page._search_input.setText(query)
             page._select_results_button.click()
+        page._search_input.setText("Beta")
         assert "筛选外 1 份" in page._checked_count_label.text()
-        page._delete_checked_button.click()
+        action = page._retain_reports_button if retain_selected else page._delete_checked_button
+        action.click()
         assert len(calls) == 1
-        assert set(attempted) == {packages["Alpha"], packages["Beta"]}
-        assert packages["Alpha"].exists() is fail_alpha
-        assert not packages["Beta"].exists()
-        assert packages["Gamma"].is_dir() and packages["Delta"].is_dir()
+        assert set(attempted) == {packages[name] for name in targets}
+        assert packages[locked_name].exists() is fail_alpha
+        assert not packages[targets[1]].exists()
+        assert packages["Alpha" if retain_selected else "Gamma"].is_dir()
+        assert packages["Delta"].is_dir() and broken.is_dir()
         assert sentinel.read_text(encoding="utf-8") == "fictional sentinel"
         assert page._checked_names == ({packages["Alpha"].name} if fail_alpha else set())
         assert page._search_input.text() == "Beta"
-        assert page._summary_count_label.text() == ("3 份" if fail_alpha else "2 份")
+        assert page._summary_count_label.text() == ("4 份" if fail_alpha else "3 份")
         assert ("1 份未能删除" in page._status_label.text()) is fail_alpha
+        if fail_alpha:
+            fail_alpha = False
+            def retry_confirmation(names, kept):
+                assert names == (packages[locked_name].name,)
+                assert kept == 2
+                return True
+            page._confirm_delete_reports = retry_confirmation
+            action.click()
+            assert calls[-1] == (packages[locked_name].name,)
+            assert not packages[locked_name].exists()
+            assert packages["Delta"].is_dir() and broken.is_dir()
     finally:
         page.deleteLater()
         app.processEvents()

@@ -77,6 +77,7 @@ class LocalDataPage(QWidget):
         self._refresh_pending = False
         self._deleting = False
         self._delete_mode = False
+        self._retain_retry_records: tuple[Any, ...] = ()
         self._feedback_timer = QTimer(self)
         self._feedback_timer.setSingleShot(True)
         self._feedback_timer.setInterval(4000)
@@ -180,11 +181,14 @@ class LocalDataPage(QWidget):
         self._enter_delete_button.clicked.connect(lambda: self._set_delete_mode(True))
         self._cancel_delete_button = QPushButton("取消")
         self._cancel_delete_button.clicked.connect(lambda: self._set_delete_mode(False))
+        self._retain_reports_button = QPushButton("保留所选，删除其余")
+        self._retain_reports_button.clicked.connect(self._retain_selected_reports)
         self._delete_checked_button = QPushButton("删除所选")
         self._delete_checked_button.setMinimumHeight(34)
         self._delete_checked_button.clicked.connect(self._delete_checked_reports)
         selection_row.addWidget(self._open_report_button)
         selection_row.addWidget(self._enter_delete_button)
+        selection_row.addWidget(self._retain_reports_button)
         selection_row.addWidget(self._cancel_delete_button)
         selection_row.addWidget(self._delete_checked_button)
         history_layout.addLayout(selection_row)
@@ -291,7 +295,7 @@ class LocalDataPage(QWidget):
         for record in records:
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, record.package_name)
-            item.setData(Qt.ItemDataRole.AccessibleTextRole, "\n".join(_history_values(record)))
+            item.setData(Qt.ItemDataRole.AccessibleTextRole, "\n".join((*_history_values(record), _report_size_text(record))))
             self._history_list.addItem(item)
             entry = _report_entry(
                 record, record.package_name in self._checked_names,
@@ -329,6 +333,7 @@ class LocalDataPage(QWidget):
         self._refresh_generation += 1
         if not enabled:
             self._checked_names.clear()
+            self._retain_retry_records = ()
         self._history_list.setProperty("deleteMode", enabled)
         self._history_list.style().unpolish(self._history_list)
         self._history_list.style().polish(self._history_list)
@@ -388,6 +393,16 @@ class LocalDataPage(QWidget):
         self._enter_delete_button.setEnabled(not busy and bool(self._reports))
         self._cancel_delete_button.setVisible(self._delete_mode)
         self._cancel_delete_button.setEnabled(not busy)
+        self._retain_reports_button.setVisible(self._delete_mode)
+        self._retain_reports_button.setText("重试删除失败项" if self._retain_retry_records else "保留所选，删除其余")
+        checked = self._checked_names.intersection(record.package_name for record in self._reports)
+        has_targets = (
+            any(record.package_name not in checked for record in self._retain_retry_records)
+            if self._retain_retry_records else len(checked) < len(self._reports)
+        )
+        self._retain_reports_button.setEnabled(
+            not busy and bool(checked) and has_targets
+        )
         for control in (self._delete_checked_button, self._select_results_button,
                         self._clear_checks_button, self._checked_count_label):
             control.setVisible(self._delete_mode)
@@ -429,10 +444,23 @@ class LocalDataPage(QWidget):
         if self._deleting or self._refresh_pending or not self._delete_mode:
             return
         records = tuple(record for record in self._reports if record.package_name in self._checked_names)
+        self._delete_report_records(records)
+
+    def _retain_selected_reports(self) -> None:
+        if self._deleting or self._refresh_pending or not self._delete_mode:
+            return
+        checked = self._checked_names.intersection(record.package_name for record in self._reports)
+        if not checked:
+            return
+        snapshot = self._retain_retry_records or self._reports
+        records = tuple(record for record in snapshot if record.package_name not in checked)
+        self._delete_report_records(records, retain_selected=True)
+
+    def _delete_report_records(self, records: tuple[Any, ...], *, retain_selected: bool = False) -> None:
         frozen_names = tuple(record.package_name for record in records)
         if not frozen_names:
             return
-        kept_count = len(self._reports) - len(records)
+        kept_count = sum(record.package_name not in frozen_names for record in self._reports)
         self._deleting = True
         self._refresh_generation += 1
         generation = self._refresh_generation
@@ -441,7 +469,7 @@ class LocalDataPage(QWidget):
             if self._confirm_delete_reports is not None:
                 confirmed = bool(self._confirm_delete_reports(frozen_names, kept_count))
             else:
-                dialog = _bulk_delete_confirmation_dialog(records, kept_count, self)
+                dialog = _bulk_delete_confirmation_dialog(records, kept_count, self, retain_selected=retain_selected)
                 confirmed = dialog.exec() == QDialog.DialogCode.Accepted
         except Exception:
             self._deleting = False
@@ -452,11 +480,16 @@ class LocalDataPage(QWidget):
             self._update_controls()
             return
         self._set_status("正在删除…")
+        if not retain_selected:
+            self._retain_retry_records = ()
 
         def on_success(result: Any) -> None:
             if generation != self._refresh_generation or not self._deleting:
                 return
             self._checked_names.difference_update(result.deleted)
+            if retain_selected:
+                failed_names = {failure.package_name for failure in result.failures}
+                self._retain_retry_records = tuple(record for record in records if record.package_name in failed_names)
             if result.deleted:
                 self._reports = tuple(record for record in self._reports if record.package_name not in result.deleted)
                 self._summary_count_label.setText("—")
@@ -466,7 +499,8 @@ class LocalDataPage(QWidget):
                 self._apply_search()
             message = f"已删除 {len(result.deleted)} 份报告。"
             if result.failures:
-                message += f"{len(result.failures)} 份未能删除，已保留勾选，可重试。"
+                retry_note = "可通过“重试删除失败项”重试。" if retain_selected else "已保留勾选，可重试。"
+                message += f"{len(result.failures)} 份未能删除，{retry_note}"
             self._deleting = False
             if not result.failures:
                 self._set_delete_mode(False)
@@ -475,6 +509,8 @@ class LocalDataPage(QWidget):
         def on_error(code: str, message: str) -> None:
             if generation != self._refresh_generation or not self._deleting:
                 return
+            if retain_selected:
+                self._retain_retry_records = records
             self._deleting = False
             self.refresh(error_message=message)
 
@@ -548,7 +584,7 @@ def _report_entry(record: Any, checked: bool, on_check: Callable[[bool], None], 
     content.addWidget(_plain_label(name, "archiveEntryTitle"))
     metadata = QHBoxLayout()
     metadata.setSpacing(16)
-    metadata.addWidget(_plain_label(f"{source} · {generated} · {messages} 条消息", "archiveEntryMeta"), stretch=1)
+    metadata.addWidget(_plain_label(f"{source} · {generated} · {messages} 条消息 · {_report_size_text(record)}", "archiveEntryMeta"), stretch=1)
     metadata.addWidget(_plain_label(f"分析范围：{scope}", "archiveEntryScope"), stretch=1)
     content.addLayout(metadata)
     layout.addLayout(content, stretch=1)
@@ -557,10 +593,11 @@ def _report_entry(record: Any, checked: bool, on_check: Callable[[bool], None], 
 
 def _bulk_delete_confirmation_dialog(
     records: tuple[Any, ...], kept_count: int, parent: QWidget | None = None,
+    *, retain_selected: bool = False,
 ) -> QDialog:
     dialog = QDialog(parent)
     dialog.setObjectName("archiveDeletionDialog")
-    dialog.setWindowTitle("确认删除勾选报告")
+    dialog.setWindowTitle("保留所选，删除其余" if retain_selected else "确认删除勾选报告")
     dialog.setStyleSheet(ARCHIVE_CONFIRMATION_QSS)
     dialog.resize(620, 520)
     layout = QVBoxLayout(dialog)
@@ -571,7 +608,8 @@ def _bulk_delete_confirmation_dialog(
     retained = _plain_label(f"将保留 {kept_count} 份正常报告", "archiveDeletionRetained")
     layout.addWidget(retained)
     note = _plain_label(
-        "只删除下方清单中的 Echo 报告文件，不影响 QQ / 微信原始聊天数据。删除后无法恢复。",
+        "只删除下方清单中的 Echo 报告文件，不影响 QQ / 微信原始聊天数据。删除后无法恢复。"
+        + ("删除范围不受搜索筛选限制。" if retain_selected else ""),
         "archiveDeletionNote",
     )
     note.setWordWrap(True)
@@ -588,7 +626,7 @@ def _bulk_delete_confirmation_dialog(
     listing.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
     for record in records:
         generated, source, name, messages, scope = _history_values(record)
-        item = QListWidgetItem(f"{name}\n{source} · {generated} · {messages} 条消息 · {scope}\n{record.package_name}")
+        item = QListWidgetItem(f"{name}\n{source} · {generated} · {messages} 条消息 · {_report_size_text(record)} · {scope}\n{record.package_name}")
         item.setData(Qt.ItemDataRole.UserRole, record.package_name)
         listing.addItem(item)
     layout.addWidget(listing, stretch=1)
@@ -606,6 +644,11 @@ def _bulk_delete_confirmation_dialog(
     layout.addLayout(actions)
     cancel.setFocus()
     return dialog
+
+
+def _report_size_text(record: Any) -> str:
+    size = getattr(record, "size_bytes", None)
+    return "大小未知" if size is None else _format_bytes(size)
 
 
 def _format_bytes(size: int) -> str:

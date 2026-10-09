@@ -53,6 +53,160 @@ def checkbox(page, index):
     return page._history_list.itemWidget(item).findChild(QCheckBox)
 
 
+@pytest.mark.parametrize("confirm", [False, True])
+def test_retain_selection_freezes_full_snapshot_complement(qt_app, sources, confirm):
+    window, facade = archive(qt_app, sources)
+    page = window.local_data_page
+    assert not page._retain_reports_button.isVisibleTo(window)
+    page._enter_delete_button.click()
+    assert not page._retain_reports_button.isEnabled()
+    page._retain_reports_button.click()
+    assert not facade.batch_calls
+    checkbox(page, 0).setChecked(True)
+    page._search_input.setText("Beta")
+    seen = []
+    def confirmation(names, kept):
+        seen.append((names, kept))
+        facade._reports.append(_gui_report_summary("new-after-snapshot", session_name="New"))
+        page._checked_names = {"c"}
+        page.refresh()
+        page._retain_selected_reports()
+        return confirm
+    page._confirm_delete_reports = confirmation
+    page._retain_reports_button.click()
+    assert seen == [(("b", "c"), 1)]
+    assert facade.batch_calls == ([("b", "c")] if confirm else [])
+    assert {r.package_name for r in facade._reports} == ({"a", "new-after-snapshot"} if confirm else {"a", "b", "c", "new-after-snapshot"})
+    assert page._search_input.text() == "Beta"
+    if not confirm:
+        assert "已删除" not in page._status_label.text()
+
+
+def test_retain_retry_only_targets_failed_frozen_names(qt_app, sources):
+    window, facade = archive(qt_app, sources)
+    page = window.local_data_page
+    page._enter_delete_button.click()
+    checkbox(page, 0).setChecked(True)
+    facade.failed_names = {"b"}
+    def confirmation(names, kept):
+        facade._reports.append(_gui_report_summary("new-after-snapshot"))
+        return True
+    page._confirm_delete_reports = confirmation
+    page._retain_reports_button.click()
+    assert facade.batch_calls == [("b", "c")]
+    assert page._checked_names == {"a"}
+    assert "1 份未能删除" in page._status_label.text()
+    assert not page._feedback_timer.isActive()
+    assert page._retain_reports_button.text() == "重试删除失败项"
+    facade.failed_names.clear()
+    page._confirm_delete_reports = lambda names, kept: names == ("b",) and kept == 2
+    page._retain_reports_button.click()
+    assert facade.batch_calls == [("b", "c"), ("b",)]
+    assert {r.package_name for r in facade._reports} == {"a", "new-after-snapshot"}
+
+
+def test_retain_retry_preserves_a_failed_report_checked_after_failure(qt_app, sources):
+    window, facade = archive(qt_app, sources)
+    page = window.local_data_page
+    page._enter_delete_button.click()
+    checkbox(page, 0).setChecked(True)
+    facade.failed_names = {"b", "c"}
+    def confirmation(names, kept):
+        facade._reports.append(_gui_report_summary("new-after-snapshot"))
+        return True
+    page._confirm_delete_reports = confirmation
+    page._retain_reports_button.click()
+    checkbox(page, 1).setChecked(True)  # Beta now explicitly belongs to the retained selection.
+    checkbox(page, 2).setChecked(True)
+    assert not page._retain_reports_button.isEnabled()  # New reports cannot become retry targets.
+    checkbox(page, 2).setChecked(False)
+    page._confirm_delete_reports = lambda names, kept: names == ("c",) and kept == 3
+    facade.failed_names.clear()
+    page._retain_reports_button.click()
+    assert facade.batch_calls == [("b", "c"), ("c",)]
+    assert {r.package_name for r in facade._reports} == {"a", "b", "new-after-snapshot"}
+
+
+def test_retain_error_retry_preserves_frozen_boundary_and_cancel_clears_retry(qt_app, sources):
+    window, facade = archive(qt_app, sources)
+    page = window.local_data_page
+    page._enter_delete_button.click()
+    checkbox(page, 0).setChecked(True)
+    page._confirm_delete_reports = lambda names, kept: True
+    facade.batch_error = FacadeError("delete_failed", "未能删除报告。")
+    page._retain_reports_button.click()
+    assert page._checked_names == {"a"}
+    assert "未能删除报告" in page._status_label.text()
+    facade.batch_error = None
+    facade._reports.append(_gui_report_summary("new-after-error"))
+    page.refresh()
+    page._retain_reports_button.click()
+    assert facade.batch_calls == [("b", "c"), ("b", "c")]
+    assert {r.package_name for r in facade._reports} == {"a", "new-after-error"}
+    page._enter_delete_button.click()
+    assert page._retain_reports_button.text() == "保留所选，删除其余"
+    assert not page._retain_reports_button.isEnabled()
+
+
+def test_retain_cannot_run_with_all_or_none_selected_and_blocks_duplicates(qt_app, sources):
+    window, facade = archive(qt_app, sources)
+    page = window.local_data_page
+    page._enter_delete_button.click()
+    page._select_results_button.click()
+    assert not page._retain_reports_button.isEnabled()
+    page._retain_selected_reports()
+    assert not facade.batch_calls
+    page._clear_checks_button.click()
+    checkbox(page, 0).setChecked(True)
+    executor = _QueuedExecutor()
+    page._executor = executor
+    page._confirm_delete_reports = lambda names, kept: True
+    page._retain_reports_button.click()
+    assert not page._retain_reports_button.isEnabled()
+    page._retain_selected_reports()
+    page._delete_checked_reports()
+    page.refresh()
+    assert len(executor.tasks) == 1
+    executor.succeed(0)
+    executor.succeed(1)
+    executor.fail(0, "late", "Stale retain error")
+    assert "Stale" not in page._status_label.text()
+    assert facade.batch_calls == [("b", "c")]
+
+
+@pytest.mark.parametrize("size, text", [(0, "0 B"), (2048, "2.0 KB"), (None, "大小未知")])
+def test_archive_secondary_information_displays_summary_size(qt_app, sources, size, text):
+    window, facade = archive(qt_app, sources)
+    facade._reports = [dataclasses.replace(facade._reports[0], size_bytes=size)]
+    page = window.local_data_page
+    page.refresh()
+    entry = page._history_list.itemWidget(page._history_list.item(0))
+    assert text in entry.findChild(QLabel, "archiveEntryMeta").text()
+    page._search_input.setText(text)
+    assert page._history_list.count() == 0  # Size does not change existing search semantics.
+
+
+def test_retain_confirmation_shows_full_deletion_list_and_counts(qt_app):
+    from qq_chat_analyzer.gui.local_data_page import _bulk_delete_confirmation_dialog
+    reports = tuple(dataclasses.replace(_gui_report_summary(f"delete-{i}"), size_bytes=2048)
+                    for i in range(30))
+    dialog = _bulk_delete_confirmation_dialog(reports, 2, retain_selected=True)
+    dialog.show()
+    _drain(dialog)
+    assert dialog.windowTitle() == "保留所选，删除其余"
+    labels = "\n".join(label.text() for label in dialog.findChildren(QLabel))
+    assert "30" in labels and "2" in labels
+    assert "删除范围不受搜索筛选限制" in labels
+    listing = dialog.findChild(QListWidget, "archiveDeletionList")
+    assert listing.count() == 30
+    assert all(listing.item(i).text().endswith(f"delete-{i}") for i in range(30))
+    assert "2.0 KB" in listing.item(0).text()
+    listing.scrollToBottom()
+    assert listing.visualItemRect(listing.item(29)).intersects(listing.viewport().rect())
+    cancel = next(button for button in dialog.findChildren(QPushButton) if button.text() == "取消")
+    assert cancel.isDefault() and cancel.hasFocus()
+
+
 @pytest.mark.parametrize("width", [800, 1200])
 def test_delete_toolbar_is_one_row_and_fits_window(qt_app, sources, width):
     window, facade = archive(qt_app, sources)
@@ -66,7 +220,8 @@ def test_delete_toolbar_is_one_row_and_fits_window(qt_app, sources, width):
     page._search_input.setText("Alpha")
     _drain(window)
     controls = [page._checked_count_label, page._select_results_button,
-                page._clear_checks_button, page._cancel_delete_button, page._delete_checked_button]
+                page._clear_checks_button, page._retain_reports_button,
+                page._cancel_delete_button, page._delete_checked_button]
     centers = [control.geometry().center().y() for control in controls]
     assert max(centers) - min(centers) <= 1
     assert page._checked_count_label.text().startswith("已选 30 份")

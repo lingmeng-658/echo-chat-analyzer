@@ -56,6 +56,60 @@ def test_lists_only_metadata_in_stable_generated_time_order(tmp_path, monkeypatc
     assert not listing.issues
 
 
+def test_summary_size_includes_nested_assets_without_reading_bodies(tmp_path, monkeypatch):
+    package = _package(tmp_path)
+    assets = package / "assets"
+    assets.mkdir()
+    (assets / "fictional.bin").write_bytes(b"fictional image bytes")
+    expected_bytes = sum(child.stat().st_size for child in package.rglob("*") if child.is_file())
+    original_read = Path.read_text
+    def metadata_only(path, *args, **kwargs):
+        if path.is_relative_to(tmp_path):
+            assert path.name == "metadata.json"
+        return original_read(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", metadata_only)
+    def forbidden_body(*args, **kwargs):
+        pytest.fail("Measuring a summary must not read report bodies")
+    monkeypatch.setattr(Path, "read_bytes", forbidden_body)
+    listing = _catalog(tmp_path).list_reports()
+    assert len(listing.reports) == 1 and not listing.issues
+    assert listing.reports[0].size_bytes == expected_bytes
+    assert _catalog(tmp_path).storage_usage().measured_bytes == expected_bytes
+
+
+@pytest.mark.parametrize("error", [PermissionError("fictional lock"), RuntimeError("changed identity")])
+def test_unknown_summary_size_preserves_readable_report(tmp_path, monkeypatch, error):
+    package = _package(tmp_path)
+    (package / "extra.bin").write_bytes(b"fictional")
+    original_stat = Path.lstat
+    def failing_stat(path, *args, **kwargs):
+        if path == package / "extra.bin":
+            raise error
+        return original_stat(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "lstat", failing_stat)
+    listing = _catalog(tmp_path).list_reports()
+    assert len(listing.reports) == 1 and not listing.issues
+    assert listing.reports[0].conversation_name == "Fictional Conversation"
+    assert listing.reports[0].size_bytes is None
+
+
+def test_summary_size_does_not_follow_reparse_assets(tmp_path, monkeypatch):
+    import stat
+    package = _package(tmp_path)
+    asset = package / "linked.bin"
+    asset.write_bytes(b"fictional")
+    original_stat = Path.lstat
+    class ReparseStat:
+        st_file_attributes = stat.FILE_ATTRIBUTE_REPARSE_POINT
+        st_mode = stat.S_IFREG
+    def reparse(path, *args, **kwargs):
+        return ReparseStat() if path == asset else original_stat(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "lstat", reparse)
+    listing = _catalog(tmp_path).list_reports()
+    assert len(listing.reports) == 1 and not listing.issues
+    assert listing.reports[0].size_bytes is None
+
+
 def test_fixed_01_metadata_survives_list_reopen_and_retention_without_rewrite(tmp_path):
     # Literal historical fixture: never generate this via the current writer.
     old = _package(tmp_path)

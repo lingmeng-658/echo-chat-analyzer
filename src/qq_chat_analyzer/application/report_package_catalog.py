@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 import json
 import logging
@@ -51,6 +51,7 @@ class ReportPackageSummary:
     message_count: int
     analysis_scope: AnalysisScope
     conversation_kind: str = "unknown"
+    size_bytes: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,10 +182,17 @@ class ReportPackageCatalog:
                         raise ValueError("Incomplete report package.")
                 metadata = package / "metadata.json"
                 _require_no_reparse_points(metadata)
-                reports.append(_read_summary(package.name, metadata))
+                summary = _read_summary(package.name, metadata)
             except Exception:
                 _LOGGER.warning("Unreadable report package: %s", package, exc_info=True)
                 issues.append(ReportPackageIssue(package.name, "metadata_unreadable"))
+                continue
+            try:
+                size_bytes = _package_bytes(root, package)
+            except Exception:
+                size_bytes = None
+                _LOGGER.warning("Report summary size unknown package=%s", package, exc_info=True)
+            reports.append(replace(summary, size_bytes=size_bytes))
         # Newest generated time first; equal times use ascending package name.
         reports.sort(key=lambda report: report.package_name)
         reports.sort(key=lambda report: report.generated_at, reverse=True)

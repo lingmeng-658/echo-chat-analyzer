@@ -6271,6 +6271,7 @@ def test_local_data_page_exposes_history_without_retired_snapshot_controls(
     assert page.findChildren(QGroupBox) == []
     assert {button.text() for button in page.findChildren(QPushButton)} == {
         "刷新", "打开报告", "删除报告", "删除所选", "全选当前结果", "清空勾选", "取消",
+        "保留所选，删除其余",
     }
     assert all("快照" not in label.text() for label in page.findChildren(QLabel))
     assert len(page.findChildren(QListWidget)) == 1
