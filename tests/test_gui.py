@@ -1962,8 +1962,16 @@ def test_echo_open_failure_is_recoverable_and_does_not_crash(
     qt_app,
     sources,
     tmp_path,
+    monkeypatch,
 ) -> None:
     from qq_chat_analyzer.gui.main_window import QQ_WORKSPACE_INDEX
+
+    main_window_module = importlib.import_module("qq_chat_analyzer.gui.main_window")
+    # The failure is now announced with one modal warning; capture it instead
+    # of blocking the test on a real dialog.
+    monkeypatch.setattr(
+        main_window_module.QMessageBox, "warning", lambda *_args: None
+    )
 
     report_path = tmp_path / "echo-report.html"
     report_path.write_text("<html>fictional report</html>", encoding="utf-8")
@@ -2039,7 +2047,12 @@ def test_report_directory_open_failure_is_recoverable(
     qt_app,
     sources,
     tmp_path,
+    monkeypatch,
 ) -> None:
+    main_window_module = importlib.import_module("qq_chat_analyzer.gui.main_window")
+    monkeypatch.setattr(
+        main_window_module.QMessageBox, "warning", lambda *_args: None
+    )
     report_directory = tmp_path / "Echo_Report_20260815_143012"
     report_directory.mkdir()
     report_path = report_directory / "echo-report.html"
@@ -2096,8 +2109,13 @@ def test_generate_share_failure_shows_public_message(
     qt_app,
     sources,
     tmp_path,
+    monkeypatch,
 ) -> None:
     module = _facade_module()
+    main_window_module = importlib.import_module("qq_chat_analyzer.gui.main_window")
+    monkeypatch.setattr(
+        main_window_module.QMessageBox, "warning", lambda *_args: None
+    )
     report_path = tmp_path / "echo-report.html"
     report_path.write_text("<html>fictional report</html>", encoding="utf-8")
     facade = StubFacade(
@@ -2122,7 +2140,12 @@ def test_generate_share_failure_shows_public_message(
 def test_generate_share_without_outcome_shows_visible_error(
     qt_app,
     sources,
+    monkeypatch,
 ) -> None:
+    main_window_module = importlib.import_module("qq_chat_analyzer.gui.main_window")
+    monkeypatch.setattr(
+        main_window_module.QMessageBox, "warning", lambda *_args: None
+    )
     window = _main_window(qt_app, StubFacade(sources=sources))
 
     window.generate_share_image()
@@ -2139,6 +2162,10 @@ def test_generate_share_without_facade_method_shows_visible_error(
     monkeypatch,
 ) -> None:
     monkeypatch.delattr(StubFacade, "generate_share_image")
+    main_window_module = importlib.import_module("qq_chat_analyzer.gui.main_window")
+    monkeypatch.setattr(
+        main_window_module.QMessageBox, "warning", lambda *_args: None
+    )
     report_path = tmp_path / "echo-report.html"
     report_path.write_text("<html>fictional report</html>", encoding="utf-8")
     window = _main_window(qt_app, StubFacade(sources=sources))
@@ -2156,7 +2183,12 @@ def test_generate_share_executor_submission_failure_is_visible(
     qt_app,
     sources,
     tmp_path,
+    monkeypatch,
 ) -> None:
+    main_window_module = importlib.import_module("qq_chat_analyzer.gui.main_window")
+    monkeypatch.setattr(
+        main_window_module.QMessageBox, "warning", lambda *_args: None
+    )
     report_path = tmp_path / "echo-report.html"
     report_path.write_text("<html>fictional report</html>", encoding="utf-8")
 
@@ -2192,8 +2224,12 @@ def test_show_outcome_saved_status_uses_package_publication(qt_app, sources, tmp
 
 @pytest.mark.parametrize("open_success", [True, False])
 def test_show_outcome_retention_warning_keeps_successful_report_openable(
-    qt_app, sources, tmp_path, open_success,
+    qt_app, sources, tmp_path, open_success, monkeypatch,
 ):
+    main_window_module = importlib.import_module("qq_chat_analyzer.gui.main_window")
+    monkeypatch.setattr(
+        main_window_module.QMessageBox, "warning", lambda *_args: None
+    )
     report = tmp_path / "echo-report.html"
     report.write_text("fictional", encoding="utf-8")
     warning = "报告已保存，但部分旧报告清理失败，本地报告数量可能超过 50 份。"

@@ -32,7 +32,12 @@ from .local_data_page import LocalDataPage
 from .processing_page import ProcessingPage
 from .qq_workspace import QQWorkspace
 from .shutdown import ShutdownProtocol
-from .theme import STATUS_STYLE_BASE, WINDOW_CLIENT_SEPARATOR_STYLE, WINDOW_TITLE_STYLE
+from .theme import (
+    STATUS_STYLE_BASE,
+    STATUS_STYLE_ERROR,
+    WINDOW_CLIENT_SEPARATOR_STYLE,
+    WINDOW_TITLE_STYLE,
+)
 from .wechat_workspace import WeChatWorkspace
 from .workers import shutdown as shutdown_workers
 from .workers import submit
@@ -52,6 +57,22 @@ _SHARE_GENERATING = "\u6b63\u5728\u751f\u6210\u5206\u4eab\u56fe\u7247..."
 _SHARE_READY = "\u5206\u4eab\u56fe\u7247\u5df2\u751f\u6210"
 _SHARE_UNAVAILABLE = "\u6682\u65f6\u6ca1\u6709\u53ef\u751f\u6210\u5206\u4eab\u56fe\u7247\u7684\u5206\u6790\u7ed3\u679c\u3002"
 _SHARE_SUBMIT_FAILED = "\u5206\u4eab\u56fe\u7247\u751f\u6210\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002"
+
+# Report and share actions own this one-line feedback copy. Success and
+# progress stay quiet (header line only); a failure is never silent: it also
+# raises one modal warning named by the _FAILURE_TITLE_* constants below.
+_ANALYSIS_CANCELLED = "分析已取消。"
+_REPORT_SAVED = "报告已保存"
+_REPORT_UNSAVED = "分析完成，报告暂未保存。"
+_ANALYSIS_COMPLETED = "分析完成"
+_OPEN_REPORT_FAILED = "无法打开 Echo 报告。"
+_REPORT_MISSING = "报告文件不存在，可能已被移动或删除。"
+_REPORT_DIRECTORY_MISSING = "报告目录不存在，可能已被移动或删除。"
+_SHARE_IMAGE_MISSING = "分享图片已生成，但找不到图片文件，请在报告目录中查看。"
+_SHARE_IMAGE_OPEN_FAILED = "分享图片已生成，但无法自动打开，请在报告目录中查看。"
+_FAILURE_TITLE_OPEN_REPORT = "无法打开报告"
+_FAILURE_TITLE_OPEN_DIRECTORY = "无法打开报告目录"
+_FAILURE_TITLE_SHARE = "分享图片"
 
 _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.main_window")
 
@@ -328,11 +349,20 @@ class MainWindow(QMainWindow):
             self.show_home_page()
         self._home_button.setVisible(self._active_source in ("qq", "wechat"))
         self._back_button.setVisible(False)
-        self._status_label.setText("分析已取消。")
+        self._set_status_message(_ANALYSIS_CANCELLED)
 
 
     def show_status(self, message: str) -> None:
-        """Preserve legacy string status; typed phases own the processing copy."""
+        """Preserve legacy string status; typed phases own the processing copy.
+
+        Each workspace shows its own connection copy on the page, so this line
+        keeps the legacy text without claiming the visible feedback line. While
+        a report or share feedback line is on screen it owns the header: a
+        later connection status must neither overwrite it nor duplicate the
+        connection copy up here.
+        """
+        if self._status_label.isVisibleTo(self):
+            return
         self._status_label.setText(message)
 
     def show_outcome(self, outcome: Any) -> None:
@@ -350,11 +380,11 @@ class MainWindow(QMainWindow):
         )
         retention_warning = getattr(outcome, "retention_warning", "")
         if getattr(outcome, "report_directory", None) is not None:
-            self._status_label.setText(retention_warning or "报告已保存")
+            self._set_status_message(retention_warning or _REPORT_SAVED)
         elif getattr(outcome, "report_path", None) is not None:
-            self._status_label.setText("分析完成，报告暂未保存。")
+            self._set_status_message(_REPORT_UNSAVED)
         else:
-            self._status_label.setText("分析完成")
+            self._set_status_message(_ANALYSIS_COMPLETED)
         outcome_key = (
             id(outcome),
             str(getattr(outcome, "report_path", "")),
@@ -381,37 +411,69 @@ class MainWindow(QMainWindow):
         else:
             self.stack.setCurrentIndex(HOME_PAGE_INDEX)
 
+    # ---------------------------------------------------------------- status feedback
+
+    def _set_status_message(self, message: str, *, failed: bool = False) -> None:
+        """Show one non-modal status line; an empty message hides it again.
+
+        Success and progress copy stays on this quiet header line. Failures use
+        the highlighted variant and are announced by :meth:`_announce_failure`
+        as well, so a failed click is never silent.
+        """
+        self._status_label.setStyleSheet(
+            STATUS_STYLE_ERROR if failed else STATUS_STYLE_BASE
+        )
+        self._status_label.setText(message)
+        self._status_label.setVisible(bool(message))
+
+    def _announce_failure(self, title: str, message: str) -> None:
+        """Make one failed user action unmissable: status line plus one dialog."""
+        self._set_status_message(message, failed=True)
+        QMessageBox.warning(self, title, message)
+
     # ---------------------------------------------------------------- echo report
 
     def open_echo_report(self) -> None:
         """Open the report from the latest successful outcome."""
         report_path = self._current_report_path
         _LOGGER.info("[gui] open_echo_report path=%s", report_path)
-        if report_path is None or not _is_file(report_path):
+        if report_path is None:
             self._clear_echo_report_entry()
+            return
+        if not _is_file(report_path):
+            # The entry was offered but its report is gone: drop the stale
+            # entry and tell the user instead of returning silently.
+            self._clear_echo_report_entry()
+            self._announce_failure(_FAILURE_TITLE_OPEN_REPORT, _REPORT_MISSING)
             return
         try:
             opened = self._report_opener(report_path)
         except Exception:
             opened = False
         if opened is False:
-            self._status_label.setText(
-                "\u65e0\u6cd5\u6253\u5f00 Echo \u62a5\u544a\u3002"
-            )
+            self._announce_failure(_FAILURE_TITLE_OPEN_REPORT, _OPEN_REPORT_FAILED)
 
     def open_echo_report_directory(self) -> None:
         """Open the directory containing the latest successful report."""
         directory = self._current_report_directory
-        if directory is None or not _is_directory(directory):
+        if directory is None:
             self._clear_echo_report_entry()
+            return
+        if not _is_directory(directory):
+            # Same rule as the report itself: a stale entry is reported, not
+            # silently swallowed.
+            self._clear_echo_report_entry()
+            self._announce_failure(
+                _FAILURE_TITLE_OPEN_DIRECTORY, _REPORT_DIRECTORY_MISSING
+            )
             return
         try:
             opened = self._directory_opener(directory)
         except Exception:
             opened = False
         if opened is False:
-            self._status_label.setText(
-                _REPORT_DIRECTORY_OPEN_FAILED
+            self._announce_failure(
+                _FAILURE_TITLE_OPEN_DIRECTORY, _REPORT_DIRECTORY_OPEN_FAILED
             )
 
     def generate_share_image(self) -> None:
@@ -427,7 +489,7 @@ class MainWindow(QMainWindow):
                 outcome is not None,
                 callable(generate),
             )
-            self._status_label.setText(_SHARE_UNAVAILABLE)
+            self._announce_failure(_FAILURE_TITLE_SHARE, _SHARE_UNAVAILABLE)
             return
         _LOGGER.info(
             "[gui] Share image generation started for outcome report_directory=%s "
@@ -435,7 +497,7 @@ class MainWindow(QMainWindow):
             getattr(outcome, "report_directory", None),
             getattr(outcome, "echo_report_view", None) is not None,
         )
-        self._status_label.setText(_SHARE_GENERATING)
+        self._set_status_message(_SHARE_GENERATING)
         self._generate_share_button.setEnabled(False)
         try:
             self._executor(
@@ -449,7 +511,7 @@ class MainWindow(QMainWindow):
                 "Share image worker could not be submitted."
             )
             self._generate_share_button.setEnabled(True)
-            self._status_label.setText(_SHARE_SUBMIT_FAILED)
+            self._announce_failure(_FAILURE_TITLE_SHARE, _SHARE_SUBMIT_FAILED)
 
     def _on_share_image_generated(self, image_path: Any) -> None:
         try:
@@ -461,16 +523,24 @@ class MainWindow(QMainWindow):
             image_path,
             self._current_share_image_path,
         )
-        self._status_label.setText(_SHARE_READY)
         if self._current_share_image_path is None:
+            # Generation reported success but no usable path came back: the
+            # user must learn that instead of reading a plain success line.
+            _LOGGER.error(
+                "[gui] Share image path could not be resolved: %s.",
+                image_path,
+            )
+            self._announce_failure(_FAILURE_TITLE_SHARE, _SHARE_IMAGE_MISSING)
             return
         if not _is_file(self._current_share_image_path):
             _LOGGER.error(
                 "[gui] Share image path does not exist or is not a file: %s.",
                 self._current_share_image_path,
             )
+            self._announce_failure(_FAILURE_TITLE_SHARE, _SHARE_IMAGE_MISSING)
             return
 
+        self._set_status_message(_SHARE_READY)
         try:
             opened = self._image_opener(self._current_share_image_path)
         except Exception:
@@ -478,12 +548,14 @@ class MainWindow(QMainWindow):
                 "[gui] Share image was generated but could not be opened: %s.",
                 self._current_share_image_path,
             )
-        else:
-            if opened is False:
-                _LOGGER.error(
-                    "[gui] Share image opener rejected path: %s.",
-                    self._current_share_image_path,
-                )
+            self._announce_failure(_FAILURE_TITLE_SHARE, _SHARE_IMAGE_OPEN_FAILED)
+            return
+        if opened is False:
+            _LOGGER.error(
+                "[gui] Share image opener rejected path: %s.",
+                self._current_share_image_path,
+            )
+            self._announce_failure(_FAILURE_TITLE_SHARE, _SHARE_IMAGE_OPEN_FAILED)
 
     def _on_share_image_failed(self, code: str, message: str) -> None:
         _LOGGER.warning(
@@ -491,7 +563,7 @@ class MainWindow(QMainWindow):
             code,
             message,
         )
-        self._status_label.setText(message)
+        self._announce_failure(_FAILURE_TITLE_SHARE, message)
 
     def _set_echo_report_path(
         self,
@@ -537,6 +609,9 @@ class MainWindow(QMainWindow):
         self._open_report_directory_button.setVisible(False)
         self._generate_share_button.setEnabled(False)
         self._generate_share_button.setVisible(False)
+        # Leaving the report surface clears its one-line feedback too, so a
+        # stale action message never follows the user to another page.
+        self._set_status_message("")
 
     # ---------------------------------------------------------------- error handling
 
@@ -545,7 +620,7 @@ class MainWindow(QMainWindow):
         self.processing_page.stop()
         if self.stack.currentIndex() == PROCESSING_PAGE_INDEX:
             self._show_active_workspace_or_home()
-        self._status_label.setText(message)
+        self._set_status_message(message, failed=True)
         QMessageBox.warning(self, _ERROR_TITLE, message)
 
     # ---------------------------------------------------------------- lifecycle
