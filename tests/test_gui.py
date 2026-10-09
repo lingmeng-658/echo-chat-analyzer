@@ -2481,7 +2481,9 @@ def test_qq_session_loading_preserves_final_failure(qt_app, code):
     workspace.analysis_failed.connect(lambda *args: errors.append(args))
     workspace._load_sessions()
     executor.fail(code, "Fictional failure")
-    assert errors == [(code, "Fictional failure")]
+    # Reading the session list is part of connecting, so the failure is shown
+    # on the page and never reported as an analysis failure.
+    assert errors == []
     assert not workspace._sessions_loaded
     assert not workspace.session_panel._sessions_ready
     assert executor.submission_count == 1  # No GUI retries of acquisition errors.
@@ -2564,7 +2566,9 @@ def test_qq_sessions_failure_exits_journey_and_preserves_error(qt_app):
         assert workspace._qq_connect_button.isEnabled()
         assert workspace._qq_connect_button.text() == "重新开始"
         assert workspace._qq_disconnect_button.isHidden()
-        assert errors == [("qq_direct_snapshot_acquire_failed", "Fictional safe error")]
+        # Reading the session list is part of connecting: the failure is shown
+        # on the page and must not surface as an analysis failure.
+        assert errors == []
     finally:
         workspace.hide()
 
@@ -2689,16 +2693,17 @@ def test_qq_session_loading_state_ends_before_final_error_and_returns_on_retry(q
 
     executor = _DeferredExecutor()
     workspace = QQWorkspace(StubFacade(), executor=executor)
-    observed = []
+    analysis_failures = []
     workspace.analysis_failed.connect(
-        lambda code, message: observed.append(
-            (code, message, workspace._session_loading.isVisibleTo(workspace))
-        )
+        lambda *args: analysis_failures.append(args)
     )
     workspace._load_sessions()
     assert workspace._session_loading.isVisibleTo(workspace)
     executor.fail("qq_direct_snapshot_acquire_failed", "Fictional failure")
-    assert observed == [("qq_direct_snapshot_acquire_failed", "Fictional failure", False)]
+    # The reading indicator is already gone when the error lands, and a session
+    # read failure is never reported as an analysis failure.
+    assert not workspace._session_loading.isVisibleTo(workspace)
+    assert analysis_failures == []
     workspace._load_sessions()
     assert workspace._session_loading.isVisibleTo(workspace)
     executor.succeed([])
@@ -6066,7 +6071,13 @@ def test_wechat_workspace_mismatch_offers_every_detected_candidate(
 
     assert dialog is not None
     assert dialog._use_data_roots is True
-    assert dialog._data_root_combo.count() == 2
+    # The reused window keeps every detected candidate selectable; the dialog
+    # lists them as combo entries.
+    candidates = {
+        Path(dialog._data_root_combo.itemText(index)).name
+        for index in range(dialog._data_root_combo.count())
+    }
+    assert {"fictional_wechat_a", "fictional_wechat_b"} <= candidates
     assert facade.list_sessions_calls == []
 
     # Picking the other detected candidate still reuses the captured key.

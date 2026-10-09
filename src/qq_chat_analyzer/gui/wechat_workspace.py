@@ -971,7 +971,18 @@ class WeChatWorkspace(QWidget):
     # ---------------------------------------------------------------- setup
 
     def open_wechat_setup(self, data_roots: Any = None) -> None:
-        """Open the setup dialog, showing the current facade state."""
+        """Open the setup dialog, showing the current facade state.
+
+        One workspace owns at most one live setup window: opening it again
+        raises the existing window instead of stacking a second copy. A window
+        the user closed opens normally afterwards, and the accepted signal of
+        the reused window keeps saving through the same path.
+        """
+        existing = getattr(self, "_wechat_setup_dialog", None)
+        if existing is not None and existing.isVisible():
+            existing.raise_()
+            existing.activateWindow()
+            return
         try:
             setup_status = self._facade.get_wechat_setup_status()
         except Exception:

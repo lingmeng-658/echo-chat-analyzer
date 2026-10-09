@@ -299,6 +299,9 @@ class QQWorkspace(QWidget):
         self._qq_connect_in_flight = False
         self._connection_task: Any = None
         self._qq_install_prompt_active = False
+        # A cancelled QQ.exe prompt must not reappear on passive refreshes;
+        # an explicit reconnect clears it again.
+        self._qq_install_prompt_shown = False
         self._last_qq_status_message = ""
         self._qq_waiting_auth_since: float | None = None
         self._qq_attempt_generation = 0
@@ -575,6 +578,7 @@ class QQWorkspace(QWidget):
         if (
             state == _QQ_STATE_ERROR
             and getattr(snapshot, "code", None) == "qq_install_path_missing"
+            and not self._qq_install_prompt_shown
         ):
             self._offer_qq_install_path_selection()
 
@@ -808,6 +812,9 @@ class QQWorkspace(QWidget):
         if self._qq_connect_in_flight:
             self.cancel_connection()
             return
+        # An explicit connect is the user asking again: a previously cancelled
+        # QQ.exe prompt may be offered once more.
+        self._qq_install_prompt_shown = False
         _LOGGER.info("[qq gui] connect_qq requested")
         self._qq_attempt_generation += 1
         generation = self._qq_attempt_generation
@@ -904,10 +911,15 @@ class QQWorkspace(QWidget):
         self._show_qq_error(_qq_error_title(code), message)
 
     def _offer_qq_install_path_selection(self) -> None:
-        """Ask the user for QQ.exe only when every automatic path failed."""
-        if self._qq_install_prompt_active:
+        """Ask the user for QQ.exe only when every automatic path failed.
+
+        Asked once per workspace: once the prompt has been shown, a cancelled
+        selection stays dismissed until the user explicitly connects again.
+        """
+        if self._qq_install_prompt_active or self._qq_install_prompt_shown:
             return
         self._qq_install_prompt_active = True
+        self._qq_install_prompt_shown = True
         try:
             path, _ = QFileDialog.getOpenFileName(
                 self,
@@ -1104,11 +1116,17 @@ class QQWorkspace(QWidget):
         )
 
     def _handle_session_error(self, code: str, message: str) -> None:
+        """Render a session-read failure as a connection error, not analysis.
+
+        Reading the session list belongs to connecting. It must never be
+        reported through ``analysis_failed``, which belongs to a user-started
+        analysis and drives the main window's "分析失败" dialog. The error stays
+        visible on the page and the restart action stays available.
+        """
         self._sessions_loaded = False
         self._stop_qq_status_polling()
         self._hide_qq_qrcode()
         self._show_qq_error(_qq_error_title(code), message)
-        self.analysis_failed.emit(code, message)
 
     # ---------------------------------------------------------------- signals
 
