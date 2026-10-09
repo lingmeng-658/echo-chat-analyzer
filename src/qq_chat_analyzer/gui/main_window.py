@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 from ..resources import default_echo_icon_path
 from .dashboard_page import DashboardPage
 from .home_page import HomePage
+from .update_dialog import UpdateDialog
 from .local_data_page import LocalDataPage
 from .processing_page import ProcessingPage
 from .qq_workspace import QQWorkspace
@@ -78,6 +79,7 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(QIcon(str(default_echo_icon_path())))
         self._facade = facade
         self._executor = executor or submit
+        self._update_dialog: UpdateDialog | None = None
         self._current_report_path: Path | None = None
         self._current_report_directory: Path | None = None
         self._current_outcome: Any = None
@@ -269,6 +271,20 @@ class MainWindow(QMainWindow):
             self.navigate_to_wechat()
         elif intent == "local_data":
             self.show_local_data_page()
+        elif intent == "about":
+            self.show_update_dialog()
+
+    def show_update_dialog(self) -> None:
+        """Open About without submitting any network work."""
+        if self._update_dialog is None:
+            self._update_dialog = UpdateDialog(self._facade, self, executor=self._executor)
+            self._update_dialog.finished.connect(self._clear_update_dialog)
+        self._update_dialog.show()
+        self._update_dialog.raise_()
+        self._update_dialog.activateWindow()
+
+    def _clear_update_dialog(self, _result: int) -> None:
+        self._update_dialog = None
 
     def navigate_to_qq(self) -> None:
         """Navigate to the QQ workspace."""
@@ -550,6 +566,8 @@ class MainWindow(QMainWindow):
         shutdown protocol, and the desktop entry point waits on that same
         protocol before the process is allowed to leave.
         """
+        if self._update_dialog is not None:
+            self._update_dialog.reject()
         self.processing_page.close()
         self.qq_workspace.cancel_analysis()
         self.wechat_workspace.cancel_analysis()

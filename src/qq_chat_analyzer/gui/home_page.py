@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .theme import HOME_QSS, paint_echo_note
+from .theme import HOME_QSS, HOME_COLOR_MUTED, HOME_COLOR_ACCENT, paint_echo_note
 
 
 class _EchoNote(QWidget):
@@ -108,9 +108,22 @@ class HomePage(QWidget):
 
         self._local_data_btn = self._link("查看本地报告  →", "查看本地报告", "local_data")
         self._local_data_btn.setObjectName("homeReports")
-        self._content_layout.addWidget(self._local_data_btn, alignment=Qt.AlignRight)
+        footer = QHBoxLayout()
+        footer.setContentsMargins(0, 0, 0, 0)
+        footer.setSpacing(20)
+        footer.addStretch(1)
+        self._about_btn = self._link("关于余音", "关于余音", "about")
+        self._about_btn.setObjectName("homeAbout")
+        self._about_btn.setStyleSheet(
+            f"QPushButton {{ font-size: 12px; color: {HOME_COLOR_MUTED}; }}"
+            f"QPushButton:hover, QPushButton:focus {{ color: {HOME_COLOR_ACCENT}; }}"
+        )
+        footer.addWidget(self._about_btn)
+        footer.addWidget(self._local_data_btn)
+        self._content_layout.addLayout(footer)
         QWidget.setTabOrder(self._qq_btn, self._wechat_btn)
         QWidget.setTabOrder(self._wechat_btn, self._local_data_btn)
+        QWidget.setTabOrder(self._local_data_btn, self._about_btn)
         self.setStyleSheet(HOME_QSS)
         self._update_spacing()
 
