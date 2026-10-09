@@ -102,6 +102,48 @@ def test_normal_chat_is_not_mis_filtered() -> None:
     assert result.reasons == []
 
 
+def test_burst_filter_keeps_normal_repeats_before_and_after_the_run() -> None:
+    messages = [
+        _message("虚构用户甲", "正常重复短句", 1_700_000_000 + offset)
+        for offset in (0, 3600, 3610, 3620, 7200)
+    ]
+
+    result = apply_message_quality_filter(messages)
+
+    assert result.kept_messages == [messages[0], messages[1], messages[4]]
+    assert result.filtered_messages == [messages[2], messages[3]]
+
+
+def test_each_independent_burst_keeps_its_first_message() -> None:
+    messages = [
+        _message("虚构用户甲", "正常重复短句", 1_700_000_000 + offset)
+        for offset in (0, 30, 60, 61, 91, 121)
+    ]
+
+    result = apply_message_quality_filter(messages)
+
+    assert result.kept_messages == [messages[0], messages[3]]
+    assert result.filtered_messages == [messages[1], messages[2], messages[4], messages[5]]
+    assert all(reason.metadata["window_seconds"] == 60 for reason in result.reasons)
+
+
+def test_intervening_sender_starts_a_separate_burst() -> None:
+    first_run = [
+        _message("虚构用户甲", "正常重复短句", 1_700_000_000 + offset)
+        for offset in (0, 10, 20)
+    ]
+    intervening = _message("虚构用户乙", "其他回复", 1_700_000_025)
+    second_run = [
+        _message("虚构用户甲", "正常重复短句", 1_700_000_000 + offset)
+        for offset in (30, 40, 50)
+    ]
+
+    result = apply_message_quality_filter([*first_run, intervening, *second_run])
+
+    assert result.kept_messages == [first_run[0], intervening, second_run[0]]
+    assert result.filtered_messages == [*first_run[1:], *second_run[1:]]
+
+
 def test_two_identical_messages_are_not_a_burst() -> None:
     first = _message("虚构用户", "复制内容", 1_700_000_000)
     second = _message("虚构用户", "复制内容", 1_700_000_010)

@@ -254,7 +254,7 @@ def test_metadata_projects_existing_results_without_input_io(source, monkeypatch
         **_metadata(), "source": source,
         "app_version": expected_app_version,
         "report_schema_version": ECHO_REPORT_SCHEMA_VERSION,
-        "analysis_revision": "echo-analysis.v1",
+        "analysis_revision": "echo-analysis.v2",
     }
 
 

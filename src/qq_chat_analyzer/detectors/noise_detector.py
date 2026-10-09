@@ -25,6 +25,7 @@ class _BurstRun:
     text: str
     start_timestamp: int
     last_timestamp: int
+    start_index: int
     messages: list[ChatMessage]
 
 
@@ -104,7 +105,7 @@ def _detect_sender_burst_noise(
     completed_runs: list[_BurstRun] = []
     current_run: _BurstRun | None = None
 
-    for message in messages:
+    for message_index, message in enumerate(messages):
         text = _normalize_text(message.text)
         timestamp = to_epoch_seconds(message.timestamp)
         if not text or timestamp is None:
@@ -129,6 +130,7 @@ def _detect_sender_burst_noise(
             text=text,
             start_timestamp=timestamp,
             last_timestamp=timestamp,
+            start_index=message_index,
             messages=[message],
         )
 
@@ -147,6 +149,9 @@ def _detect_sender_burst_noise(
                     "sender": run.sender,
                     "repeat_count": len(run.messages),
                     "window_seconds": run.last_timestamp - run.start_timestamp,
+                    "message_indexes": tuple(
+                        range(run.start_index, run.start_index + len(run.messages))
+                    ),
                     "examples": [
                         message.text for message in run.messages[:MAX_EXAMPLES]
                     ],

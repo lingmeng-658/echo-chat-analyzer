@@ -94,6 +94,32 @@ def test_fixed_01_metadata_survives_list_reopen_and_retention_without_rewrite(tm
     assert {path.name: (path.read_bytes(), path.stat().st_mtime_ns) for path in old.iterdir()} == before
 
 
+@pytest.mark.parametrize("revision", ["echo-analysis.v1", "echo-analysis.v2"])
+def test_catalog_reopens_both_analysis_revisions_without_rewriting(tmp_path, revision):
+    package = _package(tmp_path)
+    metadata_path = package / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata.update(
+        report_schema_version="echo-report.v0.7", analysis_revision=revision,
+    )
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    before = {
+        path.name: (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in package.iterdir()
+    }
+
+    catalog = _catalog(tmp_path)
+    listing = catalog.list_reports()
+
+    assert len(listing.reports) == 1
+    assert not listing.issues
+    assert catalog.resolve_html_path(package.name) == package / "echo-report.html"
+    assert {
+        path.name: (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in package.iterdir()
+    } == before
+
+
 @pytest.mark.parametrize("content", [None, "broken", '{}'])
 def test_damaged_metadata_remains_visible_and_can_be_deleted(tmp_path, content):
     package = _package(tmp_path)

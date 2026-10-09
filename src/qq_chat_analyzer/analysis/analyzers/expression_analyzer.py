@@ -7,8 +7,6 @@ import unicodedata
 from collections import Counter
 from collections.abc import Mapping, Sequence
 
-import jieba
-
 from ...message import ChatMessage
 from ...rich_message import (
     EXPRESSION_KIND_PLATFORM_FACE,
@@ -18,7 +16,7 @@ from ...rich_message import (
     RichMessage,
     TextContent,
 )
-from ...tokenizer import iter_expression_placeholders
+from ...tokenizer import iter_expression_placeholders, iter_text_tokens
 from ..identity import is_chat_participant, stable_sender_key
 from ..models import (
     ExpressionCombinationMember,
@@ -36,7 +34,10 @@ EXPRESSION_MEMBER_TOP_LIMIT = 3
 EXPRESSION_NEARBY_WORD_LIMIT = 3
 EXPRESSION_NEARBY_WORD_MIN_COUNT = 2
 EXPRESSION_COMBINATION_TOP_LIMIT = 3
-EXPRESSION_COMBINATION_MESSAGE_LIMIT = 5
+# Count every unordered pair up to 64 distinct expressions (2,016 pairs).
+# Above this budget omit the whole message from combination statistics rather
+# than selecting an order-dependent prefix. Other expression counts are kept.
+EXPRESSION_COMBINATION_MESSAGE_LIMIT = 64
 
 _NEARBY_STOPWORDS = frozenset(
     {
@@ -208,20 +209,20 @@ class ExpressionAnalyzer:
                     Counter(),
                 ).update(nearby_tokens)
             speaker_key = stable_sender_key(message)
-            distinct_keys = tuple(
-                dict.fromkeys(
-                    expression_key
-                    for _, expression_key, _ in habit_items
-                )
-            )[:EXPRESSION_COMBINATION_MESSAGE_LIMIT]
-            for pair in itertools.combinations(distinct_keys, 2):
+            distinct_keys = {expression_key for _, expression_key, _ in habit_items}
+            combination_keys = (
+                sorted(distinct_keys)
+                if len(distinct_keys) <= EXPRESSION_COMBINATION_MESSAGE_LIMIT
+                else ()
+            )
+            for pair in itertools.combinations(combination_keys, 2):
                 combination_counts[pair] += 1
                 if is_chat_participant(message):
                     combination_speaker_counts.setdefault(
                         pair,
                         Counter(),
                     )[speaker_key] += 1
-            for _, expression_key, _ in items:
+            for expression_key in {key for _, key, _ in items}:
                 if expression_only:
                     text_only_counts[expression_key] += 1
                 else:
@@ -406,6 +407,10 @@ class ExpressionAnalyzer:
         face_expressions: tuple[ExpressionContent, ...],
     ) -> bool:
         if face_expressions:
+            # Unicode expressions in authored text are not ordinary wording.
+            # Remove longer clusters before their base emoji (e.g. 👍🏽 / 👍).
+            for item in sorted(set(unicode_items), key=len, reverse=True):
+                text = text.replace(item, "")
             compact = "".join(text.split())
             if not compact:
                 return True
@@ -434,7 +439,7 @@ def _nearby_tokens(text: str, *, displays: tuple[str, ...]) -> list[str]:
         if display:
             cleaned = cleaned.replace(display, " ")
     tokens: list[str] = []
-    for token in jieba.lcut(cleaned):
+    for token in iter_text_tokens(cleaned):
         token = token.strip()
         if (
             _is_word_like(token)

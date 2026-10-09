@@ -374,6 +374,38 @@ def test_distinctive_report_reuses_pipeline_tokens_and_stable_sender_keys(
     }
 
 
+def test_pipeline_counts_laughter_lengths_without_extra_short_words(tmp_path: Path) -> None:
+    from qq_chat_analyzer.analyzer import count_words, count_word_speakers
+    from qq_chat_analyzer.application.analysis_service import _analyze_kept_messages
+    from qq_chat_analyzer.analysis.analyzers.user_profile_analyzer import UserProfileAnalyzer
+    from qq_chat_analyzer.message import ChatMessage
+
+    messages = [
+        ChatMessage(timestamp=1704099600, sender="Fictional Alice", message_type="text", text="哈哈 哈哈哈哈哈"),
+        ChatMessage(timestamp=1704099660, sender="Fictional Bob", message_type="text", text="哈哈哈哈哈"),
+    ]
+    original_texts = [message.text for message in messages]
+    stopwords = tmp_path / "fictional-laughter-stopwords.txt"
+    stopwords.write_text("", encoding="utf-8")
+
+    analyzed = _analyze_kept_messages(messages, stopwords)
+
+    assert count_words(analyzed.tokens) == {"哈哈": 1, "哈哈哈哈哈": 2}
+    assert count_word_speakers(analyzed.sender_tokens) == {
+        "哈哈": {"Fictional Alice": 1},
+        "哈哈哈哈哈": {"Fictional Alice": 1, "Fictional Bob": 1},
+    }
+    profiles = UserProfileAnalyzer().analyze(messages, sender_tokens=analyzed.sender_tokens)
+    assert {
+        profile.speaker: {word.word: word.count for word in profile.top_words}
+        for profile in profiles.profiles
+    } == {
+        "Fictional Alice": {"哈哈": 1, "哈哈哈哈哈": 1},
+        "Fictional Bob": {"哈哈哈哈哈": 1},
+    }
+    assert [message.text for message in messages] == original_texts
+
+
 def test_analysis_loads_stopwords_once_per_run_and_refreshes_next_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
