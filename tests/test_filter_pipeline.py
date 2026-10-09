@@ -230,13 +230,13 @@ def test_filtering_result_tracks_each_matching_ignore_decision_once() -> None:
     assert result.applied_decisions == [sender_decision]
 
 
-def test_automation_source_sender_ignore_reuses_sender_filtering() -> None:
-    ignored_message = _message(
+def test_automation_source_candidate_never_filters_sender_messages() -> None:
+    first_message = _message(
         "虚构交互助手",
         "这是一条虚构自动响应",
         1,
     )
-    kept_message = _message(
+    second_message = _message(
         "虚构普通用户",
         "这是一条虚构普通消息",
         2,
@@ -261,13 +261,14 @@ def test_automation_source_sender_ignore_reuses_sender_filtering() -> None:
         )
 
     result = FilterPipeline().apply_filter_decisions(
-        [ignored_message, kept_message],
+        [first_message, second_message],
         decisions,
     )
 
-    assert result.kept_messages == [kept_message]
-    assert result.filtered_messages == [ignored_message]
-    assert result.applied_decisions == decisions
+    assert [decision.action for decision in decisions] == ["review"]
+    assert result.kept_messages == [first_message, second_message]
+    assert result.filtered_messages == []
+    assert result.applied_decisions == []
 
 
 def _message(sender: str, text: str, timestamp: int) -> ChatMessage:

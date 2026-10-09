@@ -14,6 +14,9 @@ from qq_chat_analyzer.detectors.noise_detector import detect_noise_candidates
 from qq_chat_analyzer.message import ChatMessage
 
 
+BURST_TEXT = "这句话被连续复制"
+
+
 def test_detects_single_character_spam() -> None:
     candidates = detect_noise_candidates(
         [_message("虚构用户", "哈哈哈哈哈哈哈哈", 1_700_000_000)]
@@ -110,10 +113,78 @@ def test_interleaved_message_breaks_consecutive_copy_run() -> None:
     assert detect_noise_candidates(messages) == []
 
 
-def _message(sender: str, text: str, timestamp: int) -> ChatMessage:
+def test_same_nickname_different_identities_never_share_a_burst() -> None:
+    messages = [
+        _message("同名用户", BURST_TEXT, 1_700_000_000, sender_id="u-a"),
+        _message("同名用户", BURST_TEXT, 1_700_000_010, sender_id="u-b"),
+        _message("同名用户", BURST_TEXT, 1_700_000_020, sender_id="u-a"),
+        _message("同名用户", BURST_TEXT, 1_700_000_030, sender_id="u-b"),
+        _message("同名用户", BURST_TEXT, 1_700_000_040, sender_id="u-a"),
+        _message("同名用户", BURST_TEXT, 1_700_000_050, sender_id="u-b"),
+    ]
+
+    assert detect_noise_candidates(messages) == []
+
+
+def test_consecutive_identities_sharing_nickname_form_separate_bursts() -> None:
+    messages = [
+        _message("同名用户", BURST_TEXT, 1_700_000_000 + index, sender_id="u-a")
+        for index in (0, 10, 20)
+    ]
+    messages.extend(
+        _message("同名用户", BURST_TEXT, 1_700_000_030 + index, sender_id="u-b")
+        for index in (0, 10, 20)
+    )
+
+    candidates = detect_noise_candidates(messages)
+
+    assert len(candidates) == 2
+    assert {candidate.metadata["repeat_count"] for candidate in candidates} == {3}
+    assert [
+        candidate.metadata["message_indexes"] for candidate in candidates
+    ] == [(0, 1, 2), (3, 4, 5)]
+
+
+def test_renamed_identity_keeps_one_burst() -> None:
+    messages = [
+        _message("旧昵称", BURST_TEXT, 1_700_000_000, sender_id="u-renamed"),
+        _message("旧昵称", BURST_TEXT, 1_700_000_010, sender_id="u-renamed"),
+        _message("新昵称", BURST_TEXT, 1_700_000_020, sender_id="u-renamed"),
+        _message("新昵称", BURST_TEXT, 1_700_000_030, sender_id="u-renamed"),
+    ]
+
+    candidates = detect_noise_candidates(messages)
+
+    assert len(candidates) == 1
+    assert candidates[0].metadata["repeat_count"] == 4
+    assert candidates[0].metadata["message_indexes"] == (0, 1, 2, 3)
+
+
+def test_records_without_identity_keep_legacy_name_burst() -> None:
+    messages = [
+        _message("旧记录用户", BURST_TEXT, 1_700_000_000 + offset)
+        for offset in (0, 10, 20)
+    ]
+
+    candidates = detect_noise_candidates(messages)
+
+    assert len(candidates) == 1
+    assert candidates[0].metadata["repeat_count"] == 3
+    assert candidates[0].metadata["sender"] == "旧记录用户"
+
+
+def _message(
+    sender: str,
+    text: str,
+    timestamp: int,
+    *,
+    sender_id: str | None = None,
+) -> ChatMessage:
     return ChatMessage(
         timestamp=timestamp,
         sender=sender,
         message_type="text",
         text=text,
+        sender_id=sender_id,
+        conversation_type="group",
     )

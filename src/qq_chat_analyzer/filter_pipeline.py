@@ -6,6 +6,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from .analysis.identity import stable_sender_key
 from .filter_decisions import FilterDecision
 from .message import ChatMessage
 
@@ -52,19 +53,28 @@ class FilterPipeline:
             if decision.action != "ignore":
                 continue
             if decision.target_type == "sender":
-                sender_indexes.setdefault(decision.target, []).append(index)
+                sender_indexes.setdefault(
+                    _sender_match_key(decision),
+                    [],
+                ).append(index)
             elif decision.target_type == "template":
                 normalized_template = _normalize_template_text(decision.target)
                 template_matchers.append(
                     (index, re.compile(_template_pattern(normalized_template)))
                 )
 
+        has_sender_filters = bool(sender_indexes)
+
         for message in messages:
             should_filter = False
 
-            for index in sender_indexes.get(message.sender, ()):
-                should_filter = True
-                applied_flags[index] = True
+            if has_sender_filters:
+                for index in sender_indexes.get(
+                    stable_sender_key(message),
+                    (),
+                ):
+                    should_filter = True
+                    applied_flags[index] = True
 
             if template_matchers:
                 normalized_text = _normalize_template_text(message.text)
@@ -95,12 +105,26 @@ class FilterPipeline:
         )
 
 
+def _sender_match_key(decision: FilterDecision) -> str:
+    """Return the sender identity a filtering decision is allowed to affect.
+
+    Candidates that resolved a stable sender identity carry it in metadata, so
+    the decision stays scoped to that identity. Decisions without it remain
+    name-scoped, and names can only ever match messages whose identity is
+    unresolved: a display name never stands in for another member's identity.
+    """
+    sender_key = decision.metadata.get("sender_key")
+    if isinstance(sender_key, str) and sender_key.strip():
+        return sender_key
+    return decision.target
+
+
 def _decision_matches_message(
     decision: FilterDecision,
     message: ChatMessage,
 ) -> bool:
     if decision.target_type == "sender":
-        return message.sender == decision.target
+        return stable_sender_key(message) == _sender_match_key(decision)
     if decision.target_type == "template":
         return _template_matches(decision.target, message.text)
     return False

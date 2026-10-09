@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from ..analysis.identity import stable_sender_key
 from ..analysis.timestamps import to_epoch_seconds
 from ..candidates import Candidate
 from ..message import ChatMessage
@@ -22,6 +23,7 @@ MAX_EXAMPLES = 3
 @dataclass(slots=True)
 class _BurstRun:
     sender: str
+    sender_key: str
     text: str
     start_timestamp: int
     last_timestamp: int
@@ -102,6 +104,13 @@ def _detect_message_internal_noise(
 def _detect_sender_burst_noise(
     messages: list[ChatMessage],
 ) -> list[Candidate]:
+    """Detect repeated same-text runs per stable sender identity.
+
+    Run continuity uses ``stable_sender_key``: members who share a display name
+    are different senders, while one member who renamed mid-run stays the same
+    sender. Records without a usable identity keep the historical display-name
+    behaviour, and a name never stands in for a resolved identity.
+    """
     completed_runs: list[_BurstRun] = []
     current_run: _BurstRun | None = None
 
@@ -112,9 +121,10 @@ def _detect_sender_burst_noise(
             current_run = _finish_run(current_run, completed_runs)
             continue
 
+        sender_key = stable_sender_key(message)
         continues_run = (
             current_run is not None
-            and current_run.sender == message.sender
+            and current_run.sender_key == sender_key
             and current_run.text == text
             and 0 <= timestamp - current_run.last_timestamp <= BURST_WINDOW_SECONDS
             and timestamp - current_run.start_timestamp <= BURST_WINDOW_SECONDS
@@ -127,6 +137,7 @@ def _detect_sender_burst_noise(
         current_run = _finish_run(current_run, completed_runs)
         current_run = _BurstRun(
             sender=message.sender,
+            sender_key=sender_key,
             text=text,
             start_timestamp=timestamp,
             last_timestamp=timestamp,
