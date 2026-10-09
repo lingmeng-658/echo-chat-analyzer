@@ -61,6 +61,13 @@ _QQ_STATUS_POLL_INTERVAL_MS = 2000
 _QQ_WAITING_AUTH_TIMEOUT_MS = 120_000
 _QQ_AUTH_TIMEOUT_TITLE = "QQ登录等待超时"
 _QQ_AUTH_TIMEOUT_HINT = "扫码时间过长，请取消后重新连接。"
+# The cancel button is held disabled only while the QR is still loading, and
+# never for longer than this bound: a slow QR must not trap the user in the
+# journey, and reaching the bound must never be treated as a failed login.
+_QQ_QR_RELEASE_MS = 8000
+_QQ_QR_LOADING_ACTION = "正在加载 QQ 登录二维码，请稍候…"
+_QQ_QR_READY_ACTION = "请使用手机 QQ 扫码登录"
+_QQ_QR_SLOW_ACTION = "二维码加载较慢，你可以继续等待，或取消后重新连接。"
 _QQ_QRCODE_SIZE = 240
 # The connection journey the trail walks: 准备 → 启动 QQ → 扫码 → 连接.
 _QQ_STAGE_PREPARING = 0
@@ -425,6 +432,13 @@ class QQWorkspace(QWidget):
         self._qq_status_timer.setInterval(_QQ_STATUS_POLL_INTERVAL_MS)
         self._qq_status_timer.timeout.connect(self._poll_qq_status)
 
+        # One single-shot bound for "QR still loading". It only releases the
+        # cancel button; the 2s status poll keeps running alongside it.
+        self._qq_qr_wait_timer = QTimer(self)
+        self._qq_qr_wait_timer.setSingleShot(True)
+        self._qq_qr_wait_timer.setInterval(_QQ_QR_RELEASE_MS)
+        self._qq_qr_wait_timer.timeout.connect(self._on_qq_qr_wait_elapsed)
+
         self.session_panel.show_unconnected_placeholder()
 
     def resizeEvent(self, event) -> None:
@@ -572,9 +586,7 @@ class QQWorkspace(QWidget):
             self._show_qq_stage(_QQ_STAGE_SCANNING)
             self._start_qq_status_polling()
             self._refresh_qq_qrcode()
-            self._qq_connect_button.setEnabled(
-                self._qq_qrcode_label.isVisibleTo(self)
-            )
+            self._sync_qq_qr_wait_state()
         elif state in _QQ_PROGRESS_STATES:
             self.session_panel.show_connecting_placeholder()
             self._show_qq_stage(_QQ_STATE_STAGE[state])
@@ -606,7 +618,10 @@ class QQWorkspace(QWidget):
         # the worker can stay blocked for seconds, but the QR file is already
         # fresh and can be shown immediately during this poll.
         if self._qq_waiting_auth_since is not None:
+            # A QR that appears between polls must release the button at once,
+            # without waiting for the snapshot worker to come back.
             self._refresh_qq_qrcode()
+            self._sync_qq_qr_wait_state()
         generation = self._qq_attempt_generation
         self._executor(
             lambda: self._facade.get_qq_connection_snapshot(),
@@ -625,6 +640,56 @@ class QQWorkspace(QWidget):
 
     def _stop_qq_status_polling(self) -> None:
         self._qq_status_timer.stop()
+
+    def _sync_qq_qr_wait_state(self) -> None:
+        """Own the scan-stage copy and the cancel button while waiting for QR.
+
+        The button is held disabled only until the QR shows or the bounded wait
+        elapses. Once released it stays released: a later poll that still
+        reports the same waiting state must not disable it again.
+        """
+        note = _QQ_STAGE_COPY[_QQ_STAGE_SCANNING][1]
+        if self._qq_qrcode_label.isVisibleTo(self):
+            self._stop_qq_qr_wait_timer()
+            self._show_qq_guide(_QQ_QR_READY_ACTION, note)
+            self._qq_connect_button.setEnabled(True)
+            return
+        if self._qq_qr_wait_elapsed():
+            self._stop_qq_qr_wait_timer()
+            self._show_qq_guide(_QQ_QR_SLOW_ACTION, note)
+            self._qq_connect_button.setEnabled(True)
+            return
+        self._show_qq_guide(_QQ_QR_LOADING_ACTION, note)
+        self._qq_connect_button.setEnabled(False)
+        self._start_qq_qr_wait_timer()
+
+    def _qq_qr_wait_elapsed(self) -> bool:
+        """Return whether the QR has been loading long enough to release."""
+        since = self._qq_waiting_auth_since
+        if since is None:
+            return False
+        return (time.monotonic() - since) * 1000 >= _QQ_QR_RELEASE_MS
+
+    def _start_qq_qr_wait_timer(self) -> None:
+        """Arm the single release bound once, counted from the wait's start."""
+        if self._qq_qr_wait_timer.isActive():
+            return
+        remaining = _QQ_QR_RELEASE_MS
+        since = self._qq_waiting_auth_since
+        if since is not None:
+            remaining = max(
+                0, _QQ_QR_RELEASE_MS - int((time.monotonic() - since) * 1000)
+            )
+        self._qq_qr_wait_timer.start(remaining)
+
+    def _stop_qq_qr_wait_timer(self) -> None:
+        self._qq_qr_wait_timer.stop()
+
+    def _on_qq_qr_wait_elapsed(self) -> None:
+        """Release the cancel button after a slow QR load, and keep polling."""
+        if self._qq_waiting_auth_since is None:
+            return
+        self._sync_qq_qr_wait_state()
 
     def _qq_auth_waiting_expired(self) -> bool:
         since = self._qq_waiting_auth_since
@@ -681,9 +746,13 @@ class QQWorkspace(QWidget):
         """Move the connection trail, or hand the top line back to the status.
 
         ``None`` leaves the guided journey: the trail hides and the status
-        label (owned by the caller) speaks again.
+        label (owned by the caller) speaks again. Leaving the scan stage also
+        drops any pending QR release, so a stale callback can never touch a
+        later connection state.
         """
         self._update_setup_spacing()
+        if stage != _QQ_STAGE_SCANNING:
+            self._stop_qq_qr_wait_timer()
         if stage is None:
             self._progress_track.setVisible(False)
             return
