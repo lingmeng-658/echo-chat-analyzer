@@ -20,7 +20,7 @@ from uuid import uuid4
 import zipfile
 
 TARGET = "qq-napcat-candidate"
-OFFICIAL_URL = "https://github.com/NapNeko/NapCatQQ/releases/download/v4.18.18/NapCat.Shell.zip"
+OFFICIAL_URL = "https://github.com/NapNeko/NapCatQQ/releases/download/v4.18.33/NapCat.Shell.zip"
 DOWNLOAD_HOSTS = {"github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"}
 
 
@@ -31,6 +31,35 @@ def sha(data: bytes) -> str:
 def verify(data: bytes, expected: str) -> None:
     if not re.fullmatch(r"[0-9a-f]{64}", expected) or sha(data) != expected:
         raise ValueError("SHA256 mismatch")
+
+
+def apply_napcat_patch(text: str, patch: dict) -> str:
+    """Version-specific contract: key capture and Echo-only allowlist delta.
+
+    Hashes establish provenance, not correctness. Independently restrict the
+    executable changes and their location; fixture tests exercise the changes.
+    No upstream entry is executed by this builder.
+    """
+    edits = patch["replacements"]
+    # G1 key capture (3 edits) + G3 whitelist (1 edit). The G2 read-window
+    # telemetry patch was removed; the snapshot runtime now witnesses its own
+    # staging input before and after decryption.
+    if len(edits) != 4:
+        raise ValueError("unexpected NapCat patch scope")
+    whitelist = edits[3]
+    anchor_names = re.findall(r'"([a-z0-9-]+)"', whitelist["anchor"])
+    replacement_names = re.findall(r'"([a-z0-9-]+)"', whitelist["replacement"])
+    if replacement_names != ["napcat-plugin-echo", *anchor_names]:
+        raise ValueError("plugin authorization exceeds Echo-only delta")
+    for edit in edits:
+        if not edit["anchor"] or text.count(edit["anchor"]) != 1:
+            raise ValueError("NapCat patch anchor must occur exactly once")
+        text = text.replace(edit["anchor"], edit["replacement"], 1)
+    if ("__ECHO_DIRECT_DB_READ_STATE__" in text
+            or "core.dbPassphrase" not in text
+            or '"napcat-plugin-echo"' not in text):
+        raise ValueError("NapCat patch postcondition failed")
+    return text
 
 
 def relative(name: str) -> Path:
@@ -72,7 +101,7 @@ def build_runtime(project_root: Path, archive_path: Path | None = None) -> Path:
     pins = json.loads((scripts / "qq_napcat_runtime_pins.json").read_text(encoding="utf-8"))
     contract = json.loads((scripts / "qq_napcat_runtime_manifest.json").read_text(encoding="utf-8"))
     upstream = pins["upstream"]
-    if upstream["version"] != "4.18.18" or upstream["project"] != "NapNeko/NapCatQQ" or upstream["archiveUrl"] != OFFICIAL_URL:
+    if upstream["version"] != "4.18.33" or upstream["project"] != "NapNeko/NapCatQQ" or upstream["archiveUrl"] != OFFICIAL_URL:
         raise ValueError("unsupported official source")
     runtime = root / "runtime"
     if runtime.is_symlink() or runtime.resolve().parent != root:
@@ -120,10 +149,7 @@ def build_runtime(project_root: Path, archive_path: Path | None = None) -> Path:
             napcat = stage / "napcat.mjs"
             verify(napcat.read_bytes(), patch["upstreamSha256"])
             text = napcat.read_text(encoding="utf-8")
-            for edit in patch["replacements"]:
-                if not edit["anchor"] or text.count(edit["anchor"]) != 1:
-                    raise ValueError("NapCat patch anchor must occur exactly once")
-                text = text.replace(edit["anchor"], edit["replacement"], 1)
+            text = apply_napcat_patch(text, patch)
             # Worker loads this exact filename; do not install a second patched entry.
             napcat.write_bytes(text.encode("utf-8"))
             verify(napcat.read_bytes(), patch["patchedSha256"])

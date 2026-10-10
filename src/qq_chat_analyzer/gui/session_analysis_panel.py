@@ -732,7 +732,7 @@ class SessionAnalysisPanel(QWidget):
         if self._analysis_operation is not identity:
             return
         task = self._executor(
-            operation,
+            lambda report: operation(report) if self._analysis_operation is identity else None,
             on_success=lambda outcome: self._handle_success(identity, outcome),
             on_error=lambda code, message: self._handle_error(identity, code, message),
             on_finished=lambda: self._finish_analysis(identity),

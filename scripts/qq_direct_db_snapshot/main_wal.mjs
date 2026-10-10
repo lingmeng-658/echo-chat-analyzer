@@ -41,9 +41,13 @@ function writeExactly(fd, buffer) {
   }
 }
 
-function fileState(path) {
+export function fileState(path) {
   try {
     const state = statSync(path, { bigint: true });
+    if (state.isFile() !== true ||
+        ![state.dev, state.ino, state.size, state.mtimeNs, state.ctimeNs]
+          .every(value => typeof value === 'bigint') ||
+        state.dev < 0n || state.ino < 0n || state.size < 0n) return null;
     return `${state.dev}:${state.ino}:${state.size}:${state.mtimeNs}:${state.ctimeNs}`;
   } catch {
     return null;

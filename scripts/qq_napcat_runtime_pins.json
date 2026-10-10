@@ -1,17 +1,17 @@
 {
   "upstream": {
-    "version": "4.18.18",
+    "version": "4.18.33",
     "project": "NapNeko/NapCatQQ",
-    "releaseUrl": "https://github.com/NapNeko/NapCatQQ/releases/tag/v4.18.18",
-    "archiveUrl": "https://github.com/NapNeko/NapCatQQ/releases/download/v4.18.18/NapCat.Shell.zip",
-    "archiveSha256": "f1053918fae7ae24807841baa516d231f5412fc443fa217183698764be1c1817",
-    "archiveSizeBytes": 29466482,
+    "releaseUrl": "https://github.com/NapNeko/NapCatQQ/releases/tag/v4.18.33",
+    "archiveUrl": "https://github.com/NapNeko/NapCatQQ/releases/download/v4.18.33/NapCat.Shell.zip",
+    "archiveSha256": "4b8e20e6d22288586d99eb0b34fff6c7ee1d88b00353039326f8c459a86df667",
+    "archiveSizeBytes": 29500155,
     "license": "Limited Redistribution License for NapCat"
   },
   "napcatPatch": {
     "path": "napcat.mjs",
-    "upstreamSha256": "59ba500eb824b4064d9f9a763101d15c5aae5cd268475b4cbbb7c3c8e2134aee",
-    "patchedSha256": "c6a0782e3d6e1083a9d886fb37583540f400bc9ddf55b24bc60aed088d017295",
+    "upstreamSha256": "ee961eae58c88ec08952f81cb06fb9dc3b129704f50f21f5cfc7ea509f32bf34",
+    "patchedSha256": "87f4ebb93b14c6626ba54052bc5798769ef15d3e9a67d043b4592df304d45aab",
     "replacements": [
       {
         "anchor": "  let a;\n  if (r.onCmd(\"OidbSvcTrpcTcp.0xcde_2\"",
@@ -22,25 +22,21 @@
         "replacement": "D.inner?.value && (a = D.inner.value, core && (core.dbPassphrase = a), e.log("
       },
       {
-        "anchor": "  a && (Y.core.dbPassphrase = a), await Y.InitNapCat();",
-        "replacement": "  core = Y.core, a && (core.dbPassphrase = a), await Y.InitNapCat();"
+        "anchor": "  a && (V.core.dbPassphrase = a), await V.InitNapCat();",
+        "replacement": "  core = V.core, a && (core.dbPassphrase = a), await V.InitNapCat();"
       },
       {
-        "anchor": "function LE(t, e, n) {\n  const r = Ge.readFileSync(t), i = UE(r, e);",
-        "replacement": "function LE(t, e, n) {\n  const echoFileState = (p) => { try { const s = Ge.statSync(p); return { present: s.isFile(), bytes: s.isFile() ? s.size : 0, mtimeMs: s.mtimeMs }; } catch { return { present: false, bytes: 0, mtimeMs: 0 }; } }, echoBefore = { database: echoFileState(t), wal: echoFileState(`${t}-wal`), shm: echoFileState(`${t}-shm`) }, r = Ge.readFileSync(t), echoAfter = { database: echoFileState(t), wal: echoFileState(`${t}-wal`), shm: echoFileState(`${t}-shm`) };\n  globalThis.__ECHO_DIRECT_DB_READ_STATE__ = { databaseBefore: echoBefore.database, databaseAfter: echoAfter.database, walBefore: echoBefore.wal, walAfter: echoAfter.wal, shmBefore: echoBefore.shm, shmAfter: echoAfter.shm, readBytes: r.length };\n  const i = UE(r, e);"
-      },
-      {
-        "anchor": "new Set([\n  \"napcat-plugin-builtin\",",
-        "replacement": "new Set([\n  \"napcat-plugin-echo\",\n  \"napcat-plugin-builtin\","
+        "anchor": "new Set([\n  \"napcat-plugin-builtin\",\n  \"napcat-plugin-cleaner\",\n  \"napcat-plugin-ssqq\",\n  \"napcat-plugin-qce\"\n])",
+        "replacement": "new Set([\n  \"napcat-plugin-echo\",\n  \"napcat-plugin-builtin\",\n  \"napcat-plugin-cleaner\",\n  \"napcat-plugin-ssqq\",\n  \"napcat-plugin-qce\"\n])"
       }
     ]
   },
   "requiredFiles": {
-    "NapCatWinBootHook.dll": "962bd5caf59e9792c37eed99c9130bf1464d619d0209820be570874017d66925",
-    "NapCatWinBootMain.exe": "bd8ec316582bfb25e3b9b7f27a22c91437584f29879950462f789fd7bb111949",
+    "NapCatWinBootHook.dll": "3504f41ffcfe30ea8330abf0ad4ad39092af23a5d95b77f478369524887e0eeb",
+    "NapCatWinBootMain.exe": "fdc3b5b3131093f627811e171425e98681f71523c0aa21693dee8c6b6b2892f7",
     "conout-wiJ7YKRd.js": "4f1afebbc3a653f1d47bc787f37acc8b15d8d15a2e9bee7a4c3ba54344566564",
-    "launcher-user.bat": "1f946e1fc40d79174153d0fdf0ea831c132a447b690d1c8dfce4116869d9719d",
-    "napcat.mjs": "59ba500eb824b4064d9f9a763101d15c5aae5cd268475b4cbbb7c3c8e2134aee",
+    "launcher-user.bat": "1058dfaccdacb8690d58067f0a741c40300d428284ecc6b0e501ba10de5d59e3",
+    "napcat.mjs": "ee961eae58c88ec08952f81cb06fb9dc3b129704f50f21f5cfc7ea509f32bf34",
     "native/dpapi/win32-arm64/@primno+dpapi.node": "6a5cc9c5b3e390fe08fea0de3a22248d5836cea0b26aa6a80d9447c45ec04b12",
     "native/dpapi/win32-x64/@primno+dpapi.node": "386e7a520b143aa7b6fa1a28a0237391a938bbedd0b245733a3da3a215026a3f",
     "native/ffmpeg/ffmpegAddon.darwin.arm64.node": "041f24ebe44241f1a725d07996ada665968cccc1ebf229a8595b3a802d26c8c5",
@@ -53,9 +49,9 @@
     "native/napi2native/napi2native.linux.x64.node": "42dcb6b65c2f8b065dc5a3b5b7ae906eec08c21142433c96636f68fb2c1fedfb",
     "native/napi2native/napi2native.win32.x64.node": "46780f9cc420a840318179b26cbb551357d2ae986dd8df960ef1a49656181fcc",
     "native/packet/MoeHoo.darwin.arm64.node": "9c1dedc880dfcc332d3a61244ffc44aeefc1488e3651f40cfe192ea9adcdbae0",
-    "native/packet/MoeHoo.linux.arm64.node": "b7b0c662be9a2b9842e5a75a43841539f948ad7b07ee801e9b7d29654caef625",
-    "native/packet/MoeHoo.linux.x64.node": "70d1cd08efd877f3fe9be4df76c4366f78975e279f09f86830b9dbcff1721ed4",
-    "native/packet/MoeHoo.win32.x64.node": "2d2cf1f1fbda0922cc3c543fbf49ebb413968527c9e46c47301e3d8913fcab99",
+    "native/packet/MoeHoo.linux.arm64.node": "9925d7919a22a923e4cada245371990e95f4465b7ad42344428edaffa41558ef",
+    "native/packet/MoeHoo.linux.x64.node": "7caf9629c2ae8f25aa636bd0940c0d430bb30264617b9a6531800586d015b534",
+    "native/packet/MoeHoo.win32.x64.node": "fb62bff4d093b892bbe5c5dc4197a226881689e43f6d438a66895fa7cdbb90f1",
     "native/pty/linux.arm64/pty.node": "bda8ab21d712401fb021b90087701eb32960b65392c89a3c05ceb379e8f567f9",
     "native/pty/linux.x64/pty.node": "701b630885f889579c83d7fb173fce1a42d2be396ca2b481faa714394d7eddb9",
     "native/pty/win32.x64/conpty.node": "747cf00a7d4c5c339f991d3e6b441f4cd84beffbf1a0328e33f4daab7a94c70c",
@@ -64,7 +60,7 @@
     "native/pty/win32.x64/winpty-agent.exe": "4d724f4d2e6407e3d40c46f30d8edbb50e6f6ae84c3bfa7c9b089557d79cc822",
     "native/pty/win32.x64/winpty.dll": "61f98635a9282ff0b8c99a1d11e7316ba34128cea58ddfeb7211adf622498129",
     "node_modules/express/package.json": "2980b885bad92f757a2d44674e905cf875867d5685111d8ab8f285635b11367d",
-    "node_modules/ws/package.json": "22d3cdfb9a67c897d27af008e77f0f17aee5b1d5f7924436154f00691019b28a",
+    "node_modules/ws/package.json": "c1ef91ca04eb4754c011c5f0e7638b5078ff71104fada400c44ac761cf93e0b1",
     "package.json": "a4a29f9ecd82642d73d6f778a06e3a72531a2e52fc925fc0f46ed23519976ceb",
     "qqnt.json": "45346fc8694c6c14a7eb74c290f2de31072d9848ba08807c127770b028e920d6",
     "worker/conoutSocketWorker.mjs": "f794939779f59acfa9ce68eabfae60a7816ce0d68bddbd9d57f1d239039175f4"
@@ -73,7 +69,7 @@
     {
       "source": "qq_napcat_plugin/index.mjs",
       "target": "plugins/napcat-plugin-echo/index.mjs",
-      "sha256": "553171cb243b7101b0fac773c22faf295877c8de1bbe566f296cbe0f28ffede3"
+      "sha256": "7da29bef95d327279af7a0c2786ca1a2d6cb7c6f803ce1f599c362c4ab0837c3"
     },
     {
       "source": "qq_napcat_plugin/package.json",
@@ -83,12 +79,12 @@
     {
       "source": "qq_direct_db_snapshot/snapshot.mjs",
       "target": "plugins/napcat-plugin-echo/snapshot/snapshot.mjs",
-      "sha256": "9899f8be3a6f357bf26862193e223f7addb420a0760efa0d1263f6c02607d724"
+      "sha256": "9cc6d3b36b57645a663ee7bf93ceea0bd4b1ae932c6aa91939553b20bd78e695"
     },
     {
       "source": "qq_direct_db_snapshot/main_wal.mjs",
       "target": "plugins/napcat-plugin-echo/snapshot/main_wal.mjs",
-      "sha256": "0a2ee3a37f31a7dbb861d60f944247e95ee55069eb5a0eb90a31a1cbc71c1be0"
+      "sha256": "e2ec9ff266d7cc0e53b390ce24b0f53d980dd089305ea07044f27df597188749"
     },
     {
       "source": "qq_direct_db_snapshot/workspace.mjs",
@@ -98,7 +94,7 @@
     {
       "source": "qq_napcat_plugin/bridge.mjs",
       "target": "plugins/napcat-plugin-echo/bridge.mjs",
-      "sha256": "e312b9b8d46b786af2b5f8afbc6c47d042b6df0053bd707452a52a392ef20a67"
+      "sha256": "65261ca673f795ef68d43b80f8b0e4d26d05ca7d972f4f351c9a693fdeae820d"
     }
   ],
   "pluginConfigSha256": "83f2f45b62071d5ad84ece29baa2a25654cab204f469e59cc0f44149346b55eb"

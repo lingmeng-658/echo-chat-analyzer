@@ -11,14 +11,20 @@ Echo 已过「先证明有没有人愿意用」的阶段。当前目标是修复
 
 **交付层级（统一口径）**：
 
-1. **源码功能完成**：功能代码已进入 `main`。
+1. **代码实现完成**：须注明在工作树、分支提交还是 `main`；只有已进入 `main` 才称为已合入交付。
 2. **自动化测试通过**：对应 focused / Fast / Full 层级通过（须注明层级与时间）。
 3. **Frozen 发行包通过**：在新鲜构建的 Frozen / Portable 包上通过合同与启动验收。
 4. **真实用户验收通过**：在真实机器、真实数据上完成端到端验收。
+5. **正式发布完成**：对应源码、tag / Release 与最终发行资产已公开交付。
 
-四者逐级独立；低层级完成不得用于关闭更高层级待办。
+五者分别记录；低层级完成不得用于关闭更高层级待办。
 
-校准基线：2026-10-09，`origin/main = e820579d`。
+校准基线：2026-10-10，`origin/main = 003a689b06992e2caade01d41b6912c52365c05e`。
+当前 `integration/napcat-convergence` 包含该 main，领先 3 个提交；RPC 客户端认证、
+staging 输入强见证与 G2 telemetry patch 移除已在分支提交，尚未合入 main。
+Worker `boot_id` 代际隔离、显式重连、NapCat 4.18.33 升级及两个连接归属 P1 修复
+已在工作树实现，尚未提交。2026-10-10 本工作树 Full 已通过（3898 passed、32 skipped、0 failed；
+沿用上一轮结果，本次文档检查未重跑）；跳过项不算验收通过，Frozen / 真人与正式发布仍未完成。
 （历史校准、逐次 checkpoint 与旧测试数字已移除以降低维护成本；需要时见 Git 历史与
 `docs/BUG_JOURNAL.md`。）
 
@@ -26,7 +32,7 @@ Echo 已过「先证明有没有人愿意用」的阶段。当前目标是修复
 
 | 条目 | 状态 |
 | --- | --- |
-| REL-06C NapCat 升级与兼容性 | **Release Blocker：Yes**；未完成升级及验收，pin 仍为 4.18.18 |
+| REL-06C NapCat 升级与兼容性 | **Release Blocker：Yes**；集成工作树已适配 4.18.33、Worker 代际与显式重连，两个连接归属 P1 已修复，Full 已通过；升级与修复尚未提交 / 合入，最终 Frozen / 真人验收未完成 |
 | REL-08 分析结果分享闭环 | **源码功能已合入；分享体验优化 DEFERRED**（与报告内容后续一并优化）；最终基本可用性纳入 QA-01 |
 | REL-06 Windows Portable ZIP 发布 | 未完成：v0.1.0 只交付 Windows Portable ZIP（不开发 Setup 安装器）；REL-06B 已合入 main（PR #24），整合版最终发行验收未完成 |
 | REL-07 GUI 最终 polish | **源码功能收尾完成**（含 `9a81d5b`、`b5413dd`、`e820579d`）；仅保留最终真实使用 / Frozen 验收，不再作为独立功能开发阻塞项 |
@@ -39,8 +45,12 @@ Echo 已过「先证明有没有人愿意用」的阶段。当前目标是修复
 
 已合入 main、非阻塞（**源码功能完成**，不代表发行 / 真人验收）：报告历史浏览与批量删除
 （PR #26、`b9c42de`、`fec51e9`）、微信会话排序修复（`f264ae0`）。
-独立审计分支 `audit/algorithm-quality` 的成果须以合入 `main` 为准，不得将并行报告直接计为已交付。
-NapCat RPC 客户端认证正在独立分支实施；REL-06C NapCat 升级处于只读兼容审计阶段，两者尚未计入 `main` 交付。
+算法质量 v5（`347d298`）、QQ 表情资源与文字兜底（`b9f39d6`）、群语言画像双列布局
+（`479246c`）已随 `003a689` 合入 main，当前分支也包含这些成果。
+测试生命周期与 editable metadata 兼容修复（`4ffbe19`、`3a7e335`、`8b3b546`）同样已合入。
+`fe4e07a` 的集成验收记录保留其当时的环境失败事实，不代表当前工作树 Full 仍失败；
+测试修复与本轮通过也不能证明 GUI native access violation 或最终发行验收已关闭。
+NapCat RPC 客户端认证与 REL-06C 升级已在集成工作树实施，两者尚未计入 `main` 交付。
 
 ## Active Bugs
 
@@ -57,8 +67,9 @@ NapCat RPC 客户端认证正在独立分支实施；REL-06C NapCat 升级处于
   `scripts/package_windows_portable.py` 提供 ZIP + SHA-256 包装（包裹已有 build，不执行 fresh build）；
   QQ managed runtime 区分程序目录 / 用户运行目录 / Direct DB transient 目录，安装目录只读。
   **独立工作树 Frozen 实机验收已通过；最新 main 整合版的最终发行验收未完成。**
-- **REL-06C NapCat 升级与兼容性**：Blocker：Yes。发布前需确认目标版本、升级正式资产与 pin，
-  覆盖 Echo patch / plugin、启动登录、QR freshness、会话读取、main + WAL snapshot / decrypt、
+- **REL-06C NapCat 升级与兼容性**：Blocker：Yes。工作树已升级正式来源与 pin 至 4.18.33，
+  自动化 Full 已通过，尚未提交 / 合入 main；最终验收仍须覆盖 Echo patch / plugin、
+  启动登录、QR freshness、会话读取、main + WAL snapshot / decrypt、
   分析、退出清理与异常恢复，并在最终 Frozen / ZIP 包上验收。
 - **v0.1.0 交付形态**：首次发布**只提供 Windows Portable ZIP**，不开发 Setup 安装器；
   Setup 安装器与原地覆盖更新机制一并延期，后续作为**同一独立专题**统一设计。
@@ -96,6 +107,8 @@ GUI 收尾提交包括 `9a81d5b`（整体 / Local Data polish）、`b5413dd`（Q
 
 专项已实施 Echo 自有源码 MPL-2.0 许可文本、`NOTICE.md` 和发行复制契约；
 `third_party/napcat/NOTICE.md` 保留 NapCat 第三方边界。**不再把已完成的许可补齐工作列作待开发事项**。
+NapCat #2096 答复的历史上下文是 4.18.18 集成方案，不能自动扩大为 4.18.33 或第三方组件的
+全面授权结论；MoeHoo、napi2native、`ffmpeg.dll` 与 PTY prebuilt 精确构建来源等证据缺口仍保留。
 最终生成发行包后仍须核对实际随包资产、第三方许可与声明（含 NapCat、微信 native、字体 / 图形及官方表情资源排除情况）。
 仓库声明或 hash 校验不能单独代替最终发行分发合规结论；不作法律结论。
 

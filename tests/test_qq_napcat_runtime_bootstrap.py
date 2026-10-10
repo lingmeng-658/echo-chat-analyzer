@@ -16,7 +16,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/bootstrap_qq_napcat_runtime.py"
 PINS = ROOT / "scripts/qq_napcat_runtime_pins.json"
 MANIFEST = ROOT / "scripts/qq_napcat_runtime_manifest.json"
-ARCHIVE_SHA = "f1053918fae7ae24807841baa516d231f5412fc443fa217183698764be1c1817"
+ARCHIVE_SHA = "4b8e20e6d22288586d99eb0b34fff6c7ee1d88b00353039326f8c459a86df667"
+#: Fictional, in-memory only: never a real bridge credential.
+FICTIONAL_TOKEN = "0123456789abcdef" * 4
 
 
 def digest(data):
@@ -34,17 +36,19 @@ def load_builder():
 def test_official_pins_and_correctness_templates():
     assert PINS.is_file(), "official NapCat pins missing"
     pins = json.loads(PINS.read_text(encoding="utf-8"))
-    assert pins["upstream"]["version"] == "4.18.18"
+    assert pins["upstream"]["version"] == "4.18.33"
     assert pins["upstream"]["project"] == "NapNeko/NapCatQQ"
-    assert pins["upstream"]["archiveUrl"] == "https://github.com/NapNeko/NapCatQQ/releases/download/v4.18.18/NapCat.Shell.zip"
+    assert pins["upstream"]["archiveUrl"] == "https://github.com/NapNeko/NapCatQQ/releases/download/v4.18.33/NapCat.Shell.zip"
     assert pins["upstream"]["archiveSha256"] == ARCHIVE_SHA
-    assert pins["napcatPatch"]["upstreamSha256"] == "59ba500eb824b4064d9f9a763101d15c5aae5cd268475b4cbbb7c3c8e2134aee"
-    native = pins["napcatPatch"]["replacements"][3]["replacement"]
-    assert "__ECHO_DIRECT_DB_READ_STATE__" in native
+    assert pins["napcatPatch"]["upstreamSha256"] == "ee961eae58c88ec08952f81cb06fb9dc3b129704f50f21f5cfc7ea509f32bf34"
     assert "core && (core.dbPassphrase = a)" in pins["napcatPatch"]["replacements"][1]["replacement"]
-    whitelist = pins["napcatPatch"]["replacements"][4]
+    whitelist = pins["napcatPatch"]["replacements"][3]
     assert '"napcat-plugin-echo"' in whitelist["replacement"]
-    assert len(pins["napcatPatch"]["replacements"]) == 5
+    assert '"napcat-plugin-echo"' not in whitelist["anchor"]
+    assert len(pins["napcatPatch"]["replacements"]) == 4
+    for replacement in pins["napcatPatch"]["replacements"]:
+        assert "__ECHO_DIRECT_DB_READ_STATE__" not in replacement["anchor"]
+        assert "__ECHO_DIRECT_DB_READ_STATE__" not in replacement["replacement"]
     for item in pins["templates"]:
         assert digest((ROOT / "scripts" / item["source"]).read_bytes()) == item["sha256"]
     for name in ("snapshot.mjs", "main_wal.mjs", "workspace.mjs"):
@@ -105,7 +109,7 @@ def test_complete_runtime_worker_patch_and_repeatability(project):
     target = builder.build_runtime(root, archive)
     assert target == root / "runtime/qq-napcat-candidate"
     assert (target / "napcat.mjs").read_bytes() == patched.encode()
-    assert "__ECHO_DIRECT_DB_READ_STATE__" in patched
+    assert "__ECHO_DIRECT_DB_READ_STATE__" not in patched
     assert "core.dbPassphrase = a" in patched
     assert '"napcat-plugin-echo"' in patched
     assert json.loads((target / "config/plugins.json").read_text()) == {"napcat-plugin-echo": True}
@@ -188,6 +192,34 @@ def test_plugin_loads_without_bridge_or_acquisition(tmp_path):
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()
     (snapshot / "snapshot.mjs").write_text("export function registerEchoSnapshotApi(core, options) { core.apis.EchoSnapshotApi = {acquire(){throw Error('unexpected acquisition')},recover:async()=>({ok:true})}; }", encoding="utf-8")
-    check = "import {plugin_init,plugin_cleanup} from './index.mjs'; process.env.ECHO_BRIDGE_PORT='0'; process.env.ECHO_SNAPSHOT_ROOT=process.cwd(); const core={apis:{}}; let logged=false; await plugin_init({core,logger:{info(){logged=true}}}); if (!core.apis.EchoSnapshotApi) throw Error('not registered'); if (!logged) throw Error('plugin readiness log missing'); await plugin_cleanup();"
+    check = "import {plugin_init,plugin_cleanup} from './index.mjs'; process.env.ECHO_BRIDGE_PORT='0'; process.env.ECHO_SNAPSHOT_ROOT=process.cwd(); process.env.ECHO_BRIDGE_TOKEN='" + FICTIONAL_TOKEN + "'; const core={apis:{}}; let logged=false; await plugin_init({core,logger:{info(){logged=true}}}); if (!core.apis.EchoSnapshotApi) throw Error('not registered'); if (!logged) throw Error('plugin readiness log missing'); await plugin_cleanup();"
     result = subprocess.run([node, "--input-type=module", "-e", check], cwd=tmp_path, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("token", [None, "", "fictional", "A" * 64, "f" * 63])
+def test_plugin_refuses_an_absent_or_malformed_bridge_credential(tmp_path, token):
+    """A credential is mandatory: no token means no bridge, never an open one."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node required for plugin credential contract")
+    entry = ROOT / "scripts/qq_napcat_plugin/index.mjs"
+    assert entry.is_file(), "Echo plugin skeleton missing"
+    shutil.copy2(entry, tmp_path / "index.mjs")
+    shutil.copy2(entry.parent / "bridge.mjs", tmp_path / "bridge.mjs")
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    (snapshot / "snapshot.mjs").write_text("export function registerEchoSnapshotApi(core, options) { core.apis.EchoSnapshotApi = {acquire(){throw Error('unexpected acquisition')},recover:async()=>({ok:true})}; }", encoding="utf-8")
+    lines = [
+        "import {plugin_init} from './index.mjs';",
+        "process.env.ECHO_BRIDGE_PORT='0';",
+        "process.env.ECHO_SNAPSHOT_ROOT=process.cwd();",
+        f"if ({json.dumps(token)} === null) {{ delete process.env.ECHO_BRIDGE_TOKEN; }} else {{ process.env.ECHO_BRIDGE_TOKEN={json.dumps(token)}; }}",
+        "const core={apis:{}}; let logged=false;",
+        "try { await plugin_init({core,logger:{info(){logged=true}}}); process.exit(3); }",
+        "catch (error) { if (error.message !== 'echo_bridge_token_missing') throw error; }",
+        "if (core.apis.EchoSnapshotApi) throw Error('snapshot api registered without a credential');",
+        "if (logged) throw Error('bridge readiness was logged without a credential');",
+    ]
+    result = subprocess.run([node, "--input-type=module", "-e", "\n".join(lines)], cwd=tmp_path, capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr

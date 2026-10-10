@@ -2401,6 +2401,77 @@ def test_qq_session_loading_coalesces_connected_callbacks_until_final_success(qt
     assert workspace.session_panel._sessions_data == sessions
 
 
+def test_qq_generation_error_discards_pending_session_result(qt_app):
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+    from qq_chat_analyzer.application.connection_models import ConnectionSnapshot, ConnectionState
+    executor = _DeferredExecutor()
+    workspace = QQWorkspace(StubFacade(), executor=executor)
+    workspace._load_sessions()
+    workspace._show_qq_status(ConnectionSnapshot(ConnectionState.ERROR, "qq",
+        "QQ 运行环境已变化，请重新连接。", code="qq_reconnect_required"), False)
+    executor.succeed([_session(_facade_module().ChatSource.QQ, "old", "Old group")])
+    assert not workspace._sessions_loaded
+    assert workspace._qq_connect_button.isEnabled()
+    assert "重新连接" in workspace._status_label.text()
+
+
+def test_qq_explicit_connect_invalidates_old_analysis_result(qt_app):
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+    workspace = QQWorkspace(StubFacade(), executor=_DeferredExecutor())
+    panel = workspace.session_panel
+    panel._analysis_operation = object()
+    panel._set_busy(True)
+    workspace.connect_qq()
+    assert panel._analysis_operation is None
+
+
+def test_qq_cancelled_queued_operations_do_not_use_new_connection(qt_app):
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+    executor = _DeferredExecutor()
+    facade = StubFacade()
+    calls = []
+    facade.list_sessions = lambda source: calls.append("sessions") or []
+    workspace = QQWorkspace(facade, executor=executor)
+    workspace._load_sessions()
+    sessions = executor.operation
+    workspace._invalidate_session_request()
+    assert sessions() == [] and calls == []
+    panel = workspace.session_panel
+    identity = object()
+    panel._analysis_operation = identity
+    panel._set_busy(True)
+    panel._submit_analysis(lambda report: calls.append("analysis"), identity)
+    analysis = executor.operation
+    panel.cancel_analysis()
+    analysis(lambda message: None)
+    assert calls == []
+
+
+def test_qq_old_disconnect_callback_cannot_replace_new_status(qt_app):
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+    executor = _IndependentDeferredExecutor()
+    workspace = QQWorkspace(StubFacade(), executor=executor)
+    workspace.disconnect_qq()
+    old = executor.tasks[-1]
+    workspace.connect_qq()
+    workspace._qq_connect_in_flight = False
+    workspace._show_qq_status(_qq_snapshot("connected", message="New connection"), False)
+    old.succeed(_qq_snapshot("disconnected", message="Old disconnect"))
+    assert "New connection" in workspace._status_label.text()
+
+
+def test_qq_old_queued_disconnect_cannot_stop_new_connection(qt_app):
+    from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
+    executor = _DeferredExecutor()
+    facade = StubFacade()
+    workspace = QQWorkspace(facade, executor=executor)
+    workspace.disconnect_qq()
+    old_operation = executor.operation
+    workspace.connect_qq()
+    old_operation()
+    assert facade.disconnect_qq_calls == []
+
+
 def test_qq_session_loading_transient_acquisition_then_success_has_no_error(
     qt_app, tmp_path, monkeypatch,
 ):
@@ -2427,6 +2498,7 @@ def test_qq_session_loading_transient_acquisition_then_success_has_no_error(
 
     client = runtime.QQDirectSnapshotRuntimeClient(
         "http://127.0.0.1:1", snapshot_root=tmp_path, transport=transport,
+        boot_id="b" * 64,  # This retry fixture starts with a verified fictional binding.
     )
     sessions = [_session(_facade_module().ChatSource.QQ, "fictional", "Fictional group")]
 

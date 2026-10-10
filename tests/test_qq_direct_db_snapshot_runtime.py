@@ -65,6 +65,7 @@ FORBIDDEN_STATUS_FRAGMENTS = (
 _DRIVER = r"""import { createEchoSnapshotApi, registerEchoSnapshotApi } from '__SNAPSHOT_URL__';
 import fs from 'node:fs';
 import path from 'node:path';
+import {syncBuiltinESMExports} from 'node:module';
 
 const root = process.argv[2];
 const config = JSON.parse(process.argv[3]);
@@ -75,6 +76,33 @@ const diagnostics = [];
 console.error = (...args) => {
   diagnostics.push(args.map(String).join(' '));
 };
+
+// Inject only staging-input stat failures/changes. Source capture, lease and
+// cleanup still use their real filesystem operations; no production test seam.
+const realStatSync = fs.statSync;
+fs.statSync = (file, options) => {
+  if (options?.bigint !== true || path.resolve(String(file)) !== path.join(root, 'staging', 'merged.db')) {
+    return realStatSync(file, options);
+  }
+  const side = metrics.decryptCalls === 0 ? 'before' : 'after';
+  const fault = config.witnessFault === side || config.witnessFault === 'both';
+  if (fault && config.witnessInvalid === 'throw') {
+    throw Object.assign(new Error('fictional stat failure'), {code: 'EACCES'});
+  }
+  const state = realStatSync(file, options);
+  const result = {...state, isFile: () => state.isFile()};
+  if (fault) {
+    if (config.witnessInvalid === 'missing-field') delete result.ctimeNs;
+    if (config.witnessInvalid === 'wrong-type') result.ino = Number(result.ino);
+    if (config.witnessInvalid === 'directory') result.isFile = () => false;
+    if (config.witnessInvalid === 'negative-size') result.size = -1n;
+  }
+  if (side === 'after' && config.witnessChangedField) {
+    result[config.witnessChangedField] += 1n;
+  }
+  return result;
+};
+syncBuiltinESMExports();
 
 function buildCore() {
   const startedAt = Date.now();
@@ -99,35 +127,18 @@ function buildCore() {
         activeDecrypt += 1;
         metrics.maxActiveDecrypt = Math.max(metrics.maxActiveDecrypt, activeDecrypt);
         try {
-          if (config.traceNativeReadState || !config.omitNativeReadState) {
-            // ``nativeReadChanged`` controls whether the native read window
-            // observes the source database/WAL changing (the untrustworthy
-            // case) or staying still (the trustworthy case).
-            const changed = config.nativeReadChanged === undefined
-              ? Boolean(config.traceNativeReadState)
-              : config.nativeReadChanged;
-            const databaseChanged = changed === true || changed === 'database-only';
-            const walChanged = changed === true || changed === 'wal-only';
-            globalThis.__ECHO_DIRECT_DB_READ_STATE__ = {
-              databaseBefore: { present: true, bytes: 4096, mtimeMs: 100 },
-              databaseAfter: {
-                present: true,
-                bytes: databaseChanged ? 8192 : 4096,
-                mtimeMs: databaseChanged ? 200 : 100,
-              },
-              walBefore: { present: true, bytes: 120, mtimeMs: 100 },
-              walAfter: {
-                present: true,
-                bytes: walChanged ? 180 : 120,
-                mtimeMs: walChanged ? 200 : 100,
-              },
-              shmBefore: { present: true, bytes: 32768, mtimeMs: 100 },
-              shmAfter: { present: true, bytes: 32768, mtimeMs: 100 },
-              readBytes: 4096,
-            };
-          }
           if (config.decryptDelayMs) {
             await new Promise((resolveDelay) => setTimeout(resolveDelay, config.decryptDelayMs));
+          }
+          if (config.decryptInputMutation === 'append') fs.appendFileSync(source, 'fictional change');
+          if (config.decryptInputMutation === 'replace') {
+            const bytes = fs.readFileSync(source);
+            fs.unlinkSync(source);
+            fs.writeFileSync(source, bytes);
+          }
+          if (config.decryptInputMutation === 'delete') fs.unlinkSync(source);
+          if (config.decryptCreatesUnknownFile) {
+            fs.writeFileSync(path.join(path.dirname(target), 'unknown.db'), 'fictional unrelated file');
           }
           if (config.decrypt === 'false') {
             return false;
@@ -135,6 +146,7 @@ function buildCore() {
           if (config.decrypt === 'throw') {
             throw new Error('fictional decrypt failure');
           }
+          if (config.decrypt === 'no-output') return true;
           fs.mkdirSync(path.dirname(target), { recursive: true });
           fs.writeFileSync(target, 'fictional-sqlite-db');
           if (config.decryptMutateUin !== undefined) {
@@ -319,6 +331,96 @@ def _seed_generation(root: Path, generation_id: str) -> None:
 
 
 @pytest.mark.slow_integration
+def test_stable_staging_input_succeeds_without_native_telemetry(tmp_path: Path) -> None:
+    output = _run_node(tmp_path, _acquire({
+        "uin": FICTIONAL_UIN,
+    }))
+    result = output["results"][0]["result"]
+    assert result["ok"] is True, result
+    assert output["metrics"]["decryptCalls"] == 1
+    assert _generation_ids(tmp_path) == [result["generation_id"]]
+    assert not (tmp_path / "generations" / result["generation_id"] / "merged.db").exists()
+    assert not (tmp_path / "staging").exists()
+
+
+@pytest.mark.parametrize("side", ["before", "after", "both"])
+@pytest.mark.parametrize("invalid", ["throw", "missing-field", "wrong-type", "directory", "negative-size"])
+@pytest.mark.slow_integration
+def test_invalid_staging_witness_fails_closed(tmp_path: Path, side: str, invalid: str) -> None:
+    # `both` + `throw` specifically guards against null === null admission.
+    output = _run_node(tmp_path, _acquire({
+        "uin": FICTIONAL_UIN, "witnessFault": side, "witnessInvalid": invalid,
+    }))
+    assert output["results"][0]["result"] == {
+        "ok": False, "code": "snapshot_unstable", "status": "failed",
+    }
+    assert output["metrics"]["decryptCalls"] == (1 if side == "after" else 0)
+    assert _generation_ids(tmp_path) == []
+    assert not (tmp_path / "staging").exists()
+
+
+@pytest.mark.parametrize("field", ["dev", "ino", "size", "mtimeNs", "ctimeNs"])
+@pytest.mark.slow_integration
+def test_single_staging_witness_field_change_prevents_publication(tmp_path: Path, field: str) -> None:
+    # Only the named bigint field changes: ino catches identity replacement,
+    # ctimeNs catches an overwrite even when size and mtimeNs are preserved.
+    output = _run_node(tmp_path, _acquire({
+        "uin": FICTIONAL_UIN, "witnessChangedField": field,
+    }))
+    assert output["results"][0]["result"] == {
+        "ok": False, "code": "snapshot_unstable", "status": "failed",
+    }
+    assert output["metrics"]["decryptCalls"] == 1
+    assert _generation_ids(tmp_path) == []
+    assert not (tmp_path / "staging").exists()
+
+
+@pytest.mark.parametrize("mutation", ["append", "replace", "delete"])
+@pytest.mark.slow_integration
+def test_staging_input_mutated_during_decrypt_is_rejected(tmp_path: Path, mutation: str) -> None:
+    output = _run_node(tmp_path, _acquire({
+        "uin": FICTIONAL_UIN, "decryptInputMutation": mutation,
+    }))
+    assert output["results"][0]["result"] == {
+        "ok": False, "code": "snapshot_unstable", "status": "failed",
+    }
+    assert output["metrics"]["decryptCalls"] == 1
+    assert _generation_ids(tmp_path) == []
+    assert not (tmp_path / "staging").exists()
+
+
+@pytest.mark.parametrize("decrypt", ["false", "throw", "no-output"])
+@pytest.mark.slow_integration
+def test_changed_staging_input_remains_unstable_when_decrypt_fails(tmp_path: Path, decrypt: str) -> None:
+    output = _run_node(tmp_path, _acquire({
+        "uin": FICTIONAL_UIN, "decrypt": decrypt, "decryptInputMutation": "append",
+    }))
+    assert output["results"][0]["result"] == {
+        "ok": False, "code": "snapshot_unstable", "status": "failed",
+    }
+    assert _generation_ids(tmp_path) == []
+    assert not (tmp_path / "staging").exists()
+
+
+@pytest.mark.parametrize("failure", [
+    {"witnessFault": "after", "witnessInvalid": "throw"},
+    {"decryptInputMutation": "append"},
+    {"decrypt": "false"},
+])
+@pytest.mark.slow_integration
+def test_staging_cleanup_failure_takes_precedence(tmp_path: Path, failure: dict) -> None:
+    output = _run_node(tmp_path, _acquire({
+        "uin": FICTIONAL_UIN, "decryptCreatesUnknownFile": True, **failure,
+    }))
+    assert output["results"][0]["result"] == {
+        "ok": False, "code": "cleanup_failed", "status": "failed",
+    }
+    assert _generation_ids(tmp_path) == []
+    assert (tmp_path / "staging/owner.json").is_file()
+    assert (tmp_path / "staging/unknown.db").read_text() == "fictional unrelated file"
+
+
+@pytest.mark.slow_integration
 def test_passphrase_unavailable_removes_previous_plaintext_first(
     tmp_path: Path,
 ) -> None:
@@ -375,7 +477,7 @@ def test_acquire_logs_one_privacy_safe_diagnostic_stage(
     for fragment in (FICTIONAL_UIN, str(tmp_path), "snapshot.db", "nt_msg.db"):
         assert fragment not in serialized, fragment
 
-@pytest.mark.parametrize("decrypt", ["false", "throw"])
+@pytest.mark.parametrize("decrypt", ["false", "throw", "no-output"])
 @pytest.mark.slow_integration
 def test_decrypt_failure_never_publishes_a_ready_generation(
     tmp_path: Path,
@@ -530,7 +632,7 @@ def test_acquire_trace_records_safe_phase_boundaries(tmp_path: Path, monkeypatch
         "decrypt_source_before",
         "decrypt_started",
         "decrypt_finished",
-        "decrypt_source_read",
+        "decrypt_input_witness",
         "decrypt_source_after",
         "generation_ready",
     ]
@@ -577,7 +679,7 @@ def test_acquire_trace_records_privacy_safe_source_file_state(
 
 
 @pytest.mark.slow_integration
-def test_acquire_trace_correlates_generation_with_exact_native_read_window(
+def test_acquire_trace_correlates_generation_with_staging_input_witness(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -590,8 +692,6 @@ def test_acquire_trace_correlates_generation_with_exact_native_read_window(
             "uin": FICTIONAL_UIN,
             "passphrase": True,
             "traceSourceFileState": True,
-            "traceNativeReadState": True,
-            "nativeReadChanged": False,
         }),
     )
 
@@ -599,7 +699,7 @@ def test_acquire_trace_correlates_generation_with_exact_native_read_window(
     trace = trace_file.read_text(encoding="utf-8")
     read_line = next(
         line for line in trace.splitlines()
-        if "stage=decrypt_source_read" in line
+        if "stage=decrypt_input_witness" in line
     )
     ready_line = next(
         line for line in trace.splitlines()
@@ -607,21 +707,19 @@ def test_acquire_trace_correlates_generation_with_exact_native_read_window(
     )
     assert f"generation_id={generation_id}" in read_line
     assert f"generation_id={generation_id}" in ready_line
-    assert "database_changed=false" in read_line
-    assert "wal_changed=false" in read_line
-    assert "shm_changed=false" in read_line
-    assert "read_bytes=4096" in read_line
+    assert "before_valid=true" in read_line
+    assert "after_valid=true" in read_line
+    assert "input_changed=false" in read_line
     assert str(tmp_path) not in trace
     assert FICTIONAL_UIN not in trace
 
 
 @pytest.mark.slow_integration
-def test_acquire_rejects_snapshot_when_source_changed_during_read(
+def test_acquire_rejects_changed_staging_input_with_privacy_safe_diagnostic(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    """A snapshot whose source changed during the native read window is
-    structurally untrustworthy and must never be published as ready."""
+    """Changed staging input never publishes; diagnostics disclose no stat ids."""
     trace_file = tmp_path / "runtime.log"
     monkeypatch.setenv("QCE_LOG_FILE", str(trace_file))
 
@@ -631,7 +729,7 @@ def test_acquire_rejects_snapshot_when_source_changed_during_read(
             "uin": FICTIONAL_UIN,
             "passphrase": True,
             "traceSourceFileState": True,
-            "traceNativeReadState": True,
+            "decryptInputMutation": "append",
         }),
     )
 
@@ -642,7 +740,7 @@ def test_acquire_rejects_snapshot_when_source_changed_during_read(
     assert output["metrics"]["decryptCalls"] == 1
 
     failure_line = next(line for line in trace_file.read_text(encoding="utf-8").splitlines()
-                        if "failure_stage=telemetry guard_code=telemetry_invalid_or_changed" in line)
+                        if "failure_stage=input_witness guard_code=input_witness_invalid_or_changed" in line)
     for field in ("snapshot_code_hash", "capture_code_hash", "workspace_code_hash",
                   "node_version", "libuv_version"):
         assert f"{field}=" in failure_line
@@ -650,7 +748,7 @@ def test_acquire_rejects_snapshot_when_source_changed_during_read(
 
 
 @pytest.mark.slow_integration
-def test_acquire_rejects_snapshot_when_native_read_state_is_unavailable(
+def test_acquire_rejects_unavailable_staging_witness(
     tmp_path: Path,
 ) -> None:
     output = _run_node(
@@ -658,7 +756,8 @@ def test_acquire_rejects_snapshot_when_native_read_state_is_unavailable(
         _acquire({
             "uin": FICTIONAL_UIN,
             "passphrase": True,
-            "omitNativeReadState": True,
+            "witnessFault": "after",
+            "witnessInvalid": "throw",
         }),
     )
 
@@ -670,7 +769,7 @@ def test_acquire_rejects_snapshot_when_native_read_state_is_unavailable(
 
 
 @pytest.mark.slow_integration
-def test_acquire_rejects_snapshot_when_only_wal_changes_during_read(
+def test_acquire_rejects_replaced_staging_input(
     tmp_path: Path,
 ) -> None:
     output = _run_node(
@@ -679,8 +778,7 @@ def test_acquire_rejects_snapshot_when_only_wal_changes_during_read(
             "uin": FICTIONAL_UIN,
             "passphrase": True,
             "traceSourceFileState": True,
-            "traceNativeReadState": True,
-            "nativeReadChanged": "wal-only",
+            "decryptInputMutation": "replace",
         }),
     )
 

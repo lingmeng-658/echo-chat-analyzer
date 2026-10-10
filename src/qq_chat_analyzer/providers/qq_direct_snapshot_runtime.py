@@ -28,9 +28,12 @@ import logging
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Callable
+
+from .bridge_credential import authorization_headers, resolve_bridge_credential
 
 
 DEFAULT_RPC_TIMEOUT_SECONDS = 30
@@ -80,11 +83,30 @@ class QQSnapshotRuntimeUnavailable(QQSnapshotRuntimeError):
     )
 
 
+class QQSnapshotRuntimeUnauthorized(QQSnapshotRuntimeError):
+    """The bridge refused this client's credential.
+
+    Raised instead of a generic invalid-response failure when the bridge answers
+    ``401``: the request never reached a method, so nothing was acquired or
+    cleaned.  The public message stays the privacy-safe base message.
+    """
+
+    code = "qq_snapshot_runtime_unauthorized"
+    public_message = (
+        "QQ local chat data is unavailable. Please finish QQ login and try again."
+    )
+
+
 class QQSnapshotRuntimeInvalidResponse(QQSnapshotRuntimeError):
     """The runtime answered but the response was not a valid RPC envelope."""
 
     code = "qq_snapshot_runtime_invalid_response"
     public_message = "QQ local chat data is temporarily unavailable. Please try again."
+
+
+class QQSnapshotWorkerGenerationChanged(QQSnapshotRuntimeError):
+    code = "qq_snapshot_worker_generation_changed"
+    public_message = "QQ runtime restarted. Please reconnect explicitly."
 
 
 class QQSnapshotRuntimeNotReady(QQSnapshotRuntimeError):
@@ -144,6 +166,8 @@ class QQDirectSnapshotRuntimeClient:
         acquire_timeout: float = DEFAULT_ACQUIRE_RPC_TIMEOUT_SECONDS,
         transport: Callable[[str, bytes, float], tuple[int, str]] | None = None,
         runtime_id: str | None = None,
+        credential: object | None = None,
+        boot_id: str | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._snapshot_root = Path(snapshot_root)
@@ -151,9 +175,18 @@ class QQDirectSnapshotRuntimeClient:
                                       or re.fullmatch(r"[0-9a-f]{64}", runtime_id) is None):
             raise QQSnapshotRuntimeInvalidResponse()
         self._runtime_id = runtime_id
+        if boot_id is not None and (not isinstance(boot_id, str) or re.fullmatch(r"[0-9a-f]{64}", boot_id) is None):
+            raise QQSnapshotRuntimeInvalidResponse()
+        # A caller may pass the generation already verified by its Provider.
+        self._boot_id = boot_id
+        self._generation_changed = False
         self._timeout = timeout
         self._acquire_timeout = acquire_timeout
-        self._transport = transport or _urllib_transport
+        self._credential_source = credential
+        # A snapshot lifecycle belongs to one launch, including delayed cleanup
+        # and bounded retries. Never upgrade an old task to a new launch's token.
+        self._launch_credential = resolve_bridge_credential(credential)
+        self._transport = transport or self._request_with_credential
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -251,10 +284,13 @@ class QQDirectSnapshotRuntimeClient:
         deadline: float | None = None, timeout: float | None = None,
         namespace: str = RPC_METHOD_NAMESPACE,
     ) -> Any:
-        body = json.dumps(
-            {"method": f"{namespace}.{method}", "params": params},
-            ensure_ascii=False,
-        ).encode("utf-8")
+        if self._generation_changed:
+            raise QQSnapshotWorkerGenerationChanged()
+        if self._credential_source is not None and (
+            self._launch_credential is None or
+            resolve_bridge_credential(self._credential_source) != self._launch_credential
+        ):
+            raise QQSnapshotRuntimeUnavailable()
         url = f"{self._base_url}/rpc"
         if self._runtime_id is not None:
             url += "/" + self._runtime_id
@@ -265,21 +301,57 @@ class QQDirectSnapshotRuntimeClient:
                 raise QQSnapshotRuntimeUnavailable()
             timeout = min(remaining, self._timeout)
         try:
+            if self._boot_id is None:
+                handshake_deadline = time.monotonic() + timeout
+                status, text = self._transport(url, b'{"method":"Core.status","params":[]}', timeout)
+                result = _unwrap_rpc(status, text)
+                if not isinstance(result, Mapping) or result.get("rpc_auth") != "bearer-v1":
+                    raise QQSnapshotRuntimeUnauthorized()
+                boot = result.get("boot_id")
+                if not isinstance(boot, str) or re.fullmatch(r"[0-9a-f]{64}", boot) is None:
+                    raise QQSnapshotRuntimeInvalidResponse()
+                if result.get("runtime_id") != self._runtime_id:
+                    raise QQSnapshotRuntimeInvalidResponse()
+                if self._boot_id is not None and self._boot_id != boot:
+                    raise QQSnapshotWorkerGenerationChanged()
+                self._boot_id = boot
+                timeout = handshake_deadline - time.monotonic()
+                if timeout <= 0:
+                    raise QQSnapshotRuntimeUnavailable()
+            body = json.dumps(
+                {"method": f"{namespace}.{method}", "params": params, "boot_id": self._boot_id},
+                ensure_ascii=False,
+            ).encode("utf-8")
             status, text = self._transport(url, body, timeout)
+            result = _unwrap_rpc(status, text)
+        except QQSnapshotWorkerGenerationChanged:
+            self._generation_changed = True
+            raise
         except QQSnapshotRuntimeError:
             raise
         except (urllib.error.URLError, OSError, TimeoutError) as error:
             raise QQSnapshotRuntimeUnavailable() from error
-        result = _unwrap_rpc(status, text)
         if deadline is not None and time.monotonic() >= deadline:
             raise QQSnapshotRuntimeUnavailable()
         return result
 
+    def _request_with_credential(self, url: str, body: bytes, timeout: float) -> tuple[int, str]:
+        """Send one request with this launch's credential, or send nothing.
+
+        This is the only transport production uses, so "no live credential" is a
+        local refusal rather than an unauthenticated attempt.
+        """
+        credential = self._launch_credential
+        if credential is None or resolve_bridge_credential(self._credential_source) != credential:
+            raise QQSnapshotRuntimeUnavailable()
+        return _urllib_transport(url, body, timeout, credential=credential)
+
 
 def _unwrap_rpc(status: int, text: str) -> Any:
     """Validate the bridge `{id, ok, result|error}` envelope."""
-    if status < 200 or status >= 300:
-        raise QQSnapshotRuntimeInvalidResponse()
+    if status == 401:
+        # The credential was missing, stale or foreign: no method ran.
+        raise QQSnapshotRuntimeUnauthorized()
     payload: Any = None
     if text:
         try:
@@ -287,6 +359,10 @@ def _unwrap_rpc(status: int, text: str) -> Any:
         except json.JSONDecodeError:
             payload = None
     if not isinstance(payload, Mapping):
+        raise QQSnapshotRuntimeInvalidResponse()
+    if status == 409 and payload.get("error") == "worker_generation_mismatch":
+        raise QQSnapshotWorkerGenerationChanged()
+    if status < 200 or status >= 300:
         raise QQSnapshotRuntimeInvalidResponse()
     if payload.get("ok") is not True:
         if _is_recover_api_not_ready(payload.get("error")):
@@ -304,18 +380,41 @@ def _is_recover_api_not_ready(error: Any) -> bool:
     )
 
 
-def _urllib_transport(url: str, body: bytes, timeout: float) -> tuple[int, str]:
-    """Perform one POST against the local `/rpc` bridge only."""
-    if not url.startswith(("http://127.0.0.1", "http://localhost", "http://[::1]")):
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
         raise QQSnapshotRuntimeUnavailable()
+
+
+def _urllib_transport(
+    url: str,
+    body: bytes,
+    timeout: float,
+    *,
+    credential: str | None = None,
+) -> tuple[int, str]:
+    """Perform one POST against the local `/rpc` bridge only."""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        valid = (parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+                 and not parsed.username and not parsed.password and parsed.port is not None
+                 and not parsed.query and not parsed.fragment
+                 and re.fullmatch(r"/rpc(?:/[0-9a-f]{64})?", parsed.path) is not None)
+    except (ValueError, TypeError):
+        valid = False
+    if not valid:
+        raise QQSnapshotRuntimeUnavailable()
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    if credential is not None:
+        headers.update(authorization_headers(credential))
     request = urllib.request.Request(
         url,
         data=body,
         method="POST",
-        headers={"Accept": "application/json", "Content-Type": "application/json"},
+        headers=headers,
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+        with opener.open(request, timeout=timeout) as response:
             return int(response.status), response.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as error:
         response_text = ""
@@ -343,6 +442,8 @@ __all__ = [
     "QQSnapshotRuntimeFailure",
     "QQSnapshotRuntimeNotReady",
     "QQSnapshotRuntimeInvalidResponse",
+    "QQSnapshotRuntimeUnauthorized",
     "QQSnapshotRuntimeUnavailable",
+    "QQSnapshotWorkerGenerationChanged",
     "validate_generation_id",
 ]

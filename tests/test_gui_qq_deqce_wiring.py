@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import json
 import hashlib
+import re
 
 import pytest
 
@@ -49,9 +50,21 @@ def test_default_desktop_uses_candidate_and_shared_config(candidate, monkeypatch
     config=factory.config_loader.load_or_default()
     assert config.runtime_directory==candidate
     assert config.napcat_bridge_url=='http://127.0.0.1:40655'
-    assert isinstance(factory.create(),NapCatQQProvider)
+    provider = factory.create()
+    assert isinstance(provider,NapCatQQProvider)
     service=app._optional_qq_service(factory)
     assert service._config_loader is factory.config_loader
+    paths = factory.config_loader.runtime_paths()
+    provider._credential_source = "c" * 64
+    def fictional_status(url, body, timeout):
+        assert json.loads(body)["method"] == "Core.status"
+        return 200, json.dumps({"ok": True, "result": {
+            "rpc_auth": "bearer-v1", "boot_id": "b" * 64,
+            "runtime_id": paths.runtime_id, "self_info": {},
+            "bridge_ready": True, "qq_online": False, "database_api_ready": True,
+            "passphrase_ready": False, "snapshot_api_ready": True,
+        }})
+    monkeypatch.setattr(provider, "_request", fictional_status)
     assert service._require_runtime_client()._base_url==config.napcat_bridge_url
     setup=app._optional_qq_setup_service(factory,app._optional_qq_connection_service(factory))
     assert setup._config_loader is factory.config_loader
@@ -155,6 +168,10 @@ def test_native_launcher_uses_detected_qq_and_never_qce(candidate,tmp_path,monke
     assert 'qce-server' not in ' '.join(command)
     assert options['env']['NAPCAT_MAIN_PATH']==str(candidate/'napcat.mjs')
     assert options['env']['ECHO_BRIDGE_PORT']=='40655'
+    # A custom runtime is launched by Echo too, so it gets a credential as well:
+    # authentication is not a managed-only feature, only the identity binding is.
+    assert re.fullmatch(r'[0-9a-f]{64}', options['env']['ECHO_BRIDGE_TOKEN'])
+    assert 'ECHO_RUNTIME_ID' not in options['env']
     assert options['env'].get(variable) == '1'
     assert auth.os.environ.get(variable) == parent_value
 

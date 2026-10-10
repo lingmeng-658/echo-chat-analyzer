@@ -596,7 +596,7 @@ def test_production_service_builds_runtime_client(
         QQDirectSnapshotRuntimeClient,
     )
 
-    service = _optional_qq_service(provider_factory=object())
+    service = _optional_qq_service(provider_factory=SimpleNamespace(create=lambda: SimpleNamespace()))
     assert isinstance(service, QQDirectDatabaseImportService)
 
     config = QQEnvironmentConfig(

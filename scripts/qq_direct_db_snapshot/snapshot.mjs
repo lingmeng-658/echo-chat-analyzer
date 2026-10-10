@@ -22,13 +22,13 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
 import { unlinkSync, readFileSync } from 'node:fs';
-import { createMergedEncryptedDatabase, captureCodeHash } from './main_wal.mjs';
+import { createMergedEncryptedDatabase, captureCodeHash, fileState as strongFileState } from './main_wal.mjs';
 import { createWorkspace, workspaceCodeHash } from './workspace.mjs';
 
 const snapshotCodeHash = createHash('sha256').update(readFileSync(new URL(import.meta.url))).digest('hex');
 const FAILURE_STAGES = new Set(['source_location', 'workspace_isolation', 'shm_witness',
   'wal_identity', 'wal_header', 'wal_prefix', 'wal_checksum', 'commit_boundary',
-  'main_identity', 'main_stability', 'checkpoint_witness', 'cleanup', 'lease', 'telemetry']);
+  'main_identity', 'main_stability', 'checkpoint_witness', 'cleanup', 'lease', 'input_witness']);
 const GUARD_STAGES = Object.freeze({
   source_unavailable: 'source_location', workspace_invalid: 'workspace_isolation',
   wal_replaced: 'wal_identity', wal_header_missing: 'wal_header',
@@ -46,7 +46,7 @@ const GUARD_STAGES = Object.freeze({
 });
 const CONTEXT_GUARDS = new Set(['checkpoint_witness_missing', 'checkpoint_witness_torn',
   'checkpoint_witness_invalid', 'checkpoint_state_invalid', 'short_read',
-  'telemetry_invalid_or_changed', 'cleanup_failed', 'lease_failed', 'workspace_busy']);
+  'input_witness_invalid_or_changed', 'cleanup_failed', 'lease_failed', 'workspace_busy']);
 const FILE_GUARDS = Object.freeze({ ENOENT: 'file_missing', EACCES: 'access_denied',
   EPERM: 'access_denied', EBUSY: 'file_busy', EEXIST: 'output_exists', EIO: 'file_io_failed' });
 
@@ -202,27 +202,6 @@ function stateChanged(before, after) {
     before.mtimeMs !== after.mtimeMs;
 }
 
-function readWindowChanged(state) {
-  // Missing or malformed telemetry is not evidence of a stable source. The
-  // bundled NapCat patch records all four states around its native read.
-  if (!state || typeof state !== 'object') return true;
-  const validState = (value) => value && typeof value === 'object' &&
-    typeof value.present === 'boolean' &&
-    Number.isSafeInteger(value.bytes) && value.bytes >= 0 &&
-    Number.isFinite(value.mtimeMs);
-  if (!validState(state.databaseBefore) || !validState(state.databaseAfter) ||
-      !validState(state.walBefore) || !validState(state.walAfter)) return true;
-  // The native read consumes only the main database file. A main-file change
-  // can produce a torn/inconsistent image; a WAL change separately means the
-  // copied main file may omit committed WAL content. Neither is publishable as
-  // a stable generation, but a WAL change alone does not prove corruption.
-  const database = safeReadFileState(state.databaseBefore);
-  const databaseAfter = safeReadFileState(state.databaseAfter);
-  const wal = safeReadFileState(state.walBefore);
-  const walAfter = safeReadFileState(state.walAfter);
-  return stateChanged(database, databaseAfter) || stateChanged(wal, walAfter);
-}
-
 function traceSourceDatabaseState(stage, state, before = null, generationId = null) {
   if (!state) return;
   const logFile = process.env.QCE_LOG_FILE;
@@ -247,42 +226,16 @@ function traceSourceDatabaseState(stage, state, before = null, generationId = nu
   }
 }
 
-function safeReadFileState(value) {
-  return {
-    present: value?.present === true,
-    bytes: Number.isSafeInteger(value?.bytes) && value.bytes >= 0 ? value.bytes : 0,
-    mtimeMs: Number.isFinite(value?.mtimeMs) ? value.mtimeMs : 0,
-  };
-}
-
-function traceSourceReadState(rawState, generationId) {
-  if (!rawState || typeof rawState !== 'object') return;
-  const state = {
-    databaseBefore: safeReadFileState(rawState.databaseBefore),
-    databaseAfter: safeReadFileState(rawState.databaseAfter),
-    walBefore: safeReadFileState(rawState.walBefore),
-    walAfter: safeReadFileState(rawState.walAfter),
-    shmBefore: safeReadFileState(rawState.shmBefore),
-    shmAfter: safeReadFileState(rawState.shmAfter),
-  };
-  const readBytes = Number.isSafeInteger(rawState.readBytes) && rawState.readBytes >= 0
-    ? rawState.readBytes
-    : 0;
+function traceInputWitness(before, after, generationId) {
   const logFile = process.env.QCE_LOG_FILE;
   if (!logFile) return;
   try {
     appendFileSync(
       logFile,
-      `[${new Date().toISOString()}] [echo-snapshot] stage=decrypt_source_read ` +
+      `[${new Date().toISOString()}] [echo-snapshot] stage=decrypt_input_witness ` +
       `generation_id=${generationId} ` +
-      `database_changed=${stateChanged(state.databaseBefore, state.databaseAfter)} ` +
-      `wal_changed=${stateChanged(state.walBefore, state.walAfter)} ` +
-      `shm_changed=${stateChanged(state.shmBefore, state.shmAfter)} ` +
-      `database_before_bytes=${state.databaseBefore.bytes} ` +
-      `database_after_bytes=${state.databaseAfter.bytes} ` +
-      `wal_before_bytes=${state.walBefore.bytes} wal_after_bytes=${state.walAfter.bytes} ` +
-      `shm_before_bytes=${state.shmBefore.bytes} shm_after_bytes=${state.shmAfter.bytes} ` +
-      `read_bytes=${readBytes}\n`,
+      `before_valid=${before !== null} after_valid=${after !== null} ` +
+      `input_changed=${before !== after}\n`,
     );
   } catch {
     // Best-effort diagnostics only.
@@ -511,7 +464,14 @@ export function createEchoSnapshotApi(core, options = {}) {
       let decrypted = false;
       const sourceStateBefore = sourceDatabaseState(databaseApi);
       traceSourceDatabaseState('decrypt_source_before', sourceStateBefore, null, generationId);
-      globalThis.__ECHO_DIRECT_DB_READ_STATE__ = null;
+      const inputBefore = strongFileState(stagingMerged);
+      if (inputBefore === null) {
+        traceInputWitness(inputBefore, null, generationId);
+        traceAcquisitionDiagnostic('input_witness', { code: 'input_witness_invalid_or_changed' }, generationId);
+        const cleaned = discardStaging();
+        traceStage('snapshot_unstable', generationId);
+        return fail(cleaned ? CODES.SNAPSHOT_UNSTABLE : CODES.CLEANUP_FAILED);
+      }
       traceStage('decrypt_started');
       try {
         decrypted = Boolean(
@@ -520,31 +480,30 @@ export function createEchoSnapshotApi(core, options = {}) {
       } catch {
         decrypted = false;
       }
+      const inputAfter = strongFileState(stagingMerged);
       traceStage('decrypt_finished');
       try { workspace.assertLease(); }
       catch (error) { traceAcquisitionDiagnostic('lease', error, generationId); return fail(CODES.CLEANUP_FAILED); }
-      const sourceReadState = globalThis.__ECHO_DIRECT_DB_READ_STATE__;
-      globalThis.__ECHO_DIRECT_DB_READ_STATE__ = null;
-      traceSourceReadState(sourceReadState, generationId);
+      traceInputWitness(inputBefore, inputAfter, generationId);
       traceSourceDatabaseState(
         'decrypt_source_after',
         sourceDatabaseState(databaseApi),
         sourceStateBefore,
         generationId,
       );
+      // 5. The owned staging merge must stay stable across decryption. Invalid
+      // witnesses never establish stability, including null on both sides.
+      if (inputAfter === null || inputBefore !== inputAfter) {
+        traceAcquisitionDiagnostic('input_witness', { code: 'input_witness_invalid_or_changed' }, generationId);
+        const cleaned = discardStaging();
+        traceStage('snapshot_unstable', generationId);
+        return fail(cleaned ? CODES.SNAPSHOT_UNSTABLE : CODES.CLEANUP_FAILED);
+      }
+
       if (!decrypted || !existsSync(stagingDatabase)) {
         const cleaned = discardStaging();
         logDiagnostic('decrypt_failed');
         return fail(cleaned ? CODES.DECRYPT_FAILED : CODES.CLEANUP_FAILED);
-      }
-
-      // 5. Native read telemetry now covers the immutable staging merge;
-      // missing or changing input telemetry still prevents publication.
-      if (readWindowChanged(sourceReadState)) {
-        traceAcquisitionDiagnostic('telemetry', { code: 'telemetry_invalid_or_changed' }, generationId);
-        const cleaned = discardStaging();
-        traceStage('snapshot_unstable', generationId);
-        return fail(cleaned ? CODES.SNAPSHOT_UNSTABLE : CODES.CLEANUP_FAILED);
       }
 
       // No encrypted intermediate may enter a published generation.
