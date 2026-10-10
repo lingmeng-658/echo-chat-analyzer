@@ -43,7 +43,11 @@ def test_desktop_startup_version_matches_release_version():
 @pytest.mark.slow_integration
 def test_desktop_spec_ships_release_metadata_for_runtime_version():
     datas = _spec_datas(ROOT)
-    metadata_dirs = [Path(source) for source, target in datas if target.endswith(".dist-info")]
+    metadata_dirs = [
+        Path(source)
+        for source, target in datas
+        if target.endswith((".dist-info", ".egg-info"))
+    ]
     distributions = [
         importlib.metadata.PathDistribution(path) for path in metadata_dirs
         if importlib.metadata.PathDistribution(path).metadata["Name"] == "qq-chat-analyzer"
