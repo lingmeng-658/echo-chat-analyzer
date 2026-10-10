@@ -31,6 +31,7 @@ def _launch_target():
 
 @pytest.fixture
 def release(tmp_path, monkeypatch):
+    monkeypatch.setattr(auth, 'find_conflicting_qq_pids', lambda owned: [])
     program = tmp_path / '发行 中文 # % 空格' / 'runtime/qq-napcat-candidate'
     metadata = tmp_path / 'metadata'
     metadata.mkdir()

@@ -2886,11 +2886,13 @@ def _write_qrcode_png(path: Path) -> None:
 
 
 @pytest.mark.parametrize("runtime_mode", ["managed", "custom"])
-def test_qq_gui_reads_fresh_qr_from_auth_workspace(qt_app, tmp_path, runtime_mode):
+def test_qq_gui_reads_fresh_qr_from_auth_workspace(qt_app, tmp_path, runtime_mode, monkeypatch):
     """Display the bridge's QR, never an installation or previous session QR."""
     from PySide6.QtGui import QPixmap
     from qq_chat_analyzer.application.facade import ChatAnalyzerFacade
     from qq_chat_analyzer.application.qq.qq_auth_bridge import QQAuthBridge
+    from qq_chat_analyzer.application.qq import qq_auth_bridge
+    monkeypatch.setattr(qq_auth_bridge, "find_conflicting_qq_pids", lambda owned: [])
     from qq_chat_analyzer.application.qq.qq_environment_config import QQEnvironmentConfig
     from qq_chat_analyzer.application.qq.qq_runtime_paths import (
         qq_runtime_paths, resolve_runtime_paths,

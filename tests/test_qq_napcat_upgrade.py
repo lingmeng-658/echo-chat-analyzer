@@ -1,10 +1,11 @@
-"""4.18.33 adaptation: fictional executable capsule, optional official ZIP audit.
+"""4.18.34 adaptation: fictional executable capsule, optional official ZIP audit.
 
 Never launch the upstream entry, QQ, or use an account/credential.
 """
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -16,7 +17,7 @@ from test_qq_napcat_runtime_bootstrap import ROOT, PINS, MANIFEST, load_builder
 
 
 @pytest.mark.parametrize("early", [True, False])
-def test_41833_key_capture_survives_both_arrival_orders(early):
+def test_41834_key_capture_survives_both_arrival_orders(early):
     node = shutil.which("node")
     if not node:
         pytest.skip("Node required for G1 executable capsule")
@@ -54,17 +55,23 @@ if (!allowed.has("napcat-plugin-echo") || allowed.has("untrusted-plugin") || all
 
 
 @pytest.mark.slow_integration
-def test_official_41833_archive_and_distribution_contract(tmp_path):
+def test_official_41834_archive_and_distribution_contract(tmp_path):
     archive = os.environ.get("ECHO_NAPCAT_AUDIT_ARCHIVE")
     if not archive:
-        pytest.skip("Set ECHO_NAPCAT_AUDIT_ARCHIVE to the official 4.18.33 ZIP")
+        pytest.skip("Set ECHO_NAPCAT_AUDIT_ARCHIVE to the official 4.18.34 ZIP")
     pins = json.loads(PINS.read_text(encoding="utf-8"))
     contract = json.loads(MANIFEST.read_text(encoding="utf-8"))
     bundle_path = Path(archive)
     assert hashlib.sha256(bundle_path.read_bytes()).hexdigest() == (
-        "4b8e20e6d22288586d99eb0b34fff6c7ee1d88b00353039326f8c459a86df667")
-    assert bundle_path.stat().st_size == 29500155
+        "960cc7b0ef71125dcfa89f5c21754fa1401051082a849bff9dd6925d2b2391d3")
+    assert bundle_path.stat().st_size == 29500688
     with zipfile.ZipFile(bundle_path) as bundle:
+        text = bundle.read("napcat.mjs").decode("utf-8")
+        # Both PacketBackend and the passphrase listener's PacketHandler need
+        # exact-build offsets; merely passing the minimum QQ build is insufficient.
+        offsets = re.findall(r'"9\.9\.36-53644-x64": \{ send: "([0-9A-F]+)", recv: "([0-9A-F]+)" \}', text)
+        assert offsets == [("C3EE2F", "24A6355"), ("38255F0", "3828E30")]
+        assert '"9.9.36-53644": { appid: 537391628, qua: "V1_WIN_NQ_9.9.36_53644_GW_B" }' in text
         for name, expected in pins["requiredFiles"].items():
             assert hashlib.sha256(bundle.read(name)).hexdigest() == expected, name
         notices = (ROOT / "third_party/napcat/NPM-LICENSES.txt").read_text(encoding="utf-8")
