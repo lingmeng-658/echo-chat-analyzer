@@ -324,6 +324,7 @@ def test_expression_combination_fallback_without_assets() -> None:
             "top_combinations": [
                 {
                     "asset_keys": [None, None],
+                    "labels": ["表情", "表情"],
                     "count": 2,
                     "common_members": [],
                 }
@@ -332,10 +333,48 @@ def test_expression_combination_fallback_without_assets() -> None:
         }
     )
 
-    assert rendered["expression-combos"]["hidden"] is True
-    assert rendered["expression-combo-list"]["childCount"] == 0
-    assert "两个表达组合" not in rendered["expression-combo-list"]["text"]
-    assert "2 次" not in rendered["expression-combo-list"]["text"]
+    assert rendered["expression-combos"]["hidden"] is False
+    assert rendered["expression-combo-list"]["childCount"] == 1
+    assert "表情" in rendered["expression-combo-list"]["text"]
+    assert "2 次" in rendered["expression-combo-list"]["text"]
+
+
+def test_expression_combination_mixed_asset_and_text_fallback() -> None:
+    asset_uri = "data:image/png;base64,AAAA"
+    rendered = _render(
+        {
+            "available": True,
+            "expression_message_count": 1,
+            "expression_only_message_count": 1,
+            "expression_only_rate": 1.0,
+            "unique_expression_count": 2,
+            "top_expressions": [],
+            "top_combinations": [
+                {
+                    "asset_keys": ["wechat:捂脸", None],
+                    "labels": ["捂脸", "表情"],
+                    "count": 2,
+                    "common_members": [],
+                }
+            ],
+            "members": [],
+        },
+        assets={"wechat:捂脸": asset_uri},
+    )
+
+    def find_imgs(nodes):
+        images = []
+        for node in nodes:
+            if node["tag"] == "IMG":
+                images.append(node)
+            images.extend(find_imgs(node.get("children", [])))
+        return images
+
+    assert rendered["expression-combos"]["hidden"] is False
+    assert rendered["expression-combo-list"]["childCount"] == 1
+    assert len(find_imgs(rendered["expression-combo-list"]["children"])) == 1
+    assert "表情" in rendered["expression-combo-list"]["text"]
+    assert "2 次" in rendered["expression-combo-list"]["text"]
 
 def test_expression_with_no_repeated_nearby_words_hides_hint() -> None:
     from qq_chat_analyzer.analysis.analyzers.expression_analyzer import ExpressionAnalyzer

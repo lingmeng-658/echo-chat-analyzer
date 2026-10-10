@@ -180,6 +180,7 @@ class EchoExpressionCombination:
     asset_keys: tuple[str | None, str | None]
     count: int
     common_members: tuple[EchoExpressionCombinationMember, ...] = ()
+    labels: tuple[str, str] = ()
 
 
 @dataclass(frozen=True, slots=True)

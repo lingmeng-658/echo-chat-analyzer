@@ -1564,17 +1564,7 @@ document.documentElement.classList.add("js-ready");
     }
     var expressionCombos = document.getElementById("expression-combos");
     var expressionComboList = document.getElementById("expression-combo-list");
-    var combos = (expressionCulture.top_combinations || []).filter(
-      function (combo) {
-        return (combo.asset_keys || []).every(function (assetKey) {
-          return (
-            assetKey &&
-            window.ECHO_ASSETS &&
-            window.ECHO_ASSETS[assetKey]
-          );
-        });
-      }
-    );
+    var combos = expressionCulture.top_combinations || [];
     var hasCombos = Boolean(
       combos.length
     );
@@ -1584,18 +1574,11 @@ document.documentElement.classList.add("js-ready");
     if (expressionComboList) {
       expressionComboList.textContent = "";
       combos.forEach(function (combo) {
-        var hasAllAssets = (combo.asset_keys || []).every(function (assetKey) {
-          return (
-            assetKey &&
-            window.ECHO_ASSETS &&
-            window.ECHO_ASSETS[assetKey]
-          );
-        });
-        if (!hasAllAssets) return;
         var entry = document.createElement("li");
         entry.className = "expression-combo-item";
         var images = document.createElement("span");
         images.className = "expression-combo-images";
+        var labels = combo.labels || [];
         (combo.asset_keys || []).forEach(function (assetKey, index) {
           if (index > 0) {
             var plus = document.createElement("span");
@@ -1603,12 +1586,19 @@ document.documentElement.classList.add("js-ready");
             plus.textContent = "+";
             images.appendChild(plus);
           }
-          var img = document.createElement("img");
-          img.className = "expression-asset";
-          img.src = window.ECHO_ASSETS[assetKey];
-          img.alt = "";
-          img.loading = "lazy";
-          images.appendChild(img);
+          if (assetKey && window.ECHO_ASSETS && window.ECHO_ASSETS[assetKey]) {
+            var img = document.createElement("img");
+            img.className = "expression-asset";
+            img.src = window.ECHO_ASSETS[assetKey];
+            img.alt = "";
+            img.loading = "lazy";
+            images.appendChild(img);
+          } else {
+            var fallback = document.createElement("span");
+            fallback.className = "expression-fallback";
+            fallback.textContent = labels[index] || "表情";
+            images.appendChild(fallback);
+          }
         });
         entry.appendChild(images);
         var count = document.createElement("strong");

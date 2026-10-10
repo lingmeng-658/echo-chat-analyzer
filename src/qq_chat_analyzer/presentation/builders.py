@@ -728,14 +728,15 @@ def _display_expression_items(
     ), limit))
 
 
-def _display_expression_combinations(items, expression_source: str | None):
+def _display_expression_combinations(items, _expression_source: str | None):
+    """Keep recurring combinations even when a member lacks a bundled image.
+
+    The frontend falls back to text for any member whose asset is missing, so
+    one unbundled expression must not hide the whole combination.
+    """
     return tuple(islice((
         item for item in items
         if item.count >= ECHO_EXPRESSION_COMBINATION_MIN_COUNT
-        and all(
-            resolve_expression_asset_key(member.expression_key, expression_source)
-            for member in item.expressions
-        )
     ), ECHO_EXPRESSION_COMBINATION_TOP_LIMIT))
 
 
@@ -770,6 +771,14 @@ def _to_echo_expression_item(
     )
 
 
+def _combination_fallback_label(display_text: str) -> str:
+    """Text shown for a combination member whose asset is unavailable."""
+    text = display_text or ""
+    if text.startswith("["):
+        return "表情"
+    return text or "表情"
+
+
 def _to_echo_expression_combination(
     item: ExpressionCombinationUsage,
     member_by_key: dict[str, EchoMemberCard],
@@ -800,16 +809,21 @@ def _to_echo_expression_combination(
         )
         if len(common_members) >= ECHO_EXPRESSION_COMBINATION_MEMBER_LIMIT:
             break
-    return EchoExpressionCombination(
-        asset_keys=tuple(
+    asset_keys = []
+    labels = []
+    for member in item.expressions:
+        asset_keys.append(
             resolve_expression_asset_key(
                 member.expression_key,
                 expression_source,
             )
-            for member in item.expressions
-        ),
+        )
+        labels.append(_combination_fallback_label(member.display_text))
+    return EchoExpressionCombination(
+        asset_keys=tuple(asset_keys),
         count=item.count,
         common_members=tuple(common_members),
+        labels=tuple(labels),
     )
 
 

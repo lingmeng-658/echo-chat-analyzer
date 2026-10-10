@@ -175,8 +175,13 @@ def test_echo_combination_ranking_backfills_after_missing_assets(report_boundary
         AnalysisReports(expression=report), expression_source="wechat",
     ).expression_culture
 
-    assert [(item.asset_keys, item.count) for item in culture.top_combinations] == [
-        (("wechat:捂脸", "wechat:旺柴"), 2),
+    assert [
+        (item.asset_keys, item.labels, item.count)
+        for item in culture.top_combinations
+    ] == [
+        ((None, None), ("表情", "表情"), 3),
+        ((None, None), ("表情", "表情"), 3),
+        ((None, None), ("表情", "表情"), 3),
     ]
 
 
@@ -214,13 +219,18 @@ def test_report_boundary_keeps_combination_top_three_and_ties() -> None:
     ).expression_culture
 
     assert len(candidates.top_combinations) == 9
-    assert len(compact.top_combinations) == 6
+    # Visible combinations now equal the raw top-3 (no asset-based pruning),
+    # so the boundary retains only the prefix.
+    assert len(compact.top_combinations) == 3
     assert compact.top_combinations[:3] == candidates.top_combinations[:3]
     assert retained_view == original_view
-    assert [(pair.asset_keys, pair.count) for pair in retained_view.top_combinations] == [
-        (("wechat:微笑", "wechat:捂脸"), 2),
-        (("wechat:微笑", "wechat:旺柴"), 2),
-        (("wechat:微笑", "wechat:流泪"), 2),
+    assert [
+        (pair.asset_keys, pair.labels, pair.count)
+        for pair in retained_view.top_combinations
+    ] == [
+        ((None, None), ("表情", "表情"), 3),
+        ((None, None), ("表情", "表情"), 3),
+        ((None, None), ("表情", "表情"), 3),
     ]
 
 
