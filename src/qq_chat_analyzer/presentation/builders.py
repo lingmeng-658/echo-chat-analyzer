@@ -7,6 +7,8 @@ computed. It performs no counting, averaging, or sorting of raw messages.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
+from itertools import islice
 from ..identity_names import resolve_member_names
 
 from ..analysis.models import (
@@ -90,6 +92,11 @@ ECHO_EXPRESSION_COMBINATION_MIN_COUNT = 2
 ECHO_EXPRESSION_COMBINATION_MEMBER_LIMIT = 4
 ECHO_EXPRESSION_COMBINATION_MEMBER_MIN_COUNT = 2
 ECHO_EXPRESSION_COMBINATION_MEMBER_SHARE_MIN = 20.0
+# Keep the original raw ranking prefixes for report consumers, in addition
+# to any lower-ranked candidates needed by the visible Echo leaderboards.
+_EXPRESSION_REPORT_GLOBAL_PREFIX_LIMIT = 10
+_EXPRESSION_REPORT_MEMBER_PREFIX_LIMIT = 3
+_EXPRESSION_REPORT_COMBINATION_PREFIX_LIMIT = 3
 
 
 class DashboardBuilder:
@@ -598,6 +605,54 @@ def _build_echo_sessions(
 
 
 
+def prepare_expression_report(
+    report: ExpressionReport,
+    *,
+    expression_source: str | None,
+) -> ExpressionReport:
+    """Bound retained candidates before the application builds its report DTO.
+
+    Keep raw ranking prefixes and selected display candidates in their original
+    order. All aggregate statistics and the incoming immutable report stay intact.
+    """
+    top_expressions = _retain_ranked_items(
+        report.top_expressions,
+        _EXPRESSION_REPORT_GLOBAL_PREFIX_LIMIT,
+        _display_expression_items(report.top_expressions, ECHO_EXPRESSION_TOP_LIMIT),
+    )
+    members = []
+    for member in report.members:
+        items = _retain_ranked_items(
+            member.top_expressions,
+            _EXPRESSION_REPORT_MEMBER_PREFIX_LIMIT,
+            _display_expression_items(member.top_expressions, ECHO_EXPRESSION_MEMBER_TOP_LIMIT),
+        )
+        members.append(
+            member if items is member.top_expressions else replace(member, top_expressions=items)
+        )
+    top_combinations = _retain_ranked_items(
+        report.top_combinations,
+        _EXPRESSION_REPORT_COMBINATION_PREFIX_LIMIT,
+        _display_expression_combinations(report.top_combinations, expression_source),
+    )
+    if (
+        top_expressions is report.top_expressions
+        and top_combinations is report.top_combinations
+        and all(current is original for current, original in zip(members, report.members))
+    ):
+        return report
+    return replace(
+        report, top_expressions=top_expressions,
+        members=tuple(members), top_combinations=top_combinations,
+    )
+
+
+def _retain_ranked_items(items, prefix_limit: int, selected):
+    keep_ids = {id(item) for item in (*items[:prefix_limit], *selected)}
+    retained = tuple(item for item in items if id(item) in keep_ids)
+    return items if len(retained) == len(items) else retained
+
+
 def _build_echo_expression_culture(
     report: ExpressionReport | None,
     *,
@@ -649,16 +704,10 @@ def _build_echo_expression_culture(
                 member_by_key,
                 expression_source,
             )
-            for item in report.top_combinations
-            if item.count >= ECHO_EXPRESSION_COMBINATION_MIN_COUNT
-            and all(
-                resolve_expression_asset_key(
-                    member.expression_key,
-                    expression_source,
-                )
-                for member in item.expressions
+            for item in _display_expression_combinations(
+                report.top_combinations, expression_source,
             )
-        )[:ECHO_EXPRESSION_COMBINATION_TOP_LIMIT],
+        ),
         members=culture_members,
         unavailable_reason=(
             "" if culture_members else "暂无可展示的表达文化。"
@@ -671,12 +720,23 @@ def _display_expression_items(
     limit: int,
 ):
     """Keep presentation limited to recurring non-sticker expressions."""
-    return [
+    return tuple(islice((
         item
         for item in items
         if item.count >= ECHO_EXPRESSION_MIN_COUNT
         and item.kind != "sticker"
-    ][:limit]
+    ), limit))
+
+
+def _display_expression_combinations(items, expression_source: str | None):
+    return tuple(islice((
+        item for item in items
+        if item.count >= ECHO_EXPRESSION_COMBINATION_MIN_COUNT
+        and all(
+            resolve_expression_asset_key(member.expression_key, expression_source)
+            for member in item.expressions
+        )
+    ), ECHO_EXPRESSION_COMBINATION_TOP_LIMIT))
 
 
 def _to_echo_expression_item(

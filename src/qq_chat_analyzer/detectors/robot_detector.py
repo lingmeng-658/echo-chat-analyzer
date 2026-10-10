@@ -6,6 +6,7 @@ import re
 from collections import Counter
 from collections.abc import Iterable
 
+from ..analysis.identity import stable_sender_key
 from ..candidates import Candidate
 from ..message import ChatMessage
 
@@ -28,6 +29,7 @@ def detect_robot_candidates(
 ) -> list[Candidate]:
     """Return suspected robot senders without changing or filtering messages."""
     sender_texts: dict[str, list[str]] = {}
+    sender_names: dict[str, Counter[str]] = {}
     total_message_count = 0
 
     for message in messages:
@@ -36,14 +38,19 @@ def detect_robot_candidates(
         if not sender or not text:
             continue
 
-        sender_texts.setdefault(sender, []).append(text)
+        # Statistics are aggregated per stable sender identity, never per
+        # display name: members who happen to share a nickname are distinct
+        # senders and must not share a statistical bucket.
+        sender_key = stable_sender_key(message)
+        sender_texts.setdefault(sender_key, []).append(text)
+        sender_names.setdefault(sender_key, Counter())[sender] += 1
         total_message_count += 1
 
     if total_message_count == 0:
         return []
 
     candidates: list[Candidate] = []
-    for sender, texts in sender_texts.items():
+    for sender_key, texts in sender_texts.items():
         message_count = len(texts)
         if message_count < MIN_MESSAGE_COUNT:
             continue
@@ -67,26 +74,38 @@ def detect_robot_candidates(
         if len(reasons) < 2 or score < MIN_CANDIDATE_SCORE:
             continue
 
+        target = _display_name(sender_names[sender_key])
+        metadata: dict[str, object] = {
+            "message_count": message_count,
+            "message_ratio": round(message_ratio, 4),
+            "unique_message_count": unique_message_count,
+            "repeat_rate": round(repeat_rate, 4),
+            "template_concentration": round(
+                template_concentration,
+                4,
+            ),
+        }
+        if sender_key != target:
+            # Only carried when it isolates the identity beyond the display
+            # name; unresolved senders keep their historical metadata shape.
+            metadata["sender_key"] = sender_key
+
         candidates.append(
             Candidate(
-                target=sender,
+                target=target,
                 candidate_type="robot_sender",
                 score=score,
                 reasons=reasons,
-                metadata={
-                    "message_count": message_count,
-                    "message_ratio": round(message_ratio, 4),
-                    "unique_message_count": unique_message_count,
-                    "repeat_rate": round(repeat_rate, 4),
-                    "template_concentration": round(
-                        template_concentration,
-                        4,
-                    ),
-                },
+                metadata=metadata,
             )
         )
 
     return candidates
+
+
+def _display_name(names: Counter[str]) -> str:
+    """Return the most frequent display name, preferring the first seen."""
+    return min(names, key=lambda name: -names[name])
 
 
 def _normalize_text(text: str) -> str:

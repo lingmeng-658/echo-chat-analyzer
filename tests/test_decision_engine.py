@@ -109,7 +109,7 @@ def test_low_confidence_robot_sender_has_no_decision() -> None:
     assert create_filter_decisions([candidate]) == []
 
 
-def test_interactive_bot_uses_only_mentions_and_response_rate() -> None:
+def test_interactive_bot_strong_evidence_is_reviewed_only() -> None:
     candidate = Candidate(
         target="虚构交互助手",
         candidate_type="automation_source",
@@ -132,9 +132,9 @@ def test_interactive_bot_uses_only_mentions_and_response_rate() -> None:
         FilterDecision(
             target="虚构交互助手",
             target_type="sender",
-            action="ignore",
+            action="review",
             confidence=0.95,
-            reason="high_confidence_interactive_bot",
+            reason="possible_interactive_bot",
             source="auto",
         )
     ]
@@ -226,7 +226,7 @@ def test_interactive_bot_below_response_rate_threshold_is_reviewed() -> None:
     ]
 
 
-def test_interactive_bot_concentration_does_not_prevent_ignore() -> None:
+def test_interactive_bot_concentration_does_not_create_ignore() -> None:
     candidate = Candidate(
         target="虚构集中触发助手",
         candidate_type="automation_source",
@@ -248,15 +248,15 @@ def test_interactive_bot_concentration_does_not_prevent_ignore() -> None:
         FilterDecision(
             target="虚构集中触发助手",
             target_type="sender",
-            action="ignore",
+            action="review",
             confidence=0.96,
-            reason="high_confidence_interactive_bot",
+            reason="possible_interactive_bot",
             source="auto",
         )
     ]
 
 
-def test_interactive_bot_without_old_evidence_fields_is_ignored() -> None:
+def test_interactive_bot_high_volume_evidence_is_reviewed_only() -> None:
     candidate = Candidate(
         target="虚构单来源互动助手",
         candidate_type="automation_source",
@@ -278,9 +278,9 @@ def test_interactive_bot_without_old_evidence_fields_is_ignored() -> None:
         FilterDecision(
             target="虚构单来源互动助手",
             target_type="sender",
-            action="ignore",
+            action="review",
             confidence=0.97,
-            reason="high_confidence_interactive_bot",
+            reason="possible_interactive_bot",
             source="auto",
         )
     ]
@@ -369,7 +369,7 @@ def test_medium_confidence_interactive_bot_is_reviewed() -> None:
     ]
 
 
-def test_interactive_bot_score_does_not_participate_in_decision() -> None:
+def test_interactive_bot_score_never_produces_ignore() -> None:
     candidate = Candidate(
         target="虚构低置信助手",
         candidate_type="automation_source",
@@ -387,9 +387,9 @@ def test_interactive_bot_score_does_not_participate_in_decision() -> None:
         FilterDecision(
             target="虚构低置信助手",
             target_type="sender",
-            action="ignore",
+            action="review",
             confidence=0.59,
-            reason="high_confidence_interactive_bot",
+            reason="possible_interactive_bot",
             source="auto",
         )
     ]
@@ -417,26 +417,71 @@ def test_unknown_automation_source_kind_is_reviewed() -> None:
     ]
 
 
-def test_same_sender_automation_candidates_create_one_decision() -> None:
+def test_robot_evidence_keeps_the_identity_scoped_ignore() -> None:
+    """Action priority outranks confidence for one identity's candidates."""
+    robot_candidate = Candidate(
+        target="虚构复合助手",
+        candidate_type="robot_sender",
+        score=0.92,
+        metadata={"sender_key": "u-composite"},
+    )
+    interactive_candidate = Candidate(
+        target="虚构复合助手",
+        candidate_type="automation_source",
+        score=0.97,
+        metadata={
+            "source_kind": "interactive_bot",
+            "sender_key": "u-composite",
+            "metrics": {
+                "mention_count": 100,
+                "response_rate": 0.95,
+                "unique_trigger_source_count": 20,
+                "concentrated_in_short_window": False,
+            },
+        },
+    )
+
+    assert create_filter_decisions([interactive_candidate]) == [
+        FilterDecision(
+            target="虚构复合助手",
+            target_type="sender",
+            action="review",
+            confidence=0.97,
+            reason="possible_interactive_bot",
+            source="auto",
+            metadata={"sender_key": "u-composite"},
+        )
+    ]
+
+    assert create_filter_decisions(
+        [interactive_candidate, robot_candidate]
+    ) == [
+        FilterDecision(
+            target="虚构复合助手",
+            target_type="sender",
+            action="ignore",
+            confidence=0.92,
+            reason="high_confidence_robot_sender",
+            source="auto",
+            metadata={"sender_key": "u-composite"},
+        )
+    ]
+
+
+def test_same_identity_interactive_candidates_keep_one_review() -> None:
+    """Repeated interactive evidence stays a single, non-deleting review."""
     candidates = [
         Candidate(
-            target="虚构复合助手",
-            candidate_type="robot_sender",
-            score=0.92,
+            target="虚构重复助手",
+            candidate_type="automation_source",
+            score=0.71,
+            metadata={"source_kind": "interactive_bot", "sender_key": "u-review"},
         ),
         Candidate(
-            target="虚构复合助手",
+            target="虚构重复助手",
             candidate_type="automation_source",
-            score=0.97,
-            metadata={
-                "source_kind": "interactive_bot",
-                "metrics": {
-                    "mention_count": 100,
-                    "response_rate": 0.95,
-                    "unique_trigger_source_count": 20,
-                    "concentrated_in_short_window": False,
-                },
-            },
+            score=0.95,
+            metadata={"source_kind": "interactive_bot", "sender_key": "u-review"},
         ),
     ]
 
@@ -444,12 +489,38 @@ def test_same_sender_automation_candidates_create_one_decision() -> None:
 
     assert decisions == [
         FilterDecision(
-            target="虚构复合助手",
+            target="虚构重复助手",
             target_type="sender",
-            action="ignore",
-            confidence=0.97,
-            reason="high_confidence_interactive_bot",
+            action="review",
+            confidence=0.95,
+            reason="possible_interactive_bot",
             source="auto",
+            metadata={"sender_key": "u-review"},
+        )
+    ]
+
+
+def test_ambiguous_interactive_identity_keeps_its_own_review_reason() -> None:
+    candidate = Candidate(
+        target="虚构同名助手",
+        candidate_type="automation_source",
+        score=0.98,
+        metadata={
+            "source_kind": "interactive_bot",
+            "sender_identity_ambiguous": True,
+            "metrics": {"mention_count": 100, "response_rate": 0.95},
+        },
+    )
+
+    assert create_filter_decisions([candidate]) == [
+        FilterDecision(
+            target="虚构同名助手",
+            target_type="sender",
+            action="review",
+            confidence=0.98,
+            reason="ambiguous_sender_identity",
+            source="auto",
+            metadata={"sender_identity_ambiguous": True},
         )
     ]
 

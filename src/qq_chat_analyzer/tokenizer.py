@@ -26,6 +26,7 @@ _URL_PLACEHOLDER = "QQCHATURLPLACEHOLDER"
 _SINGLE_ASCII_LETTER_RE = re.compile(r"[A-Za-z]")
 _SHORT_INTEGER_RE = re.compile(r"[0-9]{1,2}")
 _DECK_QUANTITY_RE = re.compile(r"[0-9]+x", re.IGNORECASE)
+_LAUGHTER_RE = re.compile(r"哈{2,}")
 _GENERIC_EXPRESSION_PLACEHOLDER_RE = re.compile(
     r"\[(?:QQ表情|QQ贴图|微信表情|贴图|表情|动画表情)[^\]]*\]"
     r"|(?<![\u3400-\u9fffA-Za-z0-9])表情(?![\u3400-\u9fffA-Za-z0-9])",
@@ -66,7 +67,7 @@ def tokenize(
     url_masked_text = _URL_RE.sub(_URL_PLACEHOLDER, protected_text)
     tokens: list[str] = []
 
-    for raw_token in jieba.lcut(url_masked_text):
+    for raw_token in iter_text_tokens(url_masked_text):
         token = raw_token.strip()
         token = protected_tokens.get(token, token)
         if not token or token == _URL_PLACEHOLDER:
@@ -82,6 +83,21 @@ def tokenize(
         tokens.append(token)
 
     return tokens
+
+
+def iter_text_tokens(text: str) -> Iterator[str]:
+    """Join adjacent laughter pieces without splitting words like 哈哈镜."""
+    laughter: list[str] = []
+    for token in jieba.lcut(text):
+        if token == "哈" or _LAUGHTER_RE.fullmatch(token):
+            laughter.append(token)
+            continue
+        if laughter:
+            yield "".join(laughter)
+            laughter.clear()
+        yield token
+    if laughter:
+        yield "".join(laughter)
 
 
 def iter_expression_placeholders(text: str) -> Iterator[str]:

@@ -223,6 +223,76 @@ def test_empty_messages_have_no_template_candidates() -> None:
     assert detect_template_candidates([]) == []
 
 
+def test_literal_placeholder_text_forms_its_own_template_group() -> None:
+    messages = [
+        _message("虚构刷屏者", f"模板是 {{variable}} 请替换{number}", index)
+        for index, number in enumerate((99, 88, 77, 66))
+    ]
+    messages.append(_message("虚构成员甲", "模板是 X 请替换55", 10))
+
+    candidates = detect_template_candidates(messages)
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.target == "模板是 {{variable} 请替换{number}"
+    assert candidate.metadata["occurrence_count"] == 4
+    assert candidate.metadata["variable_counts"] == {"number": 1}
+
+
+def test_literal_and_generated_variables_coexist_in_one_message() -> None:
+    messages = [
+        _message("虚构助手", "编号{number}的完成123456", 0),
+        _message("虚构助手", "编号{number}的完成123457", 1),
+        _message("虚构助手", "编号{number}的完成123458", 2),
+    ]
+
+    candidates = detect_template_candidates(messages)
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.target == "编号{{number}的完成{id}"
+    assert candidate.metadata["variable_counts"] == {"id": 1}
+
+
+def test_literal_and_real_identifiers_form_separate_groups() -> None:
+    literal_messages = [
+        _message("虚构助手", f"编号{{id}}的完成{number}", index)
+        for index, number in enumerate((99, 88, 77))
+    ]
+    real_messages = [
+        _message("虚构助手", f"编号{identifier}的完成{number}", 10 + index)
+        for index, (identifier, number) in enumerate(
+            (("123456", 99), ("123457", 88), ("123458", 77))
+        )
+    ]
+
+    targets = {
+        candidate.target
+        for candidate in detect_template_candidates(
+            [*literal_messages, *real_messages]
+        )
+    }
+
+    assert targets == {
+        "编号{{id}的完成{number}",
+        "编号{id}的完成{number}",
+    }
+
+
+def test_plain_templates_keep_their_historical_target_form() -> None:
+    messages = [
+        _message("虚构签到助手", f"签到成功，积分+{points}", index)
+        for index, points in enumerate((10, 20, 30, 40))
+    ]
+
+    candidates = detect_template_candidates(messages)
+
+    assert len(candidates) == 1
+    assert candidates[0].target == "签到成功，积分+{number}"
+    assert candidates[0].metadata["static_character_count"] == 6
+    assert candidates[0].metadata["variable_counts"] == {"number": 1}
+
+
 def _message(sender: str, text: str, timestamp: int) -> ChatMessage:
     return ChatMessage(
         timestamp=timestamp,
