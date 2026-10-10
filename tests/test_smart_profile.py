@@ -241,6 +241,44 @@ def _interactive_messages(
     return messages
 
 
+def test_literal_placeholder_template_does_not_widen_filtering() -> None:
+    spam_messages = [
+        _message("虚构刷屏者", f"模板是 {{variable}} 请替换{number}", index)
+        for index, number in enumerate((99, 88, 77, 66))
+    ]
+    normal_messages = [
+        _message("虚构成员甲", "模板是 X 请替换55", 10),
+        _message("虚构成员乙", "模板是 YYY 请替换44", 11),
+    ]
+
+    result = run_smart_profile([*spam_messages, *normal_messages])
+
+    assert result.filtered_messages == spam_messages
+    assert result.kept_messages == normal_messages
+    assert result.applied_decisions[0].target_type == "template"
+    assert result.applied_decisions[0].action == "ignore"
+
+
+def test_cross_member_literal_placeholder_spam_is_still_filtered() -> None:
+    spam_messages = [
+        _message(
+            f"虚构成员{chr(0x4E00 + index)}",
+            "模板是 {variable} 请替换99",
+            index,
+        )
+        for index in range(4)
+    ]
+    normal_message = _message("虚构普通用户", "今天讨论本地测试方案", 10)
+
+    result = run_smart_profile([*spam_messages, normal_message])
+
+    assert result.filtered_messages == spam_messages
+    assert result.kept_messages == [normal_message]
+    assert len(result.applied_decisions) == 1
+    assert result.applied_decisions[0].target_type == "template"
+    assert result.applied_decisions[0].action == "ignore"
+
+
 def _message(sender: str, text: str, timestamp: int) -> ChatMessage:
     return ChatMessage(
         timestamp=timestamp,

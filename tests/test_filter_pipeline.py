@@ -14,6 +14,7 @@ sys.path.insert(0, str(SRC_ROOT))
 
 from qq_chat_analyzer.candidates import Candidate
 from qq_chat_analyzer.decision_engine import create_filter_decisions
+from qq_chat_analyzer.detectors import detect_template_candidates
 from qq_chat_analyzer.filter_decisions import FilterDecision
 from qq_chat_analyzer.filter_pipeline import FilterPipeline
 from qq_chat_analyzer import filter_pipeline
@@ -230,13 +231,13 @@ def test_filtering_result_tracks_each_matching_ignore_decision_once() -> None:
     assert result.applied_decisions == [sender_decision]
 
 
-def test_automation_source_sender_ignore_reuses_sender_filtering() -> None:
-    ignored_message = _message(
+def test_automation_source_candidate_never_filters_sender_messages() -> None:
+    first_message = _message(
         "虚构交互助手",
         "这是一条虚构自动响应",
         1,
     )
-    kept_message = _message(
+    second_message = _message(
         "虚构普通用户",
         "这是一条虚构普通消息",
         2,
@@ -261,13 +262,14 @@ def test_automation_source_sender_ignore_reuses_sender_filtering() -> None:
         )
 
     result = FilterPipeline().apply_filter_decisions(
-        [ignored_message, kept_message],
+        [first_message, second_message],
         decisions,
     )
 
-    assert result.kept_messages == [kept_message]
-    assert result.filtered_messages == [ignored_message]
-    assert result.applied_decisions == decisions
+    assert [decision.action for decision in decisions] == ["review"]
+    assert result.kept_messages == [first_message, second_message]
+    assert result.filtered_messages == []
+    assert result.applied_decisions == []
 
 
 def _message(sender: str, text: str, timestamp: int) -> ChatMessage:
@@ -379,3 +381,45 @@ def test_template_preparation_happens_once_per_ignore_decision(monkeypatch) -> N
     FilterPipeline().apply_filter_decisions(messages, decisions)
     assert len(pattern_calls) == 2
     assert len(compile_calls) == 2
+
+
+def test_literal_placeholder_template_does_not_over_match() -> None:
+    spam_messages = [
+        _message("虚构刷屏者", f"模板是 {{variable}} 请替换{number}", index)
+        for index, number in enumerate((99, 88, 77, 66))
+    ]
+    lookalike_messages = [
+        _message("虚构成员甲", "模板是 X 请替换55", 10),
+        _message("虚构成员乙", "模板是 YYY 请替换44", 11),
+    ]
+    messages = [*spam_messages, *lookalike_messages]
+    decisions = create_filter_decisions(detect_template_candidates(messages))
+
+    result = FilterPipeline().apply_filter_decisions(messages, decisions)
+
+    assert result.filtered_messages == spam_messages
+    assert result.kept_messages == lookalike_messages
+
+
+def test_literal_placeholder_template_matches_its_own_messages() -> None:
+    messages = [
+        _message("虚构刷屏者", f"编号{{id}}的完成{number}", index)
+        for index, number in enumerate((99, 88, 77, 66))
+    ]
+    decisions = create_filter_decisions(detect_template_candidates(messages))
+
+    result = FilterPipeline().apply_filter_decisions(messages, decisions)
+
+    assert result.filtered_messages == messages
+    assert result.kept_messages == []
+    assert len(result.applied_decisions) == 1
+
+
+def test_manual_template_target_without_escape_is_unchanged() -> None:
+    message = _message("虚构普通用户", "订单 12345 已生成", 1)
+    decision = _decision("订单 {number} 已生成", "template", "ignore")
+
+    result = FilterPipeline().apply_filter_decisions([message], [decision])
+
+    assert result.filtered_messages == [message]
+    assert result.applied_decisions == [decision]

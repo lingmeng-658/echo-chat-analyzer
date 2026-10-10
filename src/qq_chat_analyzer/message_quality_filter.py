@@ -56,21 +56,20 @@ def apply_message_quality_filter(
     candidates = detect_noise_candidates(message_list)
 
     internal_noise_by_target: dict[str, Candidate] = {}
-    burst_by_key: dict[tuple[str, str], Candidate] = {}
+    burst_by_index: dict[int, Candidate] = {}
     for candidate in candidates:
         if candidate.candidate_type in _INTERNAL_NOISE_TYPES:
             internal_noise_by_target.setdefault(candidate.target, candidate)
         elif candidate.candidate_type == _BURST_NOISE_TYPE:
-            sender = candidate.metadata.get("sender")
-            if isinstance(sender, str):
-                burst_by_key.setdefault((sender, candidate.target), candidate)
+            # Indexes refer to this exact input list, including equal messages.
+            # Keep the first message of each detected run, not each global key.
+            for message_index in candidate.metadata["message_indexes"][1:]:
+                burst_by_index[message_index] = candidate
 
     kept_messages: list[ChatMessage] = []
     filtered_messages: list[ChatMessage] = []
     reasons: list[MessageQualityReason] = []
-    burst_first_kept: set[tuple[str, str]] = set()
-
-    for message in message_list:
+    for message_index, message in enumerate(message_list):
         text = message.text if isinstance(message.text, str) else ""
         normalized = _normalize_text(text)
 
@@ -100,9 +99,8 @@ def apply_message_quality_filter(
             )
             continue
 
-        burst_key = (message.sender, normalized)
-        burst_candidate = burst_by_key.get(burst_key)
-        if burst_candidate is not None and burst_key in burst_first_kept:
+        burst_candidate = burst_by_index.get(message_index)
+        if burst_candidate is not None:
             filtered_messages.append(message)
             reasons.append(
                 MessageQualityReason(
@@ -113,8 +111,6 @@ def apply_message_quality_filter(
             )
             continue
 
-        if burst_candidate is not None:
-            burst_first_kept.add(burst_key)
         kept_messages.append(message)
 
     return MessageQualityResult(

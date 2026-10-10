@@ -415,6 +415,7 @@ def test_expression_culture_serializes_display_ready_fields_only() -> None:
     assert data["top_expressions"][2]["nearby_words"] == ["挂科", "今天"]
     assert data["top_combinations"][0] == {
         "asset_keys": ["wechat:捂脸", "wechat:旺柴"],
+        "labels": [],
         "count": 3,
         "common_members": [
             {

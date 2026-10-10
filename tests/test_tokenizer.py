@@ -23,6 +23,39 @@ def test_tokenizes_chinese_text_with_jieba() -> None:
     assert tokenize("我喜欢数据分析") == ["喜欢", "数据分析"]
 
 
+@pytest.mark.parametrize("laughter", ["哈哈", "哈哈哈", "哈哈哈哈", "哈哈哈哈哈", "哈哈哈哈哈哈", "哈" * 9])
+def test_continuous_laughter_remains_one_token(laughter: str) -> None:
+    assert tokenize(laughter) == [laughter]
+
+
+def test_sentence_preserves_laughter_runs_and_separate_short_laughter() -> None:
+    assert tokenize("今天哈哈哈哈哈继续学习，哈哈！哈哈哈？哈哈哈哈。") == [
+        "今天", "哈哈哈哈哈", "继续", "学习", "哈哈", "哈哈哈", "哈哈哈哈",
+    ]
+
+
+def test_laughter_protection_preserves_non_laughter_words() -> None:
+    assert tokenize("哈尔滨 哈密瓜 学习 数据分析 Python hello-world 嘻嘻") == [
+        "哈尔滨", "哈密瓜", "学习", "数据分析", "Python", "hello-world", "嘻嘻",
+    ]
+
+
+def test_laughter_protection_preserves_compound_words_containing_ha() -> None:
+    assert tokenize("哈哈镜 娃哈哈 哈哈哈哈哈") == ["哈哈镜", "娃哈哈", "哈哈哈哈哈"]
+
+
+def test_laughter_uses_existing_stopwords_without_length_normalization() -> None:
+    assert tokenize("哈哈 哈哈哈 哈哈哈哈 哈哈哈哈哈", stopwords={"哈哈"}) == [
+        "哈哈哈", "哈哈哈哈", "哈哈哈哈哈",
+    ]
+
+
+def test_laughter_inside_url_or_expression_marker_does_not_leak() -> None:
+    assert tokenize("https://example.invalid/哈哈哈哈哈 [表情哈哈哈哈哈] 哈哈哈哈哈") == [
+        "哈哈哈哈哈",
+    ]
+
+
 def test_filters_trimmed_stopwords_and_ignores_blank_lines(
     tmp_path: Path,
 ) -> None:

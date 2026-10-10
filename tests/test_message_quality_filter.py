@@ -102,6 +102,48 @@ def test_normal_chat_is_not_mis_filtered() -> None:
     assert result.reasons == []
 
 
+def test_burst_filter_keeps_normal_repeats_before_and_after_the_run() -> None:
+    messages = [
+        _message("虚构用户甲", "正常重复短句", 1_700_000_000 + offset)
+        for offset in (0, 3600, 3610, 3620, 7200)
+    ]
+
+    result = apply_message_quality_filter(messages)
+
+    assert result.kept_messages == [messages[0], messages[1], messages[4]]
+    assert result.filtered_messages == [messages[2], messages[3]]
+
+
+def test_each_independent_burst_keeps_its_first_message() -> None:
+    messages = [
+        _message("虚构用户甲", "正常重复短句", 1_700_000_000 + offset)
+        for offset in (0, 30, 60, 61, 91, 121)
+    ]
+
+    result = apply_message_quality_filter(messages)
+
+    assert result.kept_messages == [messages[0], messages[3]]
+    assert result.filtered_messages == [messages[1], messages[2], messages[4], messages[5]]
+    assert all(reason.metadata["window_seconds"] == 60 for reason in result.reasons)
+
+
+def test_intervening_sender_starts_a_separate_burst() -> None:
+    first_run = [
+        _message("虚构用户甲", "正常重复短句", 1_700_000_000 + offset)
+        for offset in (0, 10, 20)
+    ]
+    intervening = _message("虚构用户乙", "其他回复", 1_700_000_025)
+    second_run = [
+        _message("虚构用户甲", "正常重复短句", 1_700_000_000 + offset)
+        for offset in (30, 40, 50)
+    ]
+
+    result = apply_message_quality_filter([*first_run, intervening, *second_run])
+
+    assert result.kept_messages == [first_run[0], intervening, second_run[0]]
+    assert result.filtered_messages == [*first_run[1:], *second_run[1:]]
+
+
 def test_two_identical_messages_are_not_a_burst() -> None:
     first = _message("虚构用户", "复制内容", 1_700_000_000)
     second = _message("虚构用户", "复制内容", 1_700_000_010)
@@ -134,6 +176,85 @@ def test_empty_input_returns_empty_partition() -> None:
     assert result.reasons == []
 
 
+def test_interleaved_same_nickname_identities_are_never_a_burst() -> None:
+    messages = [
+        _message("同名用户", "复制内容", 1_700_000_000 + offset, sender_id=identity)
+        for offset, identity in (
+            (0, "u-a"),
+            (10, "u-b"),
+            (20, "u-a"),
+            (30, "u-b"),
+            (40, "u-a"),
+            (50, "u-b"),
+        )
+    ]
+
+    result = apply_message_quality_filter(messages)
+
+    assert result.kept_messages == messages
+    assert result.filtered_messages == []
+    assert result.reasons == []
+
+
+def test_consecutive_identities_each_keep_their_own_first_message() -> None:
+    first_identity = [
+        _message("同名用户", "复制内容", 1_700_000_000 + offset, sender_id="u-a")
+        for offset in (0, 10, 20)
+    ]
+    second_identity = [
+        _message("同名用户", "复制内容", 1_700_000_030 + offset, sender_id="u-b")
+        for offset in (0, 10, 20)
+    ]
+
+    result = apply_message_quality_filter([*first_identity, *second_identity])
+
+    assert result.kept_messages == [first_identity[0], second_identity[0]]
+    assert result.filtered_messages == [
+        *first_identity[1:],
+        *second_identity[1:],
+    ]
+
+
+def test_renamed_identity_still_forms_one_burst() -> None:
+    messages = [
+        _message("旧昵称", "复制内容", 1_700_000_000, sender_id="u-renamed"),
+        _message("旧昵称", "复制内容", 1_700_000_010, sender_id="u-renamed"),
+        _message("新昵称", "复制内容", 1_700_000_020, sender_id="u-renamed"),
+        _message("新昵称", "复制内容", 1_700_000_030, sender_id="u-renamed"),
+    ]
+
+    result = apply_message_quality_filter(messages)
+
+    assert result.kept_messages == [messages[0]]
+    assert result.filtered_messages == messages[1:]
+    assert {reason.metadata["repeat_count"] for reason in result.reasons} == {4}
+
+
+def test_unresolved_record_never_joins_a_resolved_identity_burst() -> None:
+    unresolved = _message("同名用户", "复制内容", 1_700_000_000)
+    resolved = [
+        _message("同名用户", "复制内容", 1_700_000_010 + offset, sender_id="u-a")
+        for offset in (0, 10, 20)
+    ]
+
+    result = apply_message_quality_filter([unresolved, *resolved])
+
+    assert result.kept_messages == [unresolved, resolved[0]]
+    assert result.filtered_messages == [resolved[1], resolved[2]]
+
+
+def test_records_without_identity_keep_legacy_burst_behavior() -> None:
+    messages = [
+        _message("旧记录用户", "复制内容", 1_700_000_000 + offset)
+        for offset in (0, 10, 20)
+    ]
+
+    result = apply_message_quality_filter(messages)
+
+    assert result.kept_messages == [messages[0]]
+    assert result.filtered_messages == messages[1:]
+
+
 def _long_text(length: int) -> str:
     base = (
         "本地聊天分析工具只在本机处理数据，不依赖任何网络服务，"
@@ -142,10 +263,17 @@ def _long_text(length: int) -> str:
     return (base * 3)[:length]
 
 
-def _message(sender: str, text: str, timestamp: int) -> ChatMessage:
+def _message(
+    sender: str,
+    text: str,
+    timestamp: int,
+    *,
+    sender_id: str | None = None,
+) -> ChatMessage:
     return ChatMessage(
         timestamp=timestamp,
         sender=sender,
         message_type="text",
         text=text,
+        sender_id=sender_id,
     )

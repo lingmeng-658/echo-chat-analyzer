@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
@@ -71,6 +73,45 @@ def _rich(
     )
 
 
+@pytest.mark.parametrize("sticker_count", [0, 4, 12])
+@pytest.mark.parametrize("report_boundary", [False, True])
+def test_echo_expression_ranking_backfills_after_stickers(sticker_count, report_boundary) -> None:
+    from qq_chat_analyzer.analysis.models import AnalysisReports
+    from qq_chat_analyzer.presentation import build_echo_report_view
+
+    # Stickers outrank all five recurring emoji; a one-time emoji is ineligible.
+    faces = tuple(
+        ExpressionContent(
+            expression_kind=EXPRESSION_KIND_STICKER,
+            expression_key=f"fictional-sticker-{index:02d}",
+            display_text="[sticker]",
+            source="qq",
+            position=index,
+        )
+        for index in range(sticker_count)
+        for _ in range(10)
+    )
+    text = "😀" * 6 + "😁" * 5 + "😂" * 4 + "😃" * 4 + "😄" * 2 + "😅"
+    message = _chat(text)
+    rich = _rich(message.message_id, text=text, faces=faces)
+    report = ExpressionAnalyzer().analyze([message], [rich])
+    if report_boundary:
+        from qq_chat_analyzer.application.analysis_service import _build_reports
+        report = _build_reports([message], [], expression_report=report).expression
+    culture = build_echo_report_view(
+        AnalysisReports(expression=report), conversation_kind="group",
+    ).expression_culture
+
+    assert [(item.expression_key, item.count) for item in culture.top_expressions] == [
+        ("😀", 6), ("😁", 5), ("😂", 4), ("😃", 4), ("😄", 2),
+    ]
+    assert [(item.expression_key, item.count) for item in culture.members[0].top_expressions] == [
+        ("😀", 6), ("😁", 5), ("😂", 4),
+    ]
+    assert report.expression_occurrence_count == sticker_count * 10 + 22
+    assert report.unique_expression_count == sticker_count + 6
+
+
 def test_unicode_emoji_clusters_are_counted_and_attributed() -> None:
     messages = [
         _chat("今天 😀 😀 加油", sender_id="fictional-a", message_id="m1"),
@@ -95,6 +136,102 @@ def test_unicode_emoji_clusters_are_counted_and_attributed() -> None:
     assert all(item.kind == EXPRESSION_KIND_UNICODE for item in report.top_expressions)
     assert report.members[0].speaker_key == "fictional-b"
     assert report.members[0].expression_occurrence_count == 3
+
+
+@pytest.mark.parametrize("report_boundary", [False, True])
+def test_echo_combination_ranking_backfills_after_missing_assets(report_boundary) -> None:
+    from dataclasses import replace
+    from qq_chat_analyzer.analysis.models import AnalysisReports
+    from qq_chat_analyzer.presentation import build_echo_report_view
+
+    messages = []
+    rich_messages = []
+    for index in range(5):
+        message_id = f"fictional-combination-{index}"
+        names = (
+            ("fictional-a", "fictional-b", "fictional-c")
+            if index < 3 else ("捂脸", "旺柴")
+        )
+        messages.append(replace(_chat("", message_id=message_id), platform="wechat"))
+        rich_messages.append(_rich(
+            message_id,
+            faces=tuple(
+                ExpressionContent(
+                    expression_kind=EXPRESSION_KIND_PLATFORM_FACE,
+                    expression_key=name,
+                    display_text=f"[{name}]",
+                    source="wechat",
+                    position=position,
+                )
+                for position, name in enumerate(names)
+            ),
+        ))
+
+    report = ExpressionAnalyzer().analyze(messages, rich_messages)
+    if report_boundary:
+        from qq_chat_analyzer.application.analysis_service import _build_reports
+        report = _build_reports(messages, [], expression_report=report).expression
+    culture = build_echo_report_view(
+        AnalysisReports(expression=report), expression_source="wechat",
+    ).expression_culture
+
+    assert [
+        (item.asset_keys, item.labels, item.count)
+        for item in culture.top_combinations
+    ] == [
+        ((None, None), ("表情", "表情"), 3),
+        ((None, None), ("表情", "表情"), 3),
+        ((None, None), ("表情", "表情"), 3),
+    ]
+
+
+def test_report_boundary_keeps_combination_top_three_and_ties() -> None:
+    from dataclasses import replace
+    from qq_chat_analyzer.analysis.models import AnalysisReports
+    from qq_chat_analyzer.application.analysis_service import _build_reports
+    from qq_chat_analyzer.presentation import build_echo_report_view
+
+    messages, rich_messages = [], []
+    for index in range(5):
+        message_id = f"fictional-tie-{index}"
+        # Reverse encounter order so insertion order cannot satisfy key sorting.
+        names = (
+            ("fictional-c", "fictional-b", "fictional-a") if index < 3
+            else ("流泪", "旺柴", "捂脸", "微笑")
+        )
+        messages.append(replace(_chat("", message_id=message_id), platform="wechat"))
+        rich_messages.append(_rich(message_id, faces=tuple(
+            ExpressionContent(
+                expression_kind=EXPRESSION_KIND_PLATFORM_FACE,
+                expression_key=name, display_text=f"[{name}]",
+                source="wechat", position=position,
+            )
+            for position, name in enumerate(names)
+        )))
+
+    candidates = ExpressionAnalyzer().analyze(messages, rich_messages)
+    compact = _build_reports(messages, [], expression_report=candidates).expression
+    original_view = build_echo_report_view(
+        AnalysisReports(expression=candidates), expression_source="wechat",
+    ).expression_culture
+    retained_view = build_echo_report_view(
+        AnalysisReports(expression=compact), expression_source="wechat",
+    ).expression_culture
+
+    assert len(candidates.top_combinations) == 9
+    # Visible combinations now equal the raw top-3 (no asset-based pruning),
+    # so the boundary retains only the prefix.
+    assert len(compact.top_combinations) == 3
+    assert compact.top_combinations[:3] == candidates.top_combinations[:3]
+    assert retained_view == original_view
+    assert [
+        (pair.asset_keys, pair.labels, pair.count)
+        for pair in retained_view.top_combinations
+    ] == [
+        ((None, None), ("表情", "表情"), 3),
+        ((None, None), ("表情", "表情"), 3),
+        ((None, None), ("表情", "表情"), 3),
+    ]
 
 
 def test_reply_auto_mention_emoji_does_not_contaminate_sender_expression_stats() -> None:
@@ -323,6 +460,17 @@ def test_nearby_words_are_empty_when_each_word_occurs_once() -> None:
     assert report.members[0].top_expressions[0].nearby_words == ()
 
 
+def test_expression_nearby_words_preserve_complete_laughter_tokens() -> None:
+    report = ExpressionAnalyzer().analyze([
+        _chat("哈哈哈哈哈 😀", message_id="fictional-laughter-1"),
+        _chat("哈哈哈哈哈 😀", message_id="fictional-laughter-2"),
+    ])
+
+    assert [(item.word, item.count) for item in report.top_expressions[0].nearby_words] == [
+        ("哈哈哈哈哈", 2),
+    ]
+
+
 def test_nearby_words_aggregate_repeated_platform_face_context() -> None:
     messages = [
         _chat("今天又挂科了[捂脸]", sender_id="fictional-a", message_id="m-near-1"),
@@ -533,6 +681,125 @@ def test_empty_expression_habits_keep_compatible_defaults() -> None:
 
     assert report.top_combinations == ()
     assert all(item.nearby_words == () for item in report.top_expressions)
+
+
+def test_expression_combinations_merge_reversed_order() -> None:
+    report = ExpressionAnalyzer().analyze([
+        _chat("😀👍😀", sender_id="fictional-a", message_id="forward"),
+        _chat("👍😀", sender_id="fictional-b", message_id="reverse"),
+    ])
+
+    assert len(report.top_combinations) == 1
+    combination = report.top_combinations[0]
+    assert {item.expression_key for item in combination.expressions} == {"😀", "👍"}
+    assert combination.count == 2
+    assert {item.speaker_key: item.count for item in combination.member_counts} == {
+        "fictional-a": 1,
+        "fictional-b": 1,
+    }
+
+
+@pytest.mark.parametrize("expression_count", [6, 64])
+def test_combinations_include_expressions_beyond_the_first_five(expression_count: int) -> None:
+    faces = tuple(
+        ExpressionContent(
+            expression_kind=EXPRESSION_KIND_PLATFORM_FACE,
+            expression_key=f"fictional-face-{index:02d}",
+        )
+        for index in range(expression_count)
+    )
+    messages = [_chat("", message_id="many"), _chat("", message_id="last-pair")]
+    rich_messages = [
+        _rich("many", faces=faces),
+        _rich("last-pair", faces=tuple(reversed(faces[-2:]))),
+    ]
+
+    report = ExpressionAnalyzer().analyze(messages, rich_messages)
+
+    assert report.top_combinations[0].count == 2
+    assert {item.expression_key for item in report.top_combinations[0].expressions} == {
+        f"fictional-face-{expression_count - 2:02d}",
+        f"fictional-face-{expression_count - 1:02d}",
+    }
+
+
+def test_over_budget_message_does_not_count_a_biased_prefix_of_pairs() -> None:
+    faces = tuple(
+        ExpressionContent(
+            expression_kind=EXPRESSION_KIND_PLATFORM_FACE,
+            expression_key=f"fictional-face-{index:02d}",
+        )
+        for index in range(65)
+    )
+    report = ExpressionAnalyzer().analyze(
+        [_chat("", message_id="over-budget")],
+        [_rich("over-budget", faces=faces)],
+    )
+
+    assert report.top_combinations == ()
+    assert report.expression_message_count == 1
+    assert report.expression_occurrence_count == 65
+    assert report.unique_expression_count == 65
+
+
+@pytest.mark.parametrize("kind", [
+    EXPRESSION_KIND_UNICODE, EXPRESSION_KIND_PLATFORM_FACE, EXPRESSION_KIND_STICKER,
+])
+def test_expression_message_counts_deduplicate_repeated_occurrences(kind: str) -> None:
+    key = "😀" if kind == EXPRESSION_KIND_UNICODE else "fictional-expression"
+    messages = []
+    rich_messages = []
+    for index, (text, repetitions) in enumerate((("garden ", 2), ("comet ", 1), ("", 3))):
+        message_id = f"fictional-count-{index}"
+        if kind == EXPRESSION_KIND_UNICODE:
+            text += key * repetitions
+            faces = ()
+        else:
+            faces = (ExpressionContent(
+                expression_kind=kind, expression_key=key, display_text="[表情]",
+            ),) * repetitions
+        messages.append(_chat(text, message_id=message_id))
+        rich_messages.append(_rich(message_id, text=text, faces=faces))
+
+    report = ExpressionAnalyzer().analyze(messages, rich_messages)
+
+    item = report.top_expressions[0]
+    assert item.count == 6
+    assert item.with_text_message_count == 2
+    assert item.text_only_message_count == 1
+    assert report.expression_message_count == 3
+    assert report.expression_occurrence_count == 6
+    assert report.members[0].expression_occurrence_count == 6
+
+
+@pytest.mark.parametrize("text, expected_only", [
+    ("😀", True),
+    ("😀[fictional-face]", True),
+    ("[fictional-face]😀", True),
+    (" 😀 [fictional-face] 😀 ", True),
+    ("👍 👍🏽 [fictional-face]", True),
+    ("garden 😀[fictional-face]", False),
+    ("😀[fictional-face] garden", False),
+])
+def test_mixed_unicode_and_platform_expression_only_classification(
+    text: str, expected_only: bool,
+) -> None:
+    face = ExpressionContent(
+        expression_kind=EXPRESSION_KIND_PLATFORM_FACE,
+        expression_key="fictional-face",
+        display_text="[fictional-face]",
+    )
+    message = _chat(text, message_id="fictional-mixed")
+    report = ExpressionAnalyzer().analyze(
+        [message], [_rich("fictional-mixed", text=text, faces=(face,))],
+    )
+
+    assert report.expression_only_message_count == int(expected_only)
+    assert report.expression_only_rate == float(expected_only)
+    assert report.members[0].expression_only_message_count == int(expected_only)
+    assert all(item.text_only_message_count == int(expected_only) for item in report.top_expressions)
+    assert all(item.with_text_message_count == int(not expected_only) for item in report.top_expressions)
+    assert message.text == text
 
 
 def test_sticker_does_not_enter_nearby_or_combinations() -> None:

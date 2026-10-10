@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Set
 
+from ..analysis.identity import stable_sender_key
 from ..candidates import Candidate
 from ..message import ChatMessage
 from .template_detector import _NUMBER_PATTERN, _normalize_message_text
@@ -41,6 +42,7 @@ def detect_interactive_bot_candidates(
     response_counts: Counter[str] = Counter()
     trigger_sources: dict[str, set[str]] = {}
     response_templates: dict[str, Counter[str]] = {}
+    response_identities: dict[str, set[str]] = {}
 
     for index, message in enumerate(message_list):
         source_sender = message.sender.strip()
@@ -63,6 +65,9 @@ def detect_interactive_bot_candidates(
             )
             if response_message is not None:
                 response_counts[target_sender] += 1
+                response_identities.setdefault(target_sender, set()).add(
+                    stable_sender_key(response_message)
+                )
                 normalized_response = _normalize_response_template(
                     response_message.text
                 )
@@ -98,32 +103,39 @@ def detect_interactive_bot_candidates(
                 else "elevated_response_rate"
             ),
         ]
+        metadata: dict[str, object] = {
+            "source_kind": "interactive_bot",
+            "metrics": {
+                "mention_count": mention_count,
+                "response_count": response_count,
+                "response_rate": round(response_rate, 4),
+                "unique_trigger_source_count": len(
+                    trigger_sources.get(sender, set())
+                ),
+                "response_template_score": (
+                    _response_template_score(
+                        response_templates.get(
+                            sender,
+                            Counter(),
+                        ),
+                        response_count=response_count,
+                    )
+                ),
+            },
+        }
+        metadata.update(
+            _identity_evidence(
+                sender,
+                response_identities.get(sender, frozenset()),
+            )
+        )
         candidates.append(
             Candidate(
                 target=sender,
                 candidate_type="automation_source",
                 score=score,
                 reasons=reasons,
-                metadata={
-                    "source_kind": "interactive_bot",
-                    "metrics": {
-                        "mention_count": mention_count,
-                        "response_count": response_count,
-                        "response_rate": round(response_rate, 4),
-                        "unique_trigger_source_count": len(
-                            trigger_sources.get(sender, set())
-                        ),
-                        "response_template_score": (
-                            _response_template_score(
-                                response_templates.get(
-                                    sender,
-                                    Counter(),
-                                ),
-                                response_count=response_count,
-                            )
-                        ),
-                    },
-                },
+                metadata=metadata,
             )
         )
 
@@ -134,6 +146,24 @@ def detect_interactive_bot_candidates(
             candidate.target,
         ),
     )
+
+
+def _identity_evidence(name: str, keys: Set[str]) -> dict[str, object]:
+    """Describe how a matched nickname maps onto stable sender identities.
+
+    Mentions are plain text, so a nickname cannot isolate a member on its own.
+    The automation is therefore attributed to one identity only when every
+    message credited to that nickname came from the same stable identity;
+    otherwise the identity is ambiguous and an automatic deletion could remove
+    an unrelated member who happens to share the name.
+    """
+    if len(keys) > 1:
+        return {"sender_identity_ambiguous": True}
+    if len(keys) == 1:
+        sender_key = next(iter(keys))
+        if sender_key != name:
+            return {"sender_key": sender_key}
+    return {}
 
 
 def _compile_mention_pattern(
