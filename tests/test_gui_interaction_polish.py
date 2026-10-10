@@ -14,6 +14,9 @@ from __future__ import annotations
 
 import importlib
 
+import pytest
+
+from qq_chat_analyzer.application.facade import ChatSource
 from qq_chat_analyzer.gui.wechat_workspace import WeChatWorkspace
 from qq_chat_analyzer.gui.qq_workspace import QQWorkspace
 
@@ -23,6 +26,7 @@ from test_gui import (  # noqa: F401  (fixtures re-exported for pytest)
     _drain,
     _inline_executor,
     _qq_snapshot,
+    _session,
     instant_qq_connect,
     qt_app,
     sources,
@@ -46,6 +50,54 @@ def _install_path_missing_snapshot():
 
 
 # --------------------------------------------------------------------- WeChat
+
+
+def test_wechat_loaded_sessions_hide_setup_and_keep_disconnect(qt_app) -> None:
+    """A successful load clears the setup action left by idle or repair states."""
+    workspace = WeChatWorkspace(StubFacade(), executor=_inline_executor())
+    workspace.show()
+    try:
+        assert workspace._wechat_setup_button.isVisibleTo(workspace)
+        workspace._handle_session_error("wechat_environment_missing", "虚构环境待修复")
+        assert workspace._wechat_setup_button.isVisibleTo(workspace)
+
+        workspace._handle_sessions_loaded([
+            _session(ChatSource.WECHAT, "fictional", "虚构读书会", 10)
+        ])
+
+        assert not workspace._wechat_setup_button.isVisibleTo(workspace)
+        assert workspace._wechat_disconnect_button.isVisibleTo(workspace)
+        assert not workspace._wechat_connect_button.isVisibleTo(workspace)
+        assert workspace.session_panel._session_list.count() == 1
+
+        workspace._handle_session_error("wechat_environment_missing", "虚构环境待修复")
+        assert workspace._wechat_setup_button.isVisibleTo(workspace)
+        assert workspace._wechat_setup_button.isEnabled()
+    finally:
+        workspace.close()
+
+
+@pytest.mark.parametrize("size", [(900, 700), (1280, 900)])
+def test_wechat_loaded_workspace_sits_close_to_connection_bar(qt_app, size) -> None:
+    """Hidden connection actions must not leave a blank row above the workspace."""
+    workspace = WeChatWorkspace(StubFacade(), executor=_inline_executor())
+    workspace.resize(*size)
+    workspace._handle_sessions_loaded([
+        _session(ChatSource.WECHAT, "fictional", "虚构读书会", 10)
+    ])
+    workspace.show()
+    try:
+        qt_app.processEvents()
+        bar = workspace._connection_bar
+        heading = workspace.session_panel._workspace_heading
+        bar_bottom = bar.mapTo(workspace, bar.rect().bottomLeft()).y() + 1
+        heading_top = heading.mapTo(workspace, heading.rect().topLeft()).y()
+
+        assert 0 <= heading_top - bar_bottom <= 16
+        assert workspace.session_panel._session_box.isVisibleTo(workspace)
+        assert workspace.session_panel._configuration_panel.isVisibleTo(workspace)
+    finally:
+        workspace.close()
 
 
 def test_open_wechat_setup_reuses_the_visible_dialog(qt_app, sources) -> None:

@@ -899,6 +899,7 @@ class WeChatWorkspace(QWidget):
         self._status_label.setVisible(True)
         self._hide_wechat_guide()
         self._wechat_connect_button.setVisible(False)
+        self._wechat_setup_button.setVisible(False)
         self._wechat_disconnect_button.setVisible(True)
         self._update_setup_spacing()
 
