@@ -1,47 +1,114 @@
 """Read-only QQ conflict detection; ownership comes from the launch registry."""
 from __future__ import annotations
 
-import json
+import ctypes as C
+from ctypes import wintypes as W
+from functools import lru_cache
 import os
-import subprocess
+
+
+_ERROR_NO_MORE_FILES = 18
+_INVALID_HANDLE_VALUE = C.c_void_p(-1).value
+_ERROR_CATEGORIES = {
+    "api_bind": "api_bind_failed",
+    "snapshot": "snapshot_failed",
+    "first": "first_failed",
+    "next": "next_failed",
+    "close": "close_failed",
+}
+
+
+class QQProcessDetectionError(OSError):
+    """Fixed diagnostic fields, without localized native exception text."""
+
+    def __init__(self, stage: str, winerror: int):
+        super().__init__("QQ process detection failed")
+        self._stage = stage
+        self.winerror = winerror
+
+    @property
+    def stage(self) -> str:
+        return self._stage if self._stage in _ERROR_CATEGORIES else "enumeration"
+
+    @property
+    def category(self) -> str:
+        return _ERROR_CATEGORIES.get(self._stage, "unexpected_failure")
+
+
+class _ProcessEntry32W(C.Structure):
+    _fields_ = [
+        ("dwSize", W.DWORD), ("cntUsage", W.DWORD), ("th32ProcessID", W.DWORD),
+        ("th32DefaultHeapID", C.c_size_t), ("th32ModuleID", W.DWORD),
+        ("cntThreads", W.DWORD), ("th32ParentProcessID", W.DWORD),
+        ("pcPriClassBase", W.LONG), ("dwFlags", W.DWORD), ("szExeFile", W.WCHAR * 260),
+    ]
+
+
+@lru_cache(maxsize=1)
+def _kernel32():
+    api = C.WinDLL("kernel32", use_last_error=True)
+    signatures = {
+        "CreateToolhelp32Snapshot": ([W.DWORD, W.DWORD], W.HANDLE),
+        "Process32FirstW": ([W.HANDLE, C.POINTER(_ProcessEntry32W)], W.BOOL),
+        "Process32NextW": ([W.HANDLE, C.POINTER(_ProcessEntry32W)], W.BOOL),
+        "CloseHandle": ([W.HANDLE], W.BOOL),
+    }
+    for name, (args, result) in signatures.items():
+        function = getattr(api, name)
+        function.argtypes, function.restype = args, result
+    return api
+
+
+def _process_rows() -> list[tuple[int, int, str]]:
+    try:
+        api = _kernel32()
+    except (OSError, AttributeError):
+        raise QQProcessDetectionError("api_bind", C.get_last_error()) from None
+    C.set_last_error(0)
+    handle = api.CreateToolhelp32Snapshot(2, 0)  # TH32CS_SNAPPROCESS only
+    if handle is None or handle == _INVALID_HANDLE_VALUE:
+        raise QQProcessDetectionError("snapshot", C.get_last_error())
+    failed = False
+    try:
+        entry = _ProcessEntry32W()
+        entry.dwSize = C.sizeof(entry)
+        rows = []
+        function, stage = api.Process32FirstW, "first"
+        while True:
+            C.set_last_error(0)
+            if not function(handle, C.byref(entry)):
+                # Capture before CloseHandle can replace the thread's last error.
+                error = C.get_last_error()
+                if error == _ERROR_NO_MORE_FILES:
+                    return rows
+                raise QQProcessDetectionError(stage, error)
+            rows.append((entry.th32ProcessID, entry.th32ParentProcessID, entry.szExeFile))
+            function, stage = api.Process32NextW, "next"
+    except BaseException:
+        failed = True
+        raise
+    finally:
+        C.set_last_error(0)
+        if not api.CloseHandle(handle) and not failed:
+            raise QQProcessDetectionError("close", C.get_last_error())
 
 
 def find_conflicting_qq_pids(owned_pids: tuple[int, ...]) -> list[int]:
     """Return user QQ processes, excluding recorded launchers and descendants.
 
-    A bounded CIM query supplies the whole tree so QQ renderer children are
-    included even when their executable name differs in case. Detection errors
-    propagate: an unreadable snapshot must never be treated as an empty one.
+    Toolhelp supplies PID, parent PID and Unicode executable name without
+    PowerShell, WMI or JSON. Detection errors propagate: a partial/unreadable
+    snapshot must never be treated as an empty one. This function only detects
+    conflicts; the launch registry's Job resources remain the ownership proof.
     """
     if os.name != "nt":
         return []
-    script = (
-        "$ErrorActionPreference='Stop'; "
-        "$rows=@(Get-CimInstance Win32_Process | "
-        "Select-Object ProcessId,ParentProcessId,Name); "
-        "ConvertTo-Json -InputObject $rows -Compress"
-    )
-    result = subprocess.run(
-        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-        capture_output=True, text=True, timeout=5, check=True,
-        creationflags=subprocess.CREATE_NO_WINDOW,
-    )
-    if result.returncode != 0:
-        raise OSError("QQ process query failed")
-    rows = json.loads(result.stdout)
-    if not isinstance(rows, list) or any(
-        not isinstance(row, dict)
-        or not isinstance(row.get("ProcessId"), int)
-        or not isinstance(row.get("ParentProcessId"), int)
-        or not isinstance(row.get("Name"), str)
-        for row in rows
-    ):
-        raise ValueError("Invalid QQ process snapshot")
+    rows = _process_rows()
     owned = set(owned_pids)
     while True:
-        children = {row["ProcessId"] for row in rows if row["ParentProcessId"] in owned}
+        children = {pid for pid, parent, _name in rows if parent in owned}
         if children.issubset(owned):
             break
         owned.update(children)
-    return sorted({row["ProcessId"] for row in rows
-                   if row["Name"].lower() == "qq.exe" and row["ProcessId"] not in owned})
+    return sorted({pid for pid, _parent, name in rows
+                   if name.lower() == "qq.exe" and pid not in owned})

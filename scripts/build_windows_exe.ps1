@@ -75,7 +75,7 @@ function Assert-NapCatArtifactPins([string]$Root, [string]$Phase) {
         throw 'Release must use the official Echo NapCat pins.'
     }
     $Pins = Get-Content -LiteralPath (Join-Path $PSScriptRoot $PinsName) -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($Pins.upstream.version -ne '4.18.33' -or $Pins.upstream.project -ne 'NapNeko/NapCatQQ') {
+    if ($Pins.upstream.version -ne '4.18.34' -or $Pins.upstream.project -ne 'NapNeko/NapCatQQ') {
         throw 'Unsupported release NapCat source.'
     }
     $Hashes = @{}

@@ -39,6 +39,8 @@ def release(tmp_path):
     source.mkdir(parents=True)
     contract = json.loads(MANIFEST.read_text(encoding="utf-8"))
     for entry in contract["requirements"]:
+        if entry["type"] == "file" and entry["path"] in contract["portableExcludedFiles"]:
+            continue
         path = source / "runtime" / entry["path"]
         if entry["type"] == "file":
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -49,6 +51,10 @@ def release(tmp_path):
         path = source / "runtime" / entry["path"]
         path.mkdir(parents=True, exist_ok=True)
         (path / "fixture.bin").write_bytes(b"fictional program asset")
+    for relative in contract["releaseCopyrightFiles"]:
+        path = source / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"fictional copyright material")
     for relative, content in {
         "Echo.exe": b"fictional EXE, never executed",
         "_internal/python313.dll": b"fictional Python",
@@ -116,6 +122,65 @@ def test_empty_internal_is_rejected(packager, release):
 
 
 CONTRACT = json.loads(MANIFEST.read_text(encoding="utf-8"))
+
+
+def test_complete_copyright_materials_are_packaged(packager, release):
+    source, _, _ = release
+    archive, _ = run_package(packager, release)
+    with zipfile.ZipFile(archive) as zipped:
+        for relative in CONTRACT["releaseCopyrightFiles"]:
+            assert zipped.read("Echo/" + relative) == (source / relative).read_bytes()
+
+
+@pytest.mark.parametrize("relative", CONTRACT["releaseCopyrightFiles"])
+@pytest.mark.parametrize("damage", ["missing", "directory"])
+def test_required_copyright_material_must_be_a_file(packager, release, relative, damage):
+    source, output, _ = release
+    path = source / relative
+    path.unlink()
+    if damage == "directory":
+        path.mkdir()
+    with pytest.raises(packager.PackageError, match="Missing or empty release component"):
+        run_package(packager, release)
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("relative", [
+    "third_party/napcat/undeclared-license.txt", "third_party/other-license.txt",
+])
+def test_undeclared_copyright_file_is_rejected(packager, release, relative):
+    source, output, _ = release
+    extra = source / relative
+    extra.write_bytes(b"fictional undeclared copyright")
+    with pytest.raises(packager.PackageError, match="Unexpected release member"):
+        run_package(packager, release)
+    assert extra.read_bytes() == b"fictional undeclared copyright"
+    assert not output.exists()
+
+
+def test_portable_exclusions_can_be_absent_from_zip(packager, release):
+    source, _, _ = release
+    for relative in CONTRACT["portableExcludedFiles"]:
+        assert not (source / "runtime" / relative).exists()
+    archive, _ = run_package(packager, release)
+    with zipfile.ZipFile(archive) as zipped:
+        assert not {
+            "Echo/runtime/" + relative for relative in CONTRACT["portableExcludedFiles"]
+        }.intersection(zipped.namelist())
+
+
+@pytest.mark.parametrize("relative", CONTRACT["portableExcludedFiles"])
+def test_reintroduced_portable_exclusion_is_rejected(packager, release, relative):
+    source, output, _ = release
+    excluded = source / "runtime" / relative
+    excluded.parent.mkdir(parents=True, exist_ok=True)
+    excluded.write_bytes(b"fictional excluded asset")
+    with pytest.raises(packager.PackageError, match="excluded"):
+        run_package(packager, release)
+    assert excluded.read_bytes() == b"fictional excluded asset"
+    assert not output.exists()
+
+
 PRIVATE_PATHS = [f"runtime/{entry['path']}" for entry in CONTRACT["privatePaths"]]
 PRIVATE_PATHS += CONTRACT["releaseTreePrivatePaths"]
 PRIVATE_PATHS += [f"runtime/{path}" for path in CONTRACT["forbiddenPaths"]]

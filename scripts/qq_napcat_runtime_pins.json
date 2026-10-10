@@ -1,17 +1,17 @@
 {
   "upstream": {
-    "version": "4.18.33",
+    "version": "4.18.34",
     "project": "NapNeko/NapCatQQ",
-    "releaseUrl": "https://github.com/NapNeko/NapCatQQ/releases/tag/v4.18.33",
-    "archiveUrl": "https://github.com/NapNeko/NapCatQQ/releases/download/v4.18.33/NapCat.Shell.zip",
-    "archiveSha256": "4b8e20e6d22288586d99eb0b34fff6c7ee1d88b00353039326f8c459a86df667",
-    "archiveSizeBytes": 29500155,
+    "releaseUrl": "https://github.com/NapNeko/NapCatQQ/releases/tag/v4.18.34",
+    "archiveUrl": "https://github.com/NapNeko/NapCatQQ/releases/download/v4.18.34/NapCat.Shell.zip",
+    "archiveSha256": "960cc7b0ef71125dcfa89f5c21754fa1401051082a849bff9dd6925d2b2391d3",
+    "archiveSizeBytes": 29500688,
     "license": "Limited Redistribution License for NapCat"
   },
   "napcatPatch": {
     "path": "napcat.mjs",
-    "upstreamSha256": "ee961eae58c88ec08952f81cb06fb9dc3b129704f50f21f5cfc7ea509f32bf34",
-    "patchedSha256": "87f4ebb93b14c6626ba54052bc5798769ef15d3e9a67d043b4592df304d45aab",
+    "upstreamSha256": "6a22c93373c8f73462658d57b00bc88164d7e5858c0fe2f178eb97d66d7cb3ba",
+    "patchedSha256": "aaf556ffc60b84760b5b235ac8fc98c64a0bc87b1bf150b99f4450d1c5a740d4",
     "replacements": [
       {
         "anchor": "  let a;\n  if (r.onCmd(\"OidbSvcTrpcTcp.0xcde_2\"",
@@ -36,7 +36,7 @@
     "NapCatWinBootMain.exe": "fdc3b5b3131093f627811e171425e98681f71523c0aa21693dee8c6b6b2892f7",
     "conout-wiJ7YKRd.js": "4f1afebbc3a653f1d47bc787f37acc8b15d8d15a2e9bee7a4c3ba54344566564",
     "launcher-user.bat": "1058dfaccdacb8690d58067f0a741c40300d428284ecc6b0e501ba10de5d59e3",
-    "napcat.mjs": "ee961eae58c88ec08952f81cb06fb9dc3b129704f50f21f5cfc7ea509f32bf34",
+    "napcat.mjs": "6a22c93373c8f73462658d57b00bc88164d7e5858c0fe2f178eb97d66d7cb3ba",
     "native/dpapi/win32-arm64/@primno+dpapi.node": "6a5cc9c5b3e390fe08fea0de3a22248d5836cea0b26aa6a80d9447c45ec04b12",
     "native/dpapi/win32-x64/@primno+dpapi.node": "386e7a520b143aa7b6fa1a28a0237391a938bbedd0b245733a3da3a215026a3f",
     "native/ffmpeg/ffmpegAddon.darwin.arm64.node": "041f24ebe44241f1a725d07996ada665968cccc1ebf229a8595b3a802d26c8c5",

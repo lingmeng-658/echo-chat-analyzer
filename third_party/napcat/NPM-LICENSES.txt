@@ -1,4 +1,4 @@
-NapCat v4.18.33 Windows Portable: npm dependency notices
+NapCat v4.18.34 Windows Portable: npm dependency notices
 
 Inventory from the distributed node_modules package.json and license files.
 Each instance retains its own copyright and complete license text below; package-local license files also remain in the runtime.

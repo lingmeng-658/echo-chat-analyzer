@@ -242,11 +242,74 @@ def test_process_detection_failure_does_not_launch(monkeypatch):
     assert launcher.calls == 0
 
 
+@pytest.mark.parametrize("error_type", [OSError, ValueError, RuntimeError])
+def test_detection_diagnostics_never_log_exception_details(monkeypatch, caplog, error_type):
+    error = error_type("RAW_EXCEPTION_SENTINEL Z:/private/fictional account=fictional credential=fictional")
+    # Untrusted exception attributes must not become diagnostic fields either.
+    error.stage = "UNSAFE_STAGE_SENTINEL"
+    bridge, launcher, _ = _process_wait_bridge(monkeypatch, [error])
+    with caplog.at_level("INFO", logger=_bridge_module()._LOGGER.name):
+        result = bridge.start_auth_flow()
+    records = [record for record in caplog.records if "process detection" in record.getMessage()]
+    assert result.code == "qq_process_detection_failed" and launcher.calls == 0
+    assert len(records) == 1
+    message = records[0].getMessage()
+    assert "stage=enumeration" in message and "category=unexpected_failure" in message
+    assert "elapsed_ms=" in message
+    assert records[0].exc_info is None
+    assert "SENTINEL" not in caplog.text
+    assert "Z:/private" not in caplog.text
+    assert "account=" not in caplog.text and "credential=" not in caplog.text
+
+
+def test_detection_success_diagnostics_are_bounded_and_do_not_list_processes(monkeypatch, caplog):
+    bridge, launcher, _ = _process_wait_bridge(
+        monkeypatch, [[87654321], [87654321], [87654321], []], process_poll_interval=0,
+    )
+    with caplog.at_level("INFO", logger=_bridge_module()._LOGGER.name):
+        result = bridge.start_auth_flow()
+    records = [record for record in caplog.records if "process detection" in record.getMessage()]
+    assert result.state is _connection_module().ConnectionState.WAITING_AUTH
+    assert launcher.calls == 1
+    assert len(records) == 2  # initial conflict and eventual clear, not every poll
+    assert "category=conflict" in records[0].getMessage()
+    assert "category=clear" in records[1].getMessage()
+    assert all("stage=complete" in record.getMessage() and "elapsed_ms=" in record.getMessage()
+               for record in records)
+    assert "87654321" not in caplog.text
+
+
+def test_cancelled_failed_detection_never_logs_or_launches(monkeypatch, caplog):
+    cancelled = threading.Event()
+    bridge, launcher, _ = _process_wait_bridge(monkeypatch, [])
+    def detect(owned):
+        cancelled.set()
+        raise OSError("RAW_EXCEPTION_SENTINEL")
+    monkeypatch.setattr(_bridge_module(), "find_conflicting_qq_pids", detect)
+    with caplog.at_level("INFO", logger=_bridge_module()._LOGGER.name):
+        result = bridge.start_auth_flow(cancel_event=cancelled)
+    assert result.code == "qq_auth_cancelled"
+    assert launcher.calls == 0
+    assert not any("process detection" in record.getMessage() for record in caplog.records)
+
+
 def test_process_wait_timeout_does_not_launch(monkeypatch):
     bridge, launcher, _ = _process_wait_bridge(monkeypatch, [[101]], process_wait_timeout=0)
     result = bridge.start_auth_flow()
     assert result.code == "qq_process_exit_timeout"
     assert launcher.calls == 0
+
+
+def test_process_wait_timeout_has_safe_phase_and_duration(monkeypatch, caplog):
+    bridge, launcher, _ = _process_wait_bridge(monkeypatch, [[87654321]], process_wait_timeout=0)
+    with caplog.at_level("INFO", logger=_bridge_module()._LOGGER.name):
+        result = bridge.start_auth_flow()
+    assert result.code == "qq_process_exit_timeout" and launcher.calls == 0
+    records = [record for record in caplog.records if "category=timeout" in record.getMessage()]
+    assert len(records) == 1
+    assert "stage=conflict_wait" in records[0].getMessage()
+    assert "elapsed_ms=" in records[0].getMessage()
+    assert "87654321" not in caplog.text
 
 
 def test_cancel_during_process_detection_prevents_late_launch(monkeypatch):
@@ -552,7 +615,7 @@ def test_is_qrcode_ready_accepts_refreshed_qrcode_after_expiry(
     assert bridge.is_qrcode_ready() is True
 
 
-def test_start_auth_flow_logs_qr_baseline_and_acceptance_fingerprints(
+def test_start_auth_flow_logs_qr_stages_without_private_metadata(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -585,8 +648,11 @@ def test_start_auth_flow_logs_qr_baseline_and_acceptance_fingerprints(
 
     messages = [record.message for record in caplog.records]
     assert any("qr baseline exists" in message for message in messages)
-    assert any("sha256=" in message for message in messages)
     assert any("qr accepted" in message for message in messages)
+    assert "sha256=" not in caplog.text
+    assert str(tmp_path) not in caplog.text
+    assert "stale-qr-before-session" not in caplog.text
+    assert "fresh-qr-from-this-session" not in caplog.text
 
 
 def test_start_auth_flow_reports_existing_backend_stages() -> None:
@@ -1126,7 +1192,7 @@ def test_default_launcher_logs_completed_stdout_and_stderr(
     assert "stderr=bytes=16" in caplog.text
 
 
-def test_default_launcher_logs_the_actual_command(
+def test_default_launcher_logs_safe_launch_stage(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -1144,11 +1210,13 @@ def test_default_launcher_logs_the_actual_command(
     with caplog.at_level("INFO", logger="qq_chat_analyzer.desktop.qq_auth_bridge"):
         bridge.default_auth_window_launcher(config)()
 
-    assert "launch command=" in caplog.text
-    assert "qq_path=" in caplog.text
+    assert "launch requested" in caplog.text
+    assert "launch command=" not in caplog.text
+    assert "qq_path=" not in caplog.text
+    assert str(tmp_path) not in caplog.text
     assert "launch result pid=4243 returncode=None" in caplog.text
     assert "launcher-user.bat" not in caplog.text
-    assert "NapCatWinBootMain.exe" in caplog.text
+    assert "NapCatWinBootMain.exe" not in caplog.text
 
 
 def test_auth_flow_records_the_launched_window_pid(

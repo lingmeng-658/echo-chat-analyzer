@@ -2886,11 +2886,13 @@ def _write_qrcode_png(path: Path) -> None:
 
 
 @pytest.mark.parametrize("runtime_mode", ["managed", "custom"])
-def test_qq_gui_reads_fresh_qr_from_auth_workspace(qt_app, tmp_path, runtime_mode):
+def test_qq_gui_reads_fresh_qr_from_auth_workspace(qt_app, tmp_path, runtime_mode, monkeypatch):
     """Display the bridge's QR, never an installation or previous session QR."""
     from PySide6.QtGui import QPixmap
     from qq_chat_analyzer.application.facade import ChatAnalyzerFacade
     from qq_chat_analyzer.application.qq.qq_auth_bridge import QQAuthBridge
+    from qq_chat_analyzer.application.qq import qq_auth_bridge
+    monkeypatch.setattr(qq_auth_bridge, "find_conflicting_qq_pids", lambda owned: [])
     from qq_chat_analyzer.application.qq.qq_environment_config import QQEnvironmentConfig
     from qq_chat_analyzer.application.qq.qq_runtime_paths import (
         qq_runtime_paths, resolve_runtime_paths,
@@ -2925,11 +2927,14 @@ def test_qq_gui_reads_fresh_qr_from_auth_workspace(qt_app, tmp_path, runtime_mod
     workspace._refresh_qq_qrcode()
     assert workspace._qq_qrcode_label.isHidden()
     facade.start_qq_auth_flow()
-    workspace._refresh_qq_qrcode()
+    workspace._show_qq_status(_qq_snapshot("waiting_auth"), False)
     assert workspace._qq_qrcode_label.isHidden()
+    assert workspace._qq_guide_label.text() == "等待 QQ 登录，请在 QQ 登录窗口完成登录。"
+    assert "扫码" not in workspace._qq_login_guide_label.text()
     _write_qrcode_png(qr)
-    workspace._refresh_qq_qrcode()
+    workspace._show_qq_status(_qq_snapshot("waiting_auth"), False)
     assert workspace._qq_qrcode_label.isVisibleTo(workspace)
+    assert workspace._qq_guide_label.text() == "请使用手机 QQ 扫码登录"
     assert facade.get_qq_qrcode_path() == qr
     assert bridge.get_qrcode_path() == qr
 
@@ -3502,7 +3507,7 @@ def test_qq_connection_trail_walks_prepare_start_scan_connect(
     executor = _DeferredExecutor()
     workspace = QQWorkspace(facade, executor=executor)
 
-    assert module._QQ_CONNECT_STAGES == ("准备", "启动 QQ", "扫码", "连接")
+    assert module._QQ_CONNECT_STAGES == ("准备", "启动 QQ", "登录", "连接")
     assert workspace._progress_track.isHidden() is True
 
     workspace.connect_qq()

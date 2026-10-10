@@ -1,4 +1,4 @@
-"""QQ workspace: connection status, QR login, and session analysis."""
+"""QQ workspace: connection status, login guidance, and session analysis."""
 
 from __future__ import annotations
 
@@ -60,23 +60,22 @@ _QQ_CONNECT_MIN_DISPLAY_MS = 500
 _QQ_STATUS_POLL_INTERVAL_MS = 2000
 _QQ_WAITING_AUTH_TIMEOUT_MS = 120_000
 _QQ_AUTH_TIMEOUT_TITLE = "QQ登录等待超时"
-_QQ_AUTH_TIMEOUT_HINT = "扫码时间过长，请取消后重新连接。"
-# The cancel button is held disabled only while the QR is still loading, and
-# never for longer than this bound: a slow QR must not trap the user in the
-# journey, and reaching the bound must never be treated as a failed login.
+_QQ_AUTH_TIMEOUT_HINT = "登录等待时间过长，请重新连接。"
+# Before a QR is available, cancellation is disabled for at most this bound.
+# Waiting without a QR must not trap the user or be treated as a failed login.
 _QQ_QR_RELEASE_MS = 8000
-_QQ_QR_LOADING_ACTION = "正在加载 QQ 登录二维码，请稍候…"
+_QQ_QR_LOADING_ACTION = "等待 QQ 登录，请在 QQ 登录窗口完成登录。"
 _QQ_QR_READY_ACTION = "请使用手机 QQ 扫码登录"
-_QQ_QR_SLOW_ACTION = "二维码加载较慢，你可以继续等待，或取消后重新连接。"
+_QQ_QR_SLOW_ACTION = "等待 QQ 登录，你可以继续等待，或取消后重新连接。"
 _QQ_QRCODE_SIZE = 240
-# The connection journey the trail walks: 准备 → 启动 QQ → 扫码 → 连接.
+# The connection journey the trail walks: 准备 → 启动 QQ → 登录 → 连接.
 _QQ_STAGE_PREPARING = 0
 _QQ_STAGE_STARTING_QQ = 1
 _QQ_STAGE_SCANNING = 2
 _QQ_STAGE_CONNECTING = 3
-_QQ_CONNECT_STAGES = ("准备", "启动 QQ", "扫码", "连接")
-# One short current action plus one short note per stage. The QR is the visual
-# subject of the scan stage, so the copy around it stays out of the way.
+_QQ_CONNECT_STAGES = ("准备", "启动 QQ", "登录", "连接")
+# One short current action plus one short note per stage. Login does not
+# require a QR; the scan instruction is shown only with a displayable fresh QR.
 _QQ_STAGE_COPY = {
     _QQ_STAGE_PREPARING: (
         "正在准备连接环境",
@@ -88,8 +87,8 @@ _QQ_STAGE_COPY = {
         "这是 Echo 内置的 QQ 数据读取组件，请允许它运行。",
     ),
     _QQ_STAGE_SCANNING: (
-        "请扫码登录 QQ",
-        "QQ 主窗口可能不会显示，这是正常现象。扫码后 Echo 会自动继续。",
+        "等待 QQ 登录",
+        "请在 QQ 登录窗口完成登录，Echo 会自动继续。",
     ),
     _QQ_STAGE_CONNECTING: (
         "正在准备聊天记录",
@@ -97,7 +96,7 @@ _QQ_STAGE_COPY = {
     ),
 }
 _QQ_IDLE_ACTION = _QQ_CONNECT_LABEL
-_QQ_IDLE_NOTE = "点击后 Echo 会自动启动 QQ，并等待你扫码登录。"
+_QQ_IDLE_NOTE = "点击后 Echo 会自动启动 QQ，等待你完成登录。"
 _QQ_STATE_DISCONNECTED = "disconnected"
 _QQ_STATE_INITIALIZING = "initializing"
 _QQ_STATE_STARTING = "starting"
@@ -121,7 +120,7 @@ _QQ_STATE_MESSAGES = {
     _QQ_STATE_DISCONNECTED: "QQ 尚未连接。",
     _QQ_STATE_INITIALIZING: "正在初始化 QQ 连接，请稍候...",
     _QQ_STATE_STARTING: "正在启动 QQ，请稍候...",
-    _QQ_STATE_WAITING_AUTH: "等待 QQ 扫码登录...",
+    _QQ_STATE_WAITING_AUTH: "等待 QQ 登录...",
     _QQ_STATE_CONNECTED: "QQ 已连接。",
     _QQ_STATE_ERROR: "QQ 连接异常。",
 }
@@ -732,7 +731,7 @@ class QQWorkspace(QWidget):
         try:
             path = self._facade.get_qq_qrcode_path()
         except Exception:
-            _LOGGER.debug("[qq gui] qr path unavailable", exc_info=True)
+            _LOGGER.debug("[qq gui] qr path unavailable")
             path = None
         if path is None:
             self._hide_qq_qrcode()
@@ -955,7 +954,7 @@ class QQWorkspace(QWidget):
 
     def _save_qq_install_path(self, path: Path) -> None:
         """Persist the chosen QQ.exe through the facade, then retry."""
-        _LOGGER.info("[qq gui] saving user-selected QQ path path=%s", path)
+        _LOGGER.info("[qq gui] saving user-selected QQ path")
         self._leave_qq_journey()
         self._status_label.setStyleSheet(QQ_STATUS_STYLE)
         self._status_label.setText(_QQ_PATH_SAVING)

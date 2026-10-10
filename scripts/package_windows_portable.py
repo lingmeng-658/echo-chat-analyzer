@@ -101,6 +101,10 @@ def _inventory(root: Path) -> dict[str, tuple[Path, tuple]]:
 
 def _validate_release(entries: dict, contract: dict) -> None:
     paths = {name.rstrip("/").casefold() for name in entries}
+    excluded = {_manifest_path(p).casefold() for p in contract["portableExcludedFiles"]}
+    for relative in excluded:
+        if ("runtime/" + relative) in paths:
+            raise PackageError("Release contains an excluded portable asset: " + relative)
     private = [_manifest_path(p) for p in contract["releaseTreePrivatePaths"]]
     private += ["runtime/" + _manifest_path(e["path"]) for e in contract["privatePaths"]]
     private += ["runtime/" + _manifest_path(p) for p in contract["forbiddenPaths"]]
@@ -124,6 +128,9 @@ def _validate_release(entries: dict, contract: dict) -> None:
     require("_internal", "non-empty-directory")
     require("runtime", "non-empty-directory")
     require(DIAGNOSTIC_SCRIPT, "file")
+    copyright_files = {_manifest_path(p) for p in contract["releaseCopyrightFiles"]}
+    for relative in copyright_files:
+        require(relative, "file")
     files = set()
     directories = set()
     sources = set()
@@ -133,6 +140,8 @@ def _validate_release(entries: dict, contract: dict) -> None:
         if not relative.startswith(source + "/"):
             raise PackageError("Manifest asset is outside its source")
         sources.add(source)
+        if entry["type"] == "file" and relative.casefold() in excluded:
+            continue
         require("runtime/" + relative, entry["type"])
         if entry["type"] == "file":
             files.add("runtime/" + relative)
@@ -156,6 +165,10 @@ def _validate_release(entries: dict, contract: dict) -> None:
         if parts[0] == "_internal":
             continue
         if path in {"Echo.exe", "runtime", "scripts", DIAGNOSTIC_SCRIPT}:
+            continue
+        if path in copyright_files or (name.endswith("/") and any(
+            relative.startswith(path + "/") for relative in copyright_files
+        )):
             continue
         if parts[0] != "runtime":
             raise PackageError("Unexpected release member: " + path)

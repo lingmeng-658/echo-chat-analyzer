@@ -274,7 +274,7 @@ DB 原生字段与 protobuf 解释留在 Provider / Adapter 边界内，不能�
 Final Cleanup / Final Smoke 均 PASS；此前 main-only 损坏快照问题已关闭。
 验收范围与跨机器 RC 等开放事项见 `docs/HARDENING.md`，不将本机验收扩大为
 跨机器或跨 QQ 版本 schema 保证。上述 2026-10-02 验收属于历史版本，
-不覆盖当前 4.18.33、RPC 认证、Worker 代际隔离与显式重连变更；最新验收状态见该工作地图。
+不覆盖当前 4.18.34、RPC 认证、Worker 代际隔离与显式重连变更；最新验收状态见该工作地图。
 
 群成员元数据使用已验证的 `result.infos`：优先 `cardName`，缺失时回退 `nick`；
 不通过好友列表假定群成员关系，也不为缺失元数据猜名称。Provider 按
@@ -325,7 +325,7 @@ Provider 发现全部匹配 shard，对每个 shard 使用同一时间范围查�
 不复制 Provider 的业务解析。
 
 **Windows 发布合同（De-QCE）** —— Desktop 默认 QQ runtime 位于
-`runtime/qq-napcat-candidate`：官方 NapCat v4.18.33、late-passphrase
+`runtime/qq-napcat-candidate`：官方 NapCat v4.18.34、late-passphrase
 补丁、Echo plugin 白名单与 `napcat-plugin-echo`。连接和 metadata 使用
 `NapCatQQProvider`；snapshot correctness 使用 Echo staging 输入强见证。Provider 与
 snapshot client 绑定同一个已认证的 Worker `boot_id`，代际失效后仅显式重连可重新绑定，

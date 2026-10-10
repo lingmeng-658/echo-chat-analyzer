@@ -44,9 +44,14 @@ def test_echo_release_has_license_scope_and_public_source_notice() -> None:
     assert "https://github.com/lingmeng-658/echo-chat-analyzer" in notice
     assert "third_party/napcat/NOTICE.md" in notice
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
-    assert "## 开源许可" in readme
-    assert "MPL 2.0 本身允许商业使用" in readme
-    assert "https://github.com/NapNeko/NapCatQQ/issues/2096" in readme
+    assert "[MPL 2.0 开源许可](LICENSE)" in readme
+    assert "[许可声明](NOTICE.md)" in readme
+    assert "[第三方许可](third_party/napcat/NOTICE.md)" in readme
+    assert "MPL 2.0 本身允许商业使用" in notice
+    napcat_notice = (PROJECT_ROOT / "third_party/napcat/NOTICE.md").read_text(
+        encoding="utf-8"
+    )
+    assert "https://github.com/NapNeko/NapCatQQ/issues/2096" in napcat_notice
 PYPROJECT = PROJECT_ROOT / "pyproject.toml"
 DEVELOPMENT_GUIDE = PROJECT_ROOT / "DEVELOPMENT.md"
 

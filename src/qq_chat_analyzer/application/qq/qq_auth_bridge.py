@@ -19,7 +19,6 @@ import subprocess
 import threading
 import time
 from dataclasses import replace
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -40,12 +39,17 @@ from .qq_process_registry import (
     QQProcessRegistry,
     default_qq_process_registry,
 )
-from .qq_process_detection import find_conflicting_qq_pids
+from .qq_process_detection import QQProcessDetectionError, find_conflicting_qq_pids
+from .qq_version import read_qq_version
 from .qq_runtime_session import default_qq_runtime_session
 
 
 _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.qq_auth_bridge")
 PROGRESS_WAITING_QQ_EXIT = "请完全退出 QQ"
+# Explicit minimum in the official NapCat v4.18.33 release notes:
+# https://github.com/NapNeko/NapCatQQ/releases/tag/v4.18.33
+# Passing this gate is not a claim of full compatibility with the pinned 4.18.34.
+_MIN_WINDOWS_QQ_BUILD = 40768
 
 
 class _AuthCancelled(Exception):
@@ -201,20 +205,36 @@ class QQAuthBridge:
         progress: Callable[[str], None] | None,
         cancelled: threading.Event,
     ) -> ConnectionSnapshot | None:
-        deadline = time.monotonic() + self._process_wait_timeout
+        wait_started = time.monotonic()
+        deadline = wait_started + self._process_wait_timeout
         waiting = False
         while True:
             self._check_cancelled(cancelled)
+            detection_started = time.monotonic()
             try:
                 pids = find_conflicting_qq_pids(self._process_registry.recorded())
-            except Exception:
+            except Exception as error:
                 self._check_cancelled(cancelled)
-                _LOGGER.warning("[qq auth] QQ process detection failed", exc_info=True)
+                stage, category = "enumeration", "unexpected_failure"
+                if isinstance(error, QQProcessDetectionError):
+                    stage, category = error.stage, error.category
+                _LOGGER.warning(
+                    "[qq auth] QQ process detection stage=%s category=%s elapsed_ms=%s",
+                    stage, category, int((time.monotonic() - detection_started) * 1000),
+                )
                 return self._error_snapshot(
                     "无法检测 QQ 进程，请稍后重试。", HINT_RETRY,
                     code="qq_process_detection_failed",
                 )
             self._check_cancelled(cancelled)
+            # At most the initial conflict and eventual clear; no per-poll list
+            # or raw exception details are recorded, even before log filtering.
+            if not waiting or not pids:
+                _LOGGER.info(
+                    "[qq auth] QQ process detection stage=complete category=%s elapsed_ms=%s",
+                    "conflict" if pids else "clear",
+                    int((time.monotonic() - detection_started) * 1000),
+                )
             if not pids:
                 return None
             if not waiting:
@@ -223,6 +243,10 @@ class QQAuthBridge:
             self._check_cancelled(cancelled)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                _LOGGER.warning(
+                    "[qq auth] QQ process detection stage=conflict_wait category=timeout elapsed_ms=%s",
+                    int((time.monotonic() - wait_started) * 1000),
+                )
                 return self._error_snapshot(
                     "等待 QQ 退出超时，请完全退出 QQ 后重新连接。",
                     HINT_RETRY, code="qq_process_exit_timeout",
@@ -389,14 +413,7 @@ class QQAuthBridge:
         )
         if fresh:
             if self._qr_baseline is not None and not self._qr_ready_logged:
-                _LOGGER.info(
-                    "[qq auth] qr accepted path=%s %s",
-                    path,
-                    _qr_fingerprint_text(
-                        fingerprint,
-                        elapsed_since=self._qr_session_started_at,
-                    ),
-                )
+                _LOGGER.info("[qq auth] qr accepted")
                 self._qr_ready_logged = True
         else:
             self._qr_ready_logged = False
@@ -450,14 +467,15 @@ class QQAuthBridge:
                 config = self._setup_service.get_environment_config()
             except QQConfigNotFound:
                 config = self._recover_environment_config()
-            _LOGGER.info(
-                "[qq auth] building default window launcher config=%s",
-                _config_summary(config),
-            )
-            launcher = default_auth_window_launcher(
-                config, paths=self._runtime_paths, credential=self._credential_source
-            )
-            self._check_cancelled(cancelled)
+            _LOGGER.info("[qq auth] building default window launcher")
+            try:
+                launcher = default_auth_window_launcher(
+                    config, paths=self._runtime_paths, credential=self._credential_source
+                )
+            finally:
+                # Cancellation wins even if the completed version read would
+                # otherwise reject this attempt as too old.
+                self._check_cancelled(cancelled)
             process = launcher()
         with self._session_lock:
             if generation != self._session_generation:
@@ -572,13 +590,9 @@ class QQAuthBridge:
             _LOGGER.info("[qq auth] qr baseline unavailable")
             return
         if self._qr_baseline is None:
-            _LOGGER.info("[qq auth] qr baseline missing path=%s", path)
+            _LOGGER.info("[qq auth] qr baseline missing")
             return
-        _LOGGER.info(
-            "[qq auth] qr baseline exists path=%s %s",
-            path,
-            _qr_fingerprint_text(self._qr_baseline),
-        )
+        _LOGGER.info("[qq auth] qr baseline exists")
 
     def _clean_stale_runtime(self) -> None:
         """Stop old Echo-launched runtime sessions before a fresh launch."""
@@ -592,10 +606,7 @@ class QQAuthBridge:
             directory = self._runtime_paths.program_root
         if directory is None:
             return
-        _LOGGER.info(
-            "[qq auth] stopping stale runtime sessions dir=%s",
-            directory,
-        )
+        _LOGGER.info("[qq auth] stopping stale runtime sessions")
         try:
             self._runtime_cleaner(directory)
         except Exception as error:
@@ -627,10 +638,7 @@ class QQAuthBridge:
         try:
             return getter()
         except Exception:
-            _LOGGER.debug(
-                "[qq auth] environment config unavailable",
-                exc_info=True,
-            )
+            _LOGGER.debug("[qq auth] environment config unavailable")
             return None
 
     @staticmethod
@@ -666,11 +674,41 @@ def default_auth_window_launcher(config: Any, *, paths=None, credential: Any = N
     qq_path = resolve_qq_install_path(config, runtime_directory)
     if qq_path is None or not qq_path.is_file():
         raise QQAuthWindowUnavailable(MESSAGE_QQ_MISSING, code=QQ_INSTALL_PATH_MISSING_CODE)
+    # Capture the same executable for the version read and the eventual command;
+    # do not resolve a different install again inside the launch callable.
+    qq_path = qq_path.resolve()
+    _check_qq_version(qq_path)
     if not (runtime_directory / "NapCatWinBootMain.exe").is_file() or not (runtime_directory / "NapCatWinBootHook.dll").is_file():
         raise QQAuthWindowUnavailable(MESSAGE_WINDOW_MISSING)
     managed = getattr(config, "runtime_mode", None) == "managed"
     return lambda: _launch_auth_window(runtime_directory, runtime_directory / "NapCatWinBootMain.exe", qq_path,
                                        paths=paths, managed=managed, credential=credential)
+
+
+def _check_qq_version(qq_path: Path) -> None:
+    """Reject only a reliably identified build below the documented minimum."""
+    started = time.monotonic()
+    try:
+        version = read_qq_version(qq_path)
+    except Exception:
+        version = None
+    known = (
+        isinstance(version, tuple) and len(version) == 4
+        and all(type(part) is int and 0 <= part <= 65535 for part in version)
+        and version[:2] == (9, 9) and version[3] > 0
+    )
+    result = "unknown"
+    if known:
+        result = "below_minimum" if version[3] < _MIN_WINDOWS_QQ_BUILD else "minimum_met"
+    _LOGGER.info("[qq auth] version_check result=%s elapsed_ms=%s", result,
+                 max(0, int((time.monotonic() - started) * 1000)))
+    if result == "below_minimum":
+        major, minor, patch, build = version
+        raise QQAuthWindowUnavailable(
+            f"当前 QQ 版本过旧（检测到 {major}.{minor}.{patch}-{build}），"
+            "暂不符合 Echo 内置 NapCat 的兼容要求，请更新 QQ 后重试。",
+            code="qq_version_too_old",
+        )
 
 
 def resolve_qq_install_path(
@@ -973,10 +1011,7 @@ def _launch_auth_window(
     token = session.begin_launch()
     environment["ECHO_BRIDGE_TOKEN"] = token
     command = [str(launcher), str(qq_path), environment["NAPCAT_INJECT_PATH"]]
-    _LOGGER.info(
-        "[qq auth] launch command=%s cwd=%s qq_path=%s",
-        command, work_root, qq_path,
-    )
+    _LOGGER.info("[qq auth] launch requested")
     launch_options = {
         "cwd": str(work_root),
         "env": environment,
@@ -1092,21 +1127,11 @@ def _report_progress(
     try:
         progress(message)
     except Exception:
-        _LOGGER.debug("[qq auth] progress callback failed", exc_info=True)
+        _LOGGER.debug("[qq auth] progress callback failed")
 
 
 def _state_value(state: Any) -> Any:
     return getattr(state, "value", state)
-
-
-def _config_summary(config: Any) -> str:
-    if config is None:
-        return "none"
-    runtime_directory = _runtime_directory(config)
-    return (
-        f"runtime_directory={runtime_directory} "
-        f"exists={runtime_directory.is_dir()}"
-    )
 
 
 def _qr_fingerprint(path: Path | None) -> tuple[str, int, int] | None:
@@ -1119,23 +1144,6 @@ def _qr_fingerprint(path: Path | None) -> tuple[str, int, int] | None:
     except OSError:
         return None
     return (digest, stat.st_mtime_ns, stat.st_size)
-
-
-def _qr_fingerprint_text(
-    fingerprint: tuple[str, int, int],
-    *,
-    elapsed_since: float | None = None,
-) -> str:
-    digest, mtime_ns, size = fingerprint
-    mtime = datetime.fromtimestamp(mtime_ns / 1_000_000_000, tz=timezone.utc)
-    text = (
-        f"mtime={mtime.isoformat()} mtime_ns={mtime_ns} "
-        f"size={size} sha256={digest}"
-    )
-    if elapsed_since is not None:
-        elapsed_ms = int((time.monotonic() - elapsed_since) * 1000)
-        text += f" elapsed_ms={elapsed_ms}"
-    return text
 
 
 __all__ = [
