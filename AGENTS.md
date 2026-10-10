@@ -49,7 +49,9 @@ Analysis Core → Exporter / GUI
 
 ## QQ 数据入口
 
-桌面 QQ 会话列表与分析使用正式 QQ Direct DB 链路，已完成真人 E2E 和最终 smoke。
+桌面 QQ 会话列表与分析使用正式 QQ Direct DB 链路；历史版本已完成真人 E2E 和最终 smoke。
+该历史验收不覆盖当前 NapCat 升级、RPC 认证、Worker 代际隔离与显式重连变更；
+当前代码、自动化、合入与最终发行 / 真人验收状态以 `docs/HARDENING.md` 为准。
 具体数据流、获取与清理边界以 ARCHITECTURE.md 为准，不在本文件复制架构图。
 QQChatExporter / QCE 已完全退休：runtime、CLI 服务调用、QCE JSON 与旧 QQ JSON/JSONL
 兼容均不再支持；不得重新引入 QCE fallback。正式链路与统一消息模型边界见 ARCHITECTURE.md。

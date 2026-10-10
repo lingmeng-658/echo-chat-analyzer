@@ -49,11 +49,9 @@ def _formal(program):
         pages.push(plain);
       }
       fs.writeFileSync(target,Buffer.concat(pages));
-      globalThis.__ECHO_DIRECT_DB_READ_STATE__={
-        databaseBefore:{present:true,bytes:encrypted.length,mtimeMs:1},
-        databaseAfter:{present:true,bytes:encrypted.length,mtimeMs:1},
-        walBefore:{present:false,bytes:0,mtimeMs:0},walAfter:{present:false,bytes:0,mtimeMs:0}
-      };
+      if(mode==='merged-append') fs.appendFileSync(source,'fictional change');
+      if(mode==='merged-replace') {fs.unlinkSync(source); fs.writeFileSync(source,encrypted);}
+      if(mode==='merged-delete') fs.unlinkSync(source);
       return true;
     }
   }}};
@@ -103,6 +101,16 @@ def test_formal_append_after_boundary_succeeds(fictional_source):
     import sqlite3
     with sqlite3.connect(fictional_source[2]) as db:
         assert db.execute("SELECT body FROM entries").fetchone() == ("fictional selected",)
+
+
+@pytest.mark.parametrize('mode', ['merged-append', 'merged-replace', 'merged-delete'])
+def test_formal_changed_decrypt_input_never_publishes(fictional_source, mode):
+    result = _acquire(fictional_source, mode=mode)
+    assert result['ok'] is False and result['code'] == 'snapshot_unstable'
+    assert result['decryptCalls'] == 1 and result['mergedConsumed']
+    assert result['manifest'] is None and not result['encryptedPublished']
+    assert result['stagingCleaned'] and result['recovered']
+    assert not fictional_source[2].exists()
 
 
 @pytest.mark.parametrize("action", [

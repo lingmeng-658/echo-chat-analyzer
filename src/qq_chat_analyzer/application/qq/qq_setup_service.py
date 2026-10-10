@@ -23,6 +23,7 @@ from .qq_environment_config import (
 )
 from .qq_runtime_manager import QQRuntimeManager, QQRuntimeState, QQRuntimeStatus
 from .qq_connection_service import runtime_running
+from .qq_runtime_session import default_qq_runtime_session
 
 
 MESSAGE_CONFIG_MISSING = "QQ 尚未连接。"
@@ -85,15 +86,18 @@ class QQSetupService:
         connection_service: Any = None,
         runtime_manager: Any = None,
         runtime_factory: Callable[[QQEnvironmentConfig], Any] | None = None,
+        bridge_credential: object | None = None,
     ) -> None:
         self._config_loader = config_loader or QQEnvironmentConfigLoader()
         self._config_writer = config_writer or QQEnvironmentConfigWriter()
         self._provider_factory = provider_factory
         self._connection_service = connection_service
         self._runtime_manager = runtime_manager
+        self._bridge_credential = bridge_credential or default_qq_runtime_session()
         self._runtime_factory = runtime_factory or (lambda config: default_runtime_factory(
             config, paths=self.get_runtime_paths(),
-            path_preparer=lambda: self.get_runtime_paths(prepare=True)))
+            path_preparer=lambda: self.get_runtime_paths(prepare=True),
+            credential=self._bridge_credential))
         self._built_runtime_manager: Any = None
 
     def check_setup(self) -> QQSetupStatus:
@@ -268,11 +272,19 @@ class QQSetupService:
         return self._runtime_manager_for(config).start()
 
     def stop_runtime(self) -> QQRuntimeStatus:
-        """Stop the configured runtime and clean up its process tree."""
+        """Stop the configured runtime, clean up its process tree, retire its credential."""
         config = self._load_runtime_config()
         if config is None or not self._runtime_complete(config):
             return self._runtime_unavailable_status(self.check_setup())
-        return self._runtime_manager_for(config).stop()
+        status = self._runtime_manager_for(config).stop()
+        self._retire_bridge_credential()
+        return status
+
+    def _retire_bridge_credential(self) -> None:
+        """Drop the credential of a runtime that is no longer running."""
+        retire = getattr(self._bridge_credential, "retire", None)
+        if callable(retire):
+            retire()
 
     def wait_runtime_ready(self, timeout: float = 30.0) -> QQRuntimeStatus:
         """Wait for a started runtime to become healthy."""
@@ -328,7 +340,9 @@ class QQSetupService:
             return
         from ...providers.napcat_qq_provider import NapCatQQProvider
         try:
-            status = NapCatQQProvider(config.napcat_bridge_url, timeout=1).status()
+            status = NapCatQQProvider(
+                config.napcat_bridge_url, timeout=1, credential=self._bridge_credential
+            ).status()
             if status.runtime_id == self.get_runtime_paths().runtime_id:
                 return
         except Exception:
@@ -406,16 +420,22 @@ class QQSetupService:
         )
 
 
-def default_runtime_factory(config: QQEnvironmentConfig, *, paths=None, path_preparer=None) -> Any:
-    """Build a QQRuntimeManager from one QQ environment config."""
+def default_runtime_factory(config: QQEnvironmentConfig, *, paths=None, path_preparer=None,
+                            credential: object | None = None) -> Any:
+    """Build a QQRuntimeManager from one QQ environment config.
+
+    The health probe and the launcher share one credential session, so a runtime
+    Echo just launched is reachable and a runtime Echo does not own is not.
+    """
     from ...runtime import BundledQQRuntime, QQRuntimeConfig
 
     from ...providers.napcat_qq_provider import NapCatQQProvider
     from .qq_auth_bridge import default_auth_window_launcher
     from .qq_runtime_paths import resolve_runtime_paths
     paths = paths or resolve_runtime_paths(config)
+    session = credential or default_qq_runtime_session()
     def healthy(url):
-        status = NapCatQQProvider(url, timeout=1).status()
+        status = NapCatQQProvider(url, timeout=1, credential=session).status()
         return status.bridge_ready and (config.runtime_mode != "managed" or status.runtime_id == paths.runtime_id)
     runtime = BundledQQRuntime(
         QQRuntimeConfig(executable_path=paths.program_root / "NapCatWinBootMain.exe",
@@ -423,7 +443,8 @@ def default_runtime_factory(config: QQEnvironmentConfig, *, paths=None, path_pre
                         version=config.version),
         health_checker=healthy,
         launcher=lambda: default_auth_window_launcher(config, paths=(path_preparer() if path_preparer
-                                          else resolve_runtime_paths(config, prepare=True)))(),
+                                          else resolve_runtime_paths(config, prepare=True)),
+                                          credential=session)(),
     )
     return QQRuntimeManager(runtime)
 

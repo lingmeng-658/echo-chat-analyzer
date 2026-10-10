@@ -305,6 +305,7 @@ class QQWorkspace(QWidget):
         self._last_qq_status_message = ""
         self._qq_waiting_auth_since: float | None = None
         self._qq_attempt_generation = 0
+        self._qq_reconnect_required = False
         self._qq_cancel_event: threading.Event | None = None
         self._sessions_loaded = False
         self._session_request: object | None = None
@@ -426,7 +427,7 @@ class QQWorkspace(QWidget):
 
         self.session_panel.analysis_started.connect(self._on_analysis_started)
         self.session_panel.analysis_succeeded.connect(self.analysis_succeeded.emit)
-        self.session_panel.analysis_failed.connect(self.analysis_failed.emit)
+        self.session_panel.analysis_failed.connect(self._handle_analysis_error)
         self.session_panel.analysis_phase_changed.connect(self.analysis_phase_changed.emit)
         self.session_panel.status_changed.connect(self._on_panel_status)
         self.session_panel.workspace_width_changed.connect(self._update_setup_spacing)
@@ -519,7 +520,12 @@ class QQWorkspace(QWidget):
         self._handle_connection_status_error(code, message)
 
     def _handle_connection_status_error(self, code: str, message: str) -> None:
+        if code == "qq_reconnect_required":
+            self._require_qq_reconnect(message)
+            return
         if self._qq_connect_in_flight:
+            return
+        if self._qq_reconnect_required:
             return
         self._set_stage(None)
         self._hide_qq_guide()
@@ -538,6 +544,11 @@ class QQWorkspace(QWidget):
     ) -> None:
         """Render one QQ connection snapshot and the connect button."""
         if self._qq_connect_in_flight:
+            return
+        if getattr(snapshot, "code", None) == "qq_reconnect_required":
+            self._require_qq_reconnect(_snapshot_message(snapshot))
+            return
+        if self._qq_reconnect_required:
             return
         state = _snapshot_state(snapshot)
         message = _snapshot_message(snapshot)
@@ -815,6 +826,8 @@ class QQWorkspace(QWidget):
         # An explicit connect is the user asking again: a previously cancelled
         # QQ.exe prompt may be offered once more.
         self._qq_install_prompt_shown = False
+        self._qq_reconnect_required = False
+        self.session_panel.cancel_analysis()
         _LOGGER.info("[qq gui] connect_qq requested")
         self._qq_attempt_generation += 1
         generation = self._qq_attempt_generation
@@ -996,6 +1009,9 @@ class QQWorkspace(QWidget):
             self.cancel_connection()
             return
         _LOGGER.info("[qq gui] disconnect_qq requested")
+        self._qq_attempt_generation += 1
+        generation = self._qq_attempt_generation
+        self.session_panel.cancel_analysis()
         self._invalidate_session_request()
         self._stop_qq_status_polling()
         self._hide_qq_qrcode()
@@ -1007,12 +1023,14 @@ class QQWorkspace(QWidget):
         self.session_panel.clear()
         self.status_changed.emit(_QQ_DISCONNECTING)
         self._executor(
-            self._facade.disconnect_qq,
-            on_success=lambda snapshot: self._show_qq_status(snapshot, False),
+            lambda: self._facade.disconnect_qq()
+            if generation == self._qq_attempt_generation else None,
+            on_success=lambda snapshot: self._show_qq_status(snapshot, False)
+            if generation == self._qq_attempt_generation else None,
             on_error=lambda code, message: self._handle_qq_disconnect_error(
                 code,
                 message,
-            ),
+            ) if generation == self._qq_attempt_generation else None,
         )
 
     def _handle_qq_disconnect_error(self, code: str, message: str) -> None:
@@ -1059,6 +1077,8 @@ class QQWorkspace(QWidget):
     # ---------------------------------------------------------------- sessions
 
     def _load_sessions(self) -> None:
+        if self._qq_reconnect_required:
+            return
         # Several queued connection snapshots can resolve to connected. They
         # belong to one load, not independent acquisitions of the live DB.
         if self._session_request is not None:
@@ -1091,7 +1111,7 @@ class QQWorkspace(QWidget):
             self._handle_session_error(code, message)
 
         self._executor(
-            lambda: self._facade.list_sessions(ChatSource.QQ),
+            lambda: self._facade.list_sessions(ChatSource.QQ) if self._session_request is request else [],
             on_success=succeeded,
             on_error=failed,
         )
@@ -1123,12 +1143,31 @@ class QQWorkspace(QWidget):
         analysis and drives the main window's "分析失败" dialog. The error stays
         visible on the page and the restart action stays available.
         """
+        if code == "qq_reconnect_required":
+            self._require_qq_reconnect(message)
+            return
         self._sessions_loaded = False
         self._stop_qq_status_polling()
         self._hide_qq_qrcode()
         self._show_qq_error(_qq_error_title(code), message)
 
     # ---------------------------------------------------------------- signals
+
+    def _require_qq_reconnect(self, message: str) -> None:
+        if not self._qq_reconnect_required:
+            self._qq_attempt_generation += 1
+        self._qq_reconnect_required = True
+        self.session_panel.cancel_analysis()
+        self._invalidate_session_request()
+        self._stop_qq_status_polling()
+        self._hide_qq_qrcode()
+        self._show_qq_error("QQ 运行环境已变化，请重新连接。", message)
+
+    def _handle_analysis_error(self, code: str, message: str) -> None:
+        if code == "qq_reconnect_required":
+            self._require_qq_reconnect(message)
+        else:
+            self.analysis_failed.emit(code, message)
 
     def _on_analysis_started(self) -> None:
         self.analysis_started.emit()

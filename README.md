@@ -24,6 +24,16 @@ Echo v0.1.0 是首个计划公开的 Windows MVP，目前仍在发布前 Hardeni
 
 0.1.0 之后的长期产品目标和暂定版本主题见 [Echo Product Roadmap（0.1.0 → 1.0.0）](docs/ROADMAP.md)。
 
+## 界面预览
+
+以下截图使用虚构演示数据，不含真实聊天记录或账号信息。
+
+| 主界面 | QQ 连接页 |
+| --- | --- |
+| ![Echo 主界面](docs/screenshots/home.png) | ![QQ 连接页](docs/screenshots/qq-connection.png) |
+| 会话选择与分析配置 | Echo Report 会话概览 |
+| ![会话选择与分析配置](docs/screenshots/session-analysis.png) | ![Echo Report 会话概览](docs/screenshots/echo-report.png) |
+
 ## 开源许可
 
 Echo 自有且有权授权的源代码采用 [Mozilla Public License 2.0](LICENSE)，

@@ -289,7 +289,14 @@ NapCat -> Direct DB -> qq_db_adapter -> unified message model -> Analysis
   ChatAnalyzerFacade. Analysis does not know source formats or runtime tools.
 
 Current architecture and acceptance boundaries are in ARCHITECTURE.md and
-docs/HARDENING.md. Earlier QCE integration and acceptance remain historical
+docs/HARDENING.md. This integration working tree targets NapCat 4.18.33 with
+per-launch RPC credentials, Worker boot_id isolation, explicit reconnection,
+and Echo staging-input witnesses instead of native-read telemetry patches.
+Implementation and automated test completion do not imply merge into main,
+fresh Frozen / Portable acceptance, real-user acceptance, or a formal release.
+Earlier Direct DB E2E / smoke acceptance applies to its historical version;
+the current changes require final acceptance as tracked in docs/HARDENING.md.
+Earlier QCE integration and acceptance remain historical
 records in docs/BUG_JOURNAL.md and docs/superpowers/; their old commands, token
 paths and tests are not supported current interfaces.
 

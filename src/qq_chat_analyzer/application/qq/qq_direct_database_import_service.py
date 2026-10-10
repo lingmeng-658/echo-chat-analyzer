@@ -29,10 +29,14 @@ from ...providers.qq_direct_snapshot_runtime import (
     QQSnapshotRuntimeError,
     QQSnapshotRuntimeNotReady,
     QQSnapshotRuntimeUnavailable,
+    QQSnapshotWorkerGenerationChanged,
 )
+from ...providers.napcat_qq_provider import NapCatQQWorkerGenerationChanged, NapCatQQError, NapCatQQAuthRejected
 from ...qq_db_identity import QQ_DB_SELF_NAMESPACE, canonical_qq_uin
 from ..errors import ApplicationServiceError
 from .qq_environment_config import QQEnvironmentConfigLoader
+from .qq_runtime_session import default_qq_runtime_session
+from .qq_provider_factory import QQReconnectRequired
 
 
 _LOGGER = logging.getLogger("qq_chat_analyzer.desktop.qq_direct_database")
@@ -150,16 +154,50 @@ class QQDirectDatabaseImportService:
         provider_factory: Any | None = None,
         config_loader: QQEnvironmentConfigLoader | None = None,
         shutdown_drain_seconds: float = DEFAULT_SHUTDOWN_DRAIN_SECONDS,
+        bridge_credential: object | None = None,
     ) -> None:
         self._runtime_client = runtime_client
         self._provider_factory = provider_factory
         self._config_loader = config_loader or QQEnvironmentConfigLoader()
         self._shutdown_drain_seconds = shutdown_drain_seconds
+        self._bridge_credential = bridge_credential or default_qq_runtime_session()
         self._state = QQDirectDatabaseState.CLOSED
         self._startup_attempted = False
         self._shutdown_started = False
         self._active_acquisitions = 0
         self._condition = threading.Condition()
+        self._reconnect_required = False
+        self._connection_epoch = object()
+        self._starting = False
+
+    def _require_reconnect(self) -> None:
+        with self._condition:
+            self._reconnect_required = True
+            if self._provider_factory is not None:
+                mark = getattr(self._provider_factory, "require_reconnect", None)
+                if callable(mark):
+                    mark()
+
+    def prepare_reconnect(self) -> None:
+        """Reset only after old acquisitions have finished, on explicit connect."""
+        with self._condition:
+            if self._starting or self._active_acquisitions or self._state is QQDirectDatabaseState.SHUTTING_DOWN:
+                raise QQDirectDatabaseShuttingDown()
+            self._connection_epoch = object()
+            self._runtime_client = None
+            self._reconnect_required = False
+            self._startup_attempted = False
+            self._shutdown_started = False
+            self._state = QQDirectDatabaseState.CLOSED
+
+    @contextmanager
+    def reconnect_guard(self) -> Iterator[None]:
+        """Serialize the two in-memory connection resets with task admission.
+
+        The caller must not run authentication or other I/O inside this scope.
+        """
+        with self._condition:
+            yield
 
     @property
     def state(self) -> QQDirectDatabaseState:
@@ -175,13 +213,27 @@ class QQDirectDatabaseImportService:
         """
         return self._shutdown_drain_seconds + DEFAULT_SHUTDOWN_RECOVER_SECONDS
 
-    def start(self) -> None:
+    def start(self, *, connection_epoch: object | None = None) -> None:
         """Recover orphan plaintext and transition to ACTIVE.
 
         A transient bridge startup failure leaves the service retryable. A real
         recovery failure remains terminal and never permits an acquisition.
         """
+        deadline = time.monotonic() + DEFAULT_STARTUP_READINESS_SECONDS
         with self._condition:
+            if connection_epoch is None:
+                connection_epoch = self._connection_epoch
+            while self._starting:
+                if connection_epoch is not self._connection_epoch:
+                    raise QQReconnectRequired()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise QQDirectDatabaseNotReady()
+                self._condition.wait(timeout=remaining)
+            if connection_epoch is not self._connection_epoch:
+                raise QQReconnectRequired()
+            if self._reconnect_required or getattr(self._provider_factory, "reconnect_required", False) is True:
+                raise QQReconnectRequired()
             if self._state is QQDirectDatabaseState.ACTIVE:
                 return
             if self._shutdown_started:
@@ -189,25 +241,33 @@ class QQDirectDatabaseImportService:
             if self._startup_attempted:
                 raise QQDirectDatabaseUnavailable()
             self._startup_attempted = True
-            deadline = time.monotonic() + DEFAULT_STARTUP_READINESS_SECONDS
-            try:
-                while True:
-                    try:
-                        self._recover_on_startup(deadline=deadline)
-                        break
-                    except QQDirectDatabaseNotReady:
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            raise
-                        time.sleep(min(_STARTUP_RETRY_INTERVAL_SECONDS, remaining))
-            except QQDirectDatabaseNotReady:
+            self._starting = True
+        try:
+            while True:
+                with self._condition:
+                    if self._shutdown_started:
+                        raise QQDirectDatabaseShuttingDown()
+                try:
+                    client = self._require_runtime_client(deadline=deadline)
+                    self._recover_on_startup(deadline=deadline, client=client)
+                    break
+                except QQDirectDatabaseNotReady:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise
+                    time.sleep(min(_STARTUP_RETRY_INTERVAL_SECONDS, remaining))
+            with self._condition:
+                if self._shutdown_started:
+                    raise QQDirectDatabaseShuttingDown()
+                self._state = QQDirectDatabaseState.ACTIVE
+        except QQDirectDatabaseNotReady:
+            with self._condition:
                 self._startup_attempted = False
-                self._state = QQDirectDatabaseState.CLOSED
-                raise
-            except QQDirectDatabaseRecoveryFailed:
-                self._state = QQDirectDatabaseState.CLOSED
-                raise
-            self._state = QQDirectDatabaseState.ACTIVE
+            raise
+        finally:
+            with self._condition:
+                self._starting = False
+                self._condition.notify_all()
     def shutdown(self) -> None:
         """Transition to SHUTTING_DOWN, drain in-flight acquisitions, then recover.
 
@@ -222,7 +282,7 @@ class QQDirectDatabaseImportService:
                 _LOGGER.info("QQ Direct DB shutdown ignored reason=already_started")
                 return
             self._shutdown_started = True
-            if self._state is QQDirectDatabaseState.CLOSED:
+            if self._state is QQDirectDatabaseState.CLOSED and not self._starting:
                 _LOGGER.info("QQ Direct DB shutdown skipped reason=closed")
                 return
             self._state = QQDirectDatabaseState.SHUTTING_DOWN
@@ -234,6 +294,9 @@ class QQDirectDatabaseImportService:
         drained = self._drain_acquisitions()
         with self._condition:
             active = self._active_acquisitions
+            # Never construct a new binding during shutdown, even if startup
+            # timed out while still resolving the old client.
+            client = self._runtime_client
         _LOGGER.info(
             "QQ Direct DB drain %s active=%s elapsed=%.2fs",
             "completed" if drained else "timed out",
@@ -242,7 +305,10 @@ class QQDirectDatabaseImportService:
         )
         _LOGGER.info("QQ Direct DB recover started")
         try:
+            if client is None:
+                raise QQDirectDatabaseRecoveryFailed()
             self._recover_on_shutdown(
+                client=client,
                 deadline=min(
                     shutdown_deadline,
                     time.monotonic() + DEFAULT_SHUTDOWN_RECOVER_SECONDS,
@@ -269,9 +335,8 @@ class QQDirectDatabaseImportService:
         The generation is cleaned up in `finally` so the plaintext DB never
         outlives this call.
         """
-        self._begin_acquisition()
+        client = self._begin_acquisition()
         try:
-            client = self._require_runtime_client()
             generation_id: str | None = None
             try:
                 generation_id = client.acquire()
@@ -281,12 +346,18 @@ class QQDirectDatabaseImportService:
                 )
                 provider = QQDatabaseProvider(database_path)
                 sessions = provider.list_sessions(self_uin=self_uin)
+            except QQSnapshotWorkerGenerationChanged as error:
+                self._require_reconnect()
+                raise QQReconnectRequired() from error
             except QQSnapshotRuntimeError as error:
                 raise QQDirectSnapshotAcquireFailed() from error
             finally:
                 if generation_id is not None:
                     try:
                         client.cleanup(generation_id)
+                    except QQSnapshotWorkerGenerationChanged as error:
+                        self._require_reconnect()
+                        raise QQReconnectRequired() from error
                     except QQSnapshotRuntimeError as error:
                         raise QQDirectSnapshotCleanupFailed() from error
             return self._named_sessions(sessions)
@@ -311,10 +382,9 @@ class QQDirectDatabaseImportService:
         DB is released as soon as the `qq-db-json` payload is fully written
         and no tokenizer/analyzer/report ever holds the plaintext DB.
         """
-        self._begin_acquisition()
+        client = self._begin_acquisition()
         try:
             started_at = time.perf_counter()
-            client = self._require_runtime_client()
             generation_id: str | None = None
             scratch_context: TemporaryDirectory | None = None
             try:
@@ -351,21 +421,29 @@ class QQDirectDatabaseImportService:
                         self_uin=self_uin,
                         session=session,
                     )
+                except QQSnapshotWorkerGenerationChanged as error:
+                    self._require_reconnect()
+                    raise QQReconnectRequired() from error
                 except QQSnapshotRuntimeError as error:
                     raise QQDirectSnapshotAcquireFailed() from error
                 finally:
                     if generation_id is not None:
                         try:
                             client.cleanup(generation_id)
+                        except QQSnapshotWorkerGenerationChanged as error:
+                            self._require_reconnect()
+                            raise QQReconnectRequired() from error
                         except QQSnapshotRuntimeError as error:
                             raise QQDirectSnapshotCleanupFailed() from error
                 cleaned_at = time.perf_counter()
                 group_names, friend_names = self._metadata_names()
                 metadata_at = time.perf_counter()
                 if session.session_type == "group":
-                    sender_names = _group_sender_names_with_diagnostics(
-                        client, session, payload_path
-                    )
+                    try:
+                        sender_names = _group_sender_names_with_diagnostics(client, session, payload_path)
+                    except QQSnapshotWorkerGenerationChanged as error:
+                        self._require_reconnect()
+                        raise QQReconnectRequired() from error
                 else:
                     sender_names = friend_names
                 members_at = time.perf_counter()
@@ -424,6 +502,8 @@ class QQDirectDatabaseImportService:
         if self._provider_factory is not None:
             try:
                 provider = self._provider_factory.create()
+            except QQReconnectRequired:
+                raise
             except Exception:
                 return group_names, friend_names
             try:
@@ -433,6 +513,9 @@ class QQDirectDatabaseImportService:
                     for group in groups
                     if first_identity_name(group.group_name)
                 }
+            except NapCatQQWorkerGenerationChanged as error:
+                self._require_reconnect()
+                raise QQReconnectRequired() from error
             except Exception:
                 pass
             try:
@@ -444,6 +527,9 @@ class QQDirectDatabaseImportService:
                     and first_identity_name(friend.display_name)
                     and friend.display_name != friend.uin
                 }
+            except NapCatQQWorkerGenerationChanged as error:
+                self._require_reconnect()
+                raise QQReconnectRequired() from error
             except Exception:
                 # Names are optional metadata; the local message acquisition
                 # remains usable if the metadata endpoint is unavailable.
@@ -452,7 +538,7 @@ class QQDirectDatabaseImportService:
 
     # -------------------------------------------------------------- lifecycle
 
-    def _ensure_usable(self) -> None:
+    def _ensure_usable(self, *, connection_epoch: object) -> None:
         """Ensure startup recover has run, or refuse a non-active service.
 
         The first call auto-starts the service (recover -> ACTIVE).  After a
@@ -460,31 +546,47 @@ class QQDirectDatabaseImportService:
         raises without ever reading a generation.
         """
         with self._condition:
+            if connection_epoch is not self._connection_epoch:
+                raise QQReconnectRequired()
+            if self._reconnect_required or getattr(self._provider_factory, "reconnect_required", False) is True:
+                raise QQReconnectRequired()
             if self._state is QQDirectDatabaseState.ACTIVE:
                 return
             if self._shutdown_started:
                 raise QQDirectDatabaseShuttingDown()
-            if not self._startup_attempted:
-                self.start()
-                return
-            raise QQDirectDatabaseUnavailable()
-    def _recover_on_startup(self, *, deadline: float) -> None:
+            if self._startup_attempted and not self._starting:
+                raise QQDirectDatabaseUnavailable()
+        # start owns its short state transitions, not the HTTP recovery lock.
+        self.start(connection_epoch=connection_epoch)
+    def _recover_on_startup(self, *, deadline: float, client: Any) -> None:
         """Recover orphan plaintext during startup."""
-        client = self._require_runtime_client()
         try:
             client.recover(deadline=deadline)
+        except QQSnapshotWorkerGenerationChanged as error:
+            self._require_reconnect()
+            raise QQReconnectRequired() from error
         except (QQSnapshotRuntimeNotReady, QQSnapshotRuntimeUnavailable) as error:
             raise QQDirectDatabaseNotReady() from error
         except QQSnapshotRuntimeError as error:
             raise QQDirectDatabaseRecoveryFailed() from error
 
-    def _begin_acquisition(self) -> None:
-        """Register one in-flight acquisition, refusing new work after shutdown."""
-        self._ensure_usable()
+    def _begin_acquisition(self) -> Any:
+        """Atomically admit a task with the client of its original connection."""
         with self._condition:
+            epoch = self._connection_epoch
+        self._ensure_usable(connection_epoch=epoch)
+        with self._condition:
+            if epoch is not self._connection_epoch:
+                raise QQReconnectRequired()
+            if self._reconnect_required or getattr(self._provider_factory, "reconnect_required", False) is True:
+                raise QQReconnectRequired()
             if self._state is not QQDirectDatabaseState.ACTIVE:
                 raise QQDirectDatabaseShuttingDown()
+            client = self._runtime_client
+            if client is None:
+                raise QQDirectDatabaseUnavailable()
             self._active_acquisitions += 1
+            return client
 
     def _end_acquisition(self) -> None:
         """Release one in-flight acquisition and wake any shutdown drain."""
@@ -506,22 +608,21 @@ class QQDirectDatabaseImportService:
                 self._active_acquisitions,
                 self._shutdown_drain_seconds,
             )
-            while self._active_acquisitions > 0:
+            while self._active_acquisitions > 0 or self._starting:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return False
                 self._condition.wait(timeout=remaining)
         return True
 
-    def _recover_on_shutdown(self, *, deadline: float) -> None:
+    def _recover_on_shutdown(self, *, deadline: float, client: Any) -> None:
         """Recover orphan plaintext one last time before the runtime stops."""
-        client = self._require_runtime_client()
         try:
             client.recover(deadline=deadline)
         except QQSnapshotRuntimeError as error:
             raise QQDirectDatabaseRecoveryFailed() from error
 
-    def _require_runtime_client(self) -> Any:
+    def _require_runtime_client(self, *, deadline: float | None = None) -> Any:
         """Return the injected runtime client, or build one from config."""
         if self._runtime_client is not None:
             return self._runtime_client
@@ -531,11 +632,33 @@ class QQDirectDatabaseImportService:
         except Exception:
             raise QQDirectDatabaseUnavailable() from None
         base_url = config.napcat_bridge_url or "http://127.0.0.1:40655"
-        return QQDirectSnapshotRuntimeClient(
+        if self._provider_factory is not None:
+            provider = self._provider_factory.create()
+            builder = getattr(provider, "snapshot_client", None)
+            if callable(builder):
+                try:
+                    if deadline is not None and time.monotonic() >= deadline:
+                        raise QQDirectDatabaseNotReady()
+                    status = provider.status(timeout=None if deadline is None else deadline - time.monotonic())
+                except NapCatQQWorkerGenerationChanged as error:
+                    self._require_reconnect()
+                    raise QQReconnectRequired() from error
+                except NapCatQQAuthRejected as error:
+                    raise QQDirectDatabaseRecoveryFailed() from error
+                except NapCatQQError as error:
+                    raise QQDirectDatabaseNotReady() from error
+                expected = paths.runtime_id if config.runtime_mode == "managed" else None
+                if status.runtime_id != expected:
+                    raise QQDirectDatabaseUnavailable()
+                self._runtime_client = builder(paths.snapshot_root)
+                return self._runtime_client
+        self._runtime_client = QQDirectSnapshotRuntimeClient(
             base_url=base_url,
             snapshot_root=paths.snapshot_root,
             runtime_id=paths.runtime_id if config.runtime_mode == "managed" else None,
+            credential=self._bridge_credential,
         )
+        return self._runtime_client
 
     def _environment_config(self) -> Any:
         try:
@@ -561,6 +684,8 @@ def _group_sender_names_with_diagnostics(
             member_data = _group_member_data(member_result)
             sender_names = member_data["names"]
             rpc_status = member_data["status"]
+        except QQSnapshotWorkerGenerationChanged:
+            raise
         except Exception:
             # Member metadata is optional; do not fail local DB analysis.
             rpc_status = "rpc_failed"
