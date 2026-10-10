@@ -1,8 +1,50 @@
 """Keep default user-data paths inside each automated test's sandbox."""
 
 from pathlib import Path
+import sys
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def release_test_widgets():
+    """Delete this test's Qt roots while QApplication is still alive."""
+    # Do not import or initialize Qt for tests that do not use it.
+    widgets = sys.modules.get("PySide6.QtWidgets")
+    if widgets is None:
+        yield
+        return
+
+    application_type = widgets.QApplication
+    if not isinstance(application_type, type):
+        yield
+        return
+
+    app = application_type.instance()
+    existing = set(app.allWidgets()) if isinstance(app, application_type) else set()
+    yield
+
+    app = application_type.instance()
+    if not isinstance(app, application_type):
+        return
+
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from shiboken6 import isValid
+
+    # Higher-scope fixtures have already been set up; preserve their widgets,
+    # including pre-existing children that a test may have reparented.
+    roots = [widget for widget in app.allWidgets()
+             if widget not in existing and widget.parentWidget() is None
+             and not any(child in existing
+                         for child in widget.findChildren(widgets.QWidget))]
+    for widget in roots:
+        if isValid(widget):
+            widget.deleteLater()
+    for widget in roots:
+        if isValid(widget):
+            # Target only our roots: do not drain timers or another fixture's
+            # pending DeferredDelete events. Parent deletion owns its children.
+            QCoreApplication.sendPostedEvents(widget, QEvent.Type.DeferredDelete)
 
 
 @pytest.fixture(autouse=True)
