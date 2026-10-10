@@ -104,6 +104,11 @@ class QQSnapshotRuntimeInvalidResponse(QQSnapshotRuntimeError):
     public_message = "QQ local chat data is temporarily unavailable. Please try again."
 
 
+class QQSnapshotWorkerGenerationChanged(QQSnapshotRuntimeError):
+    code = "qq_snapshot_worker_generation_changed"
+    public_message = "QQ runtime restarted. Please reconnect explicitly."
+
+
 class QQSnapshotRuntimeNotReady(QQSnapshotRuntimeError):
     """The bridge is ready but `EchoSnapshotApi` is not registered yet."""
 
@@ -162,6 +167,7 @@ class QQDirectSnapshotRuntimeClient:
         transport: Callable[[str, bytes, float], tuple[int, str]] | None = None,
         runtime_id: str | None = None,
         credential: object | None = None,
+        boot_id: str | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._snapshot_root = Path(snapshot_root)
@@ -169,13 +175,17 @@ class QQDirectSnapshotRuntimeClient:
                                       or re.fullmatch(r"[0-9a-f]{64}", runtime_id) is None):
             raise QQSnapshotRuntimeInvalidResponse()
         self._runtime_id = runtime_id
+        if boot_id is not None and (not isinstance(boot_id, str) or re.fullmatch(r"[0-9a-f]{64}", boot_id) is None):
+            raise QQSnapshotRuntimeInvalidResponse()
+        # A caller may pass the generation already verified by its Provider.
+        self._boot_id = boot_id
+        self._generation_changed = False
         self._timeout = timeout
         self._acquire_timeout = acquire_timeout
         self._credential_source = credential
         # A snapshot lifecycle belongs to one launch, including delayed cleanup
         # and bounded retries. Never upgrade an old task to a new launch's token.
         self._launch_credential = resolve_bridge_credential(credential)
-        self._auth_verified = False
         self._transport = transport or self._request_with_credential
 
     # ------------------------------------------------------------------ lifecycle
@@ -274,10 +284,13 @@ class QQDirectSnapshotRuntimeClient:
         deadline: float | None = None, timeout: float | None = None,
         namespace: str = RPC_METHOD_NAMESPACE,
     ) -> Any:
-        body = json.dumps(
-            {"method": f"{namespace}.{method}", "params": params},
-            ensure_ascii=False,
-        ).encode("utf-8")
+        if self._generation_changed:
+            raise QQSnapshotWorkerGenerationChanged()
+        if self._credential_source is not None and (
+            self._launch_credential is None or
+            resolve_bridge_credential(self._credential_source) != self._launch_credential
+        ):
+            raise QQSnapshotRuntimeUnavailable()
         url = f"{self._base_url}/rpc"
         if self._runtime_id is not None:
             url += "/" + self._runtime_id
@@ -288,12 +301,36 @@ class QQDirectSnapshotRuntimeClient:
                 raise QQSnapshotRuntimeUnavailable()
             timeout = min(remaining, self._timeout)
         try:
+            if self._boot_id is None:
+                handshake_deadline = time.monotonic() + timeout
+                status, text = self._transport(url, b'{"method":"Core.status","params":[]}', timeout)
+                result = _unwrap_rpc(status, text)
+                if not isinstance(result, Mapping) or result.get("rpc_auth") != "bearer-v1":
+                    raise QQSnapshotRuntimeUnauthorized()
+                boot = result.get("boot_id")
+                if not isinstance(boot, str) or re.fullmatch(r"[0-9a-f]{64}", boot) is None:
+                    raise QQSnapshotRuntimeInvalidResponse()
+                if result.get("runtime_id") != self._runtime_id:
+                    raise QQSnapshotRuntimeInvalidResponse()
+                if self._boot_id is not None and self._boot_id != boot:
+                    raise QQSnapshotWorkerGenerationChanged()
+                self._boot_id = boot
+                timeout = handshake_deadline - time.monotonic()
+                if timeout <= 0:
+                    raise QQSnapshotRuntimeUnavailable()
+            body = json.dumps(
+                {"method": f"{namespace}.{method}", "params": params, "boot_id": self._boot_id},
+                ensure_ascii=False,
+            ).encode("utf-8")
             status, text = self._transport(url, body, timeout)
+            result = _unwrap_rpc(status, text)
+        except QQSnapshotWorkerGenerationChanged:
+            self._generation_changed = True
+            raise
         except QQSnapshotRuntimeError:
             raise
         except (urllib.error.URLError, OSError, TimeoutError) as error:
             raise QQSnapshotRuntimeUnavailable() from error
-        result = _unwrap_rpc(status, text)
         if deadline is not None and time.monotonic() >= deadline:
             raise QQSnapshotRuntimeUnavailable()
         return result
@@ -307,21 +344,6 @@ class QQDirectSnapshotRuntimeClient:
         credential = self._launch_credential
         if credential is None or resolve_bridge_credential(self._credential_source) != credential:
             raise QQSnapshotRuntimeUnavailable()
-        if self._runtime_id is None and not self._auth_verified:
-            deadline = time.monotonic() + timeout
-            # Custom plugins may predate authentication and silently ignore the
-            # header. Check their protocol before any mutating snapshot method.
-            status, text = _urllib_transport(
-                self._base_url + "/rpc", b'{"method":"Core.status","params":[]}',
-                timeout, credential=credential,
-            )
-            result = _unwrap_rpc(status, text)
-            if not isinstance(result, Mapping) or result.get("rpc_auth") != "bearer-v1":
-                raise QQSnapshotRuntimeUnauthorized()
-            self._auth_verified = True
-            timeout = deadline - time.monotonic()
-            if timeout <= 0:
-                raise QQSnapshotRuntimeUnavailable()
         return _urllib_transport(url, body, timeout, credential=credential)
 
 
@@ -330,8 +352,6 @@ def _unwrap_rpc(status: int, text: str) -> Any:
     if status == 401:
         # The credential was missing, stale or foreign: no method ran.
         raise QQSnapshotRuntimeUnauthorized()
-    if status < 200 or status >= 300:
-        raise QQSnapshotRuntimeInvalidResponse()
     payload: Any = None
     if text:
         try:
@@ -339,6 +359,10 @@ def _unwrap_rpc(status: int, text: str) -> Any:
         except json.JSONDecodeError:
             payload = None
     if not isinstance(payload, Mapping):
+        raise QQSnapshotRuntimeInvalidResponse()
+    if status == 409 and payload.get("error") == "worker_generation_mismatch":
+        raise QQSnapshotWorkerGenerationChanged()
+    if status < 200 or status >= 300:
         raise QQSnapshotRuntimeInvalidResponse()
     if payload.get("ok") is not True:
         if _is_recover_api_not_ready(payload.get("error")):
@@ -420,5 +444,6 @@ __all__ = [
     "QQSnapshotRuntimeInvalidResponse",
     "QQSnapshotRuntimeUnauthorized",
     "QQSnapshotRuntimeUnavailable",
+    "QQSnapshotWorkerGenerationChanged",
     "validate_generation_id",
 ]

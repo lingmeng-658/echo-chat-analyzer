@@ -70,7 +70,7 @@ class _SequenceTransport:
         self.max_active = 0
 
     def __call__(self, url: str, body: bytes, timeout: float) -> tuple[int, str]:
-        assert json.loads(body) == {"method": "EchoSnapshotApi.acquire", "params": []}
+        assert json.loads(body) == {"method": "EchoSnapshotApi.acquire", "params": [], "boot_id": "b" * 64}
         self.active += 1
         self.max_active = max(self.max_active, self.active)
         try:
@@ -85,6 +85,7 @@ def _client(transport, *, base_url: str = "http://127.0.0.1:40654", root: Path |
         base_url=base_url,
         snapshot_root=root or Path("."),
         transport=transport,
+        boot_id="b" * 64,  # Business-operation fixtures start with a verified binding.
     )
 
 
@@ -108,7 +109,7 @@ def test_acquire_success_returns_and_logs_validated_generation_id(
     assert "generation_id=gen-1234" in caplog.text
     assert transport.calls[0][0] == "http://127.0.0.1:40654/rpc"
     request = json.loads(transport.calls[0][1].decode("utf-8"))
-    assert request == {"method": "EchoSnapshotApi.acquire", "params": []}
+    assert request == {"method": "EchoSnapshotApi.acquire", "params": [], "boot_id": "b" * 64}
 
 
 def test_group_member_lookup_uses_fixed_napcat_api_over_local_rpc(tmp_path: Path) -> None:
@@ -123,6 +124,7 @@ def test_group_member_lookup_uses_fixed_napcat_api_over_local_rpc(tmp_path: Path
     assert json.loads(transport.calls[0][1].decode("utf-8")) == {
         "method": "GroupApi.getGroupMemberAll",
         "params": ["fictional-group"],
+        "boot_id": "b" * 64,
     }
 
 
@@ -405,7 +407,7 @@ def test_cleanup_invokes_rpc_with_generation_id(tmp_path: Path) -> None:
 
     assert client.cleanup("gen-1") is None
     request = json.loads(transport.calls[0][1].decode("utf-8"))
-    assert request == {"method": "EchoSnapshotApi.cleanup", "params": ["gen-1"]}
+    assert request == {"method": "EchoSnapshotApi.cleanup", "params": ["gen-1"], "boot_id": "b" * 64}
 
 
 def test_cleanup_generation_not_found_is_idempotent(tmp_path: Path) -> None:
@@ -445,7 +447,7 @@ def test_recover_invokes_rpc(tmp_path: Path) -> None:
 
     assert client.recover() is None
     request = json.loads(transport.calls[0][1].decode("utf-8"))
-    assert request == {"method": "EchoSnapshotApi.recover", "params": []}
+    assert request == {"method": "EchoSnapshotApi.recover", "params": [], "boot_id": "b" * 64}
 
 
 def test_recover_waits_until_echo_snapshot_api_is_registered(tmp_path: Path) -> None:
@@ -501,6 +503,7 @@ def test_shutdown_recover_uses_remaining_deadline_for_one_rpc(monkeypatch, tmp_p
     client = QQDirectSnapshotRuntimeClient(
         "http://127.0.0.1:40654", snapshot_root=tmp_path,
         timeout=30, transport=transport,
+        boot_id="b" * 64,
     )
 
     with pytest.raises(QQSnapshotRuntimeNotReady):
@@ -527,6 +530,7 @@ def test_shutdown_recover_caps_timeout_at_configured_rpc_timeout(monkeypatch, tm
     client = QQDirectSnapshotRuntimeClient(
         "http://127.0.0.1:40654", snapshot_root=tmp_path,
         timeout=2, transport=transport,
+        boot_id="b" * 64,
     )
 
     client.recover(deadline=105.1)
@@ -545,6 +549,7 @@ def test_shutdown_recover_rejects_response_after_total_deadline(monkeypatch, tmp
     client = QQDirectSnapshotRuntimeClient(
         "http://127.0.0.1:40654", snapshot_root=tmp_path,
         timeout=30, transport=delayed_transport,
+        boot_id="b" * 64,
     )
 
     with pytest.raises(QQSnapshotRuntimeUnavailable):

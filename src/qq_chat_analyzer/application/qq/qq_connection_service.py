@@ -6,7 +6,8 @@ from dataclasses import dataclass
 import re
 from typing import Any
 
-from ...providers.napcat_qq_provider import NapCatQQProvider
+from ...providers.napcat_qq_provider import NapCatQQProvider, NapCatQQWorkerGenerationChanged
+from .qq_provider_factory import QQReconnectRequired
 from .qq_environment_config import (
     QQConfigCorrupted,
     QQConfigNotFound,
@@ -40,6 +41,7 @@ class QQConnectionStatus:
     message: str
     action_hint: str
     direct_db_ready: bool = False
+    code: str | None = None
 
 
 def runtime_running(status: Any) -> bool:
@@ -79,12 +81,19 @@ class QQConnectionService:
 
     def check_status(self) -> QQConnectionStatus:
         """Probe once; collapse failures to a safe status."""
+        provider = None
         try:
             provider = self.provider()
+        except QQReconnectRequired:
+            return self._reconnect_status()
         except QQConfigNotFound:
             return self._config_missing_status()
         except (QQConfigCorrupted, QQEnvironmentConfigError):
             return self._config_invalid_status()
+        except NapCatQQWorkerGenerationChanged:
+            if self._provider_factory is not None:
+                self._provider_factory.require_reconnect(provider)
+            return self._reconnect_status()
         except Exception:
             return self._unknown_status()
 
@@ -98,9 +107,21 @@ class QQConnectionService:
                 version=None, message=MESSAGE_AVAILABLE if logged_in else MESSAGE_LOGIN_REQUIRED if running else MESSAGE_NOT_RUNNING,
                 action_hint=ACTION_HINT_AVAILABLE if logged_in else ACTION_HINT_AUTHORIZE if running else ACTION_HINT_START_RUNTIME,
             )
+        except NapCatQQWorkerGenerationChanged:
+            if self._provider_factory is not None:
+                self._provider_factory.require_reconnect(provider)
+            return self._reconnect_status()
         except Exception:
             return self._unknown_status()
 
+    def reconnect(self) -> None:
+        if self._provider_factory is not None:
+            self._provider_factory.reconnect()
+
+    def _reconnect_status(self) -> QQConnectionStatus:
+        return QQConnectionStatus(False, False, False, None,
+                                  QQReconnectRequired.public_message, "请点击「重新连接」。",
+                                  code=QQReconnectRequired.code)
 
     def _unknown_status(self) -> QQConnectionStatus:
         return QQConnectionStatus(

@@ -8,6 +8,7 @@ configuration source.
 from __future__ import annotations
 
 from typing import Any, Callable
+import threading
 
 from ..errors import ApplicationServiceError
 from .qq_environment_config import (
@@ -25,6 +26,11 @@ class QQProviderUnavailable(ApplicationServiceError):
     public_message = "无法连接 QQ 数据源，请稍后重试。"
 
 
+class QQReconnectRequired(ApplicationServiceError):
+    code = "qq_reconnect_required"
+    public_message = "QQ 运行环境已变化，请点击「重新连接」后继续。"
+
+
 def default_provider_builder(config: QQEnvironmentConfig, *, credential: object | None = None) -> Any:
     """Construct the Desktop Echo NapCat provider bound to the launch credential."""
     from ...providers.napcat_qq_provider import NapCatQQProvider
@@ -34,9 +40,8 @@ def default_provider_builder(config: QQEnvironmentConfig, *, credential: object 
 class QQProviderFactory:
     """Create and cache one QQ provider built from stored configuration.
 
-    The provider is cached for the life of the process, so it is given the
-    session rather than one credential value: the value is minted per launch and
-    read at request time, and a relaunch is picked up by the cached instance.
+    A verified provider belongs to one connection. A stale binding is retained
+    until an explicit reconnect; ordinary config invalidation cannot replace it.
     """
 
     def __init__(
@@ -50,16 +55,52 @@ class QQProviderFactory:
         self._provider_builder = provider_builder or default_provider_builder
         self._bridge_credential = bridge_credential or default_qq_runtime_session()
         self._provider: Any | None = None
+        # Keep the connection owner even when its ordinary config cache expires.
+        # Retain it before verification too: an outstanding status probe may
+        # establish the first binding after invalidate() returns.
+        self._connection_provider: Any | None = None
+        self._reconnect_required = False
+        self._lock = threading.RLock()
+
+    @property
+    def reconnect_required(self) -> bool:
+        with self._lock:
+            return self._reconnect_required or getattr(self._connection_provider, "requires_reconnect", False) is True
+
+    def require_reconnect(self, provider: Any = None) -> None:
+        with self._lock:
+            if provider is None or provider is self._connection_provider:
+                self._reconnect_required = True
+
+    def reconnect(self) -> None:
+        """Only an explicit user connection action may discard a stale binding."""
+        with self._lock:
+            self._provider = None
+            self._connection_provider = None
+            self._reconnect_required = False
 
     def create(self) -> Any:
         """Return the shared provider, building it on first use."""
-        if self._provider is None:
-            self._provider = self._build()
-        return self._provider
+        with self._lock:
+            if self.reconnect_required:
+                self.require_reconnect()
+                raise QQReconnectRequired()
+            if self._provider is None:
+                if self._connection_provider is None:
+                    self._connection_provider = self._build()
+                self._provider = self._connection_provider
+            return self._provider
 
     def invalidate(self) -> None:
-        """Drop the cached provider so the next call reloads the config."""
-        self._provider = None
+        """Expire the cache, never the connection's generation constraint.
+
+        Configuration changes take effect at the next explicit reconnect.
+        """
+        with self._lock:
+            if self.reconnect_required:
+                self.require_reconnect()
+                return
+            self._provider = None
 
     @property
     def config_loader(self) -> QQEnvironmentConfigLoader:

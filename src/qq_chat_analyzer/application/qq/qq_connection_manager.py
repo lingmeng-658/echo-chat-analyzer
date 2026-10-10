@@ -88,6 +88,9 @@ class QQConnectionManager:
                 HINT_CONNECT,
             )
         snapshot = self._from_connection_status(status)
+        if snapshot.code == "qq_reconnect_required":
+            self._auth_waiting = False
+            return snapshot
         if snapshot.state is ConnectionState.CONNECTED:
             self._auth_waiting = False
             return snapshot
@@ -240,6 +243,9 @@ class QQConnectionManager:
         not usable means the user still has to log in, and anything else is a
         plain disconnected state the user can act on.
         """
+        if getattr(status, "code", None) == "qq_reconnect_required":
+            return ConnectionSnapshot(ConnectionState.ERROR, SOURCE_QQ, status.message,
+                                      status.action_hint, code="qq_reconnect_required")
         available = bool(getattr(status, "available", False))
         running = runtime_running(status)
         version = getattr(status, "version", None) or None

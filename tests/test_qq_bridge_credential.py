@@ -20,6 +20,7 @@ from qq_chat_analyzer.providers import napcat_qq_provider as provider_module
 from qq_chat_analyzer.providers import qq_direct_snapshot_runtime as snapshot_module
 
 STATUS_RESULT = {
+    "boot_id": "b" * 64,
     "bridge_ready": True,
     "qq_online": True,
     "self_info": {"uin": "", "uid": "", "nickname": ""},
@@ -76,6 +77,8 @@ class _Recorder:
                 result = recorder.result
                 if json.loads(body)["method"] == "Core.status" and recorder.auth_capability:
                     result = {**STATUS_RESULT, "rpc_auth": "bearer-v1"}
+                    if self.path != "/rpc":
+                        result["runtime_id"] = self.path.rsplit("/", 1)[-1]
                 encoded = json.dumps({"ok": True, "result": result}).encode("utf-8")
                 self.send_response(recorder.status)
                 self.send_header("content-type", "application/json")
@@ -150,15 +153,17 @@ def test_provider_authenticates_every_request_it_sends():
     ]
 
 
-def test_cached_client_follows_a_new_launch_credential():
-    """The credential is read per request, so a relaunch is picked up at once."""
+def test_bound_provider_cannot_adopt_a_new_launch_credential():
+    """D1 requires explicit new binding after a launch change."""
     session, first = _session()
     with _Recorder() as recorder:
         recorder.result = STATUS_RESULT
         provider = provider_module.NapCatQQProvider(recorder.base_url, credential=session)
         provider.status()
         second = session.begin_launch()
-        provider.status()
+        with pytest.raises(provider_module.NapCatQQWorkerGenerationChanged):
+            provider.status()
+        provider_module.NapCatQQProvider(recorder.base_url, credential=session).status()
     assert second != first
     assert recorder.authorizations() == [f"Bearer {first}", f"Bearer {second}"]
 
@@ -248,8 +253,8 @@ def test_snapshot_client_keeps_the_managed_route_and_authentication_together():
         recorder.result = ACQUIRED_RESULT
         client = _snapshot_client(recorder, credential=session, runtime_id=runtime_id)
         client.acquire()
-    assert recorder.paths() == [f"/rpc/{runtime_id}"]
-    assert recorder.authorizations() == [f"Bearer {token}"]
+    assert recorder.paths() == [f"/rpc/{runtime_id}"] * 2
+    assert recorder.authorizations() == [f"Bearer {token}"] * 2
 
 
 def test_credential_values_are_never_part_of_a_public_message():
@@ -369,7 +374,7 @@ def test_custom_auth_handshake_consumes_the_rpc_deadline(monkeypatch):
     def transport(url, body, timeout, **kwargs):
         calls.append(json.loads(body)["method"])
         now[0] = 2.0
-        return 200, json.dumps({"ok": True, "result": {"rpc_auth": "bearer-v1"}})
+        return 200, json.dumps({"ok": True, "result": {"rpc_auth": "bearer-v1", "boot_id": "b" * 64}})
     monkeypatch.setattr(snapshot_module.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(snapshot_module, "_urllib_transport", transport)
     client = snapshot_module.QQDirectSnapshotRuntimeClient(

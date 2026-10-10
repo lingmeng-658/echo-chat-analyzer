@@ -1,5 +1,5 @@
 import {createServer} from 'node:http';
-import {timingSafeEqual} from 'node:crypto';
+import {randomBytes, timingSafeEqual} from 'node:crypto';
 
 const MAX_REQUEST_BYTES = 4096;
 const CREDENTIAL = /^[0-9a-f]{64}$/;
@@ -21,6 +21,9 @@ export async function startBridge(core, snapshot, {port = 40655, host = '127.0.0
   // A bridge without a usable credential is never started: there is no mode in
   // which this server answers an unauthenticated call.
   if (typeof token !== 'string' || !CREDENTIAL.test(token)) throw new Error('invalid_bridge_credential');
+  // Mint inside the actual bridge lifecycle, never in the parent environment:
+  // a restarted Worker (or a reloaded bridge) cannot inherit the old generation.
+  const bootId = randomBytes(32).toString('hex');
   const expected = Buffer.from(token, 'utf8');
   const authorized = req => {
     const header = req.headers.authorization;
@@ -30,6 +33,7 @@ export async function startBridge(core, snapshot, {port = 40655, host = '127.0.0
   };
   const status = () => ({
     rpc_auth: 'bearer-v1',
+    boot_id: bootId,
     bridge_ready: true,
     qq_online: core.selfInfo?.online === true,
     self_info: {uin: uin(core.selfInfo?.uin), uid: text(core.selfInfo?.uid), nickname: text(core.selfInfo?.nick)},
@@ -102,10 +106,17 @@ export async function startBridge(core, snapshot, {port = 40655, host = '127.0.0
       try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
       catch { return send(400, {ok: false, error: 'invalid_request'}); }
       if (!object(body) || Array.isArray(body) || typeof body.method !== 'string') return send(400, {ok: false, error: 'invalid_request'});
-      // Echo's managed snapshot lifecycle requires a matching path contract.
-      // A legacy client cannot touch a different instance's plaintext state.
-      if (runtimeId !== null && body.method.startsWith('EchoSnapshotApi.') && !boundRoute) {
+      // Every bound managed call checks workspace identity first. Only initial
+      // authenticated status discovery can use the unbound route.
+      const discovery = body.method === 'Core.status' && !Object.hasOwn(body, 'boot_id');
+      if (runtimeId !== null && !discovery && !boundRoute) {
         return send(409, {ok: false, error: 'runtime_identity_mismatch'});
+      }
+      // Only the initial authenticated status discovery may omit boot_id.
+      // Bound status polling and every operation are guarded before touching core.
+      if ((body.method !== 'Core.status' || Object.hasOwn(body, 'boot_id')) &&
+          (typeof body.boot_id !== 'string' || !CREDENTIAL.test(body.boot_id) || body.boot_id !== bootId)) {
+        return send(409, {ok: false, error: 'worker_generation_mismatch'});
       }
       const method = methods.get(body.method);
       if (!method) return send(400, {ok: false, error: 'invalid_method'});

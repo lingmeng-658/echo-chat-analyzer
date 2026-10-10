@@ -559,6 +559,22 @@ class ChatAnalyzerFacade:
         :meth:`get_qq_connection_snapshot` until it reports ``CONNECTED``.
         """
         bridge = self._require_qq_auth_bridge()
+        if cancel_event is None or not cancel_event.is_set():
+            with _translated_errors(ChatSource.QQ):
+                service = self._qq_service_if_present()
+                prepare = getattr(service, "prepare_reconnect", None)
+                connection = self._optional_qq_connection_service()
+                reconnect = getattr(connection, "reconnect", None)
+                # Only the two in-memory resets share admission's lock. The
+                # runtime login flow below deliberately runs outside it.
+                with ExitStack() as resets:
+                    guard = getattr(service, "reconnect_guard", None)
+                    if callable(guard):
+                        resets.enter_context(guard())
+                    if callable(prepare):
+                        prepare()
+                    if callable(reconnect):
+                        reconnect()
         if cancel_event is None:
             return bridge.start_auth_flow(progress=progress)
         return bridge.start_auth_flow(progress=progress, cancel_event=cancel_event)

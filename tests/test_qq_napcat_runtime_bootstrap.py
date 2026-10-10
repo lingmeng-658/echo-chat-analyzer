@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/bootstrap_qq_napcat_runtime.py"
 PINS = ROOT / "scripts/qq_napcat_runtime_pins.json"
 MANIFEST = ROOT / "scripts/qq_napcat_runtime_manifest.json"
-ARCHIVE_SHA = "f1053918fae7ae24807841baa516d231f5412fc443fa217183698764be1c1817"
+ARCHIVE_SHA = "4b8e20e6d22288586d99eb0b34fff6c7ee1d88b00353039326f8c459a86df667"
 #: Fictional, in-memory only: never a real bridge credential.
 FICTIONAL_TOKEN = "0123456789abcdef" * 4
 
@@ -36,11 +36,11 @@ def load_builder():
 def test_official_pins_and_correctness_templates():
     assert PINS.is_file(), "official NapCat pins missing"
     pins = json.loads(PINS.read_text(encoding="utf-8"))
-    assert pins["upstream"]["version"] == "4.18.18"
+    assert pins["upstream"]["version"] == "4.18.33"
     assert pins["upstream"]["project"] == "NapNeko/NapCatQQ"
-    assert pins["upstream"]["archiveUrl"] == "https://github.com/NapNeko/NapCatQQ/releases/download/v4.18.18/NapCat.Shell.zip"
+    assert pins["upstream"]["archiveUrl"] == "https://github.com/NapNeko/NapCatQQ/releases/download/v4.18.33/NapCat.Shell.zip"
     assert pins["upstream"]["archiveSha256"] == ARCHIVE_SHA
-    assert pins["napcatPatch"]["upstreamSha256"] == "59ba500eb824b4064d9f9a763101d15c5aae5cd268475b4cbbb7c3c8e2134aee"
+    assert pins["napcatPatch"]["upstreamSha256"] == "ee961eae58c88ec08952f81cb06fb9dc3b129704f50f21f5cfc7ea509f32bf34"
     assert "core && (core.dbPassphrase = a)" in pins["napcatPatch"]["replacements"][1]["replacement"]
     whitelist = pins["napcatPatch"]["replacements"][3]
     assert '"napcat-plugin-echo"' in whitelist["replacement"]

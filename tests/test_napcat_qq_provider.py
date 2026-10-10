@@ -41,7 +41,7 @@ const snapshot={
 if(config.mode==='offline'){core.selfInfo=info({online:false});core.apis.DatabaseApi={};}
 if(config.mode==='empty'){core.apis.FriendApi.getBuddyV2ExWithCate=async()=>{mark('listFriends');return []};core.apis.GroupApi.getGroups=async()=>{mark('listGroups');return []};}
 if(config.mode==='failure'){core.apis.FriendApi.getBuddyV2ExWithCate=async()=>{mark('listFriends');throw Error('PRIVATE passphrase token path')};}
-const bridge=await startBridge(core,snapshot,{port:0,token:config.token,runtimeId:config.runtimeId ?? null});
+const bridge=await startBridge(core,snapshot,{port:config.port ?? 0,token:config.token,runtimeId:config.runtimeId ?? null});
 console.log(JSON.stringify({port:bridge.port}));
 process.stdin.resume();process.stdin.on('end',async()=>{await bridge.stop();});
 """
@@ -67,13 +67,15 @@ def runtime(tmp_path_factory):
     shutil.copy2(BRIDGE, directory / "bridge.mjs")
     (directory / "server.mjs").write_text(SERVER, encoding="utf-8")
     processes = []
+    by_base = {}
 
-    def start(mode="ready", *, token=TOKEN, runtime_id=None, marker=None):
+    def start(mode="ready", *, token=TOKEN, runtime_id=None, marker=None, port=0):
         config = {
             "mode": mode,
             "token": token,
             "runtimeId": runtime_id,
             "marker": str(marker) if marker is not None else "",
+            "port": port,
         }
         process = subprocess.Popen(
             [node, str(directory / "server.mjs"), json.dumps(config)],
@@ -83,11 +85,23 @@ def runtime(tmp_path_factory):
             text=True,
         )
         processes.append(process)
-        return "http://127.0.0.1:" + str(json.loads(process.stdout.readline())["port"])
+        base = "http://127.0.0.1:" + str(json.loads(process.stdout.readline())["port"])
+        by_base[base] = process
+        return base
+
+    def restart(base, **kwargs):
+        process = by_base[base]
+        process.stdin.close()
+        process.wait(timeout=10)
+        assert process.returncode == 0, process.stderr.read()
+        return start(port=urllib.parse.urlsplit(base).port, **kwargs)
+
+    start.restart = restart
 
     yield start
     for process in processes:
-        process.stdin.close()
+        if not process.stdin.closed:
+            process.stdin.close()
         try:
             process.wait(timeout=10)
         except subprocess.TimeoutExpired:
@@ -104,7 +118,10 @@ def provider(base, credential=TOKEN):
 
 def request(base, method="Core.status", params=None, *, raw=None, headers=None,
             credential=TOKEN, path="/rpc"):
-    body = raw if raw is not None else json.dumps({"method": method, "params": params or []}).encode()
+    payload = {"method": method, "params": params or []}
+    if raw is None and method != "Core.status" and credential == TOKEN:
+        payload["boot_id"] = request(base)[1]["result"]["boot_id"]
+    body = raw if raw is not None else json.dumps(payload).encode()
     authorization = {} if credential is None else {"Authorization": f"Bearer {credential}"}
     req = urllib.request.Request(base + path, data=body, headers={"Content-Type": "application/json", **authorization, **(headers or {})})
     try:
@@ -116,6 +133,85 @@ def request(base, method="Core.status", params=None, *, raw=None, headers=None,
 
 def executed(path):
     return path.read_text(encoding="utf-8") if path.exists() else ""
+
+
+@pytest.mark.parametrize("method,params", [
+    ("EchoMetadata.listFriends", []), ("EchoMetadata.listGroups", []),
+    ("GroupApi.getGroupMemberAll", ["45678901"]),
+    ("EchoSnapshotApi.acquire", []), ("EchoSnapshotApi.cleanup", ["old-generation"]),
+    ("EchoSnapshotApi.recover", []),
+])
+@pytest.mark.parametrize("boot", [None, "", True, "bad", "a" * 64])
+def test_worker_generation_gate_prevents_all_operations(runtime, tmp_path, method, params, boot):
+    calls = tmp_path / "calls.txt"
+    base = runtime(runtime_id=RUNTIME_ID, marker=calls)
+    body = {"method": method, "params": params}
+    if boot is not None:
+        body["boot_id"] = boot
+    code, value = request(base, raw=json.dumps(body).encode(), path=f"/rpc/{RUNTIME_ID}")
+    assert (code, value) == (409, {"ok": False, "error": "worker_generation_mismatch"})
+    assert executed(calls) == ""
+
+
+def test_worker_boot_is_fresh_and_same_generation_operates(runtime):
+    base = runtime()
+    boot = request(base)[1]["result"]["boot_id"]
+    assert len(boot) == 64 and all(c in "0123456789abcdef" for c in boot)
+    assert request(base)[1]["result"]["boot_id"] == boot
+    assert request(runtime())[1]["result"]["boot_id"] != boot
+    body = {"method": "EchoSnapshotApi.recover", "params": [], "boot_id": boot}
+    assert request(base, raw=json.dumps(body).encode())[1]["result"]["ok"] is True
+
+
+def test_auth_then_workspace_then_worker_generation(runtime, tmp_path):
+    calls = tmp_path / "calls.txt"
+    base = runtime(runtime_id=RUNTIME_ID, marker=calls)
+    body = json.dumps({"method": "EchoSnapshotApi.acquire", "boot_id": "a" * 64}).encode()
+    assert request(base, raw=body, credential=WRONG_TOKEN) == (
+        401, {"ok": False, "error": "invalid_credential"})
+    assert request(base, raw=body) == (
+        409, {"ok": False, "error": "runtime_identity_mismatch"})
+    assert request(base, raw=body, path=f"/rpc/{RUNTIME_ID}") == (
+        409, {"ok": False, "error": "worker_generation_mismatch"})
+    assert executed(calls) == ""
+
+
+@pytest.mark.parametrize("method,params", [
+    ("Core.status", []), ("EchoMetadata.listFriends", []), ("EchoMetadata.listGroups", []),
+    ("GroupApi.getGroupMemberAll", ["45678901"]), ("EchoSnapshotApi.acquire", []),
+    ("EchoSnapshotApi.cleanup", ["old-generation"]), ("EchoSnapshotApi.recover", []),
+])
+def test_managed_bound_calls_check_workspace_before_generation(runtime, tmp_path, method, params):
+    calls = tmp_path / "calls.txt"
+    base = runtime(runtime_id=RUNTIME_ID, marker=calls)
+    boot = request(base)[1]["result"]["boot_id"]
+    before = executed(calls)
+    for presented in (boot, "a" * 64):
+        body = json.dumps({"method": method, "params": params, "boot_id": presented}).encode()
+        assert request(base, raw=body) == (409, {"ok": False, "error": "runtime_identity_mismatch"})
+    assert executed(calls) == before
+
+
+@pytest.mark.slow_integration
+def test_same_endpoint_worker_restart_refuses_old_provider_and_snapshot(runtime, tmp_path):
+    from qq_chat_analyzer.providers.napcat_qq_provider import NapCatQQWorkerGenerationChanged
+    from qq_chat_analyzer.providers.qq_direct_snapshot_runtime import QQSnapshotWorkerGenerationChanged
+    base = runtime(runtime_id=RUNTIME_ID)
+    old = provider(base)
+    boot = old.status().boot_id
+    snapshot = old.snapshot_client(tmp_path)
+    generation = snapshot.acquire()
+    calls = tmp_path / "new-worker-calls.txt"
+    assert runtime.restart(base, runtime_id=RUNTIME_ID, marker=calls) == base
+    with pytest.raises(QQSnapshotWorkerGenerationChanged):
+        snapshot.cleanup(generation)
+    with pytest.raises(NapCatQQWorkerGenerationChanged):
+        old.status()
+    assert executed(calls) == ""  # Even stale status was stopped before selfInfo access.
+    fresh = provider(base)
+    assert fresh.status().boot_id != boot
+    fresh.snapshot_client(tmp_path).recover()
+    assert "recover" in executed(calls)
 
 
 # ------------------------------------------------------------------ happy path
@@ -274,6 +370,7 @@ def test_single_fetch_and_invalid_response_errors():
         calls.append(json.loads(body))
         if json.loads(body)['method'] == 'Core.status':
             return 200,json.dumps({'ok':True,'result':{'rpc_auth':'bearer-v1',
+                'boot_id':'b'*64,
                 'bridge_ready':True,'qq_online':True,'self_info':{},
                 'database_api_ready':True,'passphrase_ready':True,'snapshot_api_ready':True}})
         return 200,json.dumps({"ok":True,"result":[]})

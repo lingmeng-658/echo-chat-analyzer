@@ -239,7 +239,9 @@ plaintext，清理失败则拒绝解密；再分别有限等待 DatabaseApi/pass
 main identity/stat/content 稳定性及 checkpoint witness；B 后 append 可以继续，checkpoint、
 main 改变、WAL reset/truncate 或无法证明一致性均 fail closed，不回退 main-only。
 复用同一个 hardened capture 模块生成 staging 加密合并文件，交给现有 NapCat 解密；
-native read telemetry 校验的是该 staging 输入。发布前删除加密合并文件，复核身份未改变后
+Echo 在解密前后对 staging 输入校验 `dev` / `ino`、大小与纳秒级 `mtime` / `ctime`
+强见证，无效或变化的见证均 fail closed；不再依赖上游 native-read telemetry 或 G2 patch。
+发布 generation 前删除加密合并文件，复核身份未改变后
 写入原 schema manifest 并原子发布 generation。RPC 客户端的
 acquire 超时覆盖两个顺序等待窗口。DatabaseApi namespace Proxy 的可调用 `then` 不能作为 async
 函数返回值直接返回，否则 Promise 会把它当作 thenable 而永久 pending；helper
@@ -271,7 +273,8 @@ DB 原生字段与 protobuf 解释留在 Provider / Adapter 边界内，不能�
 和正常 shutdown 清理可用。2026-10-02 最终验收已关闭 Stage 3.5、A4、A5、A6，
 Final Cleanup / Final Smoke 均 PASS；此前 main-only 损坏快照问题已关闭。
 验收范围与跨机器 RC 等开放事项见 `docs/HARDENING.md`，不将本机验收扩大为
-跨机器或跨 QQ 版本 schema 保证。
+跨机器或跨 QQ 版本 schema 保证。上述 2026-10-02 验收属于历史版本，
+不覆盖当前 4.18.33、RPC 认证、Worker 代际隔离与显式重连变更；最新验收状态见该工作地图。
 
 群成员元数据使用已验证的 `result.infos`：优先 `cardName`，缺失时回退 `nick`；
 不通过好友列表假定群成员关系，也不为缺失元数据猜名称。Provider 按
@@ -289,7 +292,7 @@ Reply / 引用回复分析属于 0.2，不是 0.1 发布前置。产品状态见
 
 Final Cleanup 已移除 `analysis-ordering` 专用计数/日志与闲置 `pollCount`；
 保留 `analysis-timing`、DEBUG member-shape、identity coverage，以及
-failure_stage / guard_code、WAL/SHM/identity/checkpoint witness、native telemetry、
+failure_stage / guard_code、WAL/SHM/identity/checkpoint witness、staging 输入强见证、
 generation/source/snapshot/`quick_check`、cleanup/recover/shutdown 等长期诊断。
 Direct DB helper 的 `QCE_LOG_FILE` 仅是保留的历史诊断变量名，不代表 QCE 能力；
 保留该诊断接口，不为字符串清零强改运行逻辑。来源注释修正同步模板、pin 与部署副本。
@@ -322,9 +325,14 @@ Provider 发现全部匹配 shard，对每个 shard 使用同一时间范围查�
 不复制 Provider 的业务解析。
 
 **Windows 发布合同（De-QCE）** —— Desktop 默认 QQ runtime 位于
-`runtime/qq-napcat-candidate`：官方 NapCat v4.18.18、native-read telemetry / late-passphrase
+`runtime/qq-napcat-candidate`：官方 NapCat v4.18.33、late-passphrase
 补丁、Echo plugin 白名单与 `napcat-plugin-echo`。连接和 metadata 使用
-`NapCatQQProvider`；snapshot correctness 三模块保留原实现。
+`NapCatQQProvider`；snapshot correctness 使用 Echo staging 输入强见证。Provider 与
+snapshot client 绑定同一个已认证的 Worker `boot_id`，代际失效后仅显式重连可重新绑定，
+新连接 recover 成功后才允许 acquire。
+本机 bridge RPC 使用每次启动独立的凭据；凭据校验与 Worker 代际校验共同约束请求，
+不能仅凭端口健康认领其他 runtime。此处描述当前分支 / 工作树实现，合入与发行状态见
+`docs/HARDENING.md`。
 `windows_runtime_manifest.json` 限定发布程序资产，build 在复制前后校验
 `qq_napcat_runtime_pins.json` 的关键产物 hash。正式 portable 不携带旧 `runtime/qq`、
 qce-server、QCE plugin 或 static/qce；不自动回退 QCE。

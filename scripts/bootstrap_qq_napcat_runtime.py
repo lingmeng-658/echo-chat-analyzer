@@ -20,7 +20,7 @@ from uuid import uuid4
 import zipfile
 
 TARGET = "qq-napcat-candidate"
-OFFICIAL_URL = "https://github.com/NapNeko/NapCatQQ/releases/download/v4.18.18/NapCat.Shell.zip"
+OFFICIAL_URL = "https://github.com/NapNeko/NapCatQQ/releases/download/v4.18.33/NapCat.Shell.zip"
 DOWNLOAD_HOSTS = {"github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"}
 
 
@@ -101,7 +101,7 @@ def build_runtime(project_root: Path, archive_path: Path | None = None) -> Path:
     pins = json.loads((scripts / "qq_napcat_runtime_pins.json").read_text(encoding="utf-8"))
     contract = json.loads((scripts / "qq_napcat_runtime_manifest.json").read_text(encoding="utf-8"))
     upstream = pins["upstream"]
-    if upstream["version"] != "4.18.18" or upstream["project"] != "NapNeko/NapCatQQ" or upstream["archiveUrl"] != OFFICIAL_URL:
+    if upstream["version"] != "4.18.33" or upstream["project"] != "NapNeko/NapCatQQ" or upstream["archiveUrl"] != OFFICIAL_URL:
         raise ValueError("unsupported official source")
     runtime = root / "runtime"
     if runtime.is_symlink() or runtime.resolve().parent != root:
