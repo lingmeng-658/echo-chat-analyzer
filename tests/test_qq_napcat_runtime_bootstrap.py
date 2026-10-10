@@ -41,12 +41,14 @@ def test_official_pins_and_correctness_templates():
     assert pins["upstream"]["archiveUrl"] == "https://github.com/NapNeko/NapCatQQ/releases/download/v4.18.18/NapCat.Shell.zip"
     assert pins["upstream"]["archiveSha256"] == ARCHIVE_SHA
     assert pins["napcatPatch"]["upstreamSha256"] == "59ba500eb824b4064d9f9a763101d15c5aae5cd268475b4cbbb7c3c8e2134aee"
-    native = pins["napcatPatch"]["replacements"][3]["replacement"]
-    assert "__ECHO_DIRECT_DB_READ_STATE__" in native
     assert "core && (core.dbPassphrase = a)" in pins["napcatPatch"]["replacements"][1]["replacement"]
-    whitelist = pins["napcatPatch"]["replacements"][4]
+    whitelist = pins["napcatPatch"]["replacements"][3]
     assert '"napcat-plugin-echo"' in whitelist["replacement"]
-    assert len(pins["napcatPatch"]["replacements"]) == 5
+    assert '"napcat-plugin-echo"' not in whitelist["anchor"]
+    assert len(pins["napcatPatch"]["replacements"]) == 4
+    for replacement in pins["napcatPatch"]["replacements"]:
+        assert "__ECHO_DIRECT_DB_READ_STATE__" not in replacement["anchor"]
+        assert "__ECHO_DIRECT_DB_READ_STATE__" not in replacement["replacement"]
     for item in pins["templates"]:
         assert digest((ROOT / "scripts" / item["source"]).read_bytes()) == item["sha256"]
     for name in ("snapshot.mjs", "main_wal.mjs", "workspace.mjs"):
@@ -107,7 +109,7 @@ def test_complete_runtime_worker_patch_and_repeatability(project):
     target = builder.build_runtime(root, archive)
     assert target == root / "runtime/qq-napcat-candidate"
     assert (target / "napcat.mjs").read_bytes() == patched.encode()
-    assert "__ECHO_DIRECT_DB_READ_STATE__" in patched
+    assert "__ECHO_DIRECT_DB_READ_STATE__" not in patched
     assert "core.dbPassphrase = a" in patched
     assert '"napcat-plugin-echo"' in patched
     assert json.loads((target / "config/plugins.json").read_text()) == {"napcat-plugin-echo": True}

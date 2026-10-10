@@ -11,7 +11,7 @@
   "napcatPatch": {
     "path": "napcat.mjs",
     "upstreamSha256": "59ba500eb824b4064d9f9a763101d15c5aae5cd268475b4cbbb7c3c8e2134aee",
-    "patchedSha256": "c6a0782e3d6e1083a9d886fb37583540f400bc9ddf55b24bc60aed088d017295",
+    "patchedSha256": "2de1ff1fa9857bd267c94d75f405950f429c4e6335dd3c1b154754cdf7caba4f",
     "replacements": [
       {
         "anchor": "  let a;\n  if (r.onCmd(\"OidbSvcTrpcTcp.0xcde_2\"",
@@ -24,10 +24,6 @@
       {
         "anchor": "  a && (Y.core.dbPassphrase = a), await Y.InitNapCat();",
         "replacement": "  core = Y.core, a && (core.dbPassphrase = a), await Y.InitNapCat();"
-      },
-      {
-        "anchor": "function LE(t, e, n) {\n  const r = Ge.readFileSync(t), i = UE(r, e);",
-        "replacement": "function LE(t, e, n) {\n  const echoFileState = (p) => { try { const s = Ge.statSync(p); return { present: s.isFile(), bytes: s.isFile() ? s.size : 0, mtimeMs: s.mtimeMs }; } catch { return { present: false, bytes: 0, mtimeMs: 0 }; } }, echoBefore = { database: echoFileState(t), wal: echoFileState(`${t}-wal`), shm: echoFileState(`${t}-shm`) }, r = Ge.readFileSync(t), echoAfter = { database: echoFileState(t), wal: echoFileState(`${t}-wal`), shm: echoFileState(`${t}-shm`) };\n  globalThis.__ECHO_DIRECT_DB_READ_STATE__ = { databaseBefore: echoBefore.database, databaseAfter: echoAfter.database, walBefore: echoBefore.wal, walAfter: echoAfter.wal, shmBefore: echoBefore.shm, shmAfter: echoAfter.shm, readBytes: r.length };\n  const i = UE(r, e);"
       },
       {
         "anchor": "new Set([\n  \"napcat-plugin-builtin\",",
@@ -83,12 +79,12 @@
     {
       "source": "qq_direct_db_snapshot/snapshot.mjs",
       "target": "plugins/napcat-plugin-echo/snapshot/snapshot.mjs",
-      "sha256": "9899f8be3a6f357bf26862193e223f7addb420a0760efa0d1263f6c02607d724"
+      "sha256": "9cc6d3b36b57645a663ee7bf93ceea0bd4b1ae932c6aa91939553b20bd78e695"
     },
     {
       "source": "qq_direct_db_snapshot/main_wal.mjs",
       "target": "plugins/napcat-plugin-echo/snapshot/main_wal.mjs",
-      "sha256": "0a2ee3a37f31a7dbb861d60f944247e95ee55069eb5a0eb90a31a1cbc71c1be0"
+      "sha256": "e2ec9ff266d7cc0e53b390ce24b0f53d980dd089305ea07044f27df597188749"
     },
     {
       "source": "qq_direct_db_snapshot/workspace.mjs",
