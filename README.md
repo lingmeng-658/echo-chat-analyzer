@@ -1,112 +1,65 @@
 # 余音 Echo
 
-> 隐私优先、完全本地运行的 QQ / 微信聊天分析工具。  
-> 把散落在聊天记录里的时间、语言与互动，重新整理成一份可以回看的 Echo Report。
+**每一句聊天，都会留下余音。**
 
-## 现在能看到什么
+一款支持 **QQ / 微信** 的本地聊天分析工具。
 
-- 会话概览：消息规模、时间跨度、活跃时段
-- 聊天轮次：谁更常开启聊天、一次通常聊多久、聊天纪录
-- 节奏：一天与一周中的活跃分布
-- 语言画像：
-  - 群聊成员特色词
-  - 私聊双方常用表达
-- QQ / 微信统一分析
-- 表达习惯（Expression）：Emoji、已支持的 QQ / 微信表情的频率、组合与相邻用词
-- 自包含 Echo HTML 报告，可直接在浏览器打开
+我们每天都在聊天，却很少会回头看看自己曾经说过什么。
 
-完整 Sticker / 表情包语义与 Reply / 引用回复分析计划在后续版本支持。
+那些聊到深夜的时刻、群里反复出现的玩笑、朋友之间独有的表达习惯，似乎都是再平常不过的事情。但如果把时间拉长，这些零散的聊天记录，也许真的留下了一些值得回顾的东西。
 
-## 当前状态
+我想试着把它们重新整理出来。
 
-Echo v0.1.0 是首个计划公开的 Windows MVP，目前仍在发布前 Hardening，**尚未正式发布**。
-当前发布阻断项、验收状态与剩余待办统一由 [Hardening 工作地图](docs/HARDENING.md) 管理。
+## 看看我们曾经聊过什么
 
-0.1.0 之后的长期产品目标和暂定版本主题见 [Echo Product Roadmap（0.1.0 → 1.0.0）](docs/ROADMAP.md)。
+Echo 可以分析 QQ 群聊、QQ 私聊及微信会话，并生成一份可以在浏览器中阅读的 **Echo Report**。
 
-## 界面预览
+目前支持：
 
-以下截图使用虚构演示数据，不含真实聊天记录或账号信息。
+- **聊天概览**：消息数量、时间跨度与活跃情况。
+- **聊天轮次**：谁更常开启聊天，一次通常聊多久。
+- **聊天节奏**：一天、一周中什么时候最活跃。
+- **语言画像**：每个人的特色词，以及私聊双方的常用表达。
+- **表达习惯**：Emoji、已支持的 QQ / 微信表情及其使用情况。
 
-| 主界面 | QQ 连接页 |
-| --- | --- |
-| ![Echo 主界面](docs/screenshots/home.png) | ![QQ 连接页](docs/screenshots/qq-connection.png) |
-| 会话选择与分析配置 | Echo Report 会话概览 |
-| ![会话选择与分析配置](docs/screenshots/session-analysis.png) | ![Echo Report 会话概览](docs/screenshots/echo-report.png) |
+![Echo Report](docs/screenshots/echo-report.png)
 
-## 开源许可
+*使用虚构数据生成的演示报告*
 
-Echo 自有且有权授权的源代码采用 [Mozilla Public License 2.0](LICENSE)，
-许可范围与源码获取方式见 [Echo 许可声明](NOTICE.md)。
-官方 Echo 免费、非商业运营；MPL 2.0 本身允许商业使用，这一运营方式不构成对 MPL 权利的额外限制。
-NapCat 和其他第三方组件仍受各自许可证约束，见 [第三方版权声明](third_party/napcat/NOTICE.md)
-及 [NapCat Issue #2096](https://github.com/NapNeko/NapCatQQ/issues/2096)。
-公开源码仓库：[lingmeng-658/echo-chat-analyzer](https://github.com/lingmeng-658/echo-chat-analyzer)。
+## 把聊天留作纪念
 
-## 隐私优先
+除了完整报告，Echo 还可以生成一张聊天纪念卡，将聊天中的一些统计结果和表达习惯整理成图片。
 
-Echo 的设计前提是：真实聊天数据属于用户自己。
+你可以把它保存下来，也可以发给曾经一起聊天的人。
 
-- QQ / 微信聊天数据在本机读取和分析
-- 不上传聊天记录
-- 不将聊天正文、身份信息、群号或本地路径写入 Git
-- 测试只使用虚构数据
-- Echo 报告可以在本地生成并查看
+*这里将展示实际生成的分享图片。*
 
-## 支持的数据来源
+## 使用 Echo
 
-### QQ
+**连接 QQ / 微信 → 选择会话 → 生成报告 → 阅读或分享**
 
-正式链路为 NapCat → Direct DB → `qq_db_adapter` → 统一消息模型 → Analysis。
-NapCat 负责启动 / 登录和本地解密，Direct DB 负责会话查询与消息获取。
-QQChatExporter（QCE）已完全退休：不再支持其 runtime、CLI 服务调用、QCE JSON，
-也不再支持旧 QQ JSON / JSONL 文件兼容或 QCE fallback。
+![Echo 桌面界面](docs/screenshots/home.png)
 
-### 微信
+Echo 在 Windows 本机读取和分析聊天数据，无需上传完整聊天记录。生成的报告保存在本地，可以随时重新打开或删除。
 
-支持在 Windows 本机读取微信数据库，与 QQ 使用同一套分析能力。
+分享报告与图片时，请注意其中可能包含的个人信息。
 
-### 本地文件 CLI
+## 下载
 
-`echo-chat` 保留为当前支持格式的本地文件分析入口：`qq-db-json`、`wechat-db-json`、
-`detailed-json`、`chatlab-jsonl` 和 `cli-json`（符合微信 CLI schema 的 bare array）。
-它不再提供 `qce list` / `qce analyze`，也不导入 QCE 或旧 QQ 导出文件。
+**v0.1.0 · 首个 MVP 版本，尚未正式发布。**
 
-## Echo Report
+首个版本计划提供 Windows Portable ZIP，解压即可运行，无需安装 Python。
 
-Echo 不希望成为另一张 Dashboard。
+[GitHub Releases](https://github.com/lingmeng-658/echo-chat-analyzer/releases)
 
-它更接近一份数字聊天杂志：
+0.1.0 已经实现基础的聊天分析与报告分享，但内容仍不够完整。更多分析功能、报告设计和分享体验会在后续版本逐步完善。
 
-- 用编辑式排版组织数据
-- 保留适量音乐意象
-- 重点展示“这段聊天留下了什么”
+[查看后续开发计划](docs/ROADMAP.md)
 
-## Desktop
+## 开源与开发
 
-Windows 桌面端当前支持：
+- [开发指南](DEVELOPMENT.md) · [项目架构](ARCHITECTURE.md)
+- [发布进度](docs/HARDENING.md) · [产品路线图](docs/ROADMAP.md)
+- [MPL 2.0 开源许可](LICENSE) · [许可声明](NOTICE.md) · [第三方许可](third_party/napcat/NOTICE.md)
 
-- QQ / 微信入口与连接
-- 会话选择与时间范围设置
-- 启动分析并打开 Echo Report
-- Local Data 本地报告管理：搜索、重新打开、删除所选 / 保留所选删除其余 / 删除全部报告，
-  并显示报告数量与占用空间
-- 「关于余音」对话框与手动检查更新：仅查询并打开官方 GitHub Release 页面
-
-报告不会自动淘汰，只由用户在 Local Data 显式删除；删除报告不会删除
-QQ / 微信原始聊天数据或用户另存的文件。
-检查更新只提示并打开官方 Release 页面，不自动下载、安装或覆盖。
-v0.1.0 首次发布只提供 Windows Portable ZIP，不提供 Setup 安装器；
-安装器与原地覆盖更新机制统一延期。
-
-## 开发运行
-
-项目使用 Python `src` layout。
-
-在仓库根目录执行：
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-pip install -e ".[gui,dev]"
-echo-gui
-```
+Echo 自有且有权授权的源码采用 MPL 2.0。官方 Echo 免费、非商业运营，第三方组件遵循各自许可证。
