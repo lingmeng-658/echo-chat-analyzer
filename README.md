@@ -22,6 +22,8 @@
 Echo v0.1.0 是首个计划公开的 Windows MVP，目前仍在发布前 Hardening，**尚未正式发布**。
 当前发布阻断项、验收状态与剩余待办统一由 [Hardening 工作地图](docs/HARDENING.md) 管理。
 
+0.1.0 之后的长期产品目标和暂定版本主题见 [Echo Product Roadmap（0.1.0 → 1.0.0）](docs/ROADMAP.md)。
+
 ## 界面预览
 
 以下截图使用虚构演示数据，不含真实聊天记录或账号信息。
