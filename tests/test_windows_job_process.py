@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
+import gc
 import importlib
 import importlib.util
 import json
@@ -50,6 +51,30 @@ def _native():
         function = getattr(api, name)
         function.argtypes, function.restype = args, result
     return api
+
+
+def _handle_count():
+    # Sample only after closed objects and their Python cycles are released.
+    gc.collect()
+    api = _native()
+    result = wintypes.DWORD()
+    assert api.GetProcessHandleCount(api.GetCurrentProcess(), ctypes.byref(result))
+    return result.value
+
+
+def _warmup_owned_process(module):
+    # Exercise the same process, pipe and text machinery before every baseline.
+    # Function scope releases the process reference before _handle_count's GC.
+    process = module.launch_owned_process(
+        [sys.executable, "-c", "pass"], stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="strict")
+    try:
+        process.communicate(timeout=8)
+    finally:
+        process.close()
+    assert process.closed
+    assert process.stdout.closed and process.stderr.closed
 
 
 def _tree_handles(directory):
@@ -120,19 +145,11 @@ def test_forced_owner_exit_kills_tree_without_touching_other_instance(tmp_path):
 
 @pytest.mark.slow_integration
 def test_normal_exit_unicode_env_cwd_pipes_and_no_handle_leak(tmp_path):
-    api = _native()
-    def count():
-        result = wintypes.DWORD()
-        assert api.GetProcessHandleCount(api.GetCurrentProcess(), ctypes.byref(result))
-        return result.value
     module = _module()
     # Windows/Python lazily initialize process/pipe machinery on first use.
     # Measure subsequent complete cycles, not one-time runtime initialization.
-    warmup = module.launch_owned_process(
-        [sys.executable, "-c", "pass"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    warmup.communicate(timeout=8)
-    warmup.close()
-    before = count()
+    _warmup_owned_process(module)
+    before = _handle_count()
     process = module.launch_owned_process(
         _command(tmp_path, "stdio"), cwd=tmp_path,
         env={**os.environ, "FICTIONAL_VALUE": "虚构路径 空格"},
@@ -145,7 +162,10 @@ def test_normal_exit_unicode_env_cwd_pipes_and_no_handle_leak(tmp_path):
         assert process.returncode == 0
     finally:
         process.close()
-    assert count() == before
+    assert process.closed
+    assert process.stdout.closed and process.stderr.closed
+    del process
+    assert _handle_count() == before
 
 
 @pytest.mark.slow_integration
@@ -185,16 +205,14 @@ def test_native_creation_failures_do_not_launch_or_leak(tmp_path, monkeypatch, f
                     return real(*args)
                 return create
             return real
-    before = wintypes.DWORD()
-    after = wintypes.DWORD()
-    assert _native().GetProcessHandleCount(_native().GetCurrentProcess(), ctypes.byref(before))
+    _warmup_owned_process(module)
+    before = _handle_count()
     monkeypatch.setattr(module, "_kernel32", lambda: FailingAPI())
     with pytest.raises(OSError):
         module.launch_owned_process(_command(tmp_path), cwd=tmp_path)
     assert created == []
     assert list(tmp_path.iterdir()) == []
-    assert _native().GetProcessHandleCount(_native().GetCurrentProcess(), ctypes.byref(after))
-    assert after.value == before.value
+    assert _handle_count() == before
 
 
 @pytest.mark.slow_integration
@@ -203,11 +221,8 @@ def test_error_after_native_creation_closes_job_process_and_thread(tmp_path, mon
     module = _module()
     api = module._kernel32()
     # Warm Windows's process machinery before the resource baseline.
-    warmup = module.launch_owned_process([sys.executable, "-c", "pass"])
-    warmup.close()
-    before = wintypes.DWORD()
-    after = wintypes.DWORD()
-    assert _native().GetProcessHandleCount(_native().GetCurrentProcess(), ctypes.byref(before))
+    _warmup_owned_process(module)
+    before = _handle_count()
     class FailingResult:
         def __getattr__(self, name):
             if name == "CreateProcessW":
@@ -220,8 +235,7 @@ def test_error_after_native_creation_closes_job_process_and_thread(tmp_path, mon
     monkeypatch.setattr(module, "_kernel32", lambda: FailingResult())
     with pytest.raises(OSError):
         module.launch_owned_process(_command(tmp_path), cwd=tmp_path)
-    assert _native().GetProcessHandleCount(_native().GetCurrentProcess(), ctypes.byref(after))
-    assert after.value == before.value
+    assert _handle_count() == before
 
 
 @pytest.mark.slow_integration
